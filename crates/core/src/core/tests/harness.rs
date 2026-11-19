@@ -28,7 +28,9 @@ use crate::acp::{Frame, Message, RequestId, RpcError};
 use crate::agent::{AgentSpec, SpawnCommand};
 use crate::chat::UserMessage;
 use crate::core::{Core, OpenChat, Refused};
-use crate::directive::{AgentDirective, Directive, PolicyDirective, TimerDirective, ViewerDirective};
+use crate::directive::{
+    AgentDirective, Directive, PolicyDirective, TimerDirective, ViewerDirective,
+};
 use crate::event::{AgentEvent, Event, HostCommand, PolicyAnswer};
 use crate::host::Host;
 use crate::ids::{ChatId, QuestionId, Ticket, TurnId};
@@ -63,8 +65,16 @@ pub(crate) struct Script {
 pub(crate) fn agents() -> Vec<AgentSpec> {
     let claude = SpawnCommand::new("/opt/caf/claude-agent-acp");
     vec![
-        AgentSpec::new("claude", claude, ProfileChoice::Builtin(Builtin::ClaudeAgentAcp)),
-        AgentSpec::new("plain", SpawnCommand::new("/opt/caf/plain-acp"), ProfileChoice::Cautious),
+        AgentSpec::new(
+            "claude",
+            claude,
+            ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
+        ),
+        AgentSpec::new(
+            "plain",
+            SpawnCommand::new("/opt/caf/plain-acp"),
+            ProfileChoice::Cautious,
+        ),
     ]
 }
 
@@ -119,14 +129,26 @@ impl Script {
     /// Keeps and returns what an event gave out, rendered.
     fn done(&mut self, out: &[Directive]) -> Vec<Value> {
         let rendered: Vec<Value> = out.iter().map(render).collect();
-        assert!(with(&rendered, "wake_at").len() <= 1, "one wake-up at most: {rendered:#?}");
+        assert!(
+            with(&rendered, "wake_at").len() <= 1,
+            "one wake-up at most: {rendered:#?}"
+        );
         for directive in &rendered {
-            let Some(proc) = directive.get("write").and_then(Value::as_u64) else { continue };
+            let Some(proc) = directive.get("write").and_then(Value::as_u64) else {
+                continue;
+            };
             let message = &directive["message"];
             if message.get("method").is_none() {
-                let count = self.answers.entry((proc, message["id"].to_string())).or_default();
+                let count = self
+                    .answers
+                    .entry((proc, message["id"].to_string()))
+                    .or_default();
                 *count += 1;
-                assert_eq!(*count, 1, "the agent's request {} answered twice", message["id"]);
+                assert_eq!(
+                    *count, 1,
+                    "the agent's request {} answered twice",
+                    message["id"]
+                );
             }
         }
         self.outs.push(rendered.clone());
@@ -135,7 +157,11 @@ impl Script {
 
     /// Runs a host method that, if it succeeds, the recording holds as
     /// `command`.
-    fn host_call<T>(&mut self, call: impl FnOnce(&mut Core, Now, &mut Vec<Directive>) -> Result<T, Refused>, command: impl FnOnce(&T) -> HostCommand) -> (Result<T, Refused>, Vec<Value>) {
+    fn host_call<T>(
+        &mut self,
+        call: impl FnOnce(&mut Core, Now, &mut Vec<Directive>) -> Result<T, Refused>,
+        command: impl FnOnce(&T) -> HostCommand,
+    ) -> (Result<T, Refused>, Vec<Value>) {
         let mut out = Vec::new();
         let now = self.now();
         let result = call(&mut self.core, now, &mut out);
@@ -156,34 +182,71 @@ impl Script {
     /// Opens a chat.
     pub(crate) fn open(&mut self, open: OpenChat) -> (Result<ChatId, Refused>, Vec<Value>) {
         let recorded = open.clone();
-        self.host_call(|core, now, out| core.open_chat(now, open, out), |&chat| HostCommand::OpenChat { chat, open: recorded })
+        self.host_call(
+            |core, now, out| core.open_chat(now, open, out),
+            |&chat| HostCommand::OpenChat {
+                chat,
+                open: recorded,
+            },
+        )
     }
 
     /// Sends `text`.
-    pub(crate) fn send(&mut self, chat: ChatId, text: &str) -> (Result<TurnId, Refused>, Vec<Value>) {
+    pub(crate) fn send(
+        &mut self,
+        chat: ChatId,
+        text: &str,
+    ) -> (Result<TurnId, Refused>, Vec<Value>) {
         self.send_message(chat, UserMessage::text(text))
     }
 
     /// Sends `message`.
-    pub(crate) fn send_message(&mut self, chat: ChatId, message: UserMessage) -> (Result<TurnId, Refused>, Vec<Value>) {
+    pub(crate) fn send_message(
+        &mut self,
+        chat: ChatId,
+        message: UserMessage,
+    ) -> (Result<TurnId, Refused>, Vec<Value>) {
         let recorded = message.clone();
-        self.host_call(|core, now, out| core.send(now, chat, message, out), |&turn| HostCommand::Send { chat, turn, message: recorded })
+        self.host_call(
+            |core, now, out| core.send(now, chat, message, out),
+            |&turn| HostCommand::Send {
+                chat,
+                turn,
+                message: recorded,
+            },
+        )
     }
 
     /// Stops `chat`.
     pub(crate) fn stop(&mut self, chat: ChatId) -> (Result<(), Refused>, Vec<Value>) {
-        self.host_call(|core, now, out| core.stop(now, chat, out), |()| HostCommand::Stop { chat })
+        self.host_call(
+            |core, now, out| core.stop(now, chat, out),
+            |()| HostCommand::Stop { chat },
+        )
     }
 
     /// Answers `question`.
-    pub(crate) fn answer(&mut self, question: QuestionId, answer: Answer) -> (Result<(), Refused>, Vec<Value>) {
+    pub(crate) fn answer(
+        &mut self,
+        question: QuestionId,
+        answer: Answer,
+    ) -> (Result<(), Refused>, Vec<Value>) {
         let recorded = answer.clone();
-        self.host_call(|core, now, out| core.answer(now, question, answer, out), |()| HostCommand::Answer { question, answer: recorded })
+        self.host_call(
+            |core, now, out| core.answer(now, question, answer, out),
+            |()| HostCommand::Answer {
+                question,
+                answer: recorded,
+            },
+        )
     }
 
     /// Closes `chat`.
     pub(crate) fn close(&mut self, chat: ChatId) -> (Result<(), Refused>, Vec<Value>) {
-        self.host_call(|core, now, out| core.close_chat(now, chat, out), |()| HostCommand::CloseChat { chat })
+        self.host_call(
+            |core, now, out| core.close_chat(now, chat, out),
+            |()| HostCommand::CloseChat { chat },
+        )
     }
 
     /// Shuts everything down.
@@ -200,7 +263,10 @@ impl Script {
 
     /// Something happens to process `proc`.
     pub(crate) fn agent(&mut self, proc: u64, event: AgentEvent) -> Vec<Value> {
-        self.event(Event::Agent { process: Ticket(proc), event })
+        self.event(Event::Agent {
+            process: Ticket(proc),
+            event,
+        })
     }
 
     /// Process `proc` writes `message`, a JSON-RPC message.
@@ -213,7 +279,10 @@ impl Script {
 
     /// Process `proc` answers CAF's request `id` with `result`.
     pub(crate) fn answers(&mut self, proc: u64, id: u64, result: &Value) -> Vec<Value> {
-        self.says(proc, &json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+        self.says(
+            proc,
+            &json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+        )
     }
 
     /// Process `proc` answers CAF's request `id` with an error.
@@ -224,20 +293,30 @@ impl Script {
     /// Process `proc` sends `update` for session `session`.
     pub(crate) fn update(&mut self, proc: u64, session: &str, update: &Value) -> Vec<Value> {
         let params = json!({ "sessionId": session, "update": update });
-        self.says(proc, &json!({ "jsonrpc": "2.0", "method": "session/update", "params": params }))
+        self.says(
+            proc,
+            &json!({ "jsonrpc": "2.0", "method": "session/update", "params": params }),
+        )
     }
 
     /// The timer driver wakes the core.
     pub(crate) fn woken(&mut self) -> Vec<Value> {
         let out = self.event(Event::Woken);
         let now = self.now().mono;
-        assert!(self.core.wake.is_none_or(|wake| wake > now), "woken, it waits for a time already past: {:?} at {now:?}", self.core.wake);
+        assert!(
+            self.core.wake.is_none_or(|wake| wake > now),
+            "woken, it waits for a time already past: {:?} at {now:?}",
+            self.core.wake
+        );
         out
     }
 
     /// The policy answers.
     pub(crate) fn policy(&mut self, ticket: u64, answer: PolicyAnswer) -> Vec<Value> {
-        self.event(Event::Policy { ticket: Ticket(ticket), answer })
+        self.event(Event::Policy {
+            ticket: Ticket(ticket),
+            answer,
+        })
     }
 
     /// The core's state, as JSON.
@@ -265,15 +344,26 @@ impl Script {
             let got: Vec<Value> = out.iter().map(render).collect();
             assert_eq!(&got, expected, "step {step} of the replay, {json}");
         }
-        assert_eq!(core.snapshot(), self.state(), "the replay ends in the same state");
+        assert_eq!(
+            core.snapshot(),
+            self.state(),
+            "the replay ends in the same state"
+        );
     }
 
     /// Checks every request of the agent's was answered once, unless its
     /// process went before it could be.
     fn check_answers(&self) {
         for ((proc, id), &count) in &self.answers {
-            let writable = self.core.procs.get(&Ticket(*proc)).is_some_and(|each| each.writable());
-            assert!(count == 1 || !writable, "the agent's request {id} to {proc} was never answered");
+            let writable = self
+                .core
+                .procs
+                .get(&Ticket(*proc))
+                .is_some_and(|each| each.writable());
+            assert!(
+                count == 1 || !writable,
+                "the agent's request {id} to {proc} was never answered"
+            );
         }
     }
 
@@ -321,7 +411,10 @@ pub(crate) fn frame(message: &Value) -> Frame {
         Value::String(text) => RequestId::String(text.clone()),
         _ => RequestId::Null,
     });
-    let method = message.get("method").and_then(Value::as_str).map(str::to_owned);
+    let method = message
+        .get("method")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let params = message.get("params").map(raw);
     Frame::Message(match (id, method) {
         (Some(id), Some(method)) => Message::Request { id, method, params },
@@ -346,25 +439,41 @@ pub(crate) fn frame(message: &Value) -> Frame {
 pub(crate) fn render(directive: &Directive) -> Value {
     match directive {
         Directive::Agent(agent) => match agent {
-            AgentDirective::Start { process, command } => json!({ "start": process.0, "program": command.program }),
+            AgentDirective::Start { process, command } => {
+                json!({ "start": process.0, "program": command.program })
+            }
             AgentDirective::Write { process, bytes } => {
                 assert_eq!(bytes.last(), Some(&b'\n'), "each message ends its line");
                 let message: Value = serde_json::from_slice(bytes).expect("CAF writes JSON");
                 json!({ "write": process.0, "message": message })
             }
             AgentDirective::CloseInput { process } => json!({ "close_input": process.0 }),
-            AgentDirective::Signal { process, signal } => json!({ "signal": process.0, "is": format!("{signal:?}") }),
+            AgentDirective::Signal { process, signal } => {
+                json!({ "signal": process.0, "is": format!("{signal:?}") })
+            }
             AgentDirective::CheckGroup { process } => json!({ "check_group": process.0 }),
             AgentDirective::Forget { process } => json!({ "forget": process.0 }),
         },
-        Directive::Timer(TimerDirective::WakeAt(at)) => json!({ "wake_at": at.map(|at| at.0 / 1_000_000) }),
-        Directive::Policy(PolicyDirective::Decide { ticket, chat, request }) => {
+        Directive::Timer(TimerDirective::WakeAt(at)) => {
+            json!({ "wake_at": at.map(|at| at.0 / 1_000_000) })
+        }
+        Directive::Policy(PolicyDirective::Decide {
+            ticket,
+            chat,
+            request,
+        }) => {
             json!({ "decide": ticket.0, "chat": chat.0, "title": request.title, "input": request.input })
         }
-        Directive::Policy(PolicyDirective::Withdrawn { ticket }) => json!({ "withdrawn": ticket.0 }),
-        Directive::Viewer(ViewerDirective::Changed { chat, latest }) => json!({ "changed": chat.0, "latest": latest.0 }),
+        Directive::Policy(PolicyDirective::Withdrawn { ticket }) => {
+            json!({ "withdrawn": ticket.0 })
+        }
+        Directive::Viewer(ViewerDirective::Changed { chat, latest }) => {
+            json!({ "changed": chat.0, "latest": latest.0 })
+        }
         Directive::Storage(storage) => match *storage {},
-        Directive::Report(report) => json!({ "report": format!("{:?}", report.level), "message": report.message }),
+        Directive::Report(report) => {
+            json!({ "report": format!("{:?}", report.level), "message": report.message })
+        }
     }
 }
 
@@ -373,10 +482,18 @@ pub(crate) fn render(directive: &Directive) -> Value {
 pub(crate) fn includes(actual: &Value, expected: &Value) -> bool {
     match (actual, expected) {
         (Value::Object(actual), Value::Object(expected)) => {
-            expected.iter().all(|(key, expected)| actual.get(key).is_some_and(|actual| includes(actual, expected)))
+            expected.iter().all(|(key, expected)| {
+                actual
+                    .get(key)
+                    .is_some_and(|actual| includes(actual, expected))
+            })
         }
         (Value::Array(actual), Value::Array(expected)) => {
-            actual.len() == expected.len() && actual.iter().zip(expected).all(|(actual, expected)| includes(actual, expected))
+            actual.len() == expected.len()
+                && actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(actual, expected)| includes(actual, expected))
         }
         _ => actual == expected,
     }
@@ -396,14 +513,23 @@ pub(crate) fn assert_has(actual: &Value, expected: &Value) {
 /// The messages written to processes in `out`, as `(process, message)`.
 pub(crate) fn writes(out: &[Value]) -> Vec<(u64, Value)> {
     (out.iter())
-        .filter_map(|directive| Some((directive.get("write")?.as_u64()?, directive["message"].clone())))
+        .filter_map(|directive| {
+            Some((
+                directive.get("write")?.as_u64()?,
+                directive["message"].clone(),
+            ))
+        })
         .collect()
 }
 
 /// The one message written in `out` with `method`.
 #[track_caller]
 pub(crate) fn sent(out: &[Value], method: &str) -> Value {
-    let found: Vec<Value> = writes(out).into_iter().map(|(_, message)| message).filter(|message| message["method"] == method).collect();
+    let found: Vec<Value> = writes(out)
+        .into_iter()
+        .map(|(_, message)| message)
+        .filter(|message| message["method"] == method)
+        .collect();
     assert_eq!(found.len(), 1, "one {method} in {out:#?}");
     found.into_iter().next().unwrap_or_default()
 }
@@ -418,5 +544,8 @@ pub(crate) fn replies(out: &[Value], id: &Value) -> Vec<Value> {
 
 /// The directives in `out` that have `key`.
 pub(crate) fn with(out: &[Value], key: &str) -> Vec<Value> {
-    out.iter().filter(|directive| directive.get(key).is_some()).cloned().collect()
+    out.iter()
+        .filter(|directive| directive.get(key).is_some())
+        .cloned()
+        .collect()
 }

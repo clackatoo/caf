@@ -41,33 +41,58 @@ impl<A: AppItem> Core<A> {
         let each = self.procs.get_mut(&proc).filter(|each| each.askable())?;
         let id = each.next_id;
         each.next_id += 1;
-        write(out, proc, &json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
+        write(
+            out,
+            proc,
+            &json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
+        );
         let deadline = watchdog.map(|watchdog| now.mono.after(watchdog));
-        self.pending.insert((proc, id), Pending {
-            purpose,
-            sent: now.mono,
-            deadline,
-        });
+        self.pending.insert(
+            (proc, id),
+            Pending {
+                purpose,
+                sent: now.mono,
+                deadline,
+            },
+        );
         Some(id)
     }
 
     /// Sends a notification to `proc`, if it may be written to.
-    pub(super) fn notify(&mut self, proc: Ticket, method: &str, params: Value, out: &mut Vec<Directive>) {
+    pub(super) fn notify(
+        &mut self,
+        proc: Ticket,
+        method: &str,
+        params: Value,
+        out: &mut Vec<Directive>,
+    ) {
         if self.procs.get(&proc).is_some_and(|each| each.askable()) {
-            write(out, proc, &json!({ "jsonrpc": "2.0", "method": method, "params": params }));
+            write(
+                out,
+                proc,
+                &json!({ "jsonrpc": "2.0", "method": method, "params": params }),
+            );
         }
     }
 
     /// Answers the agent's request `id` on `proc` with `result`, or an
     /// error's code and message. Returns whether it could be written.
-    pub(super) fn reply(&mut self, proc: Ticket, id: &RequestId, result: Result<Value, (i64, String)>, out: &mut Vec<Directive>) -> bool {
+    pub(super) fn reply(
+        &mut self,
+        proc: Ticket,
+        id: &RequestId,
+        result: Result<Value, (i64, String)>,
+        out: &mut Vec<Directive>,
+    ) -> bool {
         if !self.procs.get(&proc).is_some_and(|each| each.writable()) {
             return false;
         }
         let id = id_json(id);
         let message = match result {
             Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-            Err((code, message)) => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }),
+            Err((code, message)) => {
+                json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+            }
         };
         write(out, proc, &message);
         true
@@ -78,7 +103,10 @@ impl<A: AppItem> Core<A> {
 fn write(out: &mut Vec<Directive>, proc: Ticket, message: &Value) {
     let mut bytes = serde_json::to_vec(message).unwrap_or_default();
     bytes.push(b'\n');
-    out.push(Directive::Agent(AgentDirective::Write { process: proc, bytes }));
+    out.push(Directive::Agent(AgentDirective::Write {
+        process: proc,
+        bytes,
+    }));
 }
 
 /// A request id as JSON.

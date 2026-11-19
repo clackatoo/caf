@@ -16,7 +16,10 @@ use serde_json::Value;
 use super::clean::{agent_text, unhidden};
 use super::state::Open;
 use super::{Core, report};
-use crate::chat::{AppItem, Cost, Item, ItemKind, Part, Starter, ToolCall, ToolKind, ToolStatus, Turn, TurnLife, Unknown, Usage, UserMessage};
+use crate::chat::{
+    AppItem, Cost, Item, ItemKind, Part, Starter, ToolCall, ToolKind, ToolStatus, Turn, TurnLife,
+    Unknown, Usage, UserMessage,
+};
 use crate::directive::{Directive, Level};
 use crate::ids::{ChatId, ItemId, Ticket, TurnId};
 use crate::time::{End, Now, Window};
@@ -53,10 +56,20 @@ struct ToolChange {
 
 impl<A: AppItem> Core<A> {
     /// Takes in a `session/update` from `proc`.
-    pub(super) fn update(&mut self, now: Now, proc: Ticket, params: &Value, out: &mut Vec<Directive>) {
+    pub(super) fn update(
+        &mut self,
+        now: Now,
+        proc: Ticket,
+        params: &Value,
+        out: &mut Vec<Directive>,
+    ) {
         let session = params.get("sessionId").and_then(Value::as_str);
         let Some(chat) = session.and_then(|session| self.chat_with_session(proc, session)) else {
-            report(out, Level::Debug, "ignored an update for a session no chat holds".to_owned());
+            report(
+                out,
+                Level::Debug,
+                "ignored an update for a session no chat holds".to_owned(),
+            );
             return;
         };
         let update = params.get("update").cloned().unwrap_or(Value::Null);
@@ -80,15 +93,21 @@ impl<A: AppItem> Core<A> {
 
     /// What `update` says, read by its tag.
     fn read_update(&self, update: Value) -> Said {
-        let tag = update.get("sessionUpdate").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let tag = update
+            .get("sessionUpdate")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
         let read = match tag.as_str() {
-            "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk" => text_of(&update).map(|text| match tag.as_str() {
-                "user_message_chunk" => Said::User(text),
-                thought => Said::Text {
-                    text,
-                    thinking: thought == "agent_thought_chunk",
-                },
-            }),
+            "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk" => {
+                text_of(&update).map(|text| match tag.as_str() {
+                    "user_message_chunk" => Said::User(text),
+                    thought => Said::Text {
+                        text,
+                        thinking: thought == "agent_thought_chunk",
+                    },
+                })
+            }
             "tool_call" => match serde_json::from_value::<acp::ToolCall>(update.clone()) {
                 Ok(call) => Some(Said::Tool {
                     id: call.tool_call_id.0.to_string(),
@@ -105,24 +124,32 @@ impl<A: AppItem> Core<A> {
                 Err(_) => tool_update(&update),
             },
             "tool_call_update" => tool_update(&update),
-            "usage_update" => serde_json::from_value::<acp::UsageUpdate>(update.clone()).ok().map(|usage| {
-                Said::Usage(Usage {
-                    used: usage.used,
-                    size: usage.size,
-                    cost: usage.cost.map(|cost| Cost {
-                        amount: cost.amount,
-                        currency: agent_text(&cost.currency, 16),
-                    }),
-                })
-            }),
-            "plan" | "available_commands_update" | "current_mode_update" | "config_option_update" | "session_info_update" => {
-                Some(Said::Later(tag.clone()))
-            }
+            "usage_update" => serde_json::from_value::<acp::UsageUpdate>(update.clone())
+                .ok()
+                .map(|usage| {
+                    Said::Usage(Usage {
+                        used: usage.used,
+                        size: usage.size,
+                        cost: usage.cost.map(|cost| Cost {
+                            amount: cost.amount,
+                            currency: agent_text(&cost.currency, 16),
+                        }),
+                    })
+                }),
+            "plan"
+            | "available_commands_update"
+            | "current_mode_update"
+            | "config_option_update"
+            | "session_info_update" => Some(Said::Later(tag.clone())),
             // Notices, compaction, and anything newer than CAF.
             _ => None,
         };
         read.unwrap_or_else(|| {
-            let what = if tag.is_empty() { "session/update".to_owned() } else { agent_text(&tag, 64) };
+            let what = if tag.is_empty() {
+                "session/update".to_owned()
+            } else {
+                agent_text(&tag, 64)
+            };
             Said::Unknown(Unknown { what, raw: update })
         })
     }
@@ -139,56 +166,111 @@ impl<A: AppItem> Core<A> {
         match said {
             Said::Text { thinking: true, .. } if !self.host.shows.thinking => {}
             Said::Text { text, .. } if text.trim().is_empty() && self.open_turn(chat).is_none() => {
-                report(out, Level::Debug, "ignored blank words outside any turn".to_owned());
+                report(
+                    out,
+                    Level::Debug,
+                    "ignored blank words outside any turn".to_owned(),
+                );
             }
             Said::Text { text, thinking } => {
-                let Some(turn) = self.live_turn(now, chat, out) else { return };
+                let Some(turn) = self.live_turn(now, chat, out) else {
+                    return;
+                };
                 let last = self.turn(chat, turn).and_then(|each| each.items.last());
-                let grows = last.filter(|item| item.window.end == End::Open).and_then(|item| match &item.kind {
-                    ItemKind::Words(_) if !thinking => Some(item.id),
-                    ItemKind::Thinking(_) if thinking => Some(item.id),
-                    _ => None,
-                });
+                let grows = last
+                    .filter(|item| item.window.end == End::Open)
+                    .and_then(|item| match &item.kind {
+                        ItemKind::Words(_) if !thinking => Some(item.id),
+                        ItemKind::Thinking(_) if thinking => Some(item.id),
+                        _ => None,
+                    });
                 match grows {
                     Some(item) => self.append(chat, item, &text),
                     None => {
-                        let kind = if thinking { ItemKind::Thinking(text) } else { ItemKind::Words(text) };
+                        let kind = if thinking {
+                            ItemKind::Thinking(text)
+                        } else {
+                            ItemKind::Words(text)
+                        };
                         self.add_live_item(now, chat, turn, kind, Window::open(now));
                     }
                 }
             }
             Said::Tool { id, change } => self.live_tool(now, chat, id, change, out),
             Said::Usage(usage) => self.set_usage(chat, usage),
-            Said::User(_) => report(out, Level::Debug, "the agent told the user's message back: not kept twice".to_owned()),
-            Said::Later(what) => report(out, Level::Debug, format!("not kept yet, until a later feature: {what}")),
+            Said::User(_) => report(
+                out,
+                Level::Debug,
+                "the agent told the user's message back: not kept twice".to_owned(),
+            ),
+            Said::Later(what) => report(
+                out,
+                Level::Debug,
+                format!("not kept yet, until a later feature: {what}"),
+            ),
             // Not the agent's own output: it never opens a turn.
             Said::Unknown(unknown) => match self.open_turn(chat) {
                 Some(turn) => {
-                    self.add_live_item(now, chat, turn, ItemKind::Unknown(unknown), Window::instant(now));
+                    self.add_live_item(
+                        now,
+                        chat,
+                        turn,
+                        ItemKind::Unknown(unknown),
+                        Window::instant(now),
+                    );
                 }
-                None => report(out, Level::Info, format!("chat {}: the agent said, outside any turn: {}", chat.0, said_of(&unknown))),
+                None => report(
+                    out,
+                    Level::Info,
+                    format!(
+                        "chat {}: the agent said, outside any turn: {}",
+                        chat.0,
+                        said_of(&unknown)
+                    ),
+                ),
             },
         }
     }
 
     /// The tool call a permission request names, `call`: the one CAF has
     /// seen, or a new one from what the request says of it.
-    pub(super) fn tool_named(&mut self, now: Now, chat: ChatId, call: &Value, out: &mut Vec<Directive>) -> Option<ItemId> {
+    pub(super) fn tool_named(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        call: &Value,
+        out: &mut Vec<Directive>,
+    ) -> Option<ItemId> {
         let id = call.get("toolCallId").and_then(Value::as_str)?;
         if let Some(item) = self.runs.get(&chat).and_then(|run| run.tools.get(id)) {
             return Some(*item);
         }
         let mut update = call.clone();
         update["sessionUpdate"] = Value::from("tool_call_update");
-        let Said::Tool { id, change } = self.read_update(update) else { return None };
+        let Said::Tool { id, change } = self.read_update(update) else {
+            return None;
+        };
         self.live_tool(now, chat, id.clone(), change, out);
-        self.runs.get(&chat).and_then(|run| run.tools.get(&id)).copied()
+        self.runs
+            .get(&chat)
+            .and_then(|run| run.tools.get(&id))
+            .copied()
     }
 
     /// Adds an item to a live turn, ending words or thinking before it.
-    fn add_live_item(&mut self, now: Now, chat: ChatId, turn: TurnId, kind: ItemKind<A>, window: Window) -> ItemId {
+    fn add_live_item(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        turn: TurnId,
+        kind: ItemKind<A>,
+        window: Window,
+    ) -> ItemId {
         let last = self.turn(chat, turn).and_then(|each| each.items.last());
-        let streaming = last.filter(|item| item.window.end == End::Open && matches!(item.kind, ItemKind::Words(_) | ItemKind::Thinking(_)));
+        let streaming = last.filter(|item| {
+            item.window.end == End::Open
+                && matches!(item.kind, ItemKind::Words(_) | ItemKind::Thinking(_))
+        });
         if let Some(item) = streaming.map(|item| item.id) {
             self.end_item(now, chat, item);
         }
@@ -197,8 +279,18 @@ impl<A: AppItem> Core<A> {
 
     /// A tool call, new or changed. A change to one CAF has seen lands on
     /// its own item, in whichever turn that is.
-    fn live_tool(&mut self, now: Now, chat: ChatId, id: String, change: ToolChange, out: &mut Vec<Directive>) {
-        let known = self.runs.get(&chat).and_then(|run| run.tools.get(&id).copied());
+    fn live_tool(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        id: String,
+        change: ToolChange,
+        out: &mut Vec<Directive>,
+    ) {
+        let known = self
+            .runs
+            .get(&chat)
+            .and_then(|run| run.tools.get(&id).copied());
         let current = known.and_then(|item| match &self.item(chat, item)?.kind {
             ItemKind::Tool(tool) => Some(tool.clone()),
             _ => None,
@@ -212,8 +304,19 @@ impl<A: AppItem> Core<A> {
                     self.end_item(now, chat, item);
                 }
             }
-            _ if self.runs.get(&chat).is_some_and(|run| run.dropped_tools.contains(&id)) => {
-                report(out, Level::Debug, format!("chat {}: dropped an update to a tool call dropped as in flight", chat.0));
+            _ if self
+                .runs
+                .get(&chat)
+                .is_some_and(|run| run.dropped_tools.contains(&id)) =>
+            {
+                report(
+                    out,
+                    Level::Debug,
+                    format!(
+                        "chat {}: dropped an update to a tool call dropped as in flight",
+                        chat.0
+                    ),
+                );
             }
             _ => {
                 let Some(turn) = self.live_turn(now, chat, out) else {
@@ -224,7 +327,11 @@ impl<A: AppItem> Core<A> {
                 };
                 let tool = change.new_tool();
                 let done = matches!(tool.status, ToolStatus::Done | ToolStatus::Failed);
-                let window = if done { Window::instant(now) } else { Window::open(now) };
+                let window = if done {
+                    Window::instant(now)
+                } else {
+                    Window::open(now)
+                };
                 let item = self.add_live_item(now, chat, turn, ItemKind::Tool(tool), window);
                 if let Some(run) = self.runs.get_mut(&chat) {
                     run.tools.insert(id, item);
@@ -238,7 +345,8 @@ impl<A: AppItem> Core<A> {
     /// times aren't known.
     fn replayed(&mut self, now: Now, chat: ChatId, said: Said, out: &mut Vec<Directive>) {
         // Each update replayed shows the agent is still at it.
-        if let Some(super::state::Open::Asked { proc, id }) = self.runs.get(&chat).map(|run| &run.open)
+        if let Some(super::state::Open::Asked { proc, id }) =
+            self.runs.get(&chat).map(|run| &run.open)
             && let Some(pending) = self.pending.get_mut(&(*proc, *id))
             && pending.deadline.is_some()
         {
@@ -251,15 +359,26 @@ impl<A: AppItem> Core<A> {
                 if self.grow_import(chat, &text, thinking) {
                     return;
                 }
-                if thinking { ItemKind::Thinking(text) } else { ItemKind::Words(text) }
+                if thinking {
+                    ItemKind::Thinking(text)
+                } else {
+                    ItemKind::Words(text)
+                }
             }
             Said::Tool { id, change } => {
-                let known = self.runs.get(&chat).and_then(|run| run.tools.get(&id).copied());
+                let known = self
+                    .runs
+                    .get(&chat)
+                    .and_then(|run| run.tools.get(&id).copied());
                 let run = self.runs.get_mut(&chat);
-                let found = run.and_then(|run| run.import.as_mut()).and_then(|turn| {
-                    turn.items.iter_mut().find(|item| Some(item.id) == known)
-                });
-                if let Some(Item { kind: ItemKind::Tool(tool), .. }) = found {
+                let found = run
+                    .and_then(|run| run.import.as_mut())
+                    .and_then(|turn| turn.items.iter_mut().find(|item| Some(item.id) == known));
+                if let Some(Item {
+                    kind: ItemKind::Tool(tool),
+                    ..
+                }) = found
+                {
                     change.apply(tool);
                     return;
                 }
@@ -270,7 +389,13 @@ impl<A: AppItem> Core<A> {
                 return;
             }
             Said::Usage(usage) => return self.set_usage(chat, usage),
-            Said::Later(what) => return report(out, Level::Debug, format!("not kept yet, until a later feature: {what}")),
+            Said::Later(what) => {
+                return report(
+                    out,
+                    Level::Debug,
+                    format!("not kept yet, until a later feature: {what}"),
+                );
+            }
             Said::Unknown(unknown) => ItemKind::Unknown(unknown),
         };
         self.import_item(chat, kind);
@@ -279,8 +404,14 @@ impl<A: AppItem> Core<A> {
     /// A replayed message from the user: it starts a turn, unless the turn
     /// it started has nothing yet, when it's another part of it.
     fn replayed_user(&mut self, chat: ChatId, text: String) {
-        let Some(run) = self.runs.get_mut(&chat) else { return };
-        if let Some(Turn { starter: Starter::User(message), items, .. }) = &mut run.import
+        let Some(run) = self.runs.get_mut(&chat) else {
+            return;
+        };
+        if let Some(Turn {
+            starter: Starter::User(message),
+            items,
+            ..
+        }) = &mut run.import
             && items.is_empty()
         {
             message.parts.push(Part::Text(text));
@@ -377,7 +508,13 @@ impl ToolChange {
 /// for a notice its title and description, which are written for the
 /// user. Cleaned and capped, as the agent's words.
 fn said_of(unknown: &Unknown) -> String {
-    let text = |key: &str| unknown.raw.get(key).and_then(Value::as_str).map(|text| agent_text(text, MOST_NOTICE));
+    let text = |key: &str| {
+        unknown
+            .raw
+            .get(key)
+            .and_then(Value::as_str)
+            .map(|text| agent_text(text, MOST_NOTICE))
+    };
     match (text("title"), text("description")) {
         (Some(title), Some(description)) => format!("{}: {title}: {description}", unknown.what),
         (Some(title), None) => format!("{}: {title}", unknown.what),
@@ -398,7 +535,10 @@ fn tool_update(update: &Value) -> Option<Said> {
             kind: call.fields.kind.map(tool_kind),
             status: call.fields.status.map(tool_status),
             input: call.fields.raw_input,
-            output: output_of(call.fields.content.as_deref(), call.fields.raw_output.as_ref()),
+            output: output_of(
+                call.fields.content.as_deref(),
+                call.fields.raw_output.as_ref(),
+            ),
         },
     })
 }
@@ -417,7 +557,10 @@ pub(super) fn settle_imported<A: AppItem>(turn: &mut Turn<A>) {
 
 /// The text of a chunk update: `None` if it isn't text.
 fn text_of(update: &Value) -> Option<String> {
-    match serde_json::from_value::<acp::ContentChunk>(update.clone()).ok()?.content {
+    match serde_json::from_value::<acp::ContentChunk>(update.clone())
+        .ok()?
+        .content
+    {
         acp::ContentBlock::Text(text) => Some(text.text),
         _ => None,
     }

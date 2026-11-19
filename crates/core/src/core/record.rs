@@ -80,7 +80,9 @@ impl<A: AppItem> Core<A> {
 
     /// Sets where `chat` stands with its agent.
     pub(super) fn set_state(&mut self, chat: ChatId, state: ChatState) {
-        let Some(whole) = self.chats.get_mut(&chat) else { return };
+        let Some(whole) = self.chats.get_mut(&chat) else {
+            return;
+        };
         if whole.state != state {
             whole.state = state.clone();
             self.record(chat, Change::State(state));
@@ -89,7 +91,9 @@ impl<A: AppItem> Core<A> {
 
     /// Adds `turn` to the end of `chat`.
     pub(super) fn add_turn(&mut self, chat: ChatId, turn: Turn<A>) {
-        let Some(whole) = self.chats.get_mut(&chat) else { return };
+        let Some(whole) = self.chats.get_mut(&chat) else {
+            return;
+        };
         whole.turns.push(turn.clone());
         self.record(chat, Change::TurnAdded(turn));
     }
@@ -97,8 +101,14 @@ impl<A: AppItem> Core<A> {
     /// Adds `turn` to `chat` before its first turn waiting to be sent, or
     /// at the end if none is.
     pub(super) fn add_turn_before_waiting(&mut self, chat: ChatId, turn: Turn<A>) {
-        let Some(whole) = self.chats.get_mut(&chat) else { return };
-        let Some(at) = whole.turns.iter().position(|each| each.life == TurnLife::Waiting) else {
+        let Some(whole) = self.chats.get_mut(&chat) else {
+            return;
+        };
+        let Some(at) = whole
+            .turns
+            .iter()
+            .position(|each| each.life == TurnLife::Waiting)
+        else {
             return self.add_turn(chat, turn);
         };
         let before = whole.turns[at].id;
@@ -120,8 +130,13 @@ impl<A: AppItem> Core<A> {
     /// Moves a turn on in its life, ending it at `now` if the new life
     /// is an end.
     pub(super) fn set_life(&mut self, now: Now, chat: ChatId, turn: TurnId, life: TurnLife) {
-        let Some(each) = self.turn_mut(chat, turn) else { return };
-        let ends = !matches!(life, TurnLife::Waiting | TurnLife::Running | TurnLife::Stopping);
+        let Some(each) = self.turn_mut(chat, turn) else {
+            return;
+        };
+        let ends = !matches!(
+            life,
+            TurnLife::Waiting | TurnLife::Running | TurnLife::Stopping
+        );
         if ends {
             each.window.end = End::At(now.wall);
         }
@@ -131,7 +146,13 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Adds an item to a turn, and returns its id.
-    pub(super) fn add_item(&mut self, chat: ChatId, turn: TurnId, kind: ItemKind<A>, window: Window) -> ItemId {
+    pub(super) fn add_item(
+        &mut self,
+        chat: ChatId,
+        turn: TurnId,
+        kind: ItemKind<A>,
+        window: Window,
+    ) -> ItemId {
         let id = ItemId(self.ids.take());
         let item = Item {
             id,
@@ -149,7 +170,12 @@ impl<A: AppItem> Core<A> {
     /// An item of `chat`'s, by id: in whichever turn it is.
     pub(super) fn item(&self, chat: ChatId, item: ItemId) -> Option<&Item<A>> {
         let whole = self.chats.get(&chat)?;
-        whole.turns.iter().rev().flat_map(|turn| turn.items.iter().rev()).find(|each| each.id == item)
+        whole
+            .turns
+            .iter()
+            .rev()
+            .flat_map(|turn| turn.items.iter().rev())
+            .find(|each| each.id == item)
     }
 
     fn item_mut(&mut self, chat: ChatId, item: ItemId) -> Option<&mut Item<A>> {
@@ -161,26 +187,44 @@ impl<A: AppItem> Core<A> {
 
     /// Adds `text` to the end of words or thinking.
     pub(super) fn append(&mut self, chat: ChatId, item: ItemId, text: &str) {
-        let Some(each) = self.item_mut(chat, item) else { return };
+        let Some(each) = self.item_mut(chat, item) else {
+            return;
+        };
         match &mut each.kind {
             ItemKind::Words(words) | ItemKind::Thinking(words) => words.push_str(text),
             _ => return,
         }
-        self.record(chat, Change::Appended { item, text: text.to_owned() });
+        self.record(
+            chat,
+            Change::Appended {
+                item,
+                text: text.to_owned(),
+            },
+        );
     }
 
     /// Ends an item at `now`, if it hasn't ended.
     pub(super) fn end_item(&mut self, now: Now, chat: ChatId, item: ItemId) {
-        let Some(each) = self.item_mut(chat, item) else { return };
+        let Some(each) = self.item_mut(chat, item) else {
+            return;
+        };
         if each.window.end == End::Open {
             each.window.end = End::At(now.wall);
-            self.record(chat, Change::ItemEnded { item, end: End::At(now.wall) });
+            self.record(
+                chat,
+                Change::ItemEnded {
+                    item,
+                    end: End::At(now.wall),
+                },
+            );
         }
     }
 
     /// Sets a tool call as it is now.
     pub(super) fn set_tool(&mut self, chat: ChatId, item: ItemId, tool: ToolCall<A>) {
-        let Some(each) = self.item_mut(chat, item) else { return };
+        let Some(each) = self.item_mut(chat, item) else {
+            return;
+        };
         if let ItemKind::Tool(old) = &mut each.kind
             && *old != tool
         {
@@ -191,7 +235,9 @@ impl<A: AppItem> Core<A> {
 
     /// Sets how full the agent's memory is.
     pub(super) fn set_usage(&mut self, chat: ChatId, usage: Usage) {
-        let Some(whole) = self.chats.get_mut(&chat) else { return };
+        let Some(whole) = self.chats.get_mut(&chat) else {
+            return;
+        };
         if whole.usage.as_ref() != Some(&usage) {
             whole.usage = Some(usage.clone());
             self.record(chat, Change::Usage(usage));
@@ -215,7 +261,9 @@ impl<A: AppItem> Core<A> {
 
     /// Takes a question away, answered or withdrawn.
     pub(super) fn unask(&mut self, chat: ChatId, question: QuestionId) {
-        let Some(whole) = self.chats.get_mut(&chat) else { return };
+        let Some(whole) = self.chats.get_mut(&chat) else {
+            return;
+        };
         let before = whole.questions.len();
         whole.questions.retain(|each| each.id != question);
         if whole.questions.len() != before {

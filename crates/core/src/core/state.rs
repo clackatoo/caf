@@ -10,7 +10,9 @@ use super::clean::Tail;
 use crate::acp::RequestId;
 use crate::agent::McpServer;
 use crate::chat::{AppItem, Note, Turn};
-use crate::ids::{AgentName, AgentSessionId, ChatId, ConnectionId, ItemId, QuestionId, Ticket, TurnId};
+use crate::ids::{
+    AgentName, AgentSessionId, ChatId, ConnectionId, ItemId, QuestionId, Ticket, TurnId,
+};
 use crate::profiles::ProfileReport;
 use crate::question::PermissionOption;
 use crate::time::Mono;

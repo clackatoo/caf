@@ -31,7 +31,9 @@ use crate::chat::{AppItem, Chat, NoAppItems, UserMessage};
 use crate::directive::{Directive, Level, Report};
 use crate::event::{Event, HostCommand};
 use crate::host::Host;
-use crate::ids::{AgentName, AgentSessionId, ChangeNo, ChatId, ConnectionId, QuestionId, Ticket, TurnId};
+use crate::ids::{
+    AgentName, AgentSessionId, ChangeNo, ChatId, ConnectionId, QuestionId, Ticket, TurnId,
+};
 use crate::profiles::ProfileReport;
 use crate::question::Answer;
 use crate::time::{Mono, Now};
@@ -181,7 +183,10 @@ impl<A: AppItem> Core<A> {
     pub(crate) fn starting_ids_at(host: Host, agents: Vec<AgentSpec>, first: u64) -> Self {
         Self {
             host,
-            agents: agents.into_iter().map(|agent| (agent.name.clone(), agent)).collect(),
+            agents: agents
+                .into_iter()
+                .map(|agent| (agent.name.clone(), agent))
+                .collect(),
             chats: BTreeMap::new(),
             ids: Ids { next: first, first },
             runs: BTreeMap::new(),
@@ -202,7 +207,11 @@ impl<A: AppItem> Core<A> {
         match event {
             Event::Host(command) => {
                 if let Err(refused) = self.command(now, command, out) {
-                    report(out, Level::Debug, format!("refused a host command: {refused:?}"));
+                    report(
+                        out,
+                        Level::Debug,
+                        format!("refused a host command: {refused:?}"),
+                    );
                 }
             }
             Event::Agent { process, event } => self.agent_event(now, process, event, out),
@@ -221,7 +230,12 @@ impl<A: AppItem> Core<A> {
     ///
     /// [`Refused::NoSuchAgent`], [`Refused::RelativeFolder`] or
     /// [`Refused::Unsendable`].
-    pub fn open_chat(&mut self, now: Now, open: OpenChat, out: &mut Vec<Directive>) -> Result<ChatId, Refused> {
+    pub fn open_chat(
+        &mut self,
+        now: Now,
+        open: OpenChat,
+        out: &mut Vec<Directive>,
+    ) -> Result<ChatId, Refused> {
         let chat = ChatId(self.ids.next);
         self.command(now, HostCommand::OpenChat { chat, open }, out)?;
         self.finish(now, out);
@@ -239,9 +253,23 @@ impl<A: AppItem> Core<A> {
     ///
     /// [`Refused::NoSuchChat`], [`Refused::Closed`], [`Refused::QueueFull`],
     /// [`Refused::Unsupported`] or [`Refused::CommandNotAlone`].
-    pub fn send(&mut self, now: Now, chat: ChatId, message: UserMessage, out: &mut Vec<Directive>) -> Result<TurnId, Refused> {
+    pub fn send(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        message: UserMessage,
+        out: &mut Vec<Directive>,
+    ) -> Result<TurnId, Refused> {
         let turn = TurnId(self.ids.next);
-        self.command(now, HostCommand::Send { chat, turn, message }, out)?;
+        self.command(
+            now,
+            HostCommand::Send {
+                chat,
+                turn,
+                message,
+            },
+            out,
+        )?;
         self.finish(now, out);
         Ok(turn)
     }
@@ -264,7 +292,12 @@ impl<A: AppItem> Core<A> {
     /// # Errors
     ///
     /// [`Refused::NoSuchChat`] or [`Refused::NothingToStop`].
-    pub fn stop(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) -> Result<(), Refused> {
+    pub fn stop(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
         self.command(now, HostCommand::Stop { chat }, out)?;
         self.finish(now, out);
         Ok(())
@@ -276,7 +309,13 @@ impl<A: AppItem> Core<A> {
     ///
     /// [`Refused::NoSuchQuestion`] if it isn't waiting (answered,
     /// withdrawn or never asked), or [`Refused::WrongAnswer`].
-    pub fn answer(&mut self, now: Now, question: QuestionId, answer: Answer, out: &mut Vec<Directive>) -> Result<(), Refused> {
+    pub fn answer(
+        &mut self,
+        now: Now,
+        question: QuestionId,
+        answer: Answer,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
         self.command(now, HostCommand::Answer { question, answer }, out)?;
         self.finish(now, out);
         Ok(())
@@ -288,7 +327,12 @@ impl<A: AppItem> Core<A> {
     /// # Errors
     ///
     /// [`Refused::NoSuchChat`].
-    pub fn close_chat(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) -> Result<(), Refused> {
+    pub fn close_chat(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
         self.command(now, HostCommand::CloseChat { chat }, out)?;
         self.finish(now, out);
         Ok(())
@@ -305,7 +349,10 @@ impl<A: AppItem> Core<A> {
     /// Whether nothing is running: no adapters, nothing waiting.
     #[must_use]
     pub fn is_idle(&self) -> bool {
-        self.procs.is_empty() && self.pending.is_empty() && self.asks.is_empty() && self.runs.values().all(|run| run.running.is_none())
+        self.procs.is_empty()
+            && self.pending.is_empty()
+            && self.asks.is_empty()
+            && self.runs.values().all(|run| run.running.is_none())
     }
 
     /// A chat, by id.
@@ -343,19 +390,34 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Carries out a host's command, as a method or a recorded event.
-    fn command(&mut self, now: Now, command: HostCommand<A>, out: &mut Vec<Directive>) -> Result<(), Refused> {
+    fn command(
+        &mut self,
+        now: Now,
+        command: HostCommand<A>,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
         match command {
             HostCommand::OpenChat { chat, open } => self.open_chat_as(now, chat, open, out),
-            HostCommand::Send { chat, turn, message } => self.send_as(now, chat, turn, message, out),
+            HostCommand::Send {
+                chat,
+                turn,
+                message,
+            } => self.send_as(now, chat, turn, message, out),
             HostCommand::Stop { chat } => self.stop_chat(now, chat, out),
-            HostCommand::Answer { question, answer } => self.answer_question(now, question, answer, out),
+            HostCommand::Answer { question, answer } => {
+                self.answer_question(now, question, answer, out)
+            }
             HostCommand::CloseChat { chat } => self.close(now, chat, out),
             HostCommand::Shutdown => {
                 self.shut_down(now, out);
                 Ok(())
             }
             HostCommand::AddAppItem(_) => {
-                report(out, Level::Debug, "app items come in a later feature".to_owned());
+                report(
+                    out,
+                    Level::Debug,
+                    "app items come in a later feature".to_owned(),
+                );
                 Ok(())
             }
         }
@@ -368,13 +430,20 @@ impl<A: AppItem> Core<A> {
         self.advance_all(now, out);
         for chat in std::mem::take(&mut self.dirty) {
             if let Some(log) = self.logs.get(&chat) {
-                out.push(Directive::Viewer(crate::directive::ViewerDirective::Changed { chat, latest: log.latest() }));
+                out.push(Directive::Viewer(
+                    crate::directive::ViewerDirective::Changed {
+                        chat,
+                        latest: log.latest(),
+                    },
+                ));
             }
         }
         let next = self.next_deadline();
         if next != self.wake {
             self.wake = next;
-            out.push(Directive::Timer(crate::directive::TimerDirective::WakeAt(next)));
+            out.push(Directive::Timer(crate::directive::TimerDirective::WakeAt(
+                next,
+            )));
         }
     }
 

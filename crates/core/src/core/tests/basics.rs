@@ -11,48 +11,66 @@ fn a_chat_starts_its_adapter_opens_a_session_and_runs_a_turn() {
     let mut script = Script::new(host());
     let (chat, out) = script.open(OpenChat::new("claude", "/work"));
     assert_eq!(chat, Ok(CHAT));
-    assert_has(&json!(out[0]), &json!({ "start": PROC, "program": "/opt/caf/claude-agent-acp" }));
-    assert_has(&sent(&out, "initialize"), &json!({
-        "id": 1000,
-        "params": {
-            "protocolVersion": 1,
-            "clientInfo": { "name": "caf-test", "version": "1.2.3" },
-            "clientCapabilities": {
-                "fs": { "readTextFile": false, "writeTextFile": false },
-                "terminal": false,
-                "session": { "notices": {} },
-                "elicitation": { "form": {}, "url": {} }
+    assert_has(
+        &json!(out[0]),
+        &json!({ "start": PROC, "program": "/opt/caf/claude-agent-acp" }),
+    );
+    assert_has(
+        &sent(&out, "initialize"),
+        &json!({
+            "id": 1000,
+            "params": {
+                "protocolVersion": 1,
+                "clientInfo": { "name": "caf-test", "version": "1.2.3" },
+                "clientCapabilities": {
+                    "fs": { "readTextFile": false, "writeTextFile": false },
+                    "terminal": false,
+                    "session": { "notices": {} },
+                    "elicitation": { "form": {}, "url": {} }
+                }
             }
-        }
-    }));
+        }),
+    );
     // Waits for initialize: 30 s.
     assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 30_000 })]);
     assert_has(&script.chat(CHAT), &json!({ "state": "Opening" }));
 
     script.at(240);
     let out = script.answers(PROC, 1000, &claude_init());
-    assert_has(&sent(&out, "session/new"), &json!({ "id": 1001, "params": { "cwd": "/work", "mcpServers": [] } }));
+    assert_has(
+        &sent(&out, "session/new"),
+        &json!({ "id": 1001, "params": { "cwd": "/work", "mcpServers": [] } }),
+    );
     // The session must open within 30 s.
     assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 30_240 })]);
-    assert_has(&script.state(), &json!({ "conns": { "1001": { "profile": {
+    assert_has(
+        &script.state(),
+        &json!({ "conns": { "1001": { "profile": {
         "profile": { "Builtin": "ClaudeAgentAcp" },
         "adapter": { "name": "@agentclientprotocol/claude-agent-acp", "version": "0.98.0" },
         "checked": "Yes"
-    } } } }));
+    } } } }),
+    );
 
     script.at(1000);
     let out = script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
-    assert_has(&script.chat(CHAT), &json!({ "state": { "Open": { "session": SESSION } } }));
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "state": { "Open": { "session": SESSION } } }),
+    );
     // Nothing waits on a deadline now.
     assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": null })]);
 
     script.at(2000);
     let (turn, out) = script.send(CHAT, "Fix the tests");
     let turn = turn.expect("sent");
-    assert_has(&sent(&out, "session/prompt"), &json!({
-        "id": 1002,
-        "params": { "sessionId": SESSION, "prompt": [{ "type": "text", "text": "Fix the tests" }] }
-    }));
+    assert_has(
+        &sent(&out, "session/prompt"),
+        &json!({
+            "id": 1002,
+            "params": { "sessionId": SESSION, "prompt": [{ "type": "text", "text": "Fix the tests" }] }
+        }),
+    );
 
     script.at(2100);
     script.update(PROC, SESSION, &json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "On " } }));
@@ -60,12 +78,15 @@ fn a_chat_starts_its_adapter_opens_a_session_and_runs_a_turn() {
     script.at(3000);
     let out = script.answers(PROC, 1002, &json!({ "stopReason": "end_turn" }));
     assert!(with(&out, "changed").len() == 1, "viewers hear: {out:#?}");
-    assert_has(&script.chat(CHAT), &json!({ "turns": [{
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "turns": [{
         "id": turn.0,
         "starter": { "User": { "parts": [{ "Text": "Fix the tests" }] } },
         "life": "Finished",
         "window": { "start": 1_800_000_002_000_i64, "end": { "At": 1_800_000_003_000_i64 } },
         "items": [{ "kind": { "Words": "On it." }, "window": { "end": { "At": 1_800_000_003_000_i64 } } }],
         "imported": false
-    }] }));
+    }] }),
+    );
 }

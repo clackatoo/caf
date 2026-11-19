@@ -103,7 +103,13 @@ impl Tail {
     /// Takes more of the error output, keeping the last `keep` non-empty
     /// lines of at most `line_bytes` each, and an unended line of at most
     /// `biggest` bytes. Returns the lines it finished, cleaned.
-    pub(crate) fn push(&mut self, bytes: &[u8], keep: usize, line_bytes: usize, biggest: usize) -> Vec<String> {
+    pub(crate) fn push(
+        &mut self,
+        bytes: &[u8],
+        keep: usize,
+        line_bytes: usize,
+        biggest: usize,
+    ) -> Vec<String> {
         let mut finished = Vec::new();
         let mut rest = bytes;
         while let Some(at) = rest.iter().position(|&b| b == b'\n') {
@@ -148,7 +154,10 @@ mod tests {
 
     #[test]
     fn hidden_characters_show_as_what_they_are() {
-        assert_eq!(unhidden("a\u{202e}b\u{1b}[31m\u{7f}\r\nc\u{200b}"), "a<U+202E>b^[[31m^?\nc<U+200B>");
+        assert_eq!(
+            unhidden("a\u{202e}b\u{1b}[31m\u{7f}\r\nc\u{200b}"),
+            "a<U+202E>b^[[31m^?\nc<U+200B>"
+        );
     }
 
     #[test]

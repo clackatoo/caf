@@ -30,7 +30,10 @@ fn stop_answers_the_agents_questions_then_tells_it_and_waits() {
     let (turn, _) = script.send(CHAT, "go");
     let turn = turn.expect("sent");
     let out = script.says(PROC, &permission(7, "tool-1"));
-    assert_has(&json!(with(&out, "decide")), &json!([{ "decide": 1005, "chat": CHAT.0, "title": "Run `cargo test`", "input": "{\"command\":\"cargo test\"}" }]));
+    assert_has(
+        &json!(with(&out, "decide")),
+        &json!([{ "decide": 1005, "chat": CHAT.0, "title": "Run `cargo test`", "input": "{\"command\":\"cargo test\"}" }]),
+    );
 
     script.at(500);
     let (stopped, out) = script.stop(CHAT);
@@ -38,21 +41,30 @@ fn stop_answers_the_agents_questions_then_tells_it_and_waits() {
     // ACP: the questions are answered "cancelled" before the agent hears
     // to stop.
     let written = writes(&out);
-    assert_eq!(written[0].1, json!({ "jsonrpc": "2.0", "id": 7, "result": { "outcome": { "outcome": "cancelled" } } }));
+    assert_eq!(
+        written[0].1,
+        json!({ "jsonrpc": "2.0", "id": 7, "result": { "outcome": { "outcome": "cancelled" } } })
+    );
     assert_eq!(written[1].1["method"], "session/cancel");
     assert_eq!(written[1].1["params"], json!({ "sessionId": SESSION }));
     assert!(out.contains(&json!({ "withdrawn": 1005 })));
     assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 15_500 })]);
-    assert_has(&script.chat(CHAT), &json!({ "turns": [{ "id": turn.0, "life": "Stopping" }] }));
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "turns": [{ "id": turn.0, "life": "Stopping" }] }),
+    );
 
     script.at(600);
     let out = script.answers(PROC, 1002, &json!({ "stopReason": "cancelled" }));
     assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": null })]);
-    assert_has(&script.chat(CHAT), &json!({ "turns": [{
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "turns": [{
         "id": turn.0,
         "life": "Stopped",
         "items": [{ "id": 1004, "kind": { "Tool": { "title": "Run `cargo test`", "kind": "Execute", "status": "Failed" } } }]
-    }] }));
+    }] }),
+    );
 }
 
 #[test]
@@ -64,11 +76,17 @@ fn an_agent_that_doesnt_stop_fails_the_turn_and_is_restarted() {
 
     script.at(16_000);
     let out = script.woken();
-    assert_eq!(with(&out, "signal"), [json!({ "signal": PROC, "is": "Term" })]);
-    assert_has(&script.chat(CHAT), &json!({
-        "state": { "Lost": { "reason": "Restarted" } },
-        "turns": [{ "id": turn.expect("sent").0, "life": { "Failed": { "reason": "DidNotStop", "agent_said": null, "remedy": "SendAgain" } } }]
-    }));
+    assert_eq!(
+        with(&out, "signal"),
+        [json!({ "signal": PROC, "is": "Term" })]
+    );
+    assert_has(
+        &script.chat(CHAT),
+        &json!({
+            "state": { "Lost": { "reason": "Restarted" } },
+            "turns": [{ "id": turn.expect("sent").0, "life": { "Failed": { "reason": "DidNotStop", "agent_said": null, "remedy": "SendAgain" } } }]
+        }),
+    );
     assert_eq!(script.state()["pending"], json!([]));
 
     // Its late answer changes nothing.
@@ -101,7 +119,10 @@ fn stop_refuses_when_theres_nothing_to_stop_and_waits_for_a_stop_already_asked()
 #[test]
 fn stop_while_opening_abandons_the_open_and_a_late_session_is_closed() {
     let mut script = Script::new(host());
-    script.open(OpenChat::new("claude", "/work")).0.expect("opened");
+    script
+        .open(OpenChat::new("claude", "/work"))
+        .0
+        .expect("opened");
     let (turn, _) = script.send(CHAT, "hello");
     let out = script.answers(PROC, 1000, &claude_init());
     sent(&out, "session/new");
@@ -111,16 +132,28 @@ fn stop_while_opening_abandons_the_open_and_a_late_session_is_closed() {
     assert!(writes(&out).is_empty(), "nothing to tell the agent");
     // Abandoned, the open still has a watchdog: 60 s.
     assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 60_000 })]);
-    assert_has(&script.chat(CHAT), &json!({
-        "state": { "Lost": { "reason": "Stopped" } },
-        "turns": [{ "id": turn.expect("sent").0, "life": "Stopped" }]
-    }));
+    assert_has(
+        &script.chat(CHAT),
+        &json!({
+            "state": { "Lost": { "reason": "Stopped" } },
+            "turns": [{ "id": turn.expect("sent").0, "life": "Stopped" }]
+        }),
+    );
 
     let out = script.answers(PROC, 1001, &json!({ "sessionId": "late" }));
-    assert_eq!(sent(&out, "session/close")["params"], json!({ "sessionId": "late" }));
-    assert_has(&script.chat(CHAT), &json!({ "state": { "Lost": { "reason": "Stopped" } } }));
+    assert_eq!(
+        sent(&out, "session/close")["params"],
+        json!({ "sessionId": "late" })
+    );
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "state": { "Lost": { "reason": "Stopped" } } }),
+    );
     // Closing it has a watchdog too.
-    assert_eq!(script.state()["pending"][0]["pending"]["deadline"], json!(60_000_000_000_u64));
+    assert_eq!(
+        script.state()["pending"][0]["pending"]["deadline"],
+        json!(60_000_000_000_u64)
+    );
     script.answers(PROC, 1002, &json!({}));
 }
 
@@ -129,11 +162,18 @@ fn a_permission_request_answered_after_stop_is_refused() {
     let mut script = Script::with_claude();
     script.send(CHAT, "go").0.expect("sent");
     let out = script.says(PROC, &permission(9, "tool-1"));
-    let ticket = with(&out, "decide")[0]["decide"].as_u64().expect("a ticket");
+    let ticket = with(&out, "decide")[0]["decide"]
+        .as_u64()
+        .expect("a ticket");
     script.policy(ticket, crate::event::PolicyAnswer::AskUser);
-    let question = script.chat(CHAT)["questions"][0]["id"].as_u64().expect("asked");
+    let question = script.chat(CHAT)["questions"][0]["id"]
+        .as_u64()
+        .expect("asked");
     script.stop(CHAT).0.expect("stopping");
-    let (late, out) = script.answer(crate::ids::QuestionId(question), crate::question::Answer::Permission(crate::question::OptionId("allow".to_owned())));
+    let (late, out) = script.answer(
+        crate::ids::QuestionId(question),
+        crate::question::Answer::Permission(crate::question::OptionId("allow".to_owned())),
+    );
     assert_eq!(late, Err(Refused::NoSuchQuestion));
     assert!(replies(&out, &json!(9)).is_empty());
 }
@@ -141,14 +181,20 @@ fn a_permission_request_answered_after_stop_is_refused() {
 #[test]
 fn a_session_opening_after_caf_gave_up_on_it_is_still_closed() {
     let mut script = Script::new(host());
-    script.open(OpenChat::new("claude", "/work")).0.expect("opened");
+    script
+        .open(OpenChat::new("claude", "/work"))
+        .0
+        .expect("opened");
     script.answers(PROC, 1000, &claude_init());
     script.stop(CHAT).0.expect("stopped");
     script.at(60_000);
     script.woken();
     assert_eq!(script.state()["pending"], json!([]));
     let out = script.answers(PROC, 1001, &json!({ "sessionId": "very-late" }));
-    assert_eq!(sent(&out, "session/close")["params"], json!({ "sessionId": "very-late" }));
+    assert_eq!(
+        sent(&out, "session/close")["params"],
+        json!({ "sessionId": "very-late" })
+    );
     script.answers(PROC, 1002, &json!({}));
 }
 
@@ -159,7 +205,10 @@ fn a_turn_being_stopped_when_its_adapter_dies_ends_stopped() {
     script.stop(CHAT).0.expect("stopping");
     script.agent(PROC, AgentEvent::Exited(Exit::Code(1)));
     script.agent(PROC, AgentEvent::OutputClosed);
-    assert_has(&script.chat(CHAT), &json!({ "turns": [{ "id": turn.expect("sent").0, "life": "Stopped" }] }));
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "turns": [{ "id": turn.expect("sent").0, "life": "Stopped" }] }),
+    );
 }
 
 #[test]
@@ -176,11 +225,21 @@ fn a_stuck_session_that_cant_be_closed_isnt_continued() {
     script.stop(CHAT).0.expect("stopping");
     script.at(15_000);
     let out = script.woken();
-    assert!(with(&out, "signal").is_empty(), "the other chat's turn goes on");
+    assert!(
+        with(&out, "signal").is_empty(),
+        "the other chat's turn goes on"
+    );
     let (_, out) = script.send(CHAT, "again");
-    assert!(sent(&out, "session/new")["params"].get("sessionId").is_none());
+    assert!(
+        sent(&out, "session/new")["params"]
+            .get("sessionId")
+            .is_none()
+    );
     script.answers(PROC, 1005, &json!({ "sessionId": "a2" }));
-    assert_has(&script.chat(CHAT), &json!({ "turns": [{}, { "starter": "Caf", "items": [{ "kind": { "Note": "SessionStuck" } }] }, { "life": "Running" }] }));
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "turns": [{}, { "starter": "Caf", "items": [{ "kind": { "Note": "SessionStuck" } }] }, { "life": "Running" }] }),
+    );
     script.answers(PROC, 1004, &json!({ "stopReason": "end_turn" }));
     script.answers(PROC, 1006, &json!({ "stopReason": "end_turn" }));
 }

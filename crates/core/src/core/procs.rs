@@ -46,9 +46,22 @@ pub(super) enum Cause {
 
 impl<A: AppItem> Core<A> {
     /// Takes in what happened to an adapter process.
-    pub(super) fn agent_event(&mut self, now: Now, proc: Ticket, event: AgentEvent, out: &mut Vec<Directive>) {
+    pub(super) fn agent_event(
+        &mut self,
+        now: Now,
+        proc: Ticket,
+        event: AgentEvent,
+        out: &mut Vec<Directive>,
+    ) {
         let Some(each) = self.procs.get_mut(&proc) else {
-            report(out, Level::Debug, format!("ignored an event from process {}, which CAF has let go", proc.0));
+            report(
+                out,
+                Level::Debug,
+                format!(
+                    "ignored an event from process {}, which CAF has let go",
+                    proc.0
+                ),
+            );
             return;
         };
         match event {
@@ -73,9 +86,15 @@ impl<A: AppItem> Core<A> {
     /// want, starting a process for them if it must, or stops its process
     /// if no chat needs it.
     pub(super) fn advance(&mut self, now: Now, conn: ConnectionId, out: &mut Vec<Directive>) {
-        let Some(each) = self.conns.get(&conn) else { return };
+        let Some(each) = self.conns.get(&conn) else {
+            return;
+        };
         let wanted: Vec<ChatId> = (each.chats.iter().copied())
-            .filter(|chat| self.runs.get(chat).is_some_and(|run| run.open == Open::Wanted))
+            .filter(|chat| {
+                self.runs
+                    .get(chat)
+                    .is_some_and(|run| run.open == Open::Wanted)
+            })
             .collect();
         let current = each.current;
         if each.chats.is_empty() {
@@ -87,7 +106,10 @@ impl<A: AppItem> Core<A> {
             return;
         }
         if let Some(proc) = current
-            && self.procs.get(&proc).is_some_and(|each| matches!(each.init, Init::Waiting { deadline: None }))
+            && self
+                .procs
+                .get(&proc)
+                .is_some_and(|each| matches!(each.init, Init::Waiting { deadline: None }))
         {
             return self.still_slow(now, proc, &wanted, out);
         }
@@ -96,7 +118,11 @@ impl<A: AppItem> Core<A> {
         }
         match current {
             Some(proc) => {
-                if self.procs.get(&proc).is_some_and(|each| each.caps().is_some() && each.askable()) {
+                if self
+                    .procs
+                    .get(&proc)
+                    .is_some_and(|each| each.caps().is_some() && each.askable())
+                {
                     for chat in wanted {
                         self.ask_session(now, chat, proc, out);
                     }
@@ -116,7 +142,14 @@ impl<A: AppItem> Core<A> {
     /// seems stuck.
     fn still_slow(&mut self, now: Now, proc: Ticket, wanted: &[ChatId], out: &mut Vec<Directive>) {
         if wanted.is_empty() {
-            report(out, Level::Info, format!("stopping process {}: it never answered, and nobody waits for it", proc.0));
+            report(
+                out,
+                Level::Info,
+                format!(
+                    "stopping process {}: it never answered, and nobody waits for it",
+                    proc.0
+                ),
+            );
             return self.lose_process(now, proc, Cause::Restarted, out);
         }
         for &chat in wanted {
@@ -135,8 +168,12 @@ impl<A: AppItem> Core<A> {
 
     /// Starts a process for `conn`, and introduces CAF to it.
     fn start_process(&mut self, now: Now, conn: ConnectionId, out: &mut Vec<Directive>) {
-        let Some(each) = self.conns.get_mut(&conn) else { return };
-        let Some(spec) = self.agents.get(&each.agent) else { return };
+        let Some(each) = self.conns.get_mut(&conn) else {
+            return;
+        };
+        let Some(spec) = self.agents.get(&each.agent) else {
+            return;
+        };
         let proc = Ticket(self.ids.take());
         each.current = Some(proc);
         out.push(Directive::Agent(AgentDirective::Start {
@@ -148,36 +185,53 @@ impl<A: AppItem> Core<A> {
             "clientCapabilities": spec.profile.declarations(),
             "clientInfo": { "name": self.host.name, "version": self.host.version },
         });
-        self.procs.insert(proc, Proc {
-            conn,
-            next_id: i64::try_from(self.ids.first).unwrap_or(0),
-            init: Init::Waiting {
-                deadline: Some(now.mono.after(self.host.timers.initialize)),
+        self.procs.insert(
+            proc,
+            Proc {
+                conn,
+                next_id: i64::try_from(self.ids.first).unwrap_or(0),
+                init: Init::Waiting {
+                    deadline: Some(now.mono.after(self.host.timers.initialize)),
+                },
+                pid: None,
+                exited: false,
+                output_closed: false,
+                gone: None,
+                retired: false,
+                finalized: false,
+                ending: None,
+                group: Group::Unwatched,
+                sessions: std::collections::BTreeSet::new(),
+                given_up: std::collections::BTreeMap::new(),
             },
-            pid: None,
-            exited: false,
-            output_closed: false,
-            gone: None,
-            retired: false,
-            finalized: false,
-            ending: None,
-            group: Group::Unwatched,
-            sessions: std::collections::BTreeSet::new(),
-            given_up: std::collections::BTreeMap::new(),
-        });
-        self.request(now, proc, ("initialize", params), Purpose::Initialize, None, out);
+        );
+        self.request(
+            now,
+            proc,
+            ("initialize", params),
+            Purpose::Initialize,
+            None,
+            out,
+        );
     }
 
     /// The process couldn't be started: its chats are told, and it's let
     /// go, as there's nothing to stop.
     fn start_failed(&mut self, now: Now, proc: Ticket, error: &str, out: &mut Vec<Directive>) {
-        report(out, Level::Warn, format!("couldn't start an adapter: {}", agent_text(error, 300)));
+        report(
+            out,
+            Level::Warn,
+            format!("couldn't start an adapter: {}", agent_text(error, 300)),
+        );
         let error = agent_text(error, self.host.limits.failure_text);
         if let Some(each) = self.procs.get_mut(&proc) {
             each.finalized = true;
             each.init = Init::Failed;
             // Nothing ran, so there's nothing to signal.
-            each.ending = Some(Ending { firm: true, next: None });
+            each.ending = Some(Ending {
+                firm: true,
+                next: None,
+            });
         }
         self.lose_process(now, proc, Cause::Failed(Lost::CouldNotStart { error }), out);
         // Let go at once, so the driver frees what it kept for it.
@@ -189,8 +243,16 @@ impl<A: AppItem> Core<A> {
     }
 
     /// `initialize` was answered.
-    pub(super) fn initialized(&mut self, now: Now, proc: Ticket, reply: Reply, out: &mut Vec<Directive>) {
-        let Some(conn) = self.procs.get(&proc).map(|each| each.conn) else { return };
+    pub(super) fn initialized(
+        &mut self,
+        now: Now,
+        proc: Ticket,
+        reply: Reply,
+        out: &mut Vec<Directive>,
+    ) {
+        let Some(conn) = self.procs.get(&proc).map(|each| each.conn) else {
+            return;
+        };
         let result = match reply {
             Reply::Result(result) => {
                 let version = result.get("protocolVersion").and_then(Value::as_u64);
@@ -209,7 +271,11 @@ impl<A: AppItem> Core<A> {
         let result = match result {
             Ok(result) => result,
             Err(lost) => {
-                report(out, Level::Warn, format!("an adapter failed initialize: {lost:?}"));
+                report(
+                    out,
+                    Level::Warn,
+                    format!("an adapter failed initialize: {lost:?}"),
+                );
                 if let Some(each) = self.procs.get_mut(&proc) {
                     each.init = Init::Failed;
                 }
@@ -217,16 +283,31 @@ impl<A: AppItem> Core<A> {
             }
         };
         let adapter = (result.get("agentInfo")).and_then(|info| {
-            let text = |key: &str| info.get(key).and_then(Value::as_str).map(|text| agent_text(text, MOST_NAME));
+            let text = |key: &str| {
+                info.get(key)
+                    .and_then(Value::as_str)
+                    .map(|text| agent_text(text, MOST_NAME))
+            };
             Some(AdapterInfo {
                 name: text("name")?,
                 version: text("version")?,
             })
         });
-        let Some(each) = self.conns.get_mut(&conn) else { return };
-        let Some(spec) = self.agents.get(&each.agent) else { return };
+        let Some(each) = self.conns.get_mut(&conn) else {
+            return;
+        };
+        let Some(spec) = self.agents.get(&each.agent) else {
+            return;
+        };
         let checked = spec.profile.check(adapter);
-        report(out, Level::Info, format!("agent {}: {:?}, checked {:?}", each.agent.0, checked.adapter, checked.checked));
+        report(
+            out,
+            Level::Info,
+            format!(
+                "agent {}: {:?}, checked {:?}",
+                each.agent.0, checked.adapter, checked.checked
+            ),
+        );
         each.profile = Some(checked);
         if let Some(each) = self.procs.get_mut(&proc) {
             each.init = Init::Ready(caps(&result));
@@ -248,7 +329,9 @@ impl<A: AppItem> Core<A> {
     /// so nothing it started goes on with a session.
     fn went(&mut self, now: Now, proc: Ticket, out: &mut Vec<Directive>) {
         let gone = self.host.timers.gone;
-        let Some(each) = self.procs.get_mut(&proc) else { return };
+        let Some(each) = self.procs.get_mut(&proc) else {
+            return;
+        };
         if each.gone.is_none() {
             each.gone = Some(Gone {
                 since: now.mono,
@@ -266,7 +349,13 @@ impl<A: AppItem> Core<A> {
     /// little longer, up to a limit.
     pub(super) fn heard(&mut self, now: Now, proc: Ticket) {
         let wait = self.host.timers.gone;
-        let Some(gone) = self.procs.get_mut(&proc).and_then(|each| each.gone.as_mut()) else { return };
+        let Some(gone) = self
+            .procs
+            .get_mut(&proc)
+            .and_then(|each| each.gone.as_mut())
+        else {
+            return;
+        };
         let most = gone.since.after(wait * MOST_GONE);
         gone.until = gone.until.max(now.mono.after(wait).min(most));
     }
@@ -274,7 +363,9 @@ impl<A: AppItem> Core<A> {
     /// The gone process's last words are in: everything that hung on it
     /// is told, and its group is watched until it's empty.
     pub(super) fn finalize(&mut self, now: Now, proc: Ticket, out: &mut Vec<Directive>) {
-        let Some(each) = self.procs.get_mut(&proc) else { return };
+        let Some(each) = self.procs.get_mut(&proc) else {
+            return;
+        };
         if each.finalized {
             return;
         }
@@ -287,7 +378,9 @@ impl<A: AppItem> Core<A> {
     pub(super) fn check_group(&mut self, proc: Ticket, out: &mut Vec<Directive>) {
         if let Some(each) = self.procs.get_mut(&proc) {
             each.group = Group::Asked;
-            out.push(Directive::Agent(AgentDirective::CheckGroup { process: proc }));
+            out.push(Directive::Agent(AgentDirective::CheckGroup {
+                process: proc,
+            }));
         }
     }
 
@@ -295,7 +388,9 @@ impl<A: AppItem> Core<A> {
     /// the process is let go, and its connection may start another.
     fn group_said(&mut self, now: Now, proc: Ticket, empty: bool, out: &mut Vec<Directive>) {
         let poll = self.host.timers.group_poll;
-        let Some(each) = self.procs.get_mut(&proc) else { return };
+        let Some(each) = self.procs.get_mut(&proc) else {
+            return;
+        };
         if each.group != Group::Asked {
             return;
         }
@@ -318,15 +413,27 @@ impl<A: AppItem> Core<A> {
     pub(super) fn forget_by(&self, proc: Ticket) -> Option<crate::time::Mono> {
         let timers = &self.host.timers;
         let gone = self.procs.get(&proc)?.gone.as_ref()?;
-        Some(gone.since.after(timers.gone * MOST_GONE + timers.kill_after))
+        Some(
+            gone.since
+                .after(timers.gone * MOST_GONE + timers.kill_after),
+        )
     }
 
     /// A gone process's time is up: it's let go, killed again first in
     /// case its group never emptied.
     pub(super) fn forget_now(&mut self, now: Now, proc: Ticket, out: &mut Vec<Directive>) {
         self.finalize(now, proc, out);
-        let Some(each) = self.procs.remove(&proc) else { return };
-        report(out, Level::Warn, format!("letting process {} go: its group or output never ended in time", proc.0));
+        let Some(each) = self.procs.remove(&proc) else {
+            return;
+        };
+        report(
+            out,
+            Level::Warn,
+            format!(
+                "letting process {} go: its group or output never ended in time",
+                proc.0
+            ),
+        );
         out.push(signal(proc, Signal::Kill));
         out.push(Directive::Agent(AgentDirective::Forget { process: proc }));
         self.advance(now, each.conn, out);
@@ -335,7 +442,9 @@ impl<A: AppItem> Core<A> {
 
     /// Takes `proc` from its connection: nothing new is asked of it.
     fn retire(&mut self, proc: Ticket) {
-        let Some(each) = self.procs.get_mut(&proc) else { return };
+        let Some(each) = self.procs.get_mut(&proc) else {
+            return;
+        };
         each.retired = true;
         if let Some(conn) = self.conns.get_mut(&each.conn)
             && conn.current == Some(proc)
@@ -347,9 +456,17 @@ impl<A: AppItem> Core<A> {
     /// Stops `proc`: firmly (SIGTERM now, SIGKILL after `kill_after`), or
     /// gently (its input closed first, then the same). A gentle stop
     /// turns firm if asked.
-    pub(super) fn end_proc(&mut self, now: Now, proc: Ticket, firm: bool, out: &mut Vec<Directive>) {
+    pub(super) fn end_proc(
+        &mut self,
+        now: Now,
+        proc: Ticket,
+        firm: bool,
+        out: &mut Vec<Directive>,
+    ) {
         let wait = self.host.timers.kill_after;
-        let Some(each) = self.procs.get_mut(&proc) else { return };
+        let Some(each) = self.procs.get_mut(&proc) else {
+            return;
+        };
         match &mut each.ending {
             None if firm => {
                 out.push(signal(proc, Signal::Term));
@@ -359,7 +476,9 @@ impl<A: AppItem> Core<A> {
                 });
             }
             None => {
-                out.push(Directive::Agent(AgentDirective::CloseInput { process: proc }));
+                out.push(Directive::Agent(AgentDirective::CloseInput {
+                    process: proc,
+                }));
                 each.ending = Some(Ending {
                     firm,
                     next: Some((Step::Term, now.mono.after(wait))),
@@ -379,7 +498,13 @@ impl<A: AppItem> Core<A> {
     /// The next step in stopping `proc` is due.
     pub(super) fn end_step(&mut self, now: Now, proc: Ticket, out: &mut Vec<Directive>) {
         let wait = self.host.timers.kill_after;
-        let Some(ending) = self.procs.get_mut(&proc).and_then(|each| each.ending.as_mut()) else { return };
+        let Some(ending) = self
+            .procs
+            .get_mut(&proc)
+            .and_then(|each| each.ending.as_mut())
+        else {
+            return;
+        };
         match ending.next.take() {
             Some((Step::Term, _)) => {
                 out.push(signal(proc, Signal::Term));
@@ -393,11 +518,22 @@ impl<A: AppItem> Core<A> {
     /// Restarts `conn`'s process `proc`, or tells everything that hung on
     /// it that it's gone, for `cause`: every chat on it hears, not just
     /// the one that asked, and every request to it or from it ends.
-    pub(super) fn lose_process(&mut self, now: Now, proc: Ticket, cause: Cause, out: &mut Vec<Directive>) {
-        let Some(each) = self.procs.get(&proc) else { return };
+    pub(super) fn lose_process(
+        &mut self,
+        now: Now,
+        proc: Ticket,
+        cause: Cause,
+        out: &mut Vec<Directive>,
+    ) {
+        let Some(each) = self.procs.get(&proc) else {
+            return;
+        };
         let conn = each.conn;
         let initialized = each.caps().is_some();
-        let was_current = self.conns.get(&conn).is_some_and(|each| each.current == Some(proc));
+        let was_current = self
+            .conns
+            .get(&conn)
+            .is_some_and(|each| each.current == Some(proc));
         self.retire(proc);
         self.end_proc(now, proc, true, out);
         let chats: Vec<ChatId> = (self.runs.iter())
@@ -424,7 +560,11 @@ impl<A: AppItem> Core<A> {
             Cause::Failed(_) => false,
         };
         if !chats.is_empty() {
-            report(out, Level::Info, format!("process {} lost: {lost:?}", proc.0));
+            report(
+                out,
+                Level::Info,
+                format!("process {} lost: {lost:?}", proc.0),
+            );
         }
         for chat in chats {
             self.session_lost(now, chat, lost.clone(), reopen, out);
@@ -445,7 +585,10 @@ impl<A: AppItem> Core<A> {
 
     /// Lets go of a connection nothing uses.
     pub(super) fn tidy(&mut self, conn: ConnectionId) {
-        let unused = self.conns.get(&conn).is_some_and(|each| each.chats.is_empty() && each.current.is_none());
+        let unused = self
+            .conns
+            .get(&conn)
+            .is_some_and(|each| each.chats.is_empty() && each.current.is_none());
         if unused && !self.procs.values().any(|each| each.conn == conn) {
             self.conns.remove(&conn);
         }
@@ -454,9 +597,18 @@ impl<A: AppItem> Core<A> {
     /// Takes in what the adapter wrote to its error output.
     fn stderr(&mut self, proc: Ticket, bytes: &[u8]) {
         let limits = &self.host.limits;
-        let Some(conn) = self.procs.get(&proc).map(|each| each.conn) else { return };
-        let Some(each) = self.conns.get_mut(&conn) else { return };
-        let lines = each.stderr.push(bytes, limits.stderr_lines, limits.stderr_line_bytes, limits.biggest_message);
+        let Some(conn) = self.procs.get(&proc).map(|each| each.conn) else {
+            return;
+        };
+        let Some(each) = self.conns.get_mut(&conn) else {
+            return;
+        };
+        let lines = each.stderr.push(
+            bytes,
+            limits.stderr_lines,
+            limits.stderr_line_bytes,
+            limits.biggest_message,
+        );
         let profile = profile_of(each, &self.agents);
         if lines.iter().any(|line| profile.wants_sign_in(line)) {
             each.sign_in = true;
@@ -465,17 +617,27 @@ impl<A: AppItem> Core<A> {
 
     /// The profile `chat`'s connection reads its adapter with.
     pub(super) fn profile_of_chat(&self, chat: ChatId) -> ProfileChoice {
-        let conn = self.runs.get(&chat).and_then(|run| self.conns.get(&run.conn));
-        conn.map_or(ProfileChoice::Cautious, |conn| profile_of(conn, &self.agents))
+        let conn = self
+            .runs
+            .get(&chat)
+            .and_then(|run| self.conns.get(&run.conn));
+        conn.map_or(ProfileChoice::Cautious, |conn| {
+            profile_of(conn, &self.agents)
+        })
     }
 }
 
 /// The profile a connection reads its adapter with: as checked, once the
 /// adapter said who it is, or as chosen until then.
-fn profile_of(conn: &Conn, agents: &std::collections::BTreeMap<crate::ids::AgentName, crate::agent::AgentSpec>) -> ProfileChoice {
+fn profile_of(
+    conn: &Conn,
+    agents: &std::collections::BTreeMap<crate::ids::AgentName, crate::agent::AgentSpec>,
+) -> ProfileChoice {
     match &conn.profile {
         Some(report) => report.profile.clone(),
-        None => agents.get(&conn.agent).map_or(ProfileChoice::Cautious, |spec| spec.profile.clone()),
+        None => agents
+            .get(&conn.agent)
+            .map_or(ProfileChoice::Cautious, |spec| spec.profile.clone()),
     }
 }
 
@@ -496,5 +658,8 @@ fn caps(result: &Value) -> Caps {
 
 /// A directive sending `signal` to `proc`'s group.
 fn signal(proc: Ticket, signal: Signal) -> Directive {
-    Directive::Agent(AgentDirective::Signal { process: proc, signal })
+    Directive::Agent(AgentDirective::Signal {
+        process: proc,
+        signal,
+    })
 }

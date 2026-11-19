@@ -182,12 +182,19 @@ impl ProfileChoice {
             };
         }
         let data = data(error);
-        let kind = data.as_ref().and_then(|data| data.get("errorKind")).and_then(Value::as_str);
+        let kind = data
+            .as_ref()
+            .and_then(|data| data.get("errorKind"))
+            .and_then(Value::as_str);
         let (reason, remedy) = match (self, kind) {
             (Self::Builtin(Builtin::ClaudeAgentAcp), Some(kind)) => claude_kind(kind),
             _ => (FailureReason::Other, Some(Remedy::SendAgain)),
         };
-        Said { reason, remedy, words }
+        Said {
+            reason,
+            remedy,
+            words,
+        }
     }
 
     /// Whether `error`, the answer to a request about a session, says the
@@ -198,7 +205,9 @@ impl ProfileChoice {
             return true;
         }
         match self {
-            Self::Builtin(Builtin::ClaudeAgentAcp) => words(error).is_some_and(|words| words.contains("Session not found")),
+            Self::Builtin(Builtin::ClaudeAgentAcp) => {
+                words(error).is_some_and(|words| words.contains("Session not found"))
+            }
             Self::Cautious => false,
         }
     }
@@ -208,7 +217,9 @@ impl ProfileChoice {
     pub(crate) fn wants_sign_in(&self, line: &str) -> bool {
         match self {
             Self::Builtin(Builtin::ClaudeAgentAcp) => {
-                line.contains("/login") || line.contains("Invalid API key") || line.contains("Not logged in")
+                line.contains("/login")
+                    || line.contains("Invalid API key")
+                    || line.contains("Not logged in")
             }
             Self::Cautious => false,
         }
@@ -251,7 +262,10 @@ fn claude_kind(kind: &str) -> (FailureReason, Option<Remedy>) {
 
 /// An error's `data`, as JSON.
 fn data(error: &RpcError) -> Option<Value> {
-    error.data.as_ref().and_then(|data| serde_json::from_str(data.get()).ok())
+    error
+        .data
+        .as_ref()
+        .and_then(|data| serde_json::from_str(data.get()).ok())
 }
 
 /// What the agent said in `error`, uncleaned. The ACP SDK sends an
@@ -259,7 +273,11 @@ fn data(error: &RpcError) -> Option<Value> {
 /// thrown text in `data.details`; Claude's adapter puts its own text
 /// after "Internal error: ".
 fn words(error: &RpcError) -> Option<String> {
-    let message = error.message.strip_prefix("Internal error: ").unwrap_or(&error.message).trim();
+    let message = error
+        .message
+        .strip_prefix("Internal error: ")
+        .unwrap_or(&error.message)
+        .trim();
     let details = data(error).and_then(|data| data.get("details")?.as_str().map(str::to_owned));
     match message {
         "" | "Internal error" => details.filter(|details| !details.trim().is_empty()),
@@ -298,16 +316,31 @@ mod tests {
 
     #[test]
     fn the_claude_profile_is_checked_by_the_adapters_name_and_version() {
-        assert_eq!(claude().check(adapter(CLAUDE_NAME, "0.98.0")).checked, Checked::Yes);
+        assert_eq!(
+            claude().check(adapter(CLAUDE_NAME, "0.98.0")).checked,
+            Checked::Yes
+        );
         let newer = claude().check(adapter(CLAUDE_NAME, "0.99.1"));
         assert_eq!((newer.checked, newer.profile), (Checked::Newer, claude()));
         for older in ["0.97.9", "0.98", "0.98.0-rc.1", "x", ""] {
             let report = claude().check(adapter(CLAUDE_NAME, older));
-            assert_eq!((report.checked, report.profile), (Checked::Mismatch, ProfileChoice::Cautious), "{older}");
+            assert_eq!(
+                (report.checked, report.profile),
+                (Checked::Mismatch, ProfileChoice::Cautious),
+                "{older}"
+            );
         }
-        assert_eq!(claude().check(adapter("codex-acp", "0.98.0")).checked, Checked::Mismatch);
+        assert_eq!(
+            claude().check(adapter("codex-acp", "0.98.0")).checked,
+            Checked::Mismatch
+        );
         assert_eq!(claude().check(None).checked, Checked::Mismatch);
-        assert_eq!(ProfileChoice::Cautious.check(adapter(CLAUDE_NAME, "0.98.0")).checked, Checked::Cautious);
+        assert_eq!(
+            ProfileChoice::Cautious
+                .check(adapter(CLAUDE_NAME, "0.98.0"))
+                .checked,
+            Checked::Cautious
+        );
     }
 
     #[test]

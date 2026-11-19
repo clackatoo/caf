@@ -12,14 +12,24 @@ use super::procs::Cause;
 use super::state::{Open, Purpose, Running};
 use super::{Core, Refused, report};
 use crate::acp::RpcError;
-use crate::chat::{AppItem, ChatState, Failure, FailureReason, ItemKind, Part, Remedy, Starter, ToolStatus, Turn, TurnLife, UserMessage};
+use crate::chat::{
+    AppItem, ChatState, Failure, FailureReason, ItemKind, Part, Remedy, Starter, ToolStatus, Turn,
+    TurnLife, UserMessage,
+};
 use crate::directive::{Directive, Level};
 use crate::ids::{ChatId, TurnId};
 use crate::time::{End, Now, Window};
 
 impl<A: AppItem> Core<A> {
     /// Sends `message` in `chat` as turn `turn`.
-    pub(super) fn send_as(&mut self, now: Now, chat: ChatId, turn: TurnId, message: UserMessage, out: &mut Vec<Directive>) -> Result<(), Refused> {
+    pub(super) fn send_as(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        turn: TurnId,
+        message: UserMessage,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
         let whole = self.chats.get(&chat).ok_or(Refused::NoSuchChat)?;
         if whole.state == ChatState::Closed {
             return Err(Refused::Closed);
@@ -27,7 +37,8 @@ impl<A: AppItem> Core<A> {
         if message.parts.is_empty() {
             return Err(Refused::Unsupported);
         }
-        let command = (message.parts.iter()).any(|part| matches!(part, Part::Text(text) if is_command(text)));
+        let command =
+            (message.parts.iter()).any(|part| matches!(part, Part::Text(text) if is_command(text)));
         if command && message.parts.len() > 1 {
             return Err(Refused::CommandNotAlone);
         }
@@ -37,15 +48,22 @@ impl<A: AppItem> Core<A> {
         self.ids.seen(turn.0);
         self.shutting_down = false;
         self.end_agent_turn(now, chat);
-        self.add_turn(chat, Turn {
-            id: turn,
-            starter: Starter::User(message),
-            life: TurnLife::Waiting,
-            window: Window::open(now),
-            items: Vec::new(),
-            imported: false,
-        });
-        if self.runs.get(&chat).is_some_and(|run| run.open == Open::Idle) {
+        self.add_turn(
+            chat,
+            Turn {
+                id: turn,
+                starter: Starter::User(message),
+                life: TurnLife::Waiting,
+                window: Window::open(now),
+                items: Vec::new(),
+                imported: false,
+            },
+        );
+        if self
+            .runs
+            .get(&chat)
+            .is_some_and(|run| run.open == Open::Idle)
+        {
             self.want_open(now, chat, out);
         }
         self.pump(now, chat, out);
@@ -54,40 +72,83 @@ impl<A: AppItem> Core<A> {
 
     /// The turns of `chat` waiting to be sent, oldest first.
     pub(super) fn waiting_turns(&self, chat: ChatId) -> Vec<TurnId> {
-        let Some(whole) = self.chats.get(&chat) else { return Vec::new() };
-        (whole.turns.iter()).filter(|turn| turn.life == TurnLife::Waiting).map(|turn| turn.id).collect()
+        let Some(whole) = self.chats.get(&chat) else {
+            return Vec::new();
+        };
+        (whole.turns.iter())
+            .filter(|turn| turn.life == TurnLife::Waiting)
+            .map(|turn| turn.id)
+            .collect()
     }
 
     /// Sends `chat`'s next waiting turn, if its session is open and no
     /// turn is running.
     pub(super) fn pump(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) {
-        let Some(run) = self.runs.get(&chat) else { return };
-        let (Open::Live { proc }, None, Some(session)) = (&run.open, &run.running, &run.session) else { return };
+        let Some(run) = self.runs.get(&chat) else {
+            return;
+        };
+        let (Open::Live { proc }, None, Some(session)) = (&run.open, &run.running, &run.session)
+        else {
+            return;
+        };
         let (proc, session) = (*proc, session.clone());
-        let Some(turn) = self.waiting_turns(chat).first().copied() else { return };
-        let Some(Starter::User(message)) = self.turn(chat, turn).map(|each| each.starter.clone()) else { return };
+        let Some(turn) = self.waiting_turns(chat).first().copied() else {
+            return;
+        };
+        let Some(Starter::User(message)) = self.turn(chat, turn).map(|each| each.starter.clone())
+        else {
+            return;
+        };
         let prompt: Vec<Value> = (message.parts.iter())
             .map(|part| match part {
                 Part::Text(text) => json!({ "type": "text", "text": text }),
             })
             .collect();
         let params = json!({ "sessionId": session.0, "prompt": prompt });
-        let purpose = Purpose::Prompt { chat, turn, abandoned: false };
+        let purpose = Purpose::Prompt {
+            chat,
+            turn,
+            abandoned: false,
+        };
         // A prompt has no watchdog: an agent may work on one for an hour.
-        let Some(id) = self.request(now, proc, ("session/prompt", params), purpose, None, out) else { return };
+        let Some(id) = self.request(now, proc, ("session/prompt", params), purpose, None, out)
+        else {
+            return;
+        };
         if let Some(run) = self.runs.get_mut(&chat) {
-            run.running = Some(Running { turn, proc, id, stop_by: None });
+            run.running = Some(Running {
+                turn,
+                proc,
+                id,
+                stop_by: None,
+            });
         }
         self.set_life(now, chat, turn, TurnLife::Running);
     }
 
     /// The agent answered the prompt of `chat`'s turn `turn`.
-    pub(super) fn prompt_answered(&mut self, now: Now, chat: ChatId, turn: TurnId, reply: Reply, out: &mut Vec<Directive>) {
-        let Some(run) = self.runs.get_mut(&chat) else { return };
-        if run.running.as_ref().is_none_or(|running| running.turn != turn) {
+    pub(super) fn prompt_answered(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        turn: TurnId,
+        reply: Reply,
+        out: &mut Vec<Directive>,
+    ) {
+        let Some(run) = self.runs.get_mut(&chat) else {
+            return;
+        };
+        if run
+            .running
+            .as_ref()
+            .is_none_or(|running| running.turn != turn)
+        {
             return;
         }
-        let stopping = run.running.take().is_some_and(|running| running.stop_by.is_some());
+        let stopping = run
+            .running
+            .take()
+            .is_some_and(|running| running.stop_by.is_some());
         if let Reply::Error(error) = &reply
             && self.profile_of_chat(chat).session_gone(error)
         {
@@ -96,7 +157,9 @@ impl<A: AppItem> Core<A> {
         let life = match reply {
             Reply::Result(result) => ended_by(&result),
             Reply::Error(error) => TurnLife::Failed(self.failure(chat, turn, &error)),
-            Reply::Unreadable => TurnLife::Failed(failure(FailureReason::BadAnswer, Some(Remedy::SendAgain))),
+            Reply::Unreadable => {
+                TurnLife::Failed(failure(FailureReason::BadAnswer, Some(Remedy::SendAgain)))
+            }
         };
         // The agent's questions end with its turn.
         self.withdraw_asks(chat, out);
@@ -113,10 +176,22 @@ impl<A: AppItem> Core<A> {
     /// only: Claude's adapter says so before anything reaches the model.
     /// A turn the user was stopping ends stopped, and one the agent did
     /// something with, or that was already sent again, fails.
-    fn prompt_lost_session(&mut self, now: Now, chat: ChatId, turn: TurnId, stopping: bool, out: &mut Vec<Directive>) {
+    fn prompt_lost_session(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        turn: TurnId,
+        stopping: bool,
+        out: &mut Vec<Directive>,
+    ) {
         self.withdraw_asks(chat, out);
-        let heard = self.turn(chat, turn).is_some_and(|each| !each.items.is_empty());
-        let resent = self.runs.get(&chat).is_some_and(|run| run.resent == Some(turn));
+        let heard = self
+            .turn(chat, turn)
+            .is_some_and(|each| !each.items.is_empty());
+        let resent = self
+            .runs
+            .get(&chat)
+            .is_some_and(|run| run.resent == Some(turn));
         if stopping {
             self.end_turn(now, chat, turn, TurnLife::Stopped);
         } else if heard || resent {
@@ -137,12 +212,19 @@ impl<A: AppItem> Core<A> {
     fn failure(&self, chat: ChatId, turn: TurnId, error: &RpcError) -> Failure {
         let said = self.profile_of_chat(chat).failure(error);
         let most = self.host.limits.failure_text;
-        let words = said.words.map(|words| agent_text(&words, most)).filter(|words| !words.is_empty());
+        let words = said
+            .words
+            .map(|words| agent_text(&words, most))
+            .filter(|words| !words.is_empty());
         // Claude's adapter says a failure's text as words first, perhaps
         // after words of the answer: it's shown once, as those words.
         let said_already = |words: &String| {
             let last = self.turn(chat, turn).and_then(|each| each.items.last());
-            let ends = |text: &str| agent_text(text, usize::MAX).trim_end().ends_with(words.trim());
+            let ends = |text: &str| {
+                agent_text(text, usize::MAX)
+                    .trim_end()
+                    .ends_with(words.trim())
+            };
             last.is_some_and(|item| matches!(&item.kind, ItemKind::Words(text) if ends(text)))
         };
         Failure {
@@ -180,9 +262,13 @@ impl<A: AppItem> Core<A> {
 
     /// Ends the turn the agent started by itself, if one is open.
     pub(super) fn end_agent_turn(&mut self, now: Now, chat: ChatId) {
-        let Some(run) = self.runs.get_mut(&chat) else { return };
+        let Some(run) = self.runs.get_mut(&chat) else {
+            return;
+        };
         run.quiet_by = None;
-        let Some(turn) = run.agent_turn.take() else { return };
+        let Some(turn) = run.agent_turn.take() else {
+            return;
+        };
         self.end_turn(now, chat, turn, TurnLife::Finished);
     }
 
@@ -190,29 +276,52 @@ impl<A: AppItem> Core<A> {
     /// started by itself.
     pub(super) fn open_turn(&self, chat: ChatId) -> Option<TurnId> {
         let run = self.runs.get(&chat)?;
-        run.running.as_ref().map(|running| running.turn).or(run.agent_turn)
+        run.running
+            .as_ref()
+            .map(|running| running.turn)
+            .or(run.agent_turn)
     }
 
     /// The turn the agent's live output goes into: the open turn, or a new
     /// one it started by itself, unless one was just stopped and this was
     /// in flight.
-    pub(super) fn live_turn(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) -> Option<TurnId> {
+    pub(super) fn live_turn(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        out: &mut Vec<Directive>,
+    ) -> Option<TurnId> {
         if let Some(turn) = self.open_turn(chat) {
             return Some(turn);
         }
-        if self.runs.get(&chat)?.held_until.is_some_and(|until| now.mono < until) {
-            report(out, Level::Debug, format!("chat {}: dropped what the agent had in flight as its turn was stopped", chat.0));
+        if self
+            .runs
+            .get(&chat)?
+            .held_until
+            .is_some_and(|until| now.mono < until)
+        {
+            report(
+                out,
+                Level::Debug,
+                format!(
+                    "chat {}: dropped what the agent had in flight as its turn was stopped",
+                    chat.0
+                ),
+            );
             return None;
         }
         let turn = TurnId(self.ids.take());
-        self.add_turn(chat, Turn {
-            id: turn,
-            starter: Starter::Agent,
-            life: TurnLife::Running,
-            window: Window::open(now),
-            items: Vec::new(),
-            imported: false,
-        });
+        self.add_turn(
+            chat,
+            Turn {
+                id: turn,
+                starter: Starter::Agent,
+                life: TurnLife::Running,
+                window: Window::open(now),
+                items: Vec::new(),
+                imported: false,
+            },
+        );
         let run = self.runs.get_mut(&chat)?;
         run.agent_turn = Some(turn);
         run.quiet_by = Some(now.mono.after(self.host.timers.quiet));
@@ -244,12 +353,21 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Stops `chat`'s running turn and its waiting ones, or its opening.
-    pub(super) fn stop_chat(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) -> Result<(), Refused> {
+    pub(super) fn stop_chat(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
         let whole = self.chats.get(&chat).ok_or(Refused::NoSuchChat)?;
         let run = self.runs.get(&chat).ok_or(Refused::NoSuchChat)?;
         let waiting = self.waiting_turns(chat);
-        let opening = matches!(run.open, Open::Wanted | Open::Asked { .. }) && whole.state != ChatState::Closed;
-        let running = run.running.as_ref().map(|running| (running.turn, running.proc, running.stop_by.is_some()));
+        let opening = matches!(run.open, Open::Wanted | Open::Asked { .. })
+            && whole.state != ChatState::Closed;
+        let running = run
+            .running
+            .as_ref()
+            .map(|running| (running.turn, running.proc, running.stop_by.is_some()));
         let agent_turn = run.agent_turn;
         if waiting.is_empty() && running.is_none() && agent_turn.is_none() && !opening {
             return Err(Refused::NothingToStop);
@@ -264,9 +382,18 @@ impl<A: AppItem> Core<A> {
             let session = self.runs.get(&chat).and_then(|run| run.session.clone());
             match session.filter(|_| self.procs.get(&proc).is_some_and(|each| each.askable())) {
                 Some(session) => {
-                    self.notify(proc, "session/cancel", json!({ "sessionId": session.0 }), out);
+                    self.notify(
+                        proc,
+                        "session/cancel",
+                        json!({ "sessionId": session.0 }),
+                        out,
+                    );
                     let stop_by = now.mono.after(self.host.timers.stop);
-                    if let Some(running) = self.runs.get_mut(&chat).and_then(|run| run.running.as_mut()) {
+                    if let Some(running) = self
+                        .runs
+                        .get_mut(&chat)
+                        .and_then(|run| run.running.as_mut())
+                    {
                         running.stop_by = Some(stop_by);
                     }
                     self.set_life(now, chat, turn, TurnLife::Stopping);
@@ -291,10 +418,17 @@ impl<A: AppItem> Core<A> {
     /// turn ends, so it ends now, and what the agent had in flight opens
     /// no new turn for a moment.
     fn stop_agent_turn(&mut self, now: Now, chat: ChatId, turn: TurnId, out: &mut Vec<Directive>) {
-        let Some(run) = self.runs.get_mut(&chat) else { return };
+        let Some(run) = self.runs.get_mut(&chat) else {
+            return;
+        };
         run.held_until = Some(now.mono.after(IN_FLIGHT));
         if let (Open::Live { proc }, Some(session)) = (run.open, run.session.clone()) {
-            self.notify(proc, "session/cancel", json!({ "sessionId": session.0 }), out);
+            self.notify(
+                proc,
+                "session/cancel",
+                json!({ "sessionId": session.0 }),
+                out,
+            );
         }
         self.end_turn(now, chat, turn, TurnLife::Stopped);
     }
@@ -319,20 +453,37 @@ impl<A: AppItem> Core<A> {
     /// is mid-turn on it; otherwise only this chat's session is closed,
     /// where the agent can, and opened again with its next message.
     pub(super) fn stop_overdue(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) {
-        let Some(running) = self.give_up_prompt(now, chat) else { return };
-        report(out, Level::Warn, format!("chat {}: the agent didn't stop when asked", chat.0));
+        let Some(running) = self.give_up_prompt(now, chat) else {
+            return;
+        };
+        report(
+            out,
+            Level::Warn,
+            format!("chat {}: the agent didn't stop when asked", chat.0),
+        );
         let failed = failure(FailureReason::DidNotStop, Some(Remedy::SendAgain));
         self.end_turn(now, chat, running.turn, TurnLife::Failed(failed));
         if !self.busy_besides(running.proc, chat) {
             return self.lose_process(now, running.proc, Cause::Restarted, out);
         }
         let session = self.runs.get(&chat).and_then(|run| run.session.clone());
-        let closes = self.procs.get(&running.proc).and_then(|each| each.caps()).is_some_and(|caps| caps.close);
+        let closes = self
+            .procs
+            .get(&running.proc)
+            .and_then(|each| each.caps())
+            .is_some_and(|caps| caps.close);
         match (session, closes) {
             (Some(session), true) => {
                 let wait = self.host.timers.request;
                 let params = json!({ "sessionId": session.0 });
-                self.request(now, running.proc, ("session/close", params), Purpose::Close { session }, Some(wait), out);
+                self.request(
+                    now,
+                    running.proc,
+                    ("session/close", params),
+                    Purpose::Close { session },
+                    Some(wait),
+                    out,
+                );
             }
             // It can't be closed, and may still be running the stuck turn:
             // never continued, a new one is opened instead.
@@ -356,7 +507,10 @@ fn ended_by(result: &Value) -> TurnLife {
     match result.get("stopReason").and_then(Value::as_str) {
         Some("cancelled") => TurnLife::Stopped,
         Some("max_tokens") => TurnLife::Failed(failure(FailureReason::TooLong, None)),
-        Some("max_turn_requests") => TurnLife::Failed(failure(FailureReason::TooManySteps, Some(Remedy::SendAgain))),
+        Some("max_turn_requests") => TurnLife::Failed(failure(
+            FailureReason::TooManySteps,
+            Some(Remedy::SendAgain),
+        )),
         // The agent forgets the message: nothing to send again as it is.
         Some("refusal") => TurnLife::Failed(failure(FailureReason::Refused, None)),
         // `end_turn`, and any reason newer than CAF, read leniently.
@@ -377,7 +531,9 @@ fn failure(reason: FailureReason, remedy: Option<Remedy>) -> Failure {
 /// Whether `text` is a slash command: a `/` and a name with no other `/`
 /// in it, so a path isn't one.
 fn is_command(text: &str) -> bool {
-    let Some(rest) = text.trim_start().strip_prefix('/') else { return false };
+    let Some(rest) = text.trim_start().strip_prefix('/') else {
+        return false;
+    };
     let name = rest.split(char::is_whitespace).next().unwrap_or("");
     !name.is_empty() && !name.contains('/')
 }

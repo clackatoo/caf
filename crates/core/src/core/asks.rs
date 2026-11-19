@@ -33,17 +33,32 @@ const MOST_INPUT: usize = 64 << 10;
 
 impl<A: AppItem> Core<A> {
     /// The agent asks permission, as request `id` of `proc`.
-    pub(super) fn permission_asked(&mut self, now: Now, proc: Ticket, id: &RequestId, params: &Value, out: &mut Vec<Directive>) {
+    pub(super) fn permission_asked(
+        &mut self,
+        now: Now,
+        proc: Ticket,
+        id: &RequestId,
+        params: &Value,
+        out: &mut Vec<Directive>,
+    ) {
         let session = params.get("sessionId").and_then(Value::as_str);
         let chat = session.and_then(|session| self.chat_with_session(proc, session));
         let Some(chat) = chat else {
-            report(out, Level::Info, "refused a permission request for a session no chat holds".to_owned());
+            report(
+                out,
+                Level::Info,
+                "refused a permission request for a session no chat holds".to_owned(),
+            );
             self.reply(proc, id, Ok(cancelled()), out);
             return;
         };
         // Nothing replayed acts.
         if self.runs.get(&chat).is_some_and(|run| run.replaying) {
-            report(out, Level::Debug, "refused a permission request replayed with a session's history".to_owned());
+            report(
+                out,
+                Level::Debug,
+                "refused a permission request replayed with a session's history".to_owned(),
+            );
             self.reply(proc, id, Ok(cancelled()), out);
             return;
         }
@@ -60,15 +75,18 @@ impl<A: AppItem> Core<A> {
         let input = (call.get("rawInput").filter(|input| !input.is_null()))
             .map(|input| super::clean::cut(input.to_string(), MOST_INPUT));
         let ticket = Ticket(self.ids.take());
-        self.asks.insert(ticket, Ask {
-            proc,
-            id: id.clone(),
-            chat,
-            question: None,
-            options,
-            title: title.clone(),
-            tool,
-        });
+        self.asks.insert(
+            ticket,
+            Ask {
+                proc,
+                id: id.clone(),
+                chat,
+                question: None,
+                options,
+                title: title.clone(),
+                tool,
+            },
+        );
         out.push(Directive::Policy(PolicyDirective::Decide {
             ticket,
             chat,
@@ -77,13 +95,27 @@ impl<A: AppItem> Core<A> {
     }
 
     /// The policy answered.
-    pub(super) fn policy_answered(&mut self, now: Now, ticket: Ticket, answer: PolicyAnswer, out: &mut Vec<Directive>) {
+    pub(super) fn policy_answered(
+        &mut self,
+        now: Now,
+        ticket: Ticket,
+        answer: PolicyAnswer,
+        out: &mut Vec<Directive>,
+    ) {
         let Some(ask) = self.asks.get(&ticket) else {
-            report(out, Level::Debug, "ignored the policy's answer to a request that has ended".to_owned());
+            report(
+                out,
+                Level::Debug,
+                "ignored the policy's answer to a request that has ended".to_owned(),
+            );
             return;
         };
         if ask.question.is_some() {
-            report(out, Level::Debug, "ignored the policy answering twice".to_owned());
+            report(
+                out,
+                Level::Debug,
+                "ignored the policy answering twice".to_owned(),
+            );
             return;
         }
         match answer {
@@ -104,7 +136,9 @@ impl<A: AppItem> Core<A> {
         if !self.host.shows.permission_questions {
             return self.refuse(ticket, out);
         }
-        let Some(ask) = self.asks.get(&ticket) else { return };
+        let Some(ask) = self.asks.get(&ticket) else {
+            return;
+        };
         let kind = QuestionKind::Permission(Permission {
             tool: ask.tool,
             title: ask.title.clone(),
@@ -120,15 +154,20 @@ impl<A: AppItem> Core<A> {
     /// Refuses safely: once if the agent offers that, else always, else
     /// "cancelled".
     fn refuse(&mut self, ticket: Ticket, out: &mut Vec<Directive>) {
-        let Some(ask) = self.asks.get(&ticket) else { return };
-        let option = option(ask, OptionKind::RejectOnce).or_else(|| option(ask, OptionKind::RejectAlways));
+        let Some(ask) = self.asks.get(&ticket) else {
+            return;
+        };
+        let option =
+            option(ask, OptionKind::RejectOnce).or_else(|| option(ask, OptionKind::RejectAlways));
         self.settle(ticket, option, out);
     }
 
     /// Answers the request kept under `ticket` with `option`, or
     /// "cancelled", and forgets it.
     fn settle(&mut self, ticket: Ticket, option: Option<OptionId>, out: &mut Vec<Directive>) {
-        let Some(ask) = self.asks.remove(&ticket) else { return };
+        let Some(ask) = self.asks.remove(&ticket) else {
+            return;
+        };
         if let Some(question) = ask.question {
             self.unask(ask.chat, question);
         }
@@ -141,16 +180,38 @@ impl<A: AppItem> Core<A> {
 
     /// Answers the agent's request, or reports that its process has gone
     /// and it can't be.
-    fn reply_or_report(&mut self, proc: Ticket, id: &RequestId, result: Result<Value, (i64, String)>, out: &mut Vec<Directive>) {
+    fn reply_or_report(
+        &mut self,
+        proc: Ticket,
+        id: &RequestId,
+        result: Result<Value, (i64, String)>,
+        out: &mut Vec<Directive>,
+    ) {
         if !self.reply(proc, id, result, out) {
-            report(out, Level::Debug, "couldn't answer a permission request: its process has gone".to_owned());
+            report(
+                out,
+                Level::Debug,
+                "couldn't answer a permission request: its process has gone".to_owned(),
+            );
         }
     }
 
     /// The user answered `question`.
-    pub(super) fn answer_question(&mut self, now: Now, question: QuestionId, answer: Answer, out: &mut Vec<Directive>) -> Result<(), Refused> {
-        if let Some((&ticket, ask)) = self.asks.iter().find(|(_, ask)| ask.question == Some(question)) {
-            let Answer::Permission(option) = answer else { return Err(Refused::WrongAnswer) };
+    pub(super) fn answer_question(
+        &mut self,
+        now: Now,
+        question: QuestionId,
+        answer: Answer,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
+        if let Some((&ticket, ask)) = self
+            .asks
+            .iter()
+            .find(|(_, ask)| ask.question == Some(question))
+        {
+            let Answer::Permission(option) = answer else {
+                return Err(Refused::WrongAnswer);
+            };
             if !ask.options.iter().any(|offered| offered.id == option) {
                 return Err(Refused::WrongAnswer);
             }
@@ -159,7 +220,9 @@ impl<A: AppItem> Core<A> {
         }
         let slow = self.runs.iter().find(|(_, run)| run.slow == Some(question));
         if let Some((&chat, _)) = slow {
-            let Answer::SlowToOpen(choice) = answer else { return Err(Refused::WrongAnswer) };
+            let Answer::SlowToOpen(choice) = answer else {
+                return Err(Refused::WrongAnswer);
+            };
             self.slow_chosen(now, chat, question, choice, out);
             return Ok(());
         }
@@ -168,16 +231,26 @@ impl<A: AppItem> Core<A> {
 
     /// The agent withdrew one of its requests, `$/cancel_request`: its
     /// question goes, and the request is still answered, as cancelled.
-    pub(super) fn cancel_request(&mut self, proc: Ticket, params: &Value, out: &mut Vec<Directive>) {
+    pub(super) fn cancel_request(
+        &mut self,
+        proc: Ticket,
+        params: &Value,
+        out: &mut Vec<Directive>,
+    ) {
         let id = match params.get("requestId") {
             Some(Value::Number(number)) => number.as_i64().map(RequestId::Number),
             Some(Value::String(text)) => Some(RequestId::String(text.clone())),
             Some(Value::Null) => Some(RequestId::Null),
             _ => None,
         };
-        let found = (self.asks.iter()).find(|(_, ask)| ask.proc == proc && Some(&ask.id) == id.as_ref());
+        let found =
+            (self.asks.iter()).find(|(_, ask)| ask.proc == proc && Some(&ask.id) == id.as_ref());
         let Some((&ticket, _)) = found else {
-            report(out, Level::Debug, "the agent withdrew a request CAF isn't waiting on".to_owned());
+            report(
+                out,
+                Level::Debug,
+                "the agent withdrew a request CAF isn't waiting on".to_owned(),
+            );
             return;
         };
         if let Some(ask) = self.forget_ask(ticket, out) {
@@ -187,7 +260,10 @@ impl<A: AppItem> Core<A> {
 
     /// Answers every request `chat`'s agent is waiting on "cancelled".
     pub(super) fn withdraw_asks(&mut self, chat: ChatId, out: &mut Vec<Directive>) {
-        let tickets: Vec<Ticket> = (self.asks.iter()).filter(|(_, ask)| ask.chat == chat).map(|(&ticket, _)| ticket).collect();
+        let tickets: Vec<Ticket> = (self.asks.iter())
+            .filter(|(_, ask)| ask.chat == chat)
+            .map(|(&ticket, _)| ticket)
+            .collect();
         for ticket in tickets {
             if let Some(ask) = self.forget_ask(ticket, out) {
                 self.reply_or_report(ask.proc, &ask.id, Ok(cancelled()), out);
@@ -198,7 +274,10 @@ impl<A: AppItem> Core<A> {
     /// Forgets the requests `which` picks, without answering them: their
     /// process has gone, so they can't be.
     pub(super) fn drop_asks(&mut self, which: impl Fn(&Ask) -> bool, out: &mut Vec<Directive>) {
-        let tickets: Vec<Ticket> = (self.asks.iter()).filter(|(_, ask)| which(ask)).map(|(&ticket, _)| ticket).collect();
+        let tickets: Vec<Ticket> = (self.asks.iter())
+            .filter(|(_, ask)| which(ask))
+            .map(|(&ticket, _)| ticket)
+            .collect();
         for ticket in tickets {
             self.forget_ask(ticket, out);
         }
@@ -223,13 +302,19 @@ fn cancelled() -> Value {
 
 /// The first option of `kind` the request offers.
 fn option(ask: &Ask, kind: OptionKind) -> Option<OptionId> {
-    ask.options.iter().find(|option| option.kind == kind).map(|option| option.id.clone())
+    ask.options
+        .iter()
+        .find(|option| option.kind == kind)
+        .map(|option| option.id.clone())
 }
 
 /// The options a permission request offers, read leniently: one without
 /// an id is left out, and one of a kind CAF doesn't know is `Other`.
 fn options(options: Option<&Value>) -> Vec<PermissionOption> {
-    let options = options.and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    let options = options
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     (options.iter().take(MOST_OPTIONS))
         .filter_map(|option| {
             let id = option.get("optionId")?.as_str()?;

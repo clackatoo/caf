@@ -25,7 +25,9 @@ use crate::time::Window;
 ///
 /// Only the app adds them, never the agent. CAF keeps them in order,
 /// saves them with the chat, and never looks inside.
-pub trait AppItem: Clone + Debug + PartialEq + Serialize + DeserializeOwned + Send + 'static {
+pub trait AppItem:
+    Clone + Debug + PartialEq + Serialize + DeserializeOwned + Send + 'static
+{
     /// One line saying what it is, such as "Moved the map to Kyiv": for
     /// viewers that don't know the app's type, and for catch-up notes
     /// written for another agent.
