@@ -35,9 +35,11 @@ pub enum Change<A: AppItem = NoAppItems> {
     State(ChatState),
     /// A turn was added.
     TurnAdded(Turn<A>),
-    /// A turn was added before another, rather than at the end: history
-    /// a session's agent replayed, imported while a message sent meanwhile
-    /// waited, goes before that message.
+    /// A turn was added before another, rather than at the end. Turns
+    /// that belong before a message still waiting to be sent go before it:
+    /// history a session's agent replayed while the message waited, and
+    /// CAF's own notes about the session it will go to, such as that it's
+    /// a new one.
     TurnInserted {
         /// The turn it goes before.
         before: TurnId,

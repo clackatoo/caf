@@ -93,6 +93,14 @@ pub struct Cost {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChatState {
     /// Starting its agent or opening its session. Messages sent now wait.
+    ///
+    /// It may also be waiting for something that still holds its session
+    /// to let it go: another request opening or closing it, or an adapter
+    /// process that had it and hasn't gone yet. One session is never open
+    /// twice. If that takes as long as [`Timers::session_open`], the user
+    /// is asked whether to keep waiting.
+    ///
+    /// [`Timers::session_open`]: crate::host::Timers::session_open
     Opening,
     /// Open: the agent knows the session by this id.
     Open {

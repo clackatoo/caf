@@ -255,6 +255,12 @@ impl<A: AppItem> Core<A> {
     /// stop timer, the turn fails and the session is restarted. If the
     /// session is still opening, opening it is abandoned.
     ///
+    /// A turn the agent started by itself is stopped too. ACP doesn't say
+    /// when such a turn ends, so it ends as stopped at once, and for the
+    /// next 2 s what the agent says opens no new turn: it was in flight,
+    /// and is dropped with a report, as are later updates to a tool call
+    /// dropped so.
+    ///
     /// # Errors
     ///
     /// [`Refused::NoSuchChat`] or [`Refused::NothingToStop`].
