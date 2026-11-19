@@ -284,6 +284,12 @@ pub enum FailureReason {
     Refused,
     /// The agent wants the user to sign in.
     SignInNeeded,
+    /// The account or its credentials can't be used: signing in again
+    /// doesn't fix it.
+    AccessDenied,
+    /// The agent's provider refused the request as it stood, such as for a
+    /// model it doesn't have. Sending it again won't help.
+    BadRequest,
     /// The agent hit a usage limit.
     UsageLimit,
     /// The agent's provider was overloaded or failed.

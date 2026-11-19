@@ -15,7 +15,6 @@ use super::frames::Reply;
 use super::procs::Cause;
 use super::record::Log;
 use super::state::{Conn, How, Open, Purpose, Run};
-use super::wire::NOT_FOUND;
 use super::{Core, OpenChat, Refused, SessionChoice, report};
 use crate::agent::{EnvChange, McpServer};
 use crate::chat::{AppItem, Chat, ChatState, Failure, FailureReason, ItemKind, Lost, Note, Remedy, Starter, Turn, TurnLife};
@@ -221,7 +220,7 @@ impl<A: AppItem> Core<A> {
                 }
             }
             Reply::Error(_) | Reply::Unreadable if !waiting => {}
-            Reply::Error(error) if how != How::New && (error.code == NOT_FOUND || error.message.contains("Session not found")) => {
+            Reply::Error(error) if how != How::New && self.profile_of_chat(chat).session_gone(&error) => {
                 // Gone from the agent: a new session, and the chat says so.
                 if let Some(run) = self.runs.get_mut(&chat) {
                     run.session = None;

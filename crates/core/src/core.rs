@@ -139,7 +139,7 @@ pub enum Refused {
     Unsendable,
     /// The chat already has as many messages waiting as the host allows.
     QueueFull,
-    /// The message has a part this agent can't take.
+    /// The message is empty, or has a part this agent can't take.
     Unsupported,
     /// A slash command must be a message's only part.
     CommandNotAlone,

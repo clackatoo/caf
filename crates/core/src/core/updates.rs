@@ -89,26 +89,22 @@ impl<A: AppItem> Core<A> {
                     thinking: thought == "agent_thought_chunk",
                 },
             }),
-            "tool_call" => serde_json::from_value::<acp::ToolCall>(update.clone()).ok().map(|call| Said::Tool {
-                id: call.tool_call_id.0.to_string(),
-                change: ToolChange {
-                    title: Some(call.title),
-                    kind: Some(tool_kind(call.kind)),
-                    status: Some(tool_status(call.status)),
-                    input: call.raw_input,
-                    output: output_of(Some(&call.content), call.raw_output.as_ref()),
-                },
-            }),
-            "tool_call_update" => serde_json::from_value::<acp::ToolCallUpdate>(update.clone()).ok().map(|call| Said::Tool {
-                id: call.tool_call_id.0.to_string(),
-                change: ToolChange {
-                    title: call.fields.title,
-                    kind: call.fields.kind.map(tool_kind),
-                    status: call.fields.status.map(tool_status),
-                    input: call.fields.raw_input,
-                    output: output_of(call.fields.content.as_deref(), call.fields.raw_output.as_ref()),
-                },
-            }),
+            "tool_call" => match serde_json::from_value::<acp::ToolCall>(update.clone()) {
+                Ok(call) => Some(Said::Tool {
+                    id: call.tool_call_id.0.to_string(),
+                    change: ToolChange {
+                        title: Some(call.title),
+                        kind: Some(tool_kind(call.kind)),
+                        status: Some(tool_status(call.status)),
+                        input: call.raw_input,
+                        output: output_of(Some(&call.content), call.raw_output.as_ref()),
+                    },
+                }),
+                // Missing something ACP requires, such as its title: read
+                // as far as it goes, so its updates find it.
+                Err(_) => tool_update(&update),
+            },
+            "tool_call_update" => tool_update(&update),
             "usage_update" => serde_json::from_value::<acp::UsageUpdate>(update.clone()).ok().map(|usage| {
                 Said::Usage(Usage {
                     used: usage.used,
@@ -367,6 +363,21 @@ impl ToolChange {
         self.apply(&mut tool);
         tool
     }
+}
+
+/// A tool call update, or a tool call read as far as it goes.
+fn tool_update(update: &Value) -> Option<Said> {
+    let call = serde_json::from_value::<acp::ToolCallUpdate>(update.clone()).ok()?;
+    Some(Said::Tool {
+        id: call.tool_call_id.0.to_string(),
+        change: ToolChange {
+            title: call.fields.title,
+            kind: call.fields.kind.map(tool_kind),
+            status: call.fields.status.map(tool_status),
+            input: call.fields.raw_input,
+            output: output_of(call.fields.content.as_deref(), call.fields.raw_output.as_ref()),
+        },
+    })
 }
 
 /// Imported tool calls still pending or running didn't finish, as far as

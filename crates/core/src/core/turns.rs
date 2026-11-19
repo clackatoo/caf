@@ -88,6 +88,11 @@ impl<A: AppItem> Core<A> {
             return;
         }
         run.running = None;
+        if let Reply::Error(error) = &reply
+            && self.profile_of_chat(chat).session_gone(error)
+        {
+            return self.prompt_lost_session(now, chat, turn, out);
+        }
         let life = match reply {
             Reply::Result(result) => ended_by(&result),
             Reply::Error(error) => TurnLife::Failed(self.failure(chat, turn, &error)),
@@ -99,17 +104,44 @@ impl<A: AppItem> Core<A> {
         self.pump(now, chat, out);
     }
 
+    /// The agent no longer has the session `chat`'s turn `turn` was sent
+    /// to. A new session is opened, which the chat says, and the turn goes
+    /// to it if the agent did nothing with it; otherwise it fails, and can
+    /// be sent again.
+    fn prompt_lost_session(&mut self, now: Now, chat: ChatId, turn: TurnId, out: &mut Vec<Directive>) {
+        self.withdraw_asks(chat, out);
+        let heard = self.turn(chat, turn).is_some_and(|each| !each.items.is_empty());
+        if heard {
+            let failed = failure(FailureReason::AgentStopped, Some(Remedy::SendAgain));
+            self.end_turn(now, chat, turn, TurnLife::Failed(failed));
+        } else {
+            self.set_life(now, chat, turn, TurnLife::Waiting);
+        }
+        self.end_agent_turn(now, chat);
+        let Some(run) = self.runs.get_mut(&chat) else { return };
+        if let (Open::Live { proc }, Some(session)) = (run.open, run.session.take())
+            && let Some(each) = self.procs.get_mut(&proc)
+        {
+            each.sessions.remove(&session.0);
+        }
+        if let Some(run) = self.runs.get_mut(&chat) {
+            run.note = Some(crate::chat::Note::SessionGone);
+        }
+        self.want_open(now, chat, out);
+    }
+
     /// What the agent's error `error` for `chat`'s turn `turn` means, as
     /// its profile reads it.
     fn failure(&self, chat: ChatId, turn: TurnId, error: &RpcError) -> Failure {
         let said = self.profile_of_chat(chat).failure(error);
         let most = self.host.limits.failure_text;
         let words = said.words.map(|words| agent_text(&words, most)).filter(|words| !words.is_empty());
-        // Claude's adapter says a failure's text as words first: it's
-        // shown once, as those words.
+        // Claude's adapter says a failure's text as words first, perhaps
+        // after words of the answer: it's shown once, as those words.
         let said_already = |words: &String| {
             let last = self.turn(chat, turn).and_then(|each| each.items.last());
-            last.is_some_and(|item| matches!(&item.kind, ItemKind::Words(text) if agent_text(text, most) == *words))
+            let ends = |text: &str| agent_text(text, usize::MAX).trim_end().ends_with(words.trim());
+            last.is_some_and(|item| matches!(&item.kind, ItemKind::Words(text) if ends(text)))
         };
         Failure {
             reason: said.reason,

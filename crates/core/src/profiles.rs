@@ -123,6 +123,9 @@ const CLAUDE_CHECKED: [u64; 3] = [0, 98, 0];
 /// ACP's error for "the user must sign in first".
 pub(crate) const AUTH_REQUIRED: i64 = -32000;
 
+/// ACP's error for something that doesn't exist, such as a session.
+pub(crate) const RESOURCE_NOT_FOUND: i64 = -32002;
+
 impl ProfileChoice {
     /// What CAF declares to an adapter with this profile, as ACP's
     /// `clientCapabilities`.
@@ -148,8 +151,8 @@ impl ProfileChoice {
             Self::Cautious => Checked::Cautious,
             Self::Builtin(Builtin::ClaudeAgentAcp) => match &adapter {
                 Some(info) if info.name == CLAUDE_NAME => match version(&info.version) {
-                    Some(version) if version == CLAUDE_CHECKED => Checked::Yes,
-                    Some(version) if version > CLAUDE_CHECKED => Checked::Newer,
+                    Some((version, false)) if version == CLAUDE_CHECKED => Checked::Yes,
+                    Some((version, _)) if version > CLAUDE_CHECKED => Checked::Newer,
                     _ => Checked::Mismatch,
                 },
                 _ => Checked::Mismatch,
@@ -170,9 +173,7 @@ impl ProfileChoice {
     /// wrong in CAF's terms, what the user can do, and the agent's own
     /// words, uncleaned.
     pub(crate) fn failure(&self, error: &RpcError) -> Said {
-        let data: Option<Value> = error.data.as_ref().and_then(|data| serde_json::from_str(data.get()).ok());
-        let words = error.message.strip_prefix("Internal error: ").unwrap_or(&error.message);
-        let words = (!words.trim().is_empty()).then(|| words.to_owned());
+        let words = words(error);
         if error.code == AUTH_REQUIRED {
             return Said {
                 reason: FailureReason::SignInNeeded,
@@ -180,16 +181,26 @@ impl ProfileChoice {
                 words,
             };
         }
+        let data = data(error);
         let kind = data.as_ref().and_then(|data| data.get("errorKind")).and_then(Value::as_str);
-        let reason = match (self, kind) {
+        let (reason, remedy) = match (self, kind) {
             (Self::Builtin(Builtin::ClaudeAgentAcp), Some(kind)) => claude_kind(kind),
-            _ => FailureReason::Other,
-        };
-        let remedy = match reason {
-            FailureReason::ProviderError | FailureReason::UsageLimit | FailureReason::Other => Some(Remedy::SendAgain),
-            _ => None,
+            _ => (FailureReason::Other, Some(Remedy::SendAgain)),
         };
         Said { reason, remedy, words }
+    }
+
+    /// Whether `error`, the answer to a request about a session, says the
+    /// adapter doesn't have that session: ACP's "resource not found", or,
+    /// from Claude's adapter, the text it throws.
+    pub(crate) fn session_gone(&self, error: &RpcError) -> bool {
+        if error.code == RESOURCE_NOT_FOUND {
+            return true;
+        }
+        match self {
+            Self::Builtin(Builtin::ClaudeAgentAcp) => words(error).is_some_and(|words| words.contains("Session not found")),
+            Self::Cautious => false,
+        }
     }
 
     /// Whether a line of the adapter's error output says the user must
@@ -217,25 +228,57 @@ pub(crate) struct Said {
 
 /// Claude Code's SDK's kind of error, as its adapter gives it in
 /// `data.errorKind` when a prompt fails.
-fn claude_kind(kind: &str) -> FailureReason {
+///
+/// The kinds are the Claude Agent SDK's (`SDKAssistantMessageError`) and
+/// the adapter's own (`no_result`, `incomplete_tool_call`,
+/// `worker_shutdown`, `transport_lost`), grouped as the adapter's
+/// `providerFailureCategory` groups them: an unknown kind is a provider
+/// error, as there. Sending the message again is offered only where it
+/// can help.
+fn claude_kind(kind: &str) -> (FailureReason, Option<Remedy>) {
+    let again = Some(Remedy::SendAgain);
     match kind {
-        "authentication_failed" | "oauth_org_not_allowed" => FailureReason::SignInNeeded,
-        "billing_error" | "account_on_hold" | "rate_limit" => FailureReason::UsageLimit,
-        "overloaded" | "server_error" | "no_result" | "incomplete_tool_call" | "worker_shutdown" | "transport_lost" => {
-            FailureReason::ProviderError
-        }
-        "max_output_tokens" => FailureReason::TooLong,
-        _ => FailureReason::Other,
+        "authentication_failed" | "oauth_org_not_allowed" => (FailureReason::SignInNeeded, None),
+        "billing_error" | "account_on_hold" => (FailureReason::UsageLimit, None),
+        "rate_limit" => (FailureReason::UsageLimit, again),
+        // Signing in again doesn't fix these.
+        "verification_required" | "cloud_credential_error" => (FailureReason::AccessDenied, None),
+        "invalid_request" | "model_not_found" => (FailureReason::BadRequest, None),
+        "max_output_tokens" => (FailureReason::TooLong, None),
+        _ => (FailureReason::ProviderError, again),
     }
 }
 
-/// `text` as a version of three numbers, ignoring anything after a `-`
-/// or `+`.
-fn version(text: &str) -> Option<[u64; 3]> {
-    let core = text.split(['-', '+']).next()?;
+/// An error's `data`, as JSON.
+fn data(error: &RpcError) -> Option<Value> {
+    error.data.as_ref().and_then(|data| serde_json::from_str(data.get()).ok())
+}
+
+/// What the agent said in `error`, uncleaned. The ACP SDK sends an
+/// adapter's plain thrown error as a bare "Internal error" with the
+/// thrown text in `data.details`; Claude's adapter puts its own text
+/// after "Internal error: ".
+fn words(error: &RpcError) -> Option<String> {
+    let message = error.message.strip_prefix("Internal error: ").unwrap_or(&error.message).trim();
+    let details = data(error).and_then(|data| data.get("details")?.as_str().map(str::to_owned));
+    match message {
+        "" | "Internal error" => details.filter(|details| !details.trim().is_empty()),
+        message => Some(message.to_owned()),
+    }
+}
+
+/// `text` as a version of three numbers, and whether it's a prerelease
+/// (`-rc.1`), which comes before the release of the same numbers. Build
+/// metadata (`+…`) is ignored.
+fn version(text: &str) -> Option<([u64; 3], bool)> {
+    let text = text.split('+').next()?;
+    let (core, pre) = match text.split_once('-') {
+        Some((core, _)) => (core, true),
+        None => (text, false),
+    };
     let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
     let version = [parts.next()??, parts.next()??, parts.next()??];
-    parts.next().is_none().then_some(version)
+    parts.next().is_none().then_some((version, pre))
 }
 
 #[cfg(test)]
@@ -258,7 +301,7 @@ mod tests {
         assert_eq!(claude().check(adapter(CLAUDE_NAME, "0.98.0")).checked, Checked::Yes);
         let newer = claude().check(adapter(CLAUDE_NAME, "0.99.1"));
         assert_eq!((newer.checked, newer.profile), (Checked::Newer, claude()));
-        for older in ["0.97.9", "0.98", "x", ""] {
+        for older in ["0.97.9", "0.98", "0.98.0-rc.1", "x", ""] {
             let report = claude().check(adapter(CLAUDE_NAME, older));
             assert_eq!((report.checked, report.profile), (Checked::Mismatch, ProfileChoice::Cautious), "{older}");
         }

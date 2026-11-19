@@ -25,9 +25,6 @@ pub(super) const INVALID_REQUEST: i64 = -32600;
 /// ACP's error for a request the asker withdrew.
 pub(super) const CANCELLED: i64 = -32800;
 
-/// ACP's error for something that doesn't exist, such as a session.
-pub(super) const NOT_FOUND: i64 = -32002;
-
 impl<A: AppItem> Core<A> {
     /// Sends a request to `proc` and remembers it as `purpose`, overdue
     /// after `watchdog` if given. Returns its id, or `None` if `proc` may

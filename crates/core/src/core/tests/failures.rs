@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 
-use super::harness::{Script, assert_has, host};
+use super::harness::{Script, assert_has, host, sent};
 use super::{CHAT, PROC, SESSION, claude_init};
 use crate::core::OpenChat;
 
@@ -43,7 +43,7 @@ fn claudes_failures_are_read_by_their_kind() {
     assert_eq!(ended(error("overloaded")), said("ProviderError", json!("SendAgain")));
     assert_eq!(ended(error("authentication_failed")), said("SignInNeeded", Value::Null));
     assert_eq!(ended(error("max_output_tokens")), said("TooLong", Value::Null));
-    assert_eq!(ended(error("model_not_found")), said("Other", json!("SendAgain")));
+    assert_eq!(ended(error("model_not_found")), said("BadRequest", Value::Null));
     assert_eq!(ended(Err(json!({ "code": -32000, "message": "Please run /login" }))), said_sign_in("Please run /login"));
 }
 
@@ -106,4 +106,92 @@ fn sign_in_said_in_the_error_output_explains_the_adapter_stopping() {
     script.agent(PROC, crate::event::AgentEvent::Exited(crate::event::Exit::Code(1)));
     script.agent(PROC, crate::event::AgentEvent::OutputClosed);
     assert_has(&script.chat(CHAT), &json!({ "state": { "Lost": { "reason": "SignInNeeded" } } }));
+}
+
+#[test]
+fn every_kind_of_claude_failure_is_read_and_offered_send_again_only_where_it_helps() {
+    let again = json!("SendAgain");
+    for (kinds, reason, remedy) in [
+        (&["authentication_failed", "oauth_org_not_allowed"][..], "SignInNeeded", Value::Null),
+        (&["billing_error", "account_on_hold"][..], "UsageLimit", Value::Null),
+        (&["rate_limit"][..], "UsageLimit", again.clone()),
+        (&["verification_required", "cloud_credential_error"][..], "AccessDenied", Value::Null),
+        (&["invalid_request", "model_not_found"][..], "BadRequest", Value::Null),
+        (&["max_output_tokens"][..], "TooLong", Value::Null),
+        (
+            &["overloaded", "server_error", "unknown", "no_result", "incomplete_tool_call", "worker_shutdown", "transport_lost", "newer_than_caf"][..],
+            "ProviderError",
+            again.clone(),
+        ),
+    ] {
+        for kind in kinds {
+            let life = ended(Err(json!({ "code": -32603, "message": "Internal error: x", "data": { "errorKind": kind } })));
+            assert_eq!(life, json!({ "Failed": { "reason": reason, "agent_said": "x", "remedy": remedy } }), "{kind}");
+        }
+    }
+}
+
+#[test]
+fn a_bare_internal_error_says_its_details() {
+    let life = ended(Err(json!({ "code": -32603, "message": "Internal error", "data": { "details": "spawn ENOMEM" } })));
+    assert_eq!(life, json!({ "Failed": { "reason": "Other", "agent_said": "spawn ENOMEM", "remedy": "SendAgain" } }));
+}
+
+#[test]
+fn a_prompt_to_a_session_the_adapter_dropped_opens_a_new_one_and_sends_it_there() {
+    for error in [
+        json!({ "code": -32603, "message": "Internal error", "data": { "details": "Session not found" } }),
+        json!({ "code": -32002, "message": "Resource not found" }),
+    ] {
+        let mut script = Script::with_claude();
+        let (turn, _) = script.send(CHAT, "go");
+        let out = script.fails(PROC, 1002, &error);
+        assert!(sent(&out, "session/new")["params"].get("sessionId").is_none(), "{error}");
+        let out = script.answers(PROC, 1003, &json!({ "sessionId": "fresh" }));
+        assert_has(&sent(&out, "session/prompt"), &json!({ "params": { "sessionId": "fresh", "prompt": [{ "text": "go" }] } }));
+        assert_has(&script.chat(CHAT), &json!({
+            "state": { "Open": { "session": "fresh" } },
+            "turns": [{ "id": turn.expect("sent").0, "life": "Running" }, { "starter": "Caf", "items": [{ "kind": { "Note": "SessionGone" } }] }]
+        }));
+        script.answers(PROC, 1004, &json!({ "stopReason": "end_turn" }));
+    }
+}
+
+#[test]
+fn a_cautious_profile_matches_no_agents_text() {
+    let mut script = Script::new(host());
+    script.open(OpenChat::new("plain", "/work")).0.expect("opened");
+    script.answers(PROC, 1000, &super::plain_init(false));
+    script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    script.send(CHAT, "go").0.expect("sent");
+    script.fails(PROC, 1002, &json!({ "code": -32603, "message": "Session not found" }));
+    assert_has(&script.chat(CHAT), &json!({ "state": { "Open": {} }, "turns": [{ "life": { "Failed": { "reason": "Other" } } }] }));
+}
+
+#[test]
+fn failure_text_streamed_at_the_end_of_the_words_is_shown_once() {
+    let mut script = Script::with_claude();
+    script.send(CHAT, "go").0.expect("sent");
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Working on it… API Error: Rate limited\n" } }));
+    script.fails(PROC, 1002, &json!({ "code": -32603, "message": "Internal error: API Error: Rate limited", "data": { "errorKind": "rate_limit" } }));
+    assert_eq!(script.chat(CHAT)["turns"][0]["life"]["Failed"]["agent_said"], Value::Null);
+}
+
+#[test]
+fn a_prerelease_of_the_checked_version_isnt_it() {
+    let mut script = Script::new(host());
+    script.open(OpenChat::new("claude", "/work")).0.expect("opened");
+    let mut init = claude_init();
+    init["agentInfo"]["version"] = json!("0.98.0-rc.1");
+    script.answers(PROC, 1000, &init);
+    assert_has(&script.state(), &json!({ "conns": { "1001": { "profile": { "checked": "Mismatch" } } } }));
+}
+
+#[test]
+fn a_tool_call_with_no_title_is_still_a_tool() {
+    let mut script = Script::with_claude();
+    script.send(CHAT, "go").0.expect("sent");
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "kind": "read", "status": "in_progress" }));
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "title": "Read a.rs", "status": "completed" }));
+    assert_has(&script.chat(CHAT), &json!({ "turns": [{ "items": [{ "kind": { "Tool": { "title": "Read a.rs", "kind": "Read", "status": "Done" } } }] }] }));
 }
