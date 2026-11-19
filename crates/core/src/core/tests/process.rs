@@ -213,3 +213,61 @@ fn events_for_a_process_let_go_are_ignored() {
     assert_eq!(out.iter().filter(|each| each.get("report").is_none()).count(), 0, "{out:#?}");
     assert_eq!(script.state(), before);
 }
+
+#[test]
+fn retrying_an_adapter_that_hasnt_answered_restarts_it() {
+    let mut script = Script::new(host());
+    script.open(OpenChat::new("claude", "/work")).0.expect("opened");
+    // The agent's requests are answered at once, even before initialize
+    // is: only CAF's own wait.
+    let out = script.says(PROC, &json!({ "jsonrpc": "2.0", "id": 1, "method": "fs/read_text_file", "params": {} }));
+    assert_eq!(writes(&out).len(), 1);
+    script.at(30_000);
+    script.woken();
+    let (retried, out) = script.answer(crate::ids::QuestionId(1003), Answer::SlowToOpen(SlowChoice::Retry));
+    retried.expect("retried");
+    assert_eq!(with(&out, "signal"), [json!({ "signal": PROC, "is": "Term" })]);
+    assert_has(&script.chat(CHAT), &json!({ "state": "Opening", "questions": [] }));
+    script.at(32_000);
+    // SIGKILL follows SIGTERM if the group isn't empty by then.
+    assert_eq!(with(&script.woken(), "signal"), [json!({ "signal": PROC, "is": "Kill" })]);
+    script.agent(PROC, AgentEvent::Exited(Exit::Signal(9)));
+    script.agent(PROC, AgentEvent::OutputClosed);
+    let out = script.agent(PROC, AgentEvent::Group { empty: true });
+    assert_has(&json!(with(&out, "start")), &json!([{ "start": 1004 }]));
+}
+
+#[test]
+fn giving_up_on_a_slow_session_stops_its_waiting_message() {
+    let mut script = Script::new(host());
+    script.open(OpenChat::new("claude", "/work")).0.expect("opened");
+    let (turn, _) = script.send(CHAT, "hello");
+    script.answers(PROC, 1000, &claude_init());
+    script.at(30_000);
+    script.woken();
+    let question = script.chat(CHAT)["questions"][0]["id"].as_u64().expect("asked");
+    assert_has(&script.chat(CHAT), &json!({ "questions": [{ "kind": { "SlowToOpen": { "adapter_answered": true } } }] }));
+    script.answer(crate::ids::QuestionId(question), Answer::SlowToOpen(SlowChoice::Stop)).0.expect("answered");
+    assert_has(&script.chat(CHAT), &json!({
+        "state": { "Lost": { "reason": "Stopped" } },
+        "questions": [],
+        "turns": [{ "id": turn.expect("sent").0, "life": "Stopped" }]
+    }));
+    // The agent answering late gets its session closed.
+    let out = script.answers(PROC, 1001, &json!({ "sessionId": "late" }));
+    sent(&out, "session/close");
+    script.answers(PROC, 1002, &json!({}));
+}
+
+#[test]
+fn a_session_refused_for_sign_in_says_so() {
+    let mut script = Script::new(host());
+    script.open(OpenChat::new("claude", "/work")).0.expect("opened");
+    let (turn, _) = script.send(CHAT, "hello");
+    script.answers(PROC, 1000, &claude_init());
+    script.fails(PROC, 1001, &json!({ "code": -32000, "message": "Authentication required" }));
+    assert_has(&script.chat(CHAT), &json!({
+        "state": { "Lost": { "reason": "SignInNeeded" } },
+        "turns": [{ "id": turn.expect("sent").0, "life": { "Failed": { "reason": "SignInNeeded", "remedy": "SendAgain" } } }]
+    }));
+}

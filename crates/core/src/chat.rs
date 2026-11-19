@@ -188,7 +188,8 @@ pub enum Starter {
     /// The user sent this.
     User(UserMessage),
     /// The agent started it by itself, for example when a background job
-    /// it was waiting on finished. *Later.*
+    /// it was waiting on finished: what it says outside any prompt. It
+    /// ends when the next message is sent.
     Agent,
     /// Another chat's agent sent this. *Later.*
     OtherChat {
@@ -249,7 +250,7 @@ pub enum TurnLife {
     Stopped,
     /// It went wrong.
     Failed(Failure),
-    /// Cut off by the host restarting, mid-turn. *Later.*
+    /// Cut off mid-turn by the host shutting down.
     CutOff,
 }
 
