@@ -184,9 +184,12 @@ impl Fake {
         record
     }
 
+    /// The record's whole lines: one the fake is still writing may be
+    /// read in part, without its newline.
     fn whole_record(&self) -> Vec<Value> {
-        std::fs::read_to_string(&self.record)
-            .unwrap_or_default()
+        let text = std::fs::read_to_string(&self.record).unwrap_or_default();
+        let whole = text.rfind('\n').map_or("", |end| &text[..end]);
+        whole
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
@@ -761,22 +764,32 @@ fn a_wait_times_out_while_other_messages_flood_in() {
 }
 
 #[test]
-fn answering_a_notification_fails_but_not_in_a_handler() {
+fn answering_a_notification_fails_but_not_in_a_fallback() {
+    // In the script.
     let mut fake = Fake::start(
-        r#"{"on": {"method": "ping", "do": [{"respond": {"result": {}}}]}}
-{"wait": {"method": "session/cancel"}}
+        r#"{"wait": {"method": "session/cancel"}}
 {"respond": {"result": {}}}"#,
     );
-    fake.send(&json!({"jsonrpc": "2.0", "method": "ping"}));
     fake.send(&json!({"jsonrpc": "2.0", "method": "session/cancel"}));
     assert_eq!(fake.exit().code(), Some(EXIT_CHECK_FAILED));
     assert_eq!(
         fake.script_record(),
-        [
-            json!({"skipped": "a notification", "method": "ping"}),
-            json!({"failed": "session/cancel is a notification"}),
-        ]
+        [json!({"failed": "session/cancel is a notification"})]
     );
+    // In a handler that isn't a fallback: the likeliest slip, an answer
+    // to the cancel rather than to the prompt.
+    let mut fake = Fake::start(
+        r#"{"on": {"method": "session/cancel", "do": [{"respond": {"result": {"stopReason": "cancelled"}}}]}}
+"wait_closed""#,
+    );
+    fake.send(&json!({"jsonrpc": "2.0", "method": "session/cancel"}));
+    assert_eq!(fake.exit().code(), Some(EXIT_CHECK_FAILED));
+    assert_eq!(
+        fake.script_record(),
+        [json!({"failed": "session/cancel is a notification"})]
+    );
+    // In a fallback, it's skipped: see
+    // `a_fallback_takes_only_what_the_script_wont_wait_for`.
 }
 
 #[test]
@@ -936,24 +949,38 @@ fn a_holder_started_after_stdout_closes_doesnt_hold_it() {
     let mut fake = Fake::start_in(dir, &script);
     assert!(fake.stdout_ends(SOON));
     assert!(fake.child.try_wait().unwrap().is_none());
-    // The holder goes with the test's folder.
     let until = Instant::now() + SOON;
     while !pid.exists() {
         assert!(Instant::now() < until, "no holder");
         std::thread::sleep(Duration::from_millis(5));
     }
+    // It was given what took stdout's place, not nothing, nor a pipe. It
+    // goes with the test's folder.
+    let holder = std::fs::read_to_string(&pid).unwrap();
+    for fd in [0, 1] {
+        assert_eq!(
+            std::fs::read_link(format!("/proc/{holder}/fd/{fd}")).unwrap(),
+            PathBuf::from("/dev/null")
+        );
+    }
 }
 
 #[test]
 fn it_can_stop_reading() {
-    let mut fake = Fake::start(
-        r#""stop_reading"
-{"note": "stopped"}
-{"sleep": 2000}
-"resume_reading"
-{"wait": {"method": "_test/last"}}
-{"note": "read it all"}"#,
-    );
+    let dir = Dir::new();
+    let go = dir.path("go");
+    let script = dir.path("script.jsonl");
+    std::fs::write(
+        &script,
+        format!(
+            "\"stop_reading\"\n{{\"note\": \"stopped\"}}\n{}\n\"resume_reading\"\n{}\n{}\n",
+            json!({"wait_file": go}),
+            json!({"wait": {"method": "_test/last"}}),
+            json!({"note": "read it all"}),
+        ),
+    )
+    .unwrap();
+    let mut fake = Fake::start_in(dir, &script);
     fake.wait_for_record(&json!({"note": "stopped"}));
     let mut stdin = fake.stdin.take().unwrap();
     let writer = std::thread::spawn(move || {
@@ -969,8 +996,11 @@ fn it_can_stop_reading() {
             .write_all(b"{\"jsonrpc\": \"2.0\", \"method\": \"_test/last\"}\n")
             .unwrap();
     });
+    // It reads nothing until told to go on, so the writes can't finish
+    // however long this takes.
     std::thread::sleep(Duration::from_millis(300));
     assert!(!writer.is_finished(), "the client's writes didn't block");
+    std::fs::write(&go, "").unwrap();
     writer.join().unwrap();
     fake.wait_for_record(&json!({"note": "read it all"}));
 }
@@ -1024,8 +1054,53 @@ fn it_can_be_started_by_environment_variables() {
 }
 
 #[test]
-fn other_crates_find_the_program() {
-    let found = caf_fake_agent::binary();
-    let built = PathBuf::from(env!("CARGO_BIN_EXE_caf-fake-agent"));
-    assert_eq!(found.canonicalize().unwrap(), built.canonicalize().unwrap());
+fn a_holder_started_by_environment_variables_only_holds() {
+    let dir = Dir::new();
+    let pid = dir.path("holder.pid");
+    let script = dir.path("script.jsonl");
+    std::fs::write(
+        &script,
+        format!(
+            "{}\n{{\"say\": {{\"session\": \"s1\", \"text\": \"once\"}}}}\n{{\"exit\": 0}}\n",
+            json!({"spawn_holder": {"pid_file": pid}})
+        ),
+    )
+    .unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_caf-fake-agent"));
+    command
+        .env(caf_fake_agent::SCRIPT_VAR, &script)
+        .env(caf_fake_agent::RECORD_VAR, dir.path("record.jsonl"));
+    let mut fake = Fake::spawn(dir, command);
+    assert_eq!(fake.exit().code(), Some(0));
+    // Said once, by the fake: the holder ran no script.
+    assert_eq!(fake.recv()["params"]["update"]["content"]["text"], "once");
+    assert!(!fake.stdout_ends(Duration::from_millis(300)));
+    let record = fake.whole_record();
+    assert_eq!(
+        (record.iter())
+            .filter(|entry| entry.get("started").is_some())
+            .count(),
+        1
+    );
+    assert!(!record.iter().any(|entry| entry.get("failed").is_some()));
+    std::fs::remove_file(&pid).unwrap();
+    assert!(fake.stdout_ends(SOON));
+}
+
+#[test]
+fn a_fallback_leaves_what_a_later_handler_takes() {
+    let mut fake = Fake::start(
+        r#"{"on": {"fallback": true, "do": [{"respond": {"error": {"code": -32601, "message": "Method not found"}}}]}}
+{"wait": {"method": "_test/go"}}
+{"on": {"method": "session/set_mode", "do": [{"respond": {"result": {}}}]}}
+"wait_closed""#,
+    );
+    fake.send(&request(1, "session/set_mode", &json!({})));
+    fake.send(&json!({"jsonrpc": "2.0", "method": "_test/go"}));
+    assert_eq!(
+        fake.recv(),
+        json!({"jsonrpc": "2.0", "id": 1, "result": {}})
+    );
+    fake.close_stdin();
+    assert_eq!(fake.exit().code(), Some(0));
 }

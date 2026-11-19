@@ -7,26 +7,29 @@ use caf_fake_agent::{EXIT_BAD_SCRIPT, RECORD_VAR, SCRIPT_VAR, Script, run};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let code = if let Some(script) = std::env::var_os(SCRIPT_VAR) {
+    let code = match args.as_slice() {
+        // A process started by `spawn_holder`: it holds the pipes it was
+        // given, then goes. Matched first, so a holder never runs a
+        // script, whatever its environment says.
+        [hold, secs, pid_file @ ..] if hold == "--hold" && pid_file.len() <= 1 => {
+            hold_pipes(secs, pid_file.first().map(Path::new));
+            0
+        }
         // Started by a driver, which may add arguments of its own.
-        let record = std::env::var_os(RECORD_VAR).map(PathBuf::from);
-        start(Path::new(&script), record.as_deref())
-    } else {
-        match args.as_slice() {
-            [hold, secs, pid_file @ ..] if hold == "--hold" && pid_file.len() <= 1 => {
-                hold_pipes(secs, pid_file.first().map(Path::new));
-                0
-            }
-            [script] => start(Path::new(script), None),
-            [script, flag, record] if flag == "--record" => {
-                start(Path::new(script), Some(Path::new(record)))
-            }
-            _ => {
-                eprintln!(
-                    "usage: caf-fake-agent SCRIPT [--record RECORD], or set {SCRIPT_VAR} and {RECORD_VAR}"
-                );
-                EXIT_BAD_SCRIPT
-            }
+        _ if std::env::var_os(SCRIPT_VAR).is_some() => {
+            let script = std::env::var_os(SCRIPT_VAR).map(PathBuf::from);
+            let record = std::env::var_os(RECORD_VAR).map(PathBuf::from);
+            start(script.as_deref().expect("it's set"), record.as_deref())
+        }
+        [script] => start(Path::new(script), None),
+        [script, flag, record] if flag == "--record" => {
+            start(Path::new(script), Some(Path::new(record)))
+        }
+        _ => {
+            eprintln!(
+                "usage: caf-fake-agent SCRIPT [--record RECORD], or set {SCRIPT_VAR} and {RECORD_VAR}"
+            );
+            EXIT_BAD_SCRIPT
         }
     };
     std::process::exit(code);

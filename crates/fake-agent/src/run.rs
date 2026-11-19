@@ -57,7 +57,7 @@ pub fn run(script: &Script, record: Option<&Path>) -> i32 {
         answers: HashMap::new(),
         received: HashMap::new(),
         last_received: None,
-        handling: 0,
+        handling: None,
         answered: HashSet::new(),
         sent: HashMap::new(),
         last_sent: None,
@@ -216,8 +216,8 @@ struct Fake<'s> {
     received: HashMap<String, Value>,
     /// The one last waited for: within a handler, the one it handles.
     last_received: Option<Value>,
-    /// Whether a handler is running: more than 0 if so.
-    handling: usize,
+    /// The handler running, if any: whether it's a fallback.
+    handling: Option<bool>,
     /// The ids of the client's requests answered so far.
     answered: HashSet<String>,
     /// The ids of the fake's requests, by name.
@@ -380,6 +380,14 @@ impl Fake<'_> {
                 }
                 self.handle()
             }
+            Step::WaitFile(path) => {
+                // Polled, as files give no notice, reading meanwhile.
+                while !path.exists() {
+                    self.handle()?;
+                    self.hear(deadline(Some(10)));
+                }
+                self.handle()
+            }
             Step::Hang => loop {
                 self.handle()?;
                 self.hear(None);
@@ -471,9 +479,9 @@ impl Fake<'_> {
             let label = on.label.clone().unwrap_or_else(|| method(&message));
             let shadowed = self.received.insert(label.clone(), message.clone());
             let last = self.last_received.replace(message);
-            self.handling += 1;
+            self.handling = Some(on.fallback);
             let done = self.steps(&on.steps);
-            self.handling -= 1;
+            self.handling = None;
             self.last_received = last;
             match shadowed {
                 Some(shadowed) => self.received.insert(label, shadowed),
@@ -485,8 +493,9 @@ impl Fake<'_> {
     }
 
     /// The handler that takes this message, if any: the first ordinary one
-    /// that matches, else the first fallback that does, if the rest of the
-    /// script never waits for it.
+    /// that matches, else the first fallback that does, if nothing later
+    /// in the script, a `wait` or a handler that isn't a fallback, would
+    /// take it.
     fn handler_for(&self, message: &Value) -> Option<usize> {
         let matching = |fallback: bool| {
             self.handlers.iter().position(|handler| {
@@ -500,10 +509,25 @@ impl Fake<'_> {
             })
         };
         matching(false).or_else(|| {
-            let waited = self.main[self.at.min(self.main.len())..].iter().any(|step| {
-                matches!(step, Step::Wait(wait) if wanted(wait.method.as_ref(), wait.matches.as_ref(), message))
-            });
-            if waited { None } else { matching(true) }
+            let fallbacks =
+                (self.handlers.iter()).any(|handler| !handler.done && handler.on.fallback);
+            if !fallbacks {
+                return None;
+            }
+            // What a later `wait`, or a later handler that isn't a
+            // fallback, would take is left for it.
+            let later = self.main[self.at.min(self.main.len())..]
+                .iter()
+                .any(|step| match step {
+                    Step::Wait(wait) => {
+                        wanted(wait.method.as_ref(), wait.matches.as_ref(), message)
+                    }
+                    Step::On(on) => {
+                        !on.fallback && wanted(on.method.as_ref(), on.matches.as_ref(), message)
+                    }
+                    _ => false,
+                });
+            if later { None } else { matching(true) }
         })
     }
 
@@ -565,7 +589,7 @@ impl Fake<'_> {
                         .ok_or_else(|| format!("{} has nothing at {pointer}", method(message))),
                     None => match message.get("id") {
                         Some(id) => Ok(id.clone()),
-                        None if self.handling > 0 => {
+                        None if self.handling == Some(true) => {
                             let method = method(message);
                             self.record
                                 .write(&json!({"skipped": "a notification", "method": method}));
@@ -672,7 +696,11 @@ impl Fake<'_> {
             if let Some(path) = &holder.pid_file {
                 command.arg(path);
             }
+            // Not told the script, so even an old holder that read the
+            // environment first couldn't run it again.
             command
+                .env_remove(crate::SCRIPT_VAR)
+                .env_remove(crate::RECORD_VAR)
                 .stdin(Stdio::null())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit())
@@ -739,9 +767,10 @@ impl Fake<'_> {
     }
 
     /// A check failed: says so in the record and on stderr, and ends.
-    /// Stderr is written on a thread, waited for only briefly, so a client
+    /// Stderr is written on a thread, waited for at most 5 s, so a client
     /// that never reads it still sees the fake exit; the fake ends either
-    /// way, and the thread with it.
+    /// way, and the thread with it. The wait costs nothing unless stderr
+    /// is full.
     fn fail<T>(&mut self, why: &str) -> Result<T, End> {
         self.record.write(&json!({"failed": why}));
         if let Some(mut err) = self.err.take() {
@@ -751,7 +780,7 @@ impl Fake<'_> {
                 let _ = err.write_all(line.as_bytes());
                 let _ = done.send(());
             });
-            let _ = written.recv_timeout(Duration::from_millis(200));
+            let _ = written.recv_timeout(Duration::from_secs(5));
         }
         Err(End(EXIT_CHECK_FAILED))
     }

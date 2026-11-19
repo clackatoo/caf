@@ -29,7 +29,8 @@
 //! Tests in this crate find the program in `CARGO_BIN_EXE_caf-fake-agent`.
 //! Cargo gives that only to the crate's own tests, so tests elsewhere call
 //! [`binary`], which finds it, and builds it first if it's missing or
-//! stale.
+//! stale; or set [`BIN_VAR`] (`CAF_FAKE_AGENT_BIN`) to use a program
+//! built already.
 //!
 //! # Scripts
 //!
@@ -70,10 +71,11 @@
 //! | `{"note": TEXT}` | Writes a note to the record |
 //! | `{"record_env": [NAME, …]}` | Writes these environment variables' values to the record |
 //! | `{"exit": CODE}` | Exits |
-//! | `{"signal": N}` | Sends itself signal N, such as 9 to die by `SIGKILL` |
+//! | `{"signal": N}` | Sends itself signal N, such as 9 to die by `SIGKILL` or 15 by `SIGTERM` |
 //! | `"stop_reading"`, `"resume_reading"` | Stops reading stdin, so the client's writes block, and starts again |
 //! | `"close_stdout"`, `"close_stderr"` | Closes one, and carries on |
 //! | `"wait_closed"` | Waits until stdin closes, and carries on |
+//! | `{"wait_file": PATH}` | Waits until a file is there, so the test says when to go on |
 //! | `"hang"` | Does nothing more, ever, but run handlers |
 //! | `{"spawn_holder": {"pid_file", "secs"}}` | Starts a process holding stdout and stderr, before any `close_stdout`, until its pid file goes ([`SpawnHolder`]) |
 //! | `{"include": PATH}` | Puts another script's steps here, or a handler's |
@@ -124,21 +126,24 @@
 //! - an answer waits, by its id, until an `await` takes it.
 //!
 //! Handlers run only while the script waits or sleeps (in `wait`,
-//! `await`, `sleep`, `wait_closed` and `hang`), or is over, so a
+//! `await`, `sleep`, `wait_closed`, `wait_file` and `hang`), or is over,
+//! so a
 //! script's writes are never interleaved with a handler's. A handler
 //! takes every queued message it matches, before any `wait` sees it, and
 //! the first handler added wins. A *fallback* handler comes after the
-//! others, and takes only what no `wait` left in the script would take:
-//! so `{"on": {"fallback": true, "do": [...]}}` can refuse whatever the
-//! script doesn't expect, as a real adapter refuses methods it doesn't
-//! know.
+//! others, and takes only what nothing later in the script would take,
+//! neither a `wait` nor a handler that isn't a fallback: so `{"on":
+//! {"fallback": true, "do": [...]}}` can refuse whatever the script
+//! doesn't expect, as a real adapter refuses methods it doesn't know. A
+//! later `{"wait": {}}` would take anything, so until it's done,
+//! fallbacks take nothing.
 //!
 //! Within a handler, `respond` answers the message that set it off, and
 //! its name is the handler's own: once the handler is done, the script's
-//! names mean what they meant before. A `respond` to a notification does
-//! nothing there, so one handler can refuse requests and let
-//! notifications be; in the script itself, it's a failed check. A
-//! handler's steps can't wait or sleep.
+//! names mean what they meant before. In a fallback, a `respond` to a
+//! notification does nothing, so one fallback can refuse requests and let
+//! notifications be; anywhere else, it's a failed check. A handler's
+//! steps can't wait or sleep.
 //!
 //! The client's answers are kept by id: if it answers one id twice
 //! before an `await` takes it, the second replaces the first, and only
@@ -178,7 +183,7 @@
 //! | `{"note": TEXT}` | A `note` step |
 //! | `{"env": {NAME: VALUE or null, …}}` | A `record_env` step |
 //! | `{"skipped": "answered already", "id": ID}` | A `respond` to a request already answered |
-//! | `{"skipped": "a notification", "method": METHOD}` | A handler's `respond` to a notification |
+//! | `{"skipped": "a notification", "method": METHOD}` | A fallback's `respond` to a notification |
 //! | `{"failed": WHY}` | A check failed |
 //! | `{"ended": WHY}` | Stdin closed while the script waited |
 //! | `{"gone": WHY}` | Stdout couldn't be written |
@@ -255,6 +260,12 @@ pub use script::{
     Await, CancelRequest, Chunk, LongLine, Notify, On, Output, Request, Respond, RpcError, Script,
     ScriptError, SpawnHolder, Step, Update, Wait,
 };
+
+/// The environment variable that names the program for [`binary`] to
+/// give, an absolute path, so it builds nothing: for test runners that
+/// start each test in a process of its own, such as nextest, or builds
+/// [`binary`] can't repeat.
+pub const BIN_VAR: &str = "CAF_FAKE_AGENT_BIN";
 
 /// The environment variable that names the script, an absolute path. When
 /// it's set, the fake's arguments are ignored.

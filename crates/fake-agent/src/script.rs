@@ -66,9 +66,10 @@ pub enum Step {
     RecordEnv(Vec<String>),
     /// Exits with this code.
     Exit(i32),
-    /// Sends the fake this signal, such as 9 (`SIGKILL`) or 6
-    /// (`SIGABRT`), to die by it. One that doesn't kill it lets it carry
-    /// on.
+    /// Sends the fake this signal, such as 9 (`SIGKILL`) or 15
+    /// (`SIGTERM`), to die by it. One that doesn't kill it lets it carry
+    /// on. Tests should prefer those two: 6 (`SIGABRT`) may write a core
+    /// dump.
     Signal(i32),
     /// Stops reading stdin, so the pipe fills and the client's writes
     /// block. What it read already still counts, and so may the line it's
@@ -83,6 +84,10 @@ pub enum Step {
     CloseStderr,
     /// Waits until the client closes stdin, and carries on.
     WaitClosed,
+    /// Waits until this file, an absolute path, is there, reading
+    /// meanwhile: so a test can say when the script goes on, even while
+    /// the fake isn't reading stdin.
+    WaitFile(PathBuf),
     /// Does nothing more, ever, but run handlers: not even exit when stdin
     /// closes.
     Hang,
@@ -264,8 +269,9 @@ pub struct On {
     #[serde(default, skip_serializing_if = "is_false")]
     pub fallback: bool,
     /// Its steps. None may wait or sleep: not `wait`, `await`, `sleep`,
-    /// `wait_closed`, `hang` or `on`. An `include` is replaced by its
-    /// file's steps.
+    /// `wait_closed`, `wait_file`, `hang`, `spawn_holder` (which waits for
+    /// its pid file) or `on`. An `include` is replaced by its file's
+    /// steps.
     #[serde(rename = "do")]
     pub steps: Vec<Step>,
 }
@@ -307,9 +313,10 @@ impl Output {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpawnHolder {
-    /// A file to write its pid to: an absolute path. The holder goes as
-    /// soon as the file does, so a test that deletes its folder leaves
-    /// nothing behind.
+    /// A file for its pid: an absolute path. The holder writes it, and
+    /// goes as soon as the file does, so a test that deletes its folder
+    /// leaves nothing behind. Without one, it lives its `secs` whatever
+    /// happens, so tests should give one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid_file: Option<PathBuf>,
     /// How many seconds it lives at most. 60, if left out.
@@ -348,7 +355,7 @@ impl Script {
 
     /// Checks what [`Script::load`] and [`Script::parse`] check: paths
     /// absolute, handlers that don't wait, lines that fit their length,
-    /// and no `include` left.
+    /// pointers that are pointers, and no `include` left.
     ///
     /// # Errors
     ///
@@ -359,9 +366,6 @@ impl Script {
                 at: format!("step {}", at + 1),
                 message,
             };
-            if let Step::Include(path) = step {
-                return Err(wrong(format!("{} isn't included", path.display())));
-            }
             check(step, false).map_err(wrong)
         })
     }
@@ -475,15 +479,22 @@ fn include(path: &Path, depth: usize) -> Result<Vec<Step>, String> {
 /// lines that fit their length.
 fn check(step: &Step, in_handler: bool) -> Result<(), String> {
     match step {
+        // Reading a script replaces these, so only one built in Rust has
+        // any.
+        Step::Include(path) => Err(format!("{} isn't included", path.display())),
         Step::Wait(_)
         | Step::Await(_)
         | Step::Sleep(_)
         | Step::WaitClosed
+        | Step::WaitFile(_)
         | Step::Hang
-        | Step::Include(_)
+        | Step::SpawnHolder(_)
             if in_handler =>
         {
             Err("a handler's steps can't wait or sleep".into())
+        }
+        Step::WaitFile(path) if !path.is_absolute() => {
+            Err("a file to wait for must be an absolute path".into())
         }
         Step::On(_) if in_handler => Err("a handler can't add handlers".into()),
         Step::On(on) => on.steps.iter().try_for_each(|step| check(step, true)),
@@ -493,6 +504,12 @@ fn check(step: &Step, in_handler: bool) -> Result<(), String> {
         Step::Respond(respond) if respond.id.is_some() && respond.id_from.is_some() => {
             Err("an answer has an id or says where to find one, not both".into())
         }
+        Step::Respond(Respond {
+            id_from: Some(pointer),
+            ..
+        }) if !pointer.starts_with('/') => Err(format!(
+            "{pointer} isn't a JSON pointer: it starts with /, as /params/requestId"
+        )),
         Step::SpawnHolder(SpawnHolder {
             pid_file: Some(path),
             ..
@@ -521,7 +538,7 @@ fn check(step: &Step, in_handler: bool) -> Result<(), String> {
 mod tests {
     use serde_json::json;
 
-    use super::{LongLine, Respond, Script, Step};
+    use super::{LongLine, On, Respond, Script, Step};
 
     #[test]
     fn steps_without_settings_are_strings_or_null() {
@@ -557,6 +574,12 @@ mod tests {
         assert!(wrong(r#"{"spawn_holder": {"pid_file": "pid"}}"#).contains("absolute"));
         assert!(wrong(r#"{"on": {"do": ["hang"]}}"#).contains("can't wait"));
         assert!(wrong(r#"{"on": {"do": [{"sleep": 5}]}}"#).contains("can't wait or sleep"));
+        assert!(wrong(r#"{"on": {"do": [{"spawn_holder": {}}]}}"#).contains("can't wait"));
+        assert!(wrong(r#"{"wait_file": "go"}"#).contains("absolute"));
+        assert!(
+            wrong(r#"{"respond": {"id_from": "params/requestId", "result": 1}}"#)
+                .contains("isn't a JSON pointer")
+        );
         assert!(
             wrong(r#"{"respond": {"id": 1, "id_from": "/id", "result": 1}}"#).contains("not both")
         );
@@ -576,6 +599,14 @@ mod tests {
             ..LongLine::default()
         })]);
         assert!(short.check().unwrap_err().message.contains("longer than 3"));
+        let in_handler = Script::new(vec![Step::On(On {
+            steps: vec![Step::Include("/y.jsonl".into())],
+            ..On::default()
+        })]);
+        assert_eq!(
+            in_handler.check().unwrap_err().to_string(),
+            "step 1: /y.jsonl isn't included"
+        );
         assert_eq!(Script::new(vec![Step::Hang]).check(), Ok(()));
     }
 
