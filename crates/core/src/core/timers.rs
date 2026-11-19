@@ -27,6 +27,8 @@ enum Due {
     EndStep(Ticket),
     /// Time to ask again whether a process's group is empty.
     Group(Ticket),
+    /// A gone process must be let go now.
+    Forget(Ticket),
     /// A request is overdue.
     Request(Ticket, i64),
     /// A chat's agent hasn't stopped in time.
@@ -54,7 +56,9 @@ impl<A: AppItem> Core<A> {
                 Group::Again(at) => Some((at, Due::Group(proc))),
                 _ => None,
             };
-            [init, gone, step, group].into_iter().flatten()
+            // Before the group: once let go, there's nothing to ask.
+            let forget = self.forget_by(proc).map(|at| (at, Due::Forget(proc)));
+            [init, gone, step, forget, group].into_iter().flatten()
         });
         let requests = (self.pending.iter()).filter_map(|(&(proc, id), pending)| Some((pending.deadline?, Due::Request(proc, id))));
         let stops = (self.runs.iter()).filter_map(|(&chat, run)| Some((run.running.as_ref()?.stop_by?, Due::Stop(chat))));
@@ -85,6 +89,7 @@ impl<A: AppItem> Core<A> {
             Due::Gone(proc) => self.finalize(now, proc, out),
             Due::EndStep(proc) => self.end_step(now, proc, out),
             Due::Group(proc) => self.check_group(proc, out),
+            Due::Forget(proc) => self.forget_now(now, proc, out),
             Due::Request(proc, id) => self.overdue(now, proc, id, out),
             Due::Stop(chat) => self.stop_overdue(now, chat, out),
             Due::Quiet(chat) => self.quiet(now, chat),

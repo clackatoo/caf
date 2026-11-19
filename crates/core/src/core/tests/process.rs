@@ -92,7 +92,9 @@ fn an_adapter_that_cant_start_fails_its_chats_waiting_messages() {
     script.open(OpenChat::new("claude", "/work")).0.expect("opened");
     let (turn, _) = script.send(CHAT, "hello");
     let out = script.agent(PROC, AgentEvent::StartFailed { error: "No such file or directory".to_owned() });
-    assert!(with(&out, "signal").is_empty() && with(&out, "forget").is_empty(), "nothing ran: {out:#?}");
+    assert!(with(&out, "signal").is_empty(), "nothing ran: {out:#?}");
+    // Let go at once, so the driver frees what it kept for it.
+    assert_eq!(with(&out, "forget"), [json!({ "forget": PROC })]);
     assert_has(&script.chat(CHAT), &json!({
         "state": { "Lost": { "reason": { "CouldNotStart": { "error": "No such file or directory" } } } },
         "turns": [{ "id": turn.expect("sent").0, "life": { "Failed": { "reason": "AgentStopped", "remedy": "SendAgain" } } }]
@@ -270,4 +272,34 @@ fn a_session_refused_for_sign_in_says_so() {
         "state": { "Lost": { "reason": "SignInNeeded" } },
         "turns": [{ "id": turn.expect("sent").0, "life": { "Failed": { "reason": "SignInNeeded", "remedy": "SendAgain" } } }]
     }));
+}
+
+#[test]
+fn a_process_that_exited_is_let_go_in_a_fixed_time_whatever_holds_its_output_open() {
+    let mut script = Script::with_claude();
+    script.at(1000);
+    script.agent(PROC, AgentEvent::Exited(Exit::Code(0)));
+    // Something it left behind keeps writing, so its output never closes,
+    // and its group never says it's empty.
+    let mut ms = 1000;
+    while ms + 500 < 13_000 {
+        ms += 500;
+        script.at(ms);
+        let out = script.woken();
+        assert!(with(&out, "forget").is_empty(), "not yet, at {ms}");
+        script.agent(PROC, AgentEvent::Stderr(b"still here\n".to_vec()));
+        if script.state()["procs"]["1002"]["group"] == json!("Asked") {
+            script.agent(PROC, AgentEvent::Group { empty: false });
+        }
+    }
+    // At most five times `gone` for its last words, then `kill_after`.
+    script.at(13_000);
+    let out = script.woken();
+    assert_eq!(with(&out, "forget"), [json!({ "forget": PROC })]);
+    assert_eq!(with(&out, "signal"), [json!({ "signal": PROC, "is": "Kill" })]);
+    assert_eq!(with(&out, "report")[0]["report"], "Warn");
+    assert_eq!(script.state()["procs"], json!({}));
+    // The next message starts another.
+    let (_, out) = script.send(CHAT, "again");
+    assert_eq!(with(&out, "start").len(), 1);
 }

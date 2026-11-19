@@ -180,7 +180,9 @@ impl<A: AppItem> Core<A> {
             each.ending = Some(Ending { firm: true, next: None });
         }
         self.lose_process(now, proc, Cause::Failed(Lost::CouldNotStart { error }), out);
+        // Let go at once, so the driver frees what it kept for it.
         if let Some(each) = self.procs.remove(&proc) {
+            out.push(Directive::Agent(AgentDirective::Forget { process: proc }));
             self.advance(now, each.conn, out);
             self.tidy(each.conn);
         }
@@ -306,6 +308,29 @@ impl<A: AppItem> Core<A> {
         out.push(Directive::Agent(AgentDirective::Forget { process: proc }));
         self.advance(now, conn, out);
         self.tidy(conn);
+    }
+
+    /// When a gone process is let go at the latest, whatever holds its
+    /// output open or its group: its last words are waited for at most
+    /// five times `gone`, then its group has `kill_after` more to empty.
+    /// Something it started that keeps writing could otherwise keep the
+    /// driver reading it forever.
+    pub(super) fn forget_by(&self, proc: Ticket) -> Option<crate::time::Mono> {
+        let timers = &self.host.timers;
+        let gone = self.procs.get(&proc)?.gone.as_ref()?;
+        Some(gone.since.after(timers.gone * MOST_GONE + timers.kill_after))
+    }
+
+    /// A gone process's time is up: it's let go, killed again first in
+    /// case its group never emptied.
+    pub(super) fn forget_now(&mut self, now: Now, proc: Ticket, out: &mut Vec<Directive>) {
+        self.finalize(now, proc, out);
+        let Some(each) = self.procs.remove(&proc) else { return };
+        report(out, Level::Warn, format!("letting process {} go: its group or output never ended in time", proc.0));
+        out.push(signal(proc, Signal::Kill));
+        out.push(Directive::Agent(AgentDirective::Forget { process: proc }));
+        self.advance(now, each.conn, out);
+        self.tidy(each.conn);
     }
 
     /// Takes `proc` from its connection: nothing new is asked of it.
