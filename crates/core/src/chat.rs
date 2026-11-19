@@ -133,6 +133,32 @@ pub enum Lost {
         /// What it said, cleaned and capped.
         message: String,
     },
+    /// The user stopped it opening.
+    Stopped,
+    /// The adapter can't do what this chat needs.
+    Incompatible(Incompatible),
+    /// Another chat already has this session open: one session is never
+    /// opened twice.
+    InUse,
+    /// The host shut CAF down.
+    ShutDown,
+}
+
+/// What an adapter can't do that a chat needs.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Incompatible {
+    /// It speaks a version of ACP that CAF doesn't: this one, if it said
+    /// which.
+    Protocol {
+        /// The version it answered with.
+        version: Option<u64>,
+    },
+    /// It can't reach MCP servers over HTTP, and the chat has one. The
+    /// chat is refused rather than quietly run without its tools.
+    HttpMcp,
+    /// Its answer made no sense, such as a session id CAF can't keep.
+    BadAnswer,
 }
 
 /// One turn: something started it, the agent worked, and it ended.
@@ -173,6 +199,9 @@ pub enum Starter {
     },
     /// The app told the agent something. *Later.*
     Notice(String),
+    /// CAF itself, to say something between turns, such as that a
+    /// session couldn't be continued. Its items are [`Note`]s.
+    Caf,
 }
 
 /// A message to an agent.
@@ -311,8 +340,8 @@ pub enum ItemKind<A: AppItem = NoAppItems> {
     Tool(ToolCall<A>),
     /// The agent summarised its memory to make room. *Later.*
     Compacted(Compacted),
-    /// Something CAF itself says, such as "continuing after a restart".
-    /// *Later.*
+    /// Something CAF itself says, such as "the agent no longer had this
+    /// session".
     Note(Note),
     /// The app's own item.
     App(A),
@@ -384,10 +413,17 @@ pub enum ToolStatus {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Compacted {}
 
-/// Something CAF says in a turn. *Later.*
+/// Something CAF says in a turn.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Note {}
+pub enum Note {
+    /// The agent no longer had the session the chat continues, so a new
+    /// one was opened: it remembers nothing from before.
+    SessionGone,
+    /// The agent can't continue sessions, so a new one was opened: it
+    /// remembers nothing from before.
+    CannotContinue,
+}
 
 /// Something the agent sent that CAF couldn't read.
 #[non_exhaustive]

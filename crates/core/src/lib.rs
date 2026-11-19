@@ -73,9 +73,8 @@
 //! 9. **Agent text is never passed off as CAF's.** Failure text from the
 //!    agent is cleaned, capped and kept apart from CAF's own words.
 
-// The API draft for review: bodies are `todo!()` until it is approved.
-#![allow(unused_variables, dead_code)]
-
+// `acp`'s framer and parser are being written apart from the rest.
+#[allow(unused_variables, dead_code)]
 pub mod acp;
 pub mod agent;
 pub mod change;

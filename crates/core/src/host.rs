@@ -87,6 +87,9 @@ pub struct Limits {
     pub stderr_line_bytes: usize,
     /// The longest failure text from an agent to show. 2 KiB.
     pub failure_text: usize,
+    /// How many changes each chat keeps for viewers. A viewer further
+    /// behind gets the whole chat instead. 4096.
+    pub kept_changes: usize,
 }
 
 /// How long to wait for things. Every timer is the host's to set:
@@ -157,6 +160,7 @@ impl Default for Limits {
             stderr_lines: 4,
             stderr_line_bytes: 300,
             failure_text: 2 << 10,
+            kept_changes: 4096,
         }
     }
 }
