@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 
-use super::harness::{Script, assert_has, host, sent};
+use super::harness::{Script, assert_has, host, sent, with};
 use super::{CHAT, PROC, SESSION, claude_init};
 use crate::core::OpenChat;
 
@@ -137,26 +137,73 @@ fn a_bare_internal_error_says_its_details() {
     assert_eq!(life, json!({ "Failed": { "reason": "Other", "agent_said": "spawn ENOMEM", "remedy": "SendAgain" } }));
 }
 
+/// A prompt answered "the adapter has no such session", as the ACP SDK
+/// sends Claude's adapter's error, or as ACP's own error.
+fn not_found(claude_text: bool) -> Value {
+    if claude_text {
+        json!({ "code": -32603, "message": "Internal error", "data": { "details": "Session not found" } })
+    } else {
+        json!({ "code": -32002, "message": "Resource not found" })
+    }
+}
+
 #[test]
-fn a_prompt_to_a_session_the_adapter_dropped_opens_a_new_one_and_sends_it_there() {
-    for error in [
-        json!({ "code": -32603, "message": "Internal error", "data": { "details": "Session not found" } }),
-        json!({ "code": -32002, "message": "Resource not found" }),
-    ] {
+fn a_prompt_to_a_session_the_adapter_dropped_resumes_it_and_sends_again() {
+    for claude_text in [true, false] {
         let mut script = Script::with_claude();
         let (turn, _) = script.send(CHAT, "go");
-        let out = script.fails(PROC, 1002, &error);
-        assert!(sent(&out, "session/new")["params"].get("sessionId").is_none(), "{error}");
-        let out = script.answers(PROC, 1003, &json!({ "sessionId": "fresh" }));
-        assert_has(&sent(&out, "session/prompt"), &json!({ "params": { "sessionId": "fresh", "prompt": [{ "text": "go" }] } }));
-        assert_has(&script.chat(CHAT), &json!({
-            "state": { "Open": { "session": "fresh" } },
-            // The note comes before the message, sent again to the new
-            // session.
-            "turns": [{ "starter": "Caf", "items": [{ "kind": { "Note": "SessionGone" } }] }, { "id": turn.expect("sent").0, "life": "Running" }]
-        }));
+        let out = script.fails(PROC, 1002, &not_found(claude_text));
+        // The conversation is kept on disk: resumed, not replaced.
+        assert_has(&sent(&out, "session/resume"), &json!({ "params": { "sessionId": SESSION } }));
+        let out = script.answers(PROC, 1003, &json!({}));
+        assert_has(&sent(&out, "session/prompt"), &json!({ "params": { "sessionId": SESSION, "prompt": [{ "text": "go" }] } }));
+        assert_has(&script.chat(CHAT), &json!({ "state": { "Open": { "session": SESSION } }, "turns": [{ "id": turn.expect("sent").0, "life": "Running" }] }));
         script.answers(PROC, 1004, &json!({ "stopReason": "end_turn" }));
     }
+}
+
+#[test]
+fn a_dropped_session_that_cant_be_resumed_is_replaced_and_the_chat_says_so() {
+    let mut script = Script::with_claude();
+    let (turn, _) = script.send(CHAT, "go");
+    script.fails(PROC, 1002, &not_found(true));
+    let out = script.fails(PROC, 1003, &json!({ "code": -32002, "message": "Resource not found" }));
+    assert!(sent(&out, "session/new")["params"].get("sessionId").is_none());
+    let out = script.answers(PROC, 1004, &json!({ "sessionId": "fresh" }));
+    sent(&out, "session/prompt");
+    assert_has(&script.chat(CHAT), &json!({
+        "state": { "Open": { "session": "fresh" } },
+        "turns": [{ "starter": "Caf", "items": [{ "kind": { "Note": "SessionGone" } }] }, { "id": turn.expect("sent").0, "life": "Running" }]
+    }));
+    script.answers(PROC, 1005, &json!({ "stopReason": "end_turn" }));
+}
+
+#[test]
+fn a_message_is_sent_again_to_a_dropped_session_at_most_once() {
+    let mut script = Script::with_claude();
+    let (turn, _) = script.send(CHAT, "go");
+    script.fails(PROC, 1002, &not_found(true));
+    script.answers(PROC, 1003, &json!({}));
+    let out = script.fails(PROC, 1004, &not_found(true));
+    assert!(with(&out, "write").iter().all(|write| write["message"]["method"] != "session/prompt"));
+    assert_has(&script.chat(CHAT), &json!({
+        "turns": [{ "id": turn.expect("sent").0, "life": { "Failed": { "reason": "AgentStopped", "agent_said": null, "remedy": "SendAgain" } } }]
+    }));
+    // The chat still opens its session again, for the next message.
+    script.answers(PROC, 1005, &json!({}));
+    assert_has(&script.chat(CHAT), &json!({ "state": { "Open": { "session": SESSION } } }));
+}
+
+#[test]
+fn a_turn_being_stopped_isnt_sent_again_when_its_session_was_dropped() {
+    let mut script = Script::with_claude();
+    let (turn, _) = script.send(CHAT, "go");
+    script.stop(CHAT).0.expect("stopping");
+    let out = script.fails(PROC, 1002, &not_found(true));
+    assert_has(&script.chat(CHAT), &json!({ "turns": [{ "id": turn.expect("sent").0, "life": "Stopped" }] }));
+    sent(&out, "session/resume");
+    let out = script.answers(PROC, 1003, &json!({}));
+    assert!(with(&out, "write").is_empty(), "nothing sent: {out:#?}");
 }
 
 #[test]

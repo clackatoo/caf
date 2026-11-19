@@ -309,6 +309,9 @@ pub(super) struct Run<A: AppItem> {
     pub(super) slow: Option<QuestionId>,
     /// Something to say once the session is open.
     pub(super) note: Option<Note>,
+    /// A turn sent again after its session was dropped: it isn't sent a
+    /// third time.
+    pub(super) resent: Option<TurnId>,
 }
 
 /// Where a chat is with its session.

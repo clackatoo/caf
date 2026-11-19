@@ -87,11 +87,11 @@ impl<A: AppItem> Core<A> {
         if run.running.as_ref().is_none_or(|running| running.turn != turn) {
             return;
         }
-        run.running = None;
+        let stopping = run.running.take().is_some_and(|running| running.stop_by.is_some());
         if let Reply::Error(error) = &reply
             && self.profile_of_chat(chat).session_gone(error)
         {
-            return self.prompt_lost_session(now, chat, turn, out);
+            return self.prompt_lost_session(now, chat, turn, stopping, out);
         }
         let life = match reply {
             Reply::Result(result) => ended_by(&result),
@@ -105,28 +105,30 @@ impl<A: AppItem> Core<A> {
     }
 
     /// The agent no longer has the session `chat`'s turn `turn` was sent
-    /// to. A new session is opened, which the chat says, and the turn goes
-    /// to it if the agent did nothing with it; otherwise it fails, and can
-    /// be sent again.
-    fn prompt_lost_session(&mut self, now: Now, chat: ChatId, turn: TurnId, out: &mut Vec<Directive>) {
+    /// to, as when Claude's program under the adapter died. The session is
+    /// opened again, resumed where the agent can: its conversation may be
+    /// kept even so, and if it isn't, a new one opens and the chat says so.
+    ///
+    /// The turn goes to it again if the agent did nothing with it, once
+    /// only: Claude's adapter says so before anything reaches the model.
+    /// A turn the user was stopping ends stopped, and one the agent did
+    /// something with, or that was already sent again, fails.
+    fn prompt_lost_session(&mut self, now: Now, chat: ChatId, turn: TurnId, stopping: bool, out: &mut Vec<Directive>) {
         self.withdraw_asks(chat, out);
         let heard = self.turn(chat, turn).is_some_and(|each| !each.items.is_empty());
-        if heard {
+        let resent = self.runs.get(&chat).is_some_and(|run| run.resent == Some(turn));
+        if stopping {
+            self.end_turn(now, chat, turn, TurnLife::Stopped);
+        } else if heard || resent {
             let failed = failure(FailureReason::AgentStopped, Some(Remedy::SendAgain));
             self.end_turn(now, chat, turn, TurnLife::Failed(failed));
         } else {
             self.set_life(now, chat, turn, TurnLife::Waiting);
+            if let Some(run) = self.runs.get_mut(&chat) {
+                run.resent = Some(turn);
+            }
         }
         self.end_agent_turn(now, chat);
-        let Some(run) = self.runs.get_mut(&chat) else { return };
-        if let (Open::Live { proc }, Some(session)) = (run.open, run.session.take())
-            && let Some(each) = self.procs.get_mut(&proc)
-        {
-            each.sessions.remove(&session.0);
-        }
-        if let Some(run) = self.runs.get_mut(&chat) {
-            run.note = Some(crate::chat::Note::SessionGone);
-        }
         self.want_open(now, chat, out);
     }
 

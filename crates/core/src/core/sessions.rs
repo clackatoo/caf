@@ -77,6 +77,7 @@ impl<A: AppItem> Core<A> {
             replaying: false,
             slow: None,
             note: None,
+            resent: None,
         });
         self.advance(now, conn, out);
         Ok(())
