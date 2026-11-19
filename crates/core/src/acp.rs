@@ -396,6 +396,9 @@ pub enum Frame {
     /// A line too long to accept. Its id and method are recovered from its
     /// start, if they're there, so a request can be refused and an answer
     /// can end the request it answered.
+    ///
+    /// It may gain fields, so patterns on it outside CAF need `..`.
+    #[non_exhaustive]
     TooBig {
         /// Its id, if found.
         id: Option<RequestId>,

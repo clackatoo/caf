@@ -64,13 +64,22 @@ pub struct AgentLimits {
     pub parsing: usize,
     /// How much is read before yielding to other tasks. 1 MiB.
     pub read_step: usize,
-    /// How much unsent input may build up for one process before it's
-    /// watched for being stuck. 64 MiB.
+    /// How much input may wait unsent for one process. Two rules hold it
+    /// to that, each ending in [`AgentEvent::WriteFailed`], after which
+    /// nothing more is written to the process:
+    /// - **Stuck:** more than this waiting, with none of it taken for
+    ///   [`stuck`](Self::stuck), fails it. While the process takes some,
+    ///   the clock starts again, so a process that's reading isn't failed
+    ///   by this rule however much waits.
+    /// - **Ceiling:** more than four times this waiting fails it at once,
+    ///   moving or not, so memory stays bounded. That includes a single
+    ///   write too big for it.
+    ///
+    /// 64 MiB, so the ceiling is 256 MiB.
     pub unsent: usize,
     /// How long more than [`unsent`](Self::unsent) may wait with none of
     /// it taken before the process is treated as stuck and reported gone.
-    /// A process that's reading is never failed, however big one write
-    /// is. 30 s.
+    /// 30 s.
     pub stuck: Duration,
     /// How long a process's pipes may stay open with nothing coming
     /// through, once it has exited, before they're dropped. Time spent with
@@ -126,7 +135,11 @@ impl Default for AgentLimits {
 /// - **Memory:** each process may hold up to
 ///   [`AgentLimits::biggest_line`] of a line not yet ended, and
 ///   [`AgentLimits::parsing`] of lines waiting for the core, so 128 MiB by
-///   default, besides its unsent input.
+///   default, besides its unsent input, which is held to four times
+///   [`AgentLimits::unsent`].
+/// - **It needs tokio's real clock:** under a paused clock
+///   (`tokio::time::pause`) its drain and stuck timers would jump ahead
+///   whenever the runtime is idle, while its processes run in real time.
 /// - **[`AgentDirective::Forget`]** of a process that hasn't exited kills
 ///   its group and reaps it. Dropping the driver kills every group it
 ///   started, and reaps what's left. If the tokio runtime shuts down
@@ -154,6 +167,10 @@ const EVENTS: usize = 256;
 /// reading it pauses, however small they are: a flood of empty lines is
 /// no bytes, but each is a frame.
 const WAITING: usize = 4096;
+
+/// How many times [`AgentLimits::unsent`] may wait unsent, moving or not,
+/// before writing fails.
+const UNSENT_CEILING: usize = 4;
 
 /// How much is read from a pipe at once.
 const READ: usize = 64 << 10;
@@ -441,6 +458,14 @@ impl Process {
         }
         self.unsent.push(bytes);
         self.flush();
+        let ceiling = self.limits.unsent.saturating_mul(UNSENT_CEILING);
+        if self.unsent.len > ceiling {
+            let error = io::Error::other(format!(
+                "it can't take its input fast enough: {} bytes are waiting, more than the most, {ceiling}",
+                self.unsent.len
+            ));
+            self.write_failed(&error);
+        }
     }
 
     /// Writes what's waiting until the pipe is full, then closes the pipe

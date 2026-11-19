@@ -238,7 +238,7 @@ async fn a_line_too_big_is_dropped_and_its_id_kept() {
     let too_big = find(&events, |event| {
         matches!(
             event,
-            AgentEvent::Frame(Frame::TooBig { id: Some(RequestId::Number(5)), method: Some(method), shape: Shape::Call, len })
+            AgentEvent::Frame(Frame::TooBig { id: Some(RequestId::Number(5)), method: Some(method), shape: Shape::Call, len, .. })
                 if method == "fs/write_text_file" && *len == big.len() - 1
         )
     });
@@ -572,10 +572,39 @@ async fn unsent_input_that_doesnt_move_is_a_write_failure() {
 }
 
 #[tokio::test]
-async fn one_write_bigger_than_the_cap_goes_to_a_process_that_reads() {
+async fn unsent_input_past_the_ceiling_fails_at_once() {
     let mut limits = AgentLimits::default();
     limits.unsent = 64 << 10;
-    limits.stuck = Duration::from_millis(500);
+    limits.stuck = Duration::from_secs(60);
+    let mut driver = AgentDriver::new(limits);
+    start(&mut driver, ONE, SpawnCommand::new("/bin/cat"));
+    until(&mut driver, ONE, |events| !events.is_empty()).await;
+    // Far past four times the most: failed without waiting to see
+    // whether it moves.
+    write(&mut driver, ONE, vec![b'x'; 4 << 20]);
+    let events = until(&mut driver, ONE, |events| {
+        events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::WriteFailed { .. }))
+    })
+    .await;
+    let failures = events
+        .iter()
+        .filter(|event| matches!(event, AgentEvent::WriteFailed { .. }));
+    assert_eq!(failures.count(), 1);
+    driver.apply(AgentDirective::Signal {
+        process: ONE,
+        signal: Signal::Kill,
+    });
+    until_done(&mut driver, ONE).await;
+}
+
+#[tokio::test]
+async fn one_write_bigger_than_the_cap_goes_to_a_process_that_reads() {
+    // 8 MiB in one write: past the cap of 4 MiB, under the ceiling.
+    let mut limits = AgentLimits::default();
+    limits.unsent = 4 << 20;
+    limits.stuck = Duration::from_secs(10);
     let mut driver = AgentDriver::new(limits);
     start(&mut driver, ONE, SpawnCommand::new("/bin/cat"));
     let count = 8 << 10;
