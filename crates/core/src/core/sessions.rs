@@ -116,17 +116,15 @@ impl<A: AppItem> Core<A> {
     pub(super) fn ask_session(&mut self, now: Now, chat: ChatId, proc: Ticket, out: &mut Vec<Directive>) {
         let Some(caps) = self.procs.get(&proc).and_then(|each| each.caps().cloned()) else { return };
         let Some(run) = self.runs.get(&chat) else { return };
-        let conn = run.conn;
         if let Some(session) = &run.session {
-            // Only a chat that asked for it, or has it, holds it.
-            let held = (self.runs.iter()).any(|(&other, them)| {
-                let holds = matches!(them.open, Open::Asked { .. } | Open::Live { .. });
-                other != chat && them.conn == conn && holds && them.session.as_ref() == Some(session)
-            });
-            if held {
-                return self.session_lost(now, chat, Lost::InUse, false, out);
+            match self.holder(chat, proc, session) {
+                Some(Hold::Chat) => return self.session_lost(now, chat, Lost::InUse, false, out),
+                // It waits: whatever holds it ends, by its own deadline.
+                Some(Hold::Going) => return,
+                None => {}
             }
         }
+        let Some(run) = self.runs.get(&chat) else { return };
         if !caps.mcp_http && run.mcp.iter().any(|server| matches!(server, McpServer::Http { .. })) {
             return self.session_lost(now, chat, Lost::Incompatible(crate::chat::Incompatible::HttpMcp), false, out);
         }
@@ -160,6 +158,32 @@ impl<A: AppItem> Core<A> {
             run.open = Open::Asked { proc, id };
             run.replaying = how == How::Load;
         }
+    }
+
+    /// What keeps `chat` from opening `session` on `proc`, if anything.
+    /// A session is held, across every connection of the chat's agent, by
+    /// another chat that has it or asked for it, by any request still
+    /// opening it (even one nobody waits for), and by any other process
+    /// that had it and isn't let go yet.
+    fn holder(&self, chat: ChatId, proc: Ticket, session: &AgentSessionId) -> Option<Hold> {
+        let agent = &self.chats.get(&chat)?.agent;
+        let agents_proc = |proc: &Ticket| {
+            let conn = self.procs.get(proc).and_then(|each| self.conns.get(&each.conn));
+            conn.is_some_and(|conn| &conn.agent == agent)
+        };
+        let chat_holds = (self.runs.iter()).any(|(&other, run)| {
+            let agents = self.chats.get(&other).is_some_and(|whole| &whole.agent == agent);
+            let holds = matches!(run.open, Open::Asked { .. } | Open::Live { .. });
+            other != chat && agents && holds && run.session.as_ref() == Some(session)
+        });
+        if chat_holds {
+            return Some(Hold::Chat);
+        }
+        let opening = (self.pending.iter()).any(|((on, _), pending)| {
+            matches!(&pending.purpose, Purpose::Open { session: Some(asked), .. } if asked == session) && agents_proc(on)
+        });
+        let elsewhere = (self.procs.iter()).any(|(on, each)| *on != proc && each.sessions.contains(&session.0) && agents_proc(on));
+        (opening || elsewhere).then_some(Hold::Going)
     }
 
     /// The agent answered request `id` of `proc`, which asked for `chat`'s
@@ -222,6 +246,9 @@ impl<A: AppItem> Core<A> {
         let Some(run) = self.runs.get_mut(&chat) else { return };
         run.open = Open::Live { proc };
         run.session = Some(session.clone());
+        if let Some(each) = self.procs.get_mut(&proc) {
+            each.sessions.insert(session.0.clone());
+        }
         let note = run.note.take();
         if let Some(question) = run.slow {
             self.unask_slow(chat, question);
@@ -236,8 +263,11 @@ impl<A: AppItem> Core<A> {
     /// A session nobody waits for any more opened: it's closed, if no
     /// chat holds it now and the agent can close sessions. Otherwise it
     /// lives until its adapter stops.
-    fn close_late(&mut self, now: Now, proc: Ticket, session: AgentSessionId, out: &mut Vec<Directive>) {
-        let held = (self.runs.values()).any(|run| run.open != Open::Idle && run.session.as_ref() == Some(&session));
+    pub(super) fn close_late(&mut self, now: Now, proc: Ticket, session: AgentSessionId, out: &mut Vec<Directive>) {
+        if let Some(each) = self.procs.get_mut(&proc) {
+            each.sessions.insert(session.0.clone());
+        }
+        let held = (self.runs.values()).any(|run| matches!(run.open, Open::Asked { .. } | Open::Live { .. }) && run.session.as_ref() == Some(&session));
         if held {
             return;
         }
@@ -263,7 +293,7 @@ impl<A: AppItem> Core<A> {
     pub(super) fn flush_import(&mut self, chat: ChatId) {
         let Some(mut turn) = self.runs.get_mut(&chat).and_then(|run| run.import.take()) else { return };
         super::updates::settle_imported(&mut turn);
-        self.add_turn(chat, turn);
+        self.add_turn_before_waiting(chat, turn);
     }
 
     /// `chat` lost its session, or never got it, because of `lost`. Its
@@ -383,12 +413,22 @@ impl<A: AppItem> Core<A> {
                     pending.deadline = Some(now.mono.after(timers.session_open));
                 }
             }
+            // Waiting for the adapter itself: every chat waiting on it
+            // waits again, and is asked again together.
             Open::Wanted => {
-                let current = self.conns.get(&run.conn).and_then(|each| each.current);
+                let conn = run.conn;
+                let current = self.conns.get(&conn).and_then(|each| each.current);
                 if let Some(each) = current.and_then(|proc| self.procs.get_mut(&proc))
                     && let super::state::Init::Waiting { deadline } = &mut each.init
                 {
                     *deadline = Some(now.mono.after(timers.initialize));
+                }
+                let asked: Vec<(ChatId, QuestionId)> = (self.runs.iter())
+                    .filter(|(_, run)| run.conn == conn && run.open == Open::Wanted)
+                    .filter_map(|(&chat, run)| Some((chat, run.slow?)))
+                    .collect();
+                for (chat, question) in asked {
+                    self.unask_slow(chat, question);
                 }
             }
             _ => {}
@@ -512,6 +552,14 @@ impl<A: AppItem> Core<A> {
             each.current = None;
         }
     }
+}
+
+/// What keeps a chat from opening a session.
+enum Hold {
+    /// Another chat has it: it's in use.
+    Chat,
+    /// Something going away has it: wait.
+    Going,
 }
 
 /// How a chat's lost session fails a turn that needed it.

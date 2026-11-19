@@ -130,11 +130,15 @@ impl<A: AppItem> Core<A> {
                     self.prompt_answered(now, chat, turn, reply, out);
                 }
             }
-            super::state::Purpose::Close { .. } => {
-                if let Reply::Error(error) = reply {
-                    report(out, Level::Debug, format!("the agent couldn't close a session: error {}", error.code));
+            super::state::Purpose::Close { session } => match reply {
+                Reply::Result(_) => {
+                    if let Some(each) = self.procs.get_mut(&proc) {
+                        each.sessions.remove(&session.0);
+                    }
                 }
-            }
+                Reply::Error(error) => report(out, Level::Debug, format!("the agent couldn't close a session: error {}", error.code)),
+                Reply::Unreadable => report(out, Level::Debug, "the agent's answer to closing a session couldn't be read".to_owned()),
+            },
         }
     }
 }

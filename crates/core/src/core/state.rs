@@ -88,6 +88,12 @@ pub(super) struct Proc {
     pub(super) ending: Option<Ending>,
     /// Whether its process group is being watched for emptiness.
     pub(super) group: Group,
+    /// The sessions it has had open: until it's let go, no other process
+    /// opens them.
+    pub(super) sessions: BTreeSet<String>,
+    /// Requests to open a session CAF gave up waiting for: one that
+    /// answers late with a session gets it closed.
+    pub(super) given_up: BTreeSet<i64>,
 }
 
 impl Proc {

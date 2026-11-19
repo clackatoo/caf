@@ -35,6 +35,15 @@ pub enum Change<A: AppItem = NoAppItems> {
     State(ChatState),
     /// A turn was added.
     TurnAdded(Turn<A>),
+    /// A turn was added before another, rather than at the end: history
+    /// a session's agent replayed, imported while a message sent meanwhile
+    /// waited, goes before that message.
+    TurnInserted {
+        /// The turn it goes before.
+        before: TurnId,
+        /// The turn.
+        turn: Turn<A>,
+    },
     /// A turn moved on in its life, and ended if `end` says so.
     TurnLife {
         /// The turn.

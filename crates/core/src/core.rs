@@ -205,7 +205,7 @@ impl<A: AppItem> Core<A> {
             Event::Policy { ticket, answer } => self.policy_answered(now, ticket, answer, out),
             Event::Storage(storage) => match storage {},
         }
-        self.finish(out);
+        self.finish(now, out);
     }
 
     /// Opens a chat, and returns its id. Its agent is started, or its
@@ -218,7 +218,7 @@ impl<A: AppItem> Core<A> {
     pub fn open_chat(&mut self, now: Now, open: OpenChat, out: &mut Vec<Directive>) -> Result<ChatId, Refused> {
         let chat = ChatId(self.ids.next);
         self.command(now, HostCommand::OpenChat { chat, open }, out)?;
-        self.finish(out);
+        self.finish(now, out);
         Ok(chat)
     }
 
@@ -236,7 +236,7 @@ impl<A: AppItem> Core<A> {
     pub fn send(&mut self, now: Now, chat: ChatId, message: UserMessage, out: &mut Vec<Directive>) -> Result<TurnId, Refused> {
         let turn = TurnId(self.ids.next);
         self.command(now, HostCommand::Send { chat, turn, message }, out)?;
-        self.finish(out);
+        self.finish(now, out);
         Ok(turn)
     }
 
@@ -254,7 +254,7 @@ impl<A: AppItem> Core<A> {
     /// [`Refused::NoSuchChat`] or [`Refused::NothingToStop`].
     pub fn stop(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) -> Result<(), Refused> {
         self.command(now, HostCommand::Stop { chat }, out)?;
-        self.finish(out);
+        self.finish(now, out);
         Ok(())
     }
 
@@ -266,7 +266,7 @@ impl<A: AppItem> Core<A> {
     /// withdrawn or never asked), or [`Refused::WrongAnswer`].
     pub fn answer(&mut self, now: Now, question: QuestionId, answer: Answer, out: &mut Vec<Directive>) -> Result<(), Refused> {
         self.command(now, HostCommand::Answer { question, answer }, out)?;
-        self.finish(out);
+        self.finish(now, out);
         Ok(())
     }
 
@@ -278,7 +278,7 @@ impl<A: AppItem> Core<A> {
     /// [`Refused::NoSuchChat`].
     pub fn close_chat(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) -> Result<(), Refused> {
         self.command(now, HostCommand::CloseChat { chat }, out)?;
-        self.finish(out);
+        self.finish(now, out);
         Ok(())
     }
 
@@ -287,7 +287,7 @@ impl<A: AppItem> Core<A> {
     pub fn shutdown(&mut self, now: Now, out: &mut Vec<Directive>) {
         // Shutting down is never refused.
         let _ = self.command(now, HostCommand::Shutdown, out);
-        self.finish(out);
+        self.finish(now, out);
     }
 
     /// Whether nothing is running: no adapters, nothing waiting.
@@ -349,9 +349,11 @@ impl<A: AppItem> Core<A> {
         }
     }
 
-    /// Ends a call into the core: viewers hear which chats changed, and
-    /// the timer driver when to wake the core next.
-    fn finish(&mut self, out: &mut Vec<Directive>) {
+    /// Ends a call into the core: every connection makes what progress it
+    /// now can, viewers hear which chats changed, and the timer driver
+    /// when to wake the core next.
+    fn finish(&mut self, now: Now, out: &mut Vec<Directive>) {
+        self.advance_all(now, out);
         for chat in std::mem::take(&mut self.dirty) {
             if let Some(log) = self.logs.get(&chat) {
                 out.push(Directive::Viewer(crate::directive::ViewerDirective::Changed { chat, latest: log.latest() }));

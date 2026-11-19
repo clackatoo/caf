@@ -8,6 +8,7 @@ mod continuing;
 mod failures;
 mod frames;
 mod guarantees;
+mod holding;
 mod permissions;
 mod process;
 mod shared;

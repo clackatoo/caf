@@ -94,6 +94,18 @@ impl<A: AppItem> Core<A> {
         self.record(chat, Change::TurnAdded(turn));
     }
 
+    /// Adds `turn` to `chat` before its first turn waiting to be sent, or
+    /// at the end if none is.
+    pub(super) fn add_turn_before_waiting(&mut self, chat: ChatId, turn: Turn<A>) {
+        let Some(whole) = self.chats.get_mut(&chat) else { return };
+        let Some(at) = whole.turns.iter().position(|each| each.life == TurnLife::Waiting) else {
+            return self.add_turn(chat, turn);
+        };
+        let before = whole.turns[at].id;
+        whole.turns.insert(at, turn.clone());
+        self.record(chat, Change::TurnInserted { before, turn });
+    }
+
     /// A turn of `chat`'s, by id.
     pub(super) fn turn(&self, chat: ChatId, turn: TurnId) -> Option<&Turn<A>> {
         let whole = self.chats.get(&chat)?;

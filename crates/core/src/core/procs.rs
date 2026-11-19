@@ -86,6 +86,11 @@ impl<A: AppItem> Core<A> {
             self.tidy(conn);
             return;
         }
+        if let Some(proc) = current
+            && self.procs.get(&proc).is_some_and(|each| matches!(each.init, Init::Waiting { deadline: None }))
+        {
+            return self.still_slow(now, proc, &wanted, out);
+        }
         if wanted.is_empty() {
             return;
         }
@@ -102,6 +107,29 @@ impl<A: AppItem> Core<A> {
                 self.start_process(now, conn, out);
             }
             None => {}
+        }
+    }
+
+    /// `proc` is already slow to answer `initialize`: every chat waiting
+    /// on it that isn't being asked whether to keep waiting is asked now.
+    /// If none waits any more, it's stopped: nobody needs it, and it
+    /// seems stuck.
+    fn still_slow(&mut self, now: Now, proc: Ticket, wanted: &[ChatId], out: &mut Vec<Directive>) {
+        if wanted.is_empty() {
+            report(out, Level::Info, format!("stopping process {}: it never answered, and nobody waits for it", proc.0));
+            return self.lose_process(now, proc, Cause::Restarted, out);
+        }
+        for &chat in wanted {
+            self.slow(now, chat, false);
+        }
+    }
+
+    /// Makes progress for every connection: what one chat or process does
+    /// can free a session another chat waits for.
+    pub(super) fn advance_all(&mut self, now: Now, out: &mut Vec<Directive>) {
+        let conns: Vec<ConnectionId> = self.conns.keys().copied().collect();
+        for conn in conns {
+            self.advance(now, conn, out);
         }
     }
 
@@ -134,6 +162,8 @@ impl<A: AppItem> Core<A> {
             finalized: false,
             ending: None,
             group: Group::Unwatched,
+            sessions: std::collections::BTreeSet::new(),
+            given_up: std::collections::BTreeSet::new(),
         });
         self.request(now, proc, ("initialize", params), Purpose::Initialize, None, out);
     }
