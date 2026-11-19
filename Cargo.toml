@@ -1,0 +1,22 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/clackatoo/caf"
+
+[workspace.dependencies]
+caf-core = { path = "crates/core" }
+# ACP's types only: CAF frames and routes the messages itself. The same
+# pin as clackatoo, with the session notices clackatoo already declares.
+agent-client-protocol-schema = { version = "1.10", default-features = false, features = ["unstable_session_notices"] }
+serde = { version = "1.0", features = ["derive"] }
+# raw_value: a message's params stay unparsed until the core knows what
+# they are, so one big tool output is read once.
+serde_json = { version = "1.0", features = ["raw_value"] }
+tokio = { version = "1.54", features = ["rt", "macros", "io-util", "process", "sync", "time"] }
