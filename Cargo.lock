@@ -85,6 +85,7 @@ dependencies = [
 name = "caf-fake-agent"
 version = "0.0.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
 ]

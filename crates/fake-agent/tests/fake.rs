@@ -49,7 +49,9 @@ struct Fake {
     lines: Receiver<Vec<u8>>,
     stderr: Option<JoinHandle<String>>,
     record: PathBuf,
-    dir: Dir,
+    /// Its folder, removed once it's gone, which ends any holder it
+    /// started.
+    _dir: Dir,
 }
 
 impl Fake {
@@ -61,11 +63,19 @@ impl Fake {
     }
 
     fn start_in(dir: Dir, script: &std::path::Path) -> Self {
-        let record = dir.path("record.jsonl");
-        let mut child = Command::new(env!("CARGO_BIN_EXE_caf-fake-agent"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_caf-fake-agent"));
+        command
             .arg(script)
             .arg("--record")
-            .arg(&record)
+            .arg(dir.path("record.jsonl"));
+        Self::spawn(dir, command)
+    }
+
+    /// Starts the fake by this command, whose record is `record.jsonl` in
+    /// `dir`.
+    fn spawn(dir: Dir, mut command: Command) -> Self {
+        let record = dir.path("record.jsonl");
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -101,7 +111,7 @@ impl Fake {
             lines,
             stderr: Some(stderr),
             record,
-            dir,
+            _dir: dir,
         }
     }
 
@@ -157,12 +167,38 @@ impl Fake {
         self.stderr.take().unwrap().join().unwrap()
     }
 
+    /// The record, but for its first line, which says how it started.
     fn record(&self) -> Vec<Value> {
+        let mut record = self.whole_record();
+        if !record.is_empty() {
+            assert!(record.remove(0).get("started").is_some());
+        }
+        record
+    }
+
+    /// The record's lines from the script, not those the thread reading
+    /// stdin writes as it reads, which may come between them.
+    fn script_record(&self) -> Vec<Value> {
+        let mut record = self.record();
+        record.retain(|entry| entry.get("received").is_none() && entry.get("closed").is_none());
+        record
+    }
+
+    fn whole_record(&self) -> Vec<Value> {
         std::fs::read_to_string(&self.record)
             .unwrap_or_default()
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
+    }
+
+    /// Waits for this line in the record.
+    fn wait_for_record(&self, entry: &Value) {
+        let until = Instant::now() + SOON;
+        while !self.record().contains(entry) {
+            assert!(Instant::now() < until, "{entry} never came");
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 }
 
@@ -279,6 +315,21 @@ fn stdin_closing_while_waiting_ends_it() {
     let mut fake = Fake::start(r#"{"wait": {"method": "initialize"}}"#);
     fake.close_stdin();
     assert_eq!(fake.exit().code(), Some(0));
+    assert_eq!(
+        fake.record().last().unwrap(),
+        &json!({"ended": "stdin closed while waiting for initialize"})
+    );
+    let mut fake = Fake::start(
+        r#"{"request": {"method": "fs/read_text_file", "params": {}}}
+{"await": {"expect": {"result": {}}}}"#,
+    );
+    assert_eq!(fake.recv()["id"], 0);
+    fake.close_stdin();
+    assert_eq!(fake.exit().code(), Some(0));
+    assert_eq!(
+        fake.record().last().unwrap(),
+        &json!({"ended": "stdin closed while waiting for the answer to 0"})
+    );
 }
 
 #[test]
@@ -526,7 +577,7 @@ fn a_holder_keeps_the_pipes_open_after_it_exits() {
         &script,
         format!(
             "{}\n{{\"exit\": 0}}\n",
-            json!({"spawn_holder": {"pid_file": pid, "secs": 3}})
+            json!({"spawn_holder": {"pid_file": pid, "secs": 30}})
         ),
     )
     .unwrap();
@@ -534,10 +585,11 @@ fn a_holder_keeps_the_pipes_open_after_it_exits() {
     assert_eq!(fake.exit().code(), Some(0));
     let holder: u32 = std::fs::read_to_string(&pid).unwrap().parse().unwrap();
     assert_ne!(holder, fake.child.id());
-    // Exited, but its stdout is still open, until the holder goes.
+    // Exited, but its stdout is still open, until the holder goes, which
+    // it does once its pid file does.
     assert!(!fake.stdout_ends(Duration::from_millis(300)));
+    std::fs::remove_file(&pid).unwrap();
     assert!(fake.stdout_ends(SOON));
-    assert!(fake.dir.0.exists());
 }
 
 #[test]
@@ -573,10 +625,407 @@ fn it_exits_when_nobody_reads_stdout() {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
         }
-        assert!(Instant::now() < until, "the fake didn't exit");
+        if Instant::now() > until {
+            let _ = child.kill();
+            panic!("the fake didn't exit");
+        }
         std::thread::sleep(Duration::from_millis(10));
     };
     assert_eq!(status.code(), Some(0));
     let record = std::fs::read_to_string(&record).unwrap();
     assert!(record.contains("\n{\"gone\":\"stdout: "), "{record}");
+}
+
+#[test]
+fn a_handler_doesnt_take_the_scripts_names() {
+    let mut fake = Fake::start(
+        r#"
+{"wait": {"method": "session/prompt"}}
+{"on": {"method": "session/prompt", "do": [{"respond": {"error": {"code": -32600, "message": "busy"}}}]}}
+"wait_closed"
+{"respond": {"result": {"stopReason": "end_turn"}}}
+{"respond": {"to": "session/prompt", "result": {"stopReason": "end_turn"}}}
+"#,
+    );
+    let prompt = json!({"sessionId": "s1", "prompt": []});
+    fake.send(&request(2, "session/prompt", &prompt));
+    fake.send(&request(3, "session/prompt", &prompt));
+    fake.close_stdin();
+    // The handler refuses the second prompt, and the script answers the
+    // first, both by default and by name: once.
+    assert_eq!(
+        fake.recv(),
+        json!({"jsonrpc": "2.0", "id": 3, "error": {"code": -32600, "message": "busy"}})
+    );
+    assert_eq!(
+        fake.recv(),
+        json!({"jsonrpc": "2.0", "id": 2, "result": {"stopReason": "end_turn"}})
+    );
+    assert!(fake.stdout_ends(SOON));
+    assert_eq!(fake.exit().code(), Some(0));
+    assert!(
+        fake.record()
+            .contains(&json!({"skipped": "answered already", "id": 2}))
+    );
+}
+
+#[test]
+fn handlers_take_turns_in_the_order_they_were_added() {
+    let mut fake = Fake::start(
+        r#"
+{"on": {"method": "ping", "do": [{"note": "first"}]}}
+{"on": {"method": "ping", "do": [{"note": "second"}]}}
+{"on": {"method": "pong", "once": true, "do": [{"note": "pong"}]}}
+{"wait": {"method": "_test/go"}}
+{"wait": {"method": "pong"}}
+{"note": "the second pong waited"}
+"#,
+    );
+    for method in ["ping", "ping", "pong", "pong", "_test/go"] {
+        fake.send(&json!({"jsonrpc": "2.0", "method": method}));
+    }
+    fake.close_stdin();
+    assert_eq!(fake.exit().code(), Some(0));
+    let notes: Vec<Value> = fake
+        .record()
+        .into_iter()
+        .filter_map(|entry| entry.get("note").cloned())
+        .collect();
+    assert_eq!(
+        notes,
+        [
+            json!("first"),
+            json!("first"),
+            json!("pong"),
+            json!("the second pong waited")
+        ]
+    );
+}
+
+#[test]
+fn sleeping_takes_as_long_as_it_says() {
+    let started = Instant::now();
+    let mut fake = Fake::start("{\"sleep\": 200}\n{\"exit\": 6}\n");
+    assert_eq!(fake.exit().code(), Some(6));
+    assert!(started.elapsed() >= Duration::from_millis(200));
+}
+
+#[test]
+fn a_sleep_or_timeout_too_long_to_say_is_forever() {
+    for script in [
+        r#"{"sleep": 18446744073709551615}"#,
+        r#"{"wait": {"method": "initialize", "timeout": 18446744073709551615}}"#,
+        r#"{"request": {"method": "x"}}
+{"await": {"timeout": 18446744073709551615}}"#,
+    ] {
+        let mut fake = Fake::start(script);
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(fake.child.try_wait().unwrap().is_none(), "{script}");
+    }
+}
+
+#[test]
+fn closing_stderr_drops_what_follows() {
+    let mut fake = Fake::start(
+        "{\"stderr\": \"kept\"}\n\"close_stderr\"\n{\"stderr\": \"lost\"}\n{\"exit\": 0}\n",
+    );
+    assert_eq!(fake.exit().code(), Some(0));
+    assert_eq!(fake.stderr(), "kept\n");
+}
+
+#[test]
+fn an_await_can_time_out() {
+    let mut fake = Fake::start(
+        r#"{"request": {"method": "session/request_permission", "params": {}}}
+{"await": {"timeout": 50}}"#,
+    );
+    assert_eq!(fake.exit().code(), Some(EXIT_CHECK_FAILED));
+    assert_eq!(
+        fake.record().last().unwrap(),
+        &json!({"failed": "timed out waiting for the answer to 0"})
+    );
+}
+
+#[test]
+fn a_wait_times_out_while_other_messages_flood_in() {
+    let mut fake = Fake::start(r#"{"wait": {"method": "initialize", "timeout": 300}}"#);
+    let started = Instant::now();
+    let mut stdin = fake.stdin.take().unwrap();
+    let flood = std::thread::spawn(move || {
+        let line = b"{\"jsonrpc\": \"2.0\", \"method\": \"noise\"}\n";
+        while started.elapsed() < SOON && stdin.write_all(line).is_ok() {}
+    });
+    assert_eq!(fake.exit().code(), Some(EXIT_CHECK_FAILED));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    flood.join().unwrap();
+}
+
+#[test]
+fn answering_a_notification_fails_but_not_in_a_handler() {
+    let mut fake = Fake::start(
+        r#"{"on": {"method": "ping", "do": [{"respond": {"result": {}}}]}}
+{"wait": {"method": "session/cancel"}}
+{"respond": {"result": {}}}"#,
+    );
+    fake.send(&json!({"jsonrpc": "2.0", "method": "ping"}));
+    fake.send(&json!({"jsonrpc": "2.0", "method": "session/cancel"}));
+    assert_eq!(fake.exit().code(), Some(EXIT_CHECK_FAILED));
+    assert_eq!(
+        fake.script_record(),
+        [
+            json!({"skipped": "a notification", "method": "ping"}),
+            json!({"failed": "session/cancel is a notification"}),
+        ]
+    );
+}
+
+#[test]
+fn a_handler_doesnt_answer_what_the_script_answered() {
+    let mut fake = Fake::start(
+        r#"{"wait": {"method": "session/prompt", "as": "prompt"}}
+{"respond": {"result": {"stopReason": "end_turn"}}}
+{"on": {"method": "session/cancel", "do": [{"respond": {"to": "prompt", "result": {"stopReason": "cancelled"}}}]}}
+"wait_closed""#,
+    );
+    fake.send(&request(2, "session/prompt", &json!({})));
+    assert_eq!(fake.recv()["result"]["stopReason"], "end_turn");
+    fake.send(&json!({"jsonrpc": "2.0", "method": "session/cancel"}));
+    fake.close_stdin();
+    assert!(fake.stdout_ends(SOON));
+    assert_eq!(fake.exit().code(), Some(0));
+    assert!(
+        fake.record()
+            .contains(&json!({"skipped": "answered already", "id": 2}))
+    );
+}
+
+#[test]
+fn a_wait_can_expect_what_comes() {
+    let mut fake = Fake::start(
+        r#"{"wait": {"method": "session/new", "expect": {"params": {"cwd": "/work"}}}}
+{"note": "never reached"}"#,
+    );
+    fake.send(&request(
+        1,
+        "session/new",
+        &json!({"cwd": "/", "mcpServers": []}),
+    ));
+    assert_eq!(fake.exit().code(), Some(EXIT_CHECK_FAILED));
+    let failed = fake.record().last().unwrap()["failed"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        failed.starts_with("waiting for session/new, {")
+            && failed.ends_with("came, not {\"params\":{\"cwd\":\"/work\"}}"),
+        "{failed}"
+    );
+}
+
+#[test]
+fn a_cancelled_request_can_be_answered_by_its_id() {
+    let mut fake = Fake::start(
+        r#"{"on": {"method": "$/cancel_request", "do": [{"respond": {"id_from": "/params/requestId", "error": {"code": -32800, "message": "Cancelled"}}}]}}
+{"wait": {"method": "session/prompt"}}
+"wait_closed""#,
+    );
+    fake.send(&request(7, "session/prompt", &json!({})));
+    fake.send(&json!({"jsonrpc": "2.0", "method": "$/cancel_request", "params": {"requestId": 7}}));
+    assert_eq!(
+        fake.recv(),
+        json!({"jsonrpc": "2.0", "id": 7, "error": {"code": -32800, "message": "Cancelled"}})
+    );
+    fake.close_stdin();
+    assert_eq!(fake.exit().code(), Some(0));
+}
+
+#[test]
+fn a_fallback_takes_only_what_the_script_wont_wait_for() {
+    let mut fake = Fake::start(
+        r#"{"on": {"fallback": true, "do": [{"respond": {"error": {"code": -32601, "message": "Method not found"}}}]}}
+{"wait": {"method": "_test/go"}}
+{"wait": {"method": "session/new"}}
+{"respond": {"result": {"sessionId": "s1"}}}"#,
+    );
+    fake.send(&request(1, "session/set_mode", &json!({})));
+    fake.send(&json!({"jsonrpc": "2.0", "method": "session/cancel"}));
+    fake.send(&request(2, "session/new", &json!({})));
+    fake.send(&json!({"jsonrpc": "2.0", "method": "_test/go"}));
+    assert_eq!(
+        fake.recv(),
+        json!({"jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "Method not found"}})
+    );
+    assert_eq!(
+        fake.recv(),
+        json!({"jsonrpc": "2.0", "id": 2, "result": {"sessionId": "s1"}})
+    );
+    fake.close_stdin();
+    assert_eq!(fake.exit().code(), Some(0));
+    assert!(
+        fake.record()
+            .contains(&json!({"skipped": "a notification", "method": "session/cancel"}))
+    );
+}
+
+#[test]
+fn a_handler_can_replay_a_history() {
+    let dir = Dir::new();
+    let history = dir.path("history.jsonl");
+    std::fs::write(
+        &history,
+        "{\"say\": {\"session\": \"past-1\", \"text\": \"Fixed.\"}}\n",
+    )
+    .unwrap();
+    let script = dir.path("script.jsonl");
+    std::fs::write(
+        &script,
+        format!(
+            "{}\n",
+            json!({"on": {"method": "session/load", "do": [{"include": history}, {"respond": {"result": {}}}]}})
+        ),
+    )
+    .unwrap();
+    let mut fake = Fake::start_in(dir, &script);
+    for id in [1, 2] {
+        fake.send(&request(
+            id,
+            "session/load",
+            &json!({"sessionId": "past-1"}),
+        ));
+        assert_eq!(fake.recv()["params"]["update"]["content"]["text"], "Fixed.");
+        assert_eq!(
+            fake.recv(),
+            json!({"jsonrpc": "2.0", "id": id, "result": {}})
+        );
+    }
+    fake.close_stdin();
+    assert_eq!(fake.exit().code(), Some(0));
+}
+
+#[test]
+fn includes_cant_nest_forever() {
+    let dir = Dir::new();
+    let script = dir.path("script.jsonl");
+    std::fs::write(&script, format!("{}\n", json!({"include": script}))).unwrap();
+    let mut fake = Fake::start_in(dir, &script);
+    assert_eq!(fake.exit().code(), Some(EXIT_BAD_SCRIPT));
+    assert!(fake.stderr().contains("includes nest more than 16 deep"));
+}
+
+#[test]
+fn a_long_line_can_go_to_stderr() {
+    let mut fake =
+        Fake::start("{\"long_line\": {\"len\": 100000, \"to\": \"stderr\"}}\n{\"exit\": 0}\n");
+    assert_eq!(fake.exit().code(), Some(0));
+    assert_eq!(fake.stderr(), format!("{}\n", "x".repeat(100_000)));
+}
+
+#[test]
+fn a_holder_started_after_stdout_closes_doesnt_hold_it() {
+    let dir = Dir::new();
+    let pid = dir.path("holder.pid");
+    let script = dir.path("script.jsonl");
+    std::fs::write(
+        &script,
+        format!(
+            "\"close_stdout\"\n{}\n\"hang\"\n",
+            json!({"spawn_holder": {"pid_file": pid}})
+        ),
+    )
+    .unwrap();
+    let mut fake = Fake::start_in(dir, &script);
+    assert!(fake.stdout_ends(SOON));
+    assert!(fake.child.try_wait().unwrap().is_none());
+    // The holder goes with the test's folder.
+    let until = Instant::now() + SOON;
+    while !pid.exists() {
+        assert!(Instant::now() < until, "no holder");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn it_can_stop_reading() {
+    let mut fake = Fake::start(
+        r#""stop_reading"
+{"note": "stopped"}
+{"sleep": 2000}
+"resume_reading"
+{"wait": {"method": "_test/last"}}
+{"note": "read it all"}"#,
+    );
+    fake.wait_for_record(&json!({"note": "stopped"}));
+    let mut stdin = fake.stdin.take().unwrap();
+    let writer = std::thread::spawn(move || {
+        // Far more than the pipe holds.
+        let line = format!(
+            "{}\n",
+            json!({"jsonrpc": "2.0", "method": "noise", "params": "x".repeat(1000)})
+        );
+        for _ in 0..2000 {
+            stdin.write_all(line.as_bytes()).unwrap();
+        }
+        stdin
+            .write_all(b"{\"jsonrpc\": \"2.0\", \"method\": \"_test/last\"}\n")
+            .unwrap();
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!writer.is_finished(), "the client's writes didn't block");
+    writer.join().unwrap();
+    fake.wait_for_record(&json!({"note": "read it all"}));
+}
+
+#[test]
+fn it_can_die_by_a_signal() {
+    use std::os::unix::process::ExitStatusExt as _;
+    for signal in [9, 15] {
+        let mut fake = Fake::start(&format!(
+            "{{\"signal\": {signal}}}\n{{\"note\": \"lived\"}}\n"
+        ));
+        assert_eq!(fake.exit().signal(), Some(signal));
+        assert!(fake.record().is_empty());
+    }
+}
+
+#[test]
+fn it_can_be_started_by_environment_variables() {
+    let dir = Dir::new();
+    let script = dir.path("script.jsonl");
+    std::fs::write(
+        &script,
+        "{\"record_env\": [\"CAF_TEST_SET\", \"CAF_TEST_UNSET\"]}\n{\"exit\": 0}\n",
+    )
+    .unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_caf-fake-agent"));
+    command
+        .args(["--adapter-flag", "value"])
+        .current_dir(&dir.0)
+        .env(caf_fake_agent::SCRIPT_VAR, &script)
+        .env(caf_fake_agent::RECORD_VAR, dir.path("record.jsonl"))
+        .env("CAF_TEST_SET", "yes")
+        .env_remove("CAF_TEST_UNSET");
+    let cwd = dir.0.clone();
+    let mut fake = Fake::spawn(dir, command);
+    assert_eq!(fake.exit().code(), Some(0));
+    let record = fake.whole_record();
+    let started = &record[0]["started"];
+    assert_eq!(
+        started["args"].as_array().unwrap()[1..],
+        [json!("--adapter-flag"), json!("value")]
+    );
+    assert_eq!(started["cwd"], json!(cwd));
+    let names = started["env"].as_array().unwrap();
+    assert!(names.contains(&json!("CAF_TEST_SET")));
+    assert!(!names.contains(&json!("CAF_TEST_UNSET")));
+    assert_eq!(
+        record[1],
+        json!({"env": {"CAF_TEST_SET": "yes", "CAF_TEST_UNSET": null}})
+    );
+}
+
+#[test]
+fn other_crates_find_the_program() {
+    let found = caf_fake_agent::binary();
+    let built = PathBuf::from(env!("CARGO_BIN_EXE_caf-fake-agent"));
+    assert_eq!(found.canonicalize().unwrap(), built.canonicalize().unwrap());
 }

@@ -20,6 +20,17 @@
 //! Both are absolute paths: the fake never reads a path against its own
 //! working directory, which a test may not know.
 //!
+//! A test that starts the fake through a driver, which may add arguments
+//! of its own, can give both in the environment instead:
+//! [`SCRIPT_VAR`] (`CAF_FAKE_AGENT_SCRIPT`) and [`RECORD_VAR`]
+//! (`CAF_FAKE_AGENT_RECORD`). Then every argument is ignored, and the
+//! record's first line says how it was started.
+//!
+//! Tests in this crate find the program in `CARGO_BIN_EXE_caf-fake-agent`.
+//! Cargo gives that only to the crate's own tests, so tests elsewhere call
+//! [`binary`], which finds it, and builds it first if it's missing or
+//! stale.
+//!
 //! # Scripts
 //!
 //! A script is a file of JSON lines, one [`Step`] each, done in order.
@@ -41,28 +52,31 @@
 //!
 //! | Step | What it does |
 //! |---|---|
-//! | `{"wait": {"method", "match", "as", "timeout"}}` | Waits for a request or notification ([`Wait`]) |
-//! | `{"respond": {"to", "id", "result" or "error"}}` | Answers a request ([`Respond`]) |
+//! | `{"wait": {"method", "match", "expect", "as", "timeout"}}` | Waits for a request or notification ([`Wait`]) |
+//! | `{"respond": {"to", "id", "id_from", "result" or "error"}}` | Answers a request ([`Respond`]) |
 //! | `{"notify": {"method", "params"}}` | Sends a notification ([`Notify`]) |
 //! | `{"update": {"session", "update"}}` | Sends `session/update` ([`Update`]) |
 //! | `{"say": {"session", "text"}}`, `{"think": …}` | Sends an `agent_message_chunk` or `agent_thought_chunk` ([`Chunk`]) |
 //! | `{"request": {"method", "params", "id", "as"}}` | Sends a request ([`Request`]) |
 //! | `{"await": {"to", "expect", "timeout"}}` | Waits for the answer to one, and checks it ([`Await`]) |
 //! | `{"cancel_request": {"to"}}` | Withdraws one, with `$/cancel_request` ([`CancelRequest`]) |
-//! | `{"on": {"method", "match", "as", "once", "do"}}` | Adds a handler ([`On`]) |
+//! | `{"on": {"method", "match", "as", "once", "fallback", "do"}}` | Adds a handler ([`On`]) |
 //! | `{"sleep": MS}` | Sleeps, reading meanwhile |
 //! | `{"line": TEXT}` | Writes a line of junk to stdout |
 //! | `{"json": VALUE}` | Writes any JSON as a line |
 //! | `{"bytes": [N, …]}` | Writes these bytes, exactly: invalid UTF-8, half a line |
-//! | `{"long_line": {"len", "message"}}` | Writes a line of exactly `len` bytes ([`LongLine`]) |
+//! | `{"long_line": {"len", "message", "to"}}` | Writes a line of exactly `len` bytes, to stdout or stderr ([`LongLine`]) |
 //! | `{"stderr": TEXT}` | Writes a line to stderr |
 //! | `{"note": TEXT}` | Writes a note to the record |
+//! | `{"record_env": [NAME, …]}` | Writes these environment variables' values to the record |
 //! | `{"exit": CODE}` | Exits |
+//! | `{"signal": N}` | Sends itself signal N, such as 9 to die by `SIGKILL` |
+//! | `"stop_reading"`, `"resume_reading"` | Stops reading stdin, so the client's writes block, and starts again |
 //! | `"close_stdout"`, `"close_stderr"` | Closes one, and carries on |
 //! | `"wait_closed"` | Waits until stdin closes, and carries on |
 //! | `"hang"` | Does nothing more, ever, but run handlers |
-//! | `{"spawn_holder": {"pid_file", "secs"}}` | Starts a process holding stdout and stderr, before any `close_stdout` ([`SpawnHolder`]) |
-//! | `{"include": PATH}` | Puts another script's steps here |
+//! | `{"spawn_holder": {"pid_file", "secs"}}` | Starts a process holding stdout and stderr, before any `close_stdout`, until its pid file goes ([`SpawnHolder`]) |
+//! | `{"include": PATH}` | Puts another script's steps here, or a handler's |
 //!
 //! Settings left out take their defaults, but a step that has settings
 //! still needs its object: `{"cancel_request": {}}`, not
@@ -81,7 +95,11 @@
 //! sent. A request is answered once: answering it again does nothing, so
 //! a handler and the script can both end a prompt. `respond` with an `id`
 //! answers that id, as is, whatever the client sent, for answers to
-//! nothing and answers given twice.
+//! nothing and answers given twice. `respond` with `id_from` answers the
+//! request whose id the message holds there: a handler on
+//! `$/cancel_request` answers the request the client cancelled with
+//! `{"respond": {"id_from": "/params/requestId", "error": {"code":
+//! -32800, "message": "Cancelled"}}}`.
 //!
 //! The fake's own requests count up from 0, unless a request gives its
 //! `id`.
@@ -98,45 +116,71 @@
 //! ## Reading, waiting and handlers
 //!
 //! The fake reads stdin all the time, on a thread of its own, so it never
-//! stops reading while it writes. What comes is kept in order:
+//! stops reading while it writes, unless the script says
+//! `"stop_reading"`. What comes is kept in order:
 //! - a request or notification waits in a queue until a `wait` or a
 //!   handler takes it. A `wait` takes the first that matches, so one that
 //!   came early isn't lost, and those it passes over stay queued;
 //! - an answer waits, by its id, until an `await` takes it.
 //!
-//! Handlers run only while the script waits, sleeps or is over, so a
+//! Handlers run only while the script waits or sleeps (in `wait`,
+//! `await`, `sleep`, `wait_closed` and `hang`), or is over, so a
 //! script's writes are never interleaved with a handler's. A handler
 //! takes every queued message it matches, before any `wait` sees it, and
-//! the first handler added wins. Within a handler, `respond` answers the
-//! message that set it off. A handler's steps can't wait.
+//! the first handler added wins. A *fallback* handler comes after the
+//! others, and takes only what no `wait` left in the script would take:
+//! so `{"on": {"fallback": true, "do": [...]}}` can refuse whatever the
+//! script doesn't expect, as a real adapter refuses methods it doesn't
+//! know.
+//!
+//! Within a handler, `respond` answers the message that set it off, and
+//! its name is the handler's own: once the handler is done, the script's
+//! names mean what they meant before. A `respond` to a notification does
+//! nothing there, so one handler can refuse requests and let
+//! notifications be; in the script itself, it's a failed check. A
+//! handler's steps can't wait or sleep.
+//!
+//! The client's answers are kept by id: if it answers one id twice
+//! before an `await` takes it, the second replaces the first, and only
+//! the record shows both.
 //!
 //! ## The end
 //!
 //! - **The script ends:** the fake reads on, running handlers, until
 //!   stdin closes, then exits with 0.
-//! - **Stdin closes while a `wait` or `await` waits:** the fake exits with
-//!   0, as Claude's adapter does when its client closes its input.
-//!   `"wait_closed"` then `"hang"` makes one that doesn't.
+//! - **Stdin closes while a `wait` or `await` waits:** the fake says so in
+//!   the record and exits with 0, as Claude's adapter does when its client
+//!   closes its input. `"wait_closed"` then `"hang"` makes one that
+//!   doesn't.
 //! - **Stdout can't be written,** because nobody reads it: the fake exits
 //!   with 0. After `"close_stdout"`, writes to stdout are skipped.
-//! - **A check fails** (an `await` whose answer doesn't match, a timeout,
-//!   a name never given): the fake says why on stderr and in the record,
+//! - **A check fails** (a `wait` or `await` whose message doesn't match
+//!   its `expect`, a timeout, a name never given): the fake says why on
+//!   stderr, without waiting for anyone to read it, and in the record,
 //!   and exits with [`EXIT_CHECK_FAILED`].
 //!
 //! # The record
 //!
-//! Given `--record`, the fake appends a line of JSON to that file for
-//! each thing that happens, as it happens, so a test can see what its
-//! client sent even if the fake never ends:
+//! Given a record file, the fake appends a line of JSON to it for each
+//! thing that happens, as it happens, so a test can see what its client
+//! sent even if the fake never ends. It never holds an environment
+//! variable's value unless the script asks for it, since values can be
+//! secrets and a failing test prints its record. `received`,
+//! `unreadable` and `closed` lines are written as stdin is read, so they
+//! can fall between the script's own lines either way.
 //!
 //! | Line | When |
 //! |---|---|
+//! | `{"started": {"args", "cwd", "env"}}` | It started: its arguments, working directory, and the names of its environment variables |
 //! | `{"received": MESSAGE}` | A message from the client |
 //! | `{"unreadable": TEXT}` | A line from the client that isn't a JSON object |
 //! | `{"closed": "stdin"}` | The client closed stdin |
 //! | `{"note": TEXT}` | A `note` step |
+//! | `{"env": {NAME: VALUE or null, …}}` | A `record_env` step |
 //! | `{"skipped": "answered already", "id": ID}` | A `respond` to a request already answered |
+//! | `{"skipped": "a notification", "method": METHOD}` | A handler's `respond` to a notification |
 //! | `{"failed": WHY}` | A check failed |
+//! | `{"ended": WHY}` | Stdin closed while the script waited |
 //! | `{"gone": WHY}` | Stdout couldn't be written |
 //!
 //! # Examples
@@ -162,9 +206,11 @@
 //! ```
 //!
 //! Loading a session replays its history before the answer, from a file
-//! of steps:
+//! of steps; and a fallback refuses anything else, as an adapter refuses
+//! a method it doesn't know:
 //!
 //! ```text
+//! {"on": {"fallback": true, "do": [{"respond": {"error": {"code": -32601, "message": "Method not found"}}}]}}
 //! {"wait": {"method": "session/load", "match": {"params": {"sessionId": "past-1"}}}}
 //! {"include": "/tmp/test-1234/past-1.jsonl"}
 //! {"respond": {"result": {}}}
@@ -198,15 +244,25 @@
 //! Its types aren't `#[non_exhaustive]`, unlike CAF's, so other crates
 //! can build them.
 
+mod binary;
 mod pattern;
 mod run;
 mod script;
 
+pub use binary::binary;
 pub use run::run;
 pub use script::{
-    Await, CancelRequest, Chunk, LongLine, Notify, On, Request, Respond, RpcError, Script,
+    Await, CancelRequest, Chunk, LongLine, Notify, On, Output, Request, Respond, RpcError, Script,
     ScriptError, SpawnHolder, Step, Update, Wait,
 };
+
+/// The environment variable that names the script, an absolute path. When
+/// it's set, the fake's arguments are ignored.
+pub const SCRIPT_VAR: &str = "CAF_FAKE_AGENT_SCRIPT";
+
+/// The environment variable that names the record file, an absolute path,
+/// when [`SCRIPT_VAR`] is set.
+pub const RECORD_VAR: &str = "CAF_FAKE_AGENT_RECORD";
 
 /// The exit code when the script or the arguments are wrong.
 pub const EXIT_BAD_SCRIPT: i32 = 2;

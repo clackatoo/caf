@@ -7,13 +7,13 @@ use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
 use crate::pattern::matches;
-use crate::script::{Await, LongLine, On, Respond, Script, SpawnHolder, Step, Wait};
+use crate::script::{Await, LongLine, On, Output, Respond, Script, SpawnHolder, Step, Wait};
 use crate::{EXIT_BAD_SCRIPT, EXIT_CHECK_FAILED};
 
 /// How much of a long line is written at a time.
@@ -21,12 +21,16 @@ const CHUNK: usize = 1 << 20;
 
 /// Runs a script to its end, and returns the code to exit with.
 ///
-/// `record`, an absolute path, if given, gets a line of JSON for each
-/// message the client sends and each check that fails: see the crate's
-/// docs. Call this once, from `main`: it takes over stdin, stdout and
-/// stderr.
+/// The script is checked first ([`Script::check`]). `record`, an absolute
+/// path, if given, gets a line of JSON for each thing that happens, as the
+/// crate's docs say. Call this once, from `main`: it takes over stdin,
+/// stdout and stderr.
 #[must_use]
 pub fn run(script: &Script, record: Option<&Path>) -> i32 {
+    if let Err(err) = script.check() {
+        eprintln!("caf-fake-agent: {err}");
+        return EXIT_BAD_SCRIPT;
+    }
     let record = match record.map(Record::open).transpose() {
         Ok(record) => record.unwrap_or_default(),
         Err(err) => {
@@ -34,6 +38,8 @@ pub fn run(script: &Script, record: Option<&Path>) -> i32 {
             return EXIT_BAD_SCRIPT;
         }
     };
+    record.write(&json!({"started": started()}));
+    let gate = Arc::new(Gate::default());
     // SAFETY: fds 1 and 2 are open from the process's start, and nothing
     // else in this program writes to them, so these become their only
     // owners.
@@ -41,13 +47,17 @@ pub fn run(script: &Script, record: Option<&Path>) -> i32 {
     let mut fake = Fake {
         out: Some(out),
         err: Some(err),
-        inbox: read_stdin(record.clone()),
+        inbox: read_stdin(record.clone(), gate.clone()),
+        gate,
         record,
+        main: &script.steps,
+        at: 0,
         closed: false,
         queue: VecDeque::new(),
         answers: HashMap::new(),
         received: HashMap::new(),
         last_received: None,
+        handling: 0,
         answered: HashSet::new(),
         sent: HashMap::new(),
         last_sent: None,
@@ -55,9 +65,48 @@ pub fn run(script: &Script, record: Option<&Path>) -> i32 {
         handlers: Vec::new(),
         holders: Vec::new(),
     };
-    match fake.steps(&script.steps).and_then(|()| fake.finish()) {
+    match fake.main() {
         Ok(()) => 0,
         Err(End(code)) => code,
+    }
+}
+
+/// How the fake was started: its arguments, working directory and the
+/// names of its environment variables. Not their values, which may be
+/// secrets, and a failing test prints its record: `record_env` asks for
+/// the ones a test needs.
+fn started() -> Value {
+    let lossy = |text: std::ffi::OsString| text.to_string_lossy().into_owned();
+    let mut env: Vec<String> = std::env::vars_os().map(|(name, _)| lossy(name)).collect();
+    env.sort();
+    json!({
+        "args": std::env::args_os().map(lossy).collect::<Vec<_>>(),
+        "cwd": std::env::current_dir().ok().map(|cwd| lossy(cwd.into_os_string())),
+        "env": env,
+    })
+}
+
+/// Whether the reader thread may read stdin.
+#[derive(Default)]
+struct Gate {
+    stopped: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl Gate {
+    fn set(&self, stopped: bool) {
+        *self.stopped.lock().expect("never poisoned") = stopped;
+        self.changed.notify_all();
+    }
+
+    /// Waits until reading is allowed.
+    fn pass(&self) {
+        let stopped = self.stopped.lock().expect("never poisoned");
+        drop(
+            self.changed
+                .wait_while(stopped, |stopped| *stopped)
+                .expect("never poisoned"),
+        );
     }
 }
 
@@ -104,13 +153,15 @@ impl Record {
 }
 
 /// Reads stdin on a thread of its own, so the fake never stops reading
-/// while it writes, and both pipes can't fill at once.
-fn read_stdin(record: Record) -> Receiver<Heard> {
+/// while it writes, and both pipes can't fill at once, unless the script
+/// stops it.
+fn read_stdin(record: Record, gate: Arc<Gate>) -> Receiver<Heard> {
     let (send, inbox) = mpsc::channel();
     std::thread::spawn(move || {
         let mut input = std::io::stdin().lock();
         let mut line = Vec::new();
         loop {
+            gate.pass();
             line.clear();
             match input.read_until(b'\n', &mut line) {
                 Ok(0) | Err(_) => break,
@@ -142,13 +193,18 @@ struct Handler {
     done: bool,
 }
 
-struct Fake {
+struct Fake<'s> {
     /// Stdout, until the script closes it.
     out: Option<File>,
     /// Stderr, until the script closes it.
     err: Option<File>,
     inbox: Receiver<Heard>,
+    gate: Arc<Gate>,
     record: Record,
+    /// The script's own steps, not its handlers'.
+    main: &'s [Step],
+    /// Which of them it's at.
+    at: usize,
     /// Whether the client closed stdin.
     closed: bool,
     /// Requests and notifications from the client not yet waited for, in
@@ -158,8 +214,10 @@ struct Fake {
     answers: HashMap<String, Value>,
     /// Requests and notifications waited for, by name.
     received: HashMap<String, Value>,
-    /// The name of the one last waited for.
-    last_received: Option<String>,
+    /// The one last waited for: within a handler, the one it handles.
+    last_received: Option<Value>,
+    /// Whether a handler is running: more than 0 if so.
+    handling: usize,
     /// The ids of the client's requests answered so far.
     answered: HashSet<String>,
     /// The ids of the fake's requests, by name.
@@ -179,7 +237,18 @@ fn key(id: &Value) -> String {
     id.to_string()
 }
 
-impl Fake {
+impl Fake<'_> {
+    /// Runs the script's steps, then reads on.
+    fn main(&mut self) -> Result<(), End> {
+        let main = self.main;
+        for (at, step) in main.iter().enumerate() {
+            self.at = at;
+            self.step(step)?;
+        }
+        self.at = main.len();
+        self.finish()
+    }
+
     fn steps(&mut self, steps: &[Step]) -> Result<(), End> {
         steps.iter().try_for_each(|step| self.step(step))
     }
@@ -244,12 +313,13 @@ impl Fake {
                 Ok(())
             }
             Step::Sleep(ms) => {
-                let until = Instant::now() + Duration::from_millis(*ms);
+                // None if it's too far off to say: forever.
+                let until = deadline(Some(*ms));
                 loop {
                     self.handle()?;
                     // Checked apart from hearing, so a flood can't make
                     // it sleep longer.
-                    if Instant::now() >= until || !self.hear(Some(until)) {
+                    if past(until) || !self.hear(until) {
                         return self.handle();
                     }
                 }
@@ -259,23 +329,48 @@ impl Fake {
             Step::Bytes(bytes) => self.write_out(bytes),
             Step::LongLine(line) => self.long_line(line),
             Step::Stderr(text) => {
-                if let Some(err) = &mut self.err {
-                    // Nobody reading stderr is the client's business.
-                    let _ = err.write_all(format!("{text}\n").as_bytes());
-                }
+                self.write_err(format!("{text}\n").as_bytes());
                 Ok(())
             }
             Step::Note(text) => {
                 self.record.write(&json!({"note": text}));
                 Ok(())
             }
+            Step::RecordEnv(names) => {
+                let env: serde_json::Map<String, Value> = (names.iter())
+                    .map(|name| {
+                        let value = std::env::var_os(name)
+                            .map(|value| Value::String(value.to_string_lossy().into_owned()));
+                        (name.clone(), value.unwrap_or(Value::Null))
+                    })
+                    .collect();
+                self.record.write(&json!({"env": env}));
+                Ok(())
+            }
             Step::Exit(code) => Err(End(*code)),
+            Step::Signal(signal) => {
+                // SAFETY: kill has no memory effects; a signal that's
+                // caught or ignored returns here.
+                if unsafe { libc::kill(libc::getpid(), *signal) } != 0 {
+                    let err = std::io::Error::last_os_error();
+                    return self.fail(&format!("couldn't send signal {signal}: {err}"));
+                }
+                Ok(())
+            }
+            Step::StopReading => {
+                self.gate.set(true);
+                Ok(())
+            }
+            Step::ResumeReading => {
+                self.gate.set(false);
+                Ok(())
+            }
             Step::CloseStdout => {
-                close(&mut self.out, 1);
+                close(&mut self.out);
                 Ok(())
             }
             Step::CloseStderr => {
-                close(&mut self.err, 2);
+                close(&mut self.err);
                 Ok(())
             }
             Step::WaitClosed => {
@@ -363,15 +458,7 @@ impl Fake {
     fn handle(&mut self) -> Result<(), End> {
         let mut at = 0;
         while at < self.queue.len() {
-            let found = self.handlers.iter().position(|handler| {
-                !handler.done
-                    && wanted(
-                        handler.on.method.as_ref(),
-                        handler.on.matches.as_ref(),
-                        &self.queue[at],
-                    )
-            });
-            let Some(found) = found else {
+            let Some(found) = self.handler_for(&self.queue[at]) else {
                 at += 1;
                 continue;
             };
@@ -379,20 +466,55 @@ impl Fake {
             let handler = &mut self.handlers[found];
             handler.done = handler.on.once;
             let on = handler.on.clone();
+            // The handler's names are its own: the script's come back
+            // once it's done.
             let label = on.label.clone().unwrap_or_else(|| method(&message));
-            self.received.insert(label.clone(), message);
-            let last = self.last_received.replace(label);
+            let shadowed = self.received.insert(label.clone(), message.clone());
+            let last = self.last_received.replace(message);
+            self.handling += 1;
             let done = self.steps(&on.steps);
+            self.handling -= 1;
             self.last_received = last;
+            match shadowed {
+                Some(shadowed) => self.received.insert(label, shadowed),
+                None => self.received.remove(&label),
+            };
             done?;
         }
         Ok(())
     }
 
+    /// The handler that takes this message, if any: the first ordinary one
+    /// that matches, else the first fallback that does, if the rest of the
+    /// script never waits for it.
+    fn handler_for(&self, message: &Value) -> Option<usize> {
+        let matching = |fallback: bool| {
+            self.handlers.iter().position(|handler| {
+                !handler.done
+                    && handler.on.fallback == fallback
+                    && wanted(
+                        handler.on.method.as_ref(),
+                        handler.on.matches.as_ref(),
+                        message,
+                    )
+            })
+        };
+        matching(false).or_else(|| {
+            let waited = self.main[self.at.min(self.main.len())..].iter().any(|step| {
+                matches!(step, Step::Wait(wait) if wanted(wait.method.as_ref(), wait.matches.as_ref(), message))
+            });
+            if waited { None } else { matching(true) }
+        })
+    }
+
     fn wait(&mut self, wait: &Wait) -> Result<(), End> {
-        let until = wait
-            .timeout
-            .map(|ms| Instant::now() + Duration::from_millis(ms));
+        let until = deadline(wait.timeout);
+        let what = match (&wait.method, &wait.matches) {
+            (Some(method), Some(pattern)) => format!("{method} matching {pattern}"),
+            (Some(method), None) => method.clone(),
+            (None, Some(pattern)) => format!("a message matching {pattern}"),
+            (None, None) => "a message".into(),
+        };
         loop {
             self.handle()?;
             let found = self
@@ -401,21 +523,23 @@ impl Fake {
                 .position(|message| wanted(wait.method.as_ref(), wait.matches.as_ref(), message));
             if let Some(found) = found {
                 let message = self.queue.remove(found).expect("it's there");
+                if let Some(expect) = &wait.expect
+                    && !matches(expect, &message)
+                {
+                    return self.fail(&format!("waiting for {what}, {message} came, not {expect}"));
+                }
                 let label = wait.label.clone().unwrap_or_else(|| method(&message));
-                self.received.insert(label.clone(), message);
-                self.last_received = Some(label);
+                self.received.insert(label, message.clone());
+                self.last_received = Some(message);
                 return Ok(());
             }
             // The client is gone, so what's waited for can't come: exit,
             // as an adapter does when its stdin closes.
             if self.closed {
-                return Err(End(0));
+                return self.ended(&format!("waiting for {what}"));
             }
-            if until.is_some_and(|until| Instant::now() >= until) || !self.hear(until) {
-                return self.fail(&format!(
-                    "timed out waiting for {}",
-                    wait.method.as_deref().unwrap_or("a message")
-                ));
+            if past(until) || !self.hear(until) {
+                return self.fail(&format!("timed out waiting for {what}"));
             }
         }
     }
@@ -424,15 +548,35 @@ impl Fake {
         let id = match &respond.id {
             Some(id) => id.clone(),
             None => {
-                let label = respond.to.as_ref().or(self.last_received.as_ref());
-                let Some(message) = label.and_then(|label| self.received.get(label)) else {
+                let message = match &respond.to {
+                    Some(label) => self.received.get(label),
+                    None => self.last_received.as_ref(),
+                };
+                let Some(message) = message else {
                     return self.fail(&format!(
                         "nothing to answer called {}",
-                        label.map_or("anything", String::as_str)
+                        respond.to.as_deref().unwrap_or("anything")
                     ));
                 };
-                let Some(id) = message.get("id").cloned() else {
-                    return self.fail(&format!("{} is a notification", method(message)));
+                let id = match &respond.id_from {
+                    Some(pointer) => message
+                        .pointer(pointer)
+                        .cloned()
+                        .ok_or_else(|| format!("{} has nothing at {pointer}", method(message))),
+                    None => match message.get("id") {
+                        Some(id) => Ok(id.clone()),
+                        None if self.handling > 0 => {
+                            let method = method(message);
+                            self.record
+                                .write(&json!({"skipped": "a notification", "method": method}));
+                            return Ok(());
+                        }
+                        None => Err(format!("{} is a notification", method(message))),
+                    },
+                };
+                let id = match id {
+                    Ok(id) => id,
+                    Err(why) => return self.fail(&why),
                 };
                 if !self.answered.insert(key(&id)) {
                     self.record
@@ -461,9 +605,7 @@ impl Fake {
 
     fn await_answer(&mut self, wait: &Await) -> Result<(), End> {
         let id = self.sent_id(wait.to.as_ref())?;
-        let until = wait
-            .timeout
-            .map(|ms| Instant::now() + Duration::from_millis(ms));
+        let until = deadline(wait.timeout);
         loop {
             self.handle()?;
             if let Some(answer) = self.answers.remove(&key(&id)) {
@@ -475,9 +617,9 @@ impl Fake {
                 };
             }
             if self.closed {
-                return Err(End(0));
+                return self.ended(&format!("waiting for the answer to {id}"));
             }
-            if until.is_some_and(|until| Instant::now() >= until) || !self.hear(until) {
+            if past(until) || !self.hear(until) {
                 return self.fail(&format!("timed out waiting for the answer to {id}"));
             }
         }
@@ -507,21 +649,30 @@ impl Fake {
         };
         let fill = if line.message.is_some() { b' ' } else { b'x' };
         let mut left = line.len - head.len() - (tail.len() - 1);
-        self.write_out(&head)?;
+        self.write_to(line.to, &head)?;
         let chunk = vec![fill; left.min(CHUNK)];
         while left > 0 {
             let now = left.min(CHUNK);
-            self.write_out(&chunk[..now])?;
+            self.write_to(line.to, &chunk[..now])?;
             left -= now;
         }
-        self.write_out(tail)
+        self.write_to(line.to, tail)
     }
 
     fn spawn_holder(&mut self, holder: &SpawnHolder) -> Result<(), End> {
+        if let Some(path) = &holder.pid_file {
+            // So the file found below is this holder's, not an old one.
+            let _ = std::fs::remove_file(path);
+        }
         let spawned = std::env::current_exe().and_then(|program| {
-            Command::new(program)
+            let mut command = Command::new(program);
+            command
                 .arg("--hold")
-                .arg(holder.secs.unwrap_or(60).to_string())
+                .arg(holder.secs.unwrap_or(60).to_string());
+            if let Some(path) = &holder.pid_file {
+                command.arg(path);
+            }
+            command
                 .stdin(Stdio::null())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit())
@@ -531,16 +682,18 @@ impl Fake {
             Ok(child) => child,
             Err(err) => return self.fail(&format!("couldn't start a holder: {err}")),
         };
+        self.holders.push(child);
+        // The holder writes its pid file itself, so it knows the file was
+        // there; the script goes on once it has.
         if let Some(path) = &holder.pid_file {
-            // Renamed into place, so it's never read half written.
-            let new = path.with_extension("new");
-            let written = std::fs::write(&new, child.id().to_string())
-                .and_then(|()| std::fs::rename(&new, path));
-            if let Err(err) = written {
-                return self.fail(&format!("{}: {err}", path.display()));
+            let until = deadline(Some(10_000));
+            while !path.exists() {
+                if past(until) {
+                    return self.fail(&format!("the holder never wrote {}", path.display()));
+                }
+                std::thread::sleep(Duration::from_millis(5));
             }
         }
-        self.holders.push(child);
         Ok(())
     }
 
@@ -548,6 +701,24 @@ impl Fake {
         let mut line = serde_json::to_vec(message).expect("JSON is always JSON");
         line.push(b'\n');
         self.write_out(&line)
+    }
+
+    fn write_to(&mut self, to: Output, bytes: &[u8]) -> Result<(), End> {
+        match to {
+            Output::Stdout => self.write_out(bytes),
+            Output::Stderr => {
+                self.write_err(bytes);
+                Ok(())
+            }
+        }
+    }
+
+    /// Writes to stderr, if it's open. Nobody reading it is the client's
+    /// business.
+    fn write_err(&mut self, bytes: &[u8]) {
+        if let Some(err) = &mut self.err {
+            let _ = err.write_all(bytes);
+        }
     }
 
     /// Writes to stdout. Once the script closes it, nothing is written. If
@@ -568,13 +739,43 @@ impl Fake {
     }
 
     /// A check failed: says so in the record and on stderr, and ends.
+    /// Stderr is written without blocking, so a client that never reads it
+    /// still sees the fake exit.
     fn fail<T>(&mut self, why: &str) -> Result<T, End> {
         self.record.write(&json!({"failed": why}));
         if let Some(err) = &mut self.err {
+            let fd = err.as_raw_fd();
+            // SAFETY: fcntl on a descriptor this owns has no memory
+            // effects.
+            unsafe {
+                let flags = libc::fcntl(fd, libc::F_GETFL);
+                if flags >= 0 {
+                    libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                }
+            }
             let _ = err.write_all(format!("caf-fake-agent: {why}\n").as_bytes());
         }
         Err(End(EXIT_CHECK_FAILED))
     }
+
+    /// Stdin closed while the script waited: says so in the record, and
+    /// exits as an adapter does.
+    fn ended<T>(&mut self, waiting: &str) -> Result<T, End> {
+        self.record
+            .write(&json!({"ended": format!("stdin closed while {waiting}")}));
+        Err(End(0))
+    }
+}
+
+/// When a wait of so many milliseconds ends: never, if not given or too
+/// far off to say.
+fn deadline(ms: Option<u64>) -> Option<Instant> {
+    ms.and_then(|ms| Instant::now().checked_add(Duration::from_millis(ms)))
+}
+
+/// Whether a deadline has passed.
+fn past(until: Option<Instant>) -> bool {
+    until.is_some_and(|until| Instant::now() >= until)
 }
 
 /// Whether a message has this method, if given, and matches this pattern,
@@ -594,13 +795,20 @@ fn method(message: &Value) -> String {
 }
 
 /// Closes stdout or stderr, and puts `/dev/null` in its place, so no file
-/// opened later takes its number and gets written to by mistake.
-fn close(file: &mut Option<File>, fd: i32) {
-    if file.take().is_some()
-        && let Ok(null) = File::options().write(true).open("/dev/null")
-        && null.as_raw_fd() == fd
-    {
-        // Open for the rest of the process's life.
-        let _ = null.into_raw_fd();
+/// opened later takes its number and gets written to by mistake, and a
+/// holder started later gets `/dev/null` too.
+fn close(file: &mut Option<File>) {
+    let Some(file) = file.take() else {
+        return;
+    };
+    let fd = file.into_raw_fd();
+    match File::options().write(true).open("/dev/null") {
+        // SAFETY: both descriptors are open and this owns them. dup2
+        // closes `fd` and makes it `/dev/null`, in one step.
+        Ok(null) => unsafe {
+            libc::dup2(null.as_raw_fd(), fd);
+        },
+        // SAFETY: this owns `fd`, and nothing else uses it.
+        Err(_) => drop(unsafe { File::from_raw_fd(fd) }),
     }
 }
