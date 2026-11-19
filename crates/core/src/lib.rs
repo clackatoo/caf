@@ -51,14 +51,25 @@
 //!
 //! 1. **Every request the agent sends is answered, exactly once:** by the
 //!    policy, by the user, by the core's own safe refusal, or with an
-//!    error. A request is never left waiting because CAF forgot it.
+//!    error. A request is never left waiting because CAF forgot it. The
+//!    one exception is a request from a process that has gone, which
+//!    nothing can be written to: it's dropped, and reported.
 //! 2. **Every request CAF sends ends**, with an answer, an error, or a
 //!    terminal outcome when its connection is lost. Every request has a
 //!    watchdog ([`host::Timers`]) except a prompt, which may run as long as
-//!    the agent works; once the user stops it, it has one too.
+//!    the agent works; once the user stops it, it has one too. Where the
+//!    user may well choose to wait (starting an adapter, opening a
+//!    session), the watchdog asks them whether to, and waits as they
+//!    choose.
 //! 3. **Nothing the agent sends is silently dropped.** An update CAF can't
-//!    read becomes an [`ItemKind::Unknown`] with its original data, and a
-//!    message that fits nowhere becomes a [`Report`].
+//!    read becomes an [`ItemKind::Unknown`] with its original data in the
+//!    turn that's open, and a message that fits nowhere becomes a
+//!    [`Report`]. Only the agent's own output (words, thinking, tools)
+//!    opens a turn: anything else said outside one, such as a notice, is
+//!    reported, with what it says, as are updates about the whole chat
+//!    (its plan, commands, mode, settings and title) until the features
+//!    that keep them. The one thing CAF drops on purpose is Claude's
+//!    sign-in status, which holds the account's email.
 //! 4. **Every event names what it belongs to**: a turn, an item, a session,
 //!    a process. A late update lands on its own row, never on whatever is
 //!    current.
@@ -73,9 +84,8 @@
 //! 9. **Agent text is never passed off as CAF's.** Failure text from the
 //!    agent is cleaned, capped and kept apart from CAF's own words.
 
-// The API draft for review: bodies are `todo!()` until it is approved.
-#![allow(unused_variables, dead_code)]
-
+// `acp`'s framer and parser are being written apart from the rest.
+#[allow(unused_variables, dead_code)]
 pub mod acp;
 pub mod agent;
 pub mod change;

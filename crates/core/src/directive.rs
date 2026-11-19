@@ -84,7 +84,12 @@ pub enum AgentDirective {
         process: Ticket,
     },
     /// Stop reading it and let it go. It must already have exited, or
-    /// been killed.
+    /// been killed, or never started
+    /// ([`AgentEvent::StartFailed`](crate::event::AgentEvent::StartFailed)).
+    /// The core sends it within a fixed time of a process going, even if
+    /// its output never closes or its group never empties: five times
+    /// [`Timers::gone`](crate::host::Timers::gone), then
+    /// [`Timers::kill_after`](crate::host::Timers::kill_after).
     Forget {
         /// The process.
         process: Ticket,

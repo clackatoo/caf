@@ -15,8 +15,40 @@
 //! Profiles are CAF's own. Apps choose one for each agent but never
 //! change one. Users will be able to add profiles as data in CAF's shared
 //! folder (*later*).
+//!
+//! # The Claude profile
+//!
+//! Checked against `@agentclientprotocol/claude-agent-acp` 0.98.0. It
+//! declares:
+//! - **forms and links** (`elicitation.form`, `elicitation.url`): without
+//!   forms, the adapter takes Claude's AskUserQuestion tool away. CAF
+//!   declines forms itself while hosts can't show them.
+//! - **notices** (`session.notices`): without them, the adapter says its
+//!   notices as words, which can arrive while no turn is open and look
+//!   like a turn of their own.
+//! - **no files and no terminals**: CAF serves neither yet, and refuses
+//!   them if asked.
+//!
+//! It declares **nothing of JetBrains AIR**. Any AIR key switches the
+//! adapter into AIR's shapes for the whole connection: reads and searches
+//! arrive without their text, subagents' words stop, failures move into
+//! `_meta`, and subagents become sessions of their own. Each needs work
+//! CAF hasn't done yet (recovering text from raw SDK messages, typed
+//! failure records, child sessions), so AIR waits for the features that
+//! need it.
+//!
+//! A newer adapter keeps the Claude profile with its risky features off;
+//! feature 1 turns on nothing risky, so that changes nothing yet. Any
+//! other adapter, or one that doesn't say what it is, gets the cautious
+//! profile for reading what it sends. What was declared at the start
+//! stays declared: declarations go out before the adapter says who it
+//! is.
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::acp::RpcError;
+use crate::chat::{FailureReason, Remedy};
 
 /// Which profile an agent should have.
 #[non_exhaustive]
@@ -80,4 +112,212 @@ pub enum Checked {
     Mismatch,
     /// The agent was given the cautious profile.
     Cautious,
+}
+
+/// The adapter the Claude profile is for, as it names itself.
+const CLAUDE_NAME: &str = "@agentclientprotocol/claude-agent-acp";
+
+/// The version of it the Claude profile was checked against.
+const CLAUDE_CHECKED: [u64; 3] = [0, 98, 0];
+
+/// ACP's error for "the user must sign in first".
+pub(crate) const AUTH_REQUIRED: i64 = -32000;
+
+/// ACP's error for something that doesn't exist, such as a session.
+pub(crate) const RESOURCE_NOT_FOUND: i64 = -32002;
+
+impl ProfileChoice {
+    /// What CAF declares to an adapter with this profile, as ACP's
+    /// `clientCapabilities`.
+    pub(crate) fn declarations(&self) -> Value {
+        let mut declared = json!({
+            "fs": { "readTextFile": false, "writeTextFile": false },
+            "terminal": false,
+        });
+        match self {
+            Self::Builtin(Builtin::ClaudeAgentAcp) => {
+                declared["session"] = json!({ "notices": {} });
+                declared["elicitation"] = json!({ "form": {}, "url": {} });
+            }
+            Self::Cautious => {}
+        }
+        declared
+    }
+
+    /// What becomes of this profile once the adapter said who it is, as
+    /// `adapter`, or didn't.
+    pub(crate) fn check(&self, adapter: Option<AdapterInfo>) -> ProfileReport {
+        let checked = match self {
+            Self::Cautious => Checked::Cautious,
+            Self::Builtin(Builtin::ClaudeAgentAcp) => match &adapter {
+                Some(info) if info.name == CLAUDE_NAME => match version(&info.version) {
+                    Some((version, false)) if version == CLAUDE_CHECKED => Checked::Yes,
+                    Some((version, _)) if version > CLAUDE_CHECKED => Checked::Newer,
+                    _ => Checked::Mismatch,
+                },
+                _ => Checked::Mismatch,
+            },
+        };
+        let profile = match checked {
+            Checked::Yes | Checked::Newer => self.clone(),
+            Checked::Mismatch | Checked::Cautious => Self::Cautious,
+        };
+        ProfileReport {
+            profile,
+            adapter,
+            checked,
+        }
+    }
+
+    /// Why a request failed, as this profile reads `error`: what went
+    /// wrong in CAF's terms, what the user can do, and the agent's own
+    /// words, uncleaned.
+    pub(crate) fn failure(&self, error: &RpcError) -> Said {
+        let words = words(error);
+        if error.code == AUTH_REQUIRED {
+            return Said {
+                reason: FailureReason::SignInNeeded,
+                remedy: None,
+                words,
+            };
+        }
+        let data = data(error);
+        let kind = data.as_ref().and_then(|data| data.get("errorKind")).and_then(Value::as_str);
+        let (reason, remedy) = match (self, kind) {
+            (Self::Builtin(Builtin::ClaudeAgentAcp), Some(kind)) => claude_kind(kind),
+            _ => (FailureReason::Other, Some(Remedy::SendAgain)),
+        };
+        Said { reason, remedy, words }
+    }
+
+    /// Whether `error`, the answer to a request about a session, says the
+    /// adapter doesn't have that session: ACP's "resource not found", or,
+    /// from Claude's adapter, the text it throws.
+    pub(crate) fn session_gone(&self, error: &RpcError) -> bool {
+        if error.code == RESOURCE_NOT_FOUND {
+            return true;
+        }
+        match self {
+            Self::Builtin(Builtin::ClaudeAgentAcp) => words(error).is_some_and(|words| words.contains("Session not found")),
+            Self::Cautious => false,
+        }
+    }
+
+    /// Whether a line of the adapter's error output says the user must
+    /// sign in.
+    pub(crate) fn wants_sign_in(&self, line: &str) -> bool {
+        match self {
+            Self::Builtin(Builtin::ClaudeAgentAcp) => {
+                line.contains("/login") || line.contains("Invalid API key") || line.contains("Not logged in")
+            }
+            Self::Cautious => false,
+        }
+    }
+}
+
+/// A failure as a profile reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Said {
+    /// What went wrong, in CAF's terms.
+    pub(crate) reason: FailureReason,
+    /// What the user can do.
+    pub(crate) remedy: Option<Remedy>,
+    /// What the agent said, as it said it: clean it before showing it.
+    pub(crate) words: Option<String>,
+}
+
+/// Claude Code's SDK's kind of error, as its adapter gives it in
+/// `data.errorKind` when a prompt fails.
+///
+/// The kinds are the Claude Agent SDK's (`SDKAssistantMessageError`) and
+/// the adapter's own (`no_result`, `incomplete_tool_call`,
+/// `worker_shutdown`, `transport_lost`), grouped as the adapter's
+/// `providerFailureCategory` groups them: an unknown kind is a provider
+/// error, as there. Sending the message again is offered only where it
+/// can help.
+fn claude_kind(kind: &str) -> (FailureReason, Option<Remedy>) {
+    let again = Some(Remedy::SendAgain);
+    match kind {
+        "authentication_failed" | "oauth_org_not_allowed" => (FailureReason::SignInNeeded, None),
+        "billing_error" | "account_on_hold" => (FailureReason::UsageLimit, None),
+        "rate_limit" => (FailureReason::UsageLimit, again),
+        // Signing in again doesn't fix these.
+        "verification_required" | "cloud_credential_error" => (FailureReason::AccessDenied, None),
+        "invalid_request" | "model_not_found" => (FailureReason::BadRequest, None),
+        "max_output_tokens" => (FailureReason::TooLong, None),
+        _ => (FailureReason::ProviderError, again),
+    }
+}
+
+/// An error's `data`, as JSON.
+fn data(error: &RpcError) -> Option<Value> {
+    error.data.as_ref().and_then(|data| serde_json::from_str(data.get()).ok())
+}
+
+/// What the agent said in `error`, uncleaned. The ACP SDK sends an
+/// adapter's plain thrown error as a bare "Internal error" with the
+/// thrown text in `data.details`; Claude's adapter puts its own text
+/// after "Internal error: ".
+fn words(error: &RpcError) -> Option<String> {
+    let message = error.message.strip_prefix("Internal error: ").unwrap_or(&error.message).trim();
+    let details = data(error).and_then(|data| data.get("details")?.as_str().map(str::to_owned));
+    match message {
+        "" | "Internal error" => details.filter(|details| !details.trim().is_empty()),
+        message => Some(message.to_owned()),
+    }
+}
+
+/// `text` as a version of three numbers, and whether it's a prerelease
+/// (`-rc.1`), which comes before the release of the same numbers. Build
+/// metadata (`+…`) is ignored.
+fn version(text: &str) -> Option<([u64; 3], bool)> {
+    let text = text.split('+').next()?;
+    let (core, pre) = match text.split_once('-') {
+        Some((core, _)) => (core, true),
+        None => (text, false),
+    };
+    let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
+    let version = [parts.next()??, parts.next()??, parts.next()??];
+    parts.next().is_none().then_some((version, pre))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn claude() -> ProfileChoice {
+        ProfileChoice::Builtin(Builtin::ClaudeAgentAcp)
+    }
+
+    fn adapter(name: &str, version: &str) -> Option<AdapterInfo> {
+        Some(AdapterInfo {
+            name: name.to_owned(),
+            version: version.to_owned(),
+        })
+    }
+
+    #[test]
+    fn the_claude_profile_is_checked_by_the_adapters_name_and_version() {
+        assert_eq!(claude().check(adapter(CLAUDE_NAME, "0.98.0")).checked, Checked::Yes);
+        let newer = claude().check(adapter(CLAUDE_NAME, "0.99.1"));
+        assert_eq!((newer.checked, newer.profile), (Checked::Newer, claude()));
+        for older in ["0.97.9", "0.98", "0.98.0-rc.1", "x", ""] {
+            let report = claude().check(adapter(CLAUDE_NAME, older));
+            assert_eq!((report.checked, report.profile), (Checked::Mismatch, ProfileChoice::Cautious), "{older}");
+        }
+        assert_eq!(claude().check(adapter("codex-acp", "0.98.0")).checked, Checked::Mismatch);
+        assert_eq!(claude().check(None).checked, Checked::Mismatch);
+        assert_eq!(ProfileChoice::Cautious.check(adapter(CLAUDE_NAME, "0.98.0")).checked, Checked::Cautious);
+    }
+
+    #[test]
+    fn the_claude_profile_declares_forms_and_notices_but_no_air() {
+        let declared = claude().declarations();
+        assert_eq!(declared["elicitation"], json!({ "form": {}, "url": {} }));
+        assert_eq!(declared["session"], json!({ "notices": {} }));
+        assert_eq!(declared["terminal"], json!(false));
+        assert!(declared.get("_meta").is_none(), "no AIR");
+        let cautious = ProfileChoice::Cautious.declarations();
+        assert!(cautious.get("elicitation").is_none() && cautious.get("session").is_none());
+    }
 }

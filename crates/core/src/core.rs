@@ -1,21 +1,40 @@
 //! The core itself.
+//!
+//! The public methods are here; the rules live in private modules, one
+//! for each part of the work.
 
-use std::collections::BTreeMap;
-use std::marker::PhantomData;
+mod asks;
+mod clean;
+mod frames;
+mod procs;
+mod record;
+mod sessions;
+mod state;
+mod timers;
+mod turns;
+mod updates;
+mod wire;
+
+#[cfg(test)]
+mod tests;
+
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use self::record::Log;
+use self::state::{Ask, Conn, Ids, Pending, Proc, Run};
 use crate::agent::{AgentSpec, McpServer};
 use crate::change::Read;
 use crate::chat::{AppItem, Chat, NoAppItems, UserMessage};
-use crate::directive::Directive;
-use crate::event::Event;
+use crate::directive::{Directive, Level, Report};
+use crate::event::{Event, HostCommand};
 use crate::host::Host;
-use crate::ids::{AgentName, AgentSessionId, ChangeNo, ChatId, ConnectionId, QuestionId, TurnId};
+use crate::ids::{AgentName, AgentSessionId, ChangeNo, ChatId, ConnectionId, QuestionId, Ticket, TurnId};
 use crate::profiles::ProfileReport;
 use crate::question::Answer;
-use crate::time::Now;
+use crate::time::{Mono, Now};
 
 /// CAF's core: every chat's state, and the rules that change it.
 ///
@@ -35,7 +54,28 @@ pub struct Core<A: AppItem = NoAppItems> {
     host: Host,
     agents: BTreeMap<AgentName, AgentSpec>,
     chats: BTreeMap<ChatId, Chat<A>>,
-    _app: PhantomData<A>,
+    /// Gives out every id.
+    ids: Ids,
+    /// Each chat's place with its connection and session.
+    runs: BTreeMap<ChatId, Run<A>>,
+    /// Each chat's changes, for viewers.
+    logs: BTreeMap<ChatId, Log<A>>,
+    /// Every connection.
+    conns: BTreeMap<ConnectionId, Conn>,
+    /// Every process not yet let go, by the ticket that started it.
+    procs: BTreeMap<Ticket, Proc>,
+    /// CAF's requests waiting for answers, by process and request id.
+    pending: BTreeMap<(Ticket, i64), Pending>,
+    /// The agent's requests waiting for CAF's answer, by the ticket of
+    /// the policy's decision.
+    asks: BTreeMap<Ticket, Ask>,
+    /// The time the timer driver was last asked to wake the core at.
+    wake: Option<Mono>,
+    /// Chats changed since viewers were last told.
+    dirty: BTreeSet<ChatId>,
+    /// The host asked for everything to stop: nothing is started again
+    /// until it asks for something new.
+    shutting_down: bool,
 }
 
 /// What to open a chat with.
@@ -92,9 +132,14 @@ pub enum Refused {
     NoSuchAgent,
     /// The folder isn't absolute.
     RelativeFolder,
+    /// Something can't be sent to the agent exactly as it is: a folder,
+    /// program, argument or variable that isn't valid UTF-8, or what ACP
+    /// can't say for an MCP server (a variable to remove, or a folder to
+    /// start in). CAF never sends something else in its place.
+    Unsendable,
     /// The chat already has as many messages waiting as the host allows.
     QueueFull,
-    /// The message has a part this agent can't take.
+    /// The message is empty, or has a part this agent can't take.
     Unsupported,
     /// A slash command must be a message's only part.
     CommandNotAlone,
@@ -128,13 +173,44 @@ impl<A: AppItem> Core<A> {
     /// A core for a host, offering these agents.
     #[must_use]
     pub fn new(host: Host, agents: Vec<AgentSpec>) -> Self {
-        todo!()
+        Self::starting_ids_at(host, agents, 1)
+    }
+
+    /// A core whose ids start at `first`: tests start them at 1000, so
+    /// an id mixed up with a position shows.
+    pub(crate) fn starting_ids_at(host: Host, agents: Vec<AgentSpec>, first: u64) -> Self {
+        Self {
+            host,
+            agents: agents.into_iter().map(|agent| (agent.name.clone(), agent)).collect(),
+            chats: BTreeMap::new(),
+            ids: Ids { next: first, first },
+            runs: BTreeMap::new(),
+            logs: BTreeMap::new(),
+            conns: BTreeMap::new(),
+            procs: BTreeMap::new(),
+            pending: BTreeMap::new(),
+            asks: BTreeMap::new(),
+            wake: None,
+            dirty: BTreeSet::new(),
+            shutting_down: false,
+        }
     }
 
     /// Takes in something that happened, at `now`, and adds the work it
     /// leads to onto `out`.
     pub fn handle(&mut self, now: Now, event: Event<A>, out: &mut Vec<Directive>) {
-        todo!()
+        match event {
+            Event::Host(command) => {
+                if let Err(refused) = self.command(now, command, out) {
+                    report(out, Level::Debug, format!("refused a host command: {refused:?}"));
+                }
+            }
+            Event::Agent { process, event } => self.agent_event(now, process, event, out),
+            Event::Woken => self.woken(now, out),
+            Event::Policy { ticket, answer } => self.policy_answered(now, ticket, answer, out),
+            Event::Storage(storage) => match storage {},
+        }
+        self.finish(now, out);
     }
 
     /// Opens a chat, and returns its id. Its agent is started, or its
@@ -143,9 +219,13 @@ impl<A: AppItem> Core<A> {
     ///
     /// # Errors
     ///
-    /// [`Refused::NoSuchAgent`] or [`Refused::RelativeFolder`].
+    /// [`Refused::NoSuchAgent`], [`Refused::RelativeFolder`] or
+    /// [`Refused::Unsendable`].
     pub fn open_chat(&mut self, now: Now, open: OpenChat, out: &mut Vec<Directive>) -> Result<ChatId, Refused> {
-        todo!()
+        let chat = ChatId(self.ids.next);
+        self.command(now, HostCommand::OpenChat { chat, open }, out)?;
+        self.finish(now, out);
+        Ok(chat)
     }
 
     /// Sends a message as a new turn, and returns the turn's id.
@@ -160,7 +240,10 @@ impl<A: AppItem> Core<A> {
     /// [`Refused::NoSuchChat`], [`Refused::Closed`], [`Refused::QueueFull`],
     /// [`Refused::Unsupported`] or [`Refused::CommandNotAlone`].
     pub fn send(&mut self, now: Now, chat: ChatId, message: UserMessage, out: &mut Vec<Directive>) -> Result<TurnId, Refused> {
-        todo!()
+        let turn = TurnId(self.ids.next);
+        self.command(now, HostCommand::Send { chat, turn, message }, out)?;
+        self.finish(now, out);
+        Ok(turn)
     }
 
     /// Stops the chat's running turn, and drops its waiting ones, which end
@@ -172,11 +255,19 @@ impl<A: AppItem> Core<A> {
     /// stop timer, the turn fails and the session is restarted. If the
     /// session is still opening, opening it is abandoned.
     ///
+    /// A turn the agent started by itself is stopped too. ACP doesn't say
+    /// when such a turn ends, so it ends as stopped at once, and for the
+    /// next 2 s what the agent says opens no new turn: it was in flight,
+    /// and is dropped with a report, as are later updates to a tool call
+    /// dropped so.
+    ///
     /// # Errors
     ///
     /// [`Refused::NoSuchChat`] or [`Refused::NothingToStop`].
     pub fn stop(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) -> Result<(), Refused> {
-        todo!()
+        self.command(now, HostCommand::Stop { chat }, out)?;
+        self.finish(now, out);
+        Ok(())
     }
 
     /// Answers a question.
@@ -186,7 +277,9 @@ impl<A: AppItem> Core<A> {
     /// [`Refused::NoSuchQuestion`] if it isn't waiting (answered,
     /// withdrawn or never asked), or [`Refused::WrongAnswer`].
     pub fn answer(&mut self, now: Now, question: QuestionId, answer: Answer, out: &mut Vec<Directive>) -> Result<(), Refused> {
-        todo!()
+        self.command(now, HostCommand::Answer { question, answer }, out)?;
+        self.finish(now, out);
+        Ok(())
     }
 
     /// Closes a chat for good. Its session is closed, if the agent can
@@ -196,19 +289,23 @@ impl<A: AppItem> Core<A> {
     ///
     /// [`Refused::NoSuchChat`].
     pub fn close_chat(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) -> Result<(), Refused> {
-        todo!()
+        self.command(now, HostCommand::CloseChat { chat }, out)?;
+        self.finish(now, out);
+        Ok(())
     }
 
     /// Stops everything: closes every session, stops every adapter
     /// gently, then firmly. Done once [`Core::is_idle`] is true.
     pub fn shutdown(&mut self, now: Now, out: &mut Vec<Directive>) {
-        todo!()
+        // Shutting down is never refused.
+        let _ = self.command(now, HostCommand::Shutdown, out);
+        self.finish(now, out);
     }
 
     /// Whether nothing is running: no adapters, nothing waiting.
     #[must_use]
     pub fn is_idle(&self) -> bool {
-        todo!()
+        self.procs.is_empty() && self.pending.is_empty() && self.asks.is_empty() && self.runs.values().all(|run| run.running.is_none())
     }
 
     /// A chat, by id.
@@ -226,12 +323,82 @@ impl<A: AppItem> Core<A> {
     /// `None` or too old.
     #[must_use]
     pub fn read(&self, chat: ChatId, since: Option<ChangeNo>) -> Option<Read<'_, A>> {
-        todo!()
+        let whole = self.chats.get(&chat)?;
+        let log = self.logs.get(&chat)?;
+        Some(log.read(whole, since))
     }
 
     /// Every connection: what each adapter process is, and serves.
     #[must_use]
     pub fn connections(&self) -> Vec<ConnectionInfo> {
-        todo!()
+        (self.conns.iter())
+            .map(|(&id, conn)| ConnectionInfo {
+                id,
+                agent: conn.agent.clone(),
+                profile: conn.profile.clone(),
+                chats: conn.chats.iter().copied().collect(),
+                stderr: conn.stderr.lines.iter().cloned().collect(),
+            })
+            .collect()
     }
+
+    /// Carries out a host's command, as a method or a recorded event.
+    fn command(&mut self, now: Now, command: HostCommand<A>, out: &mut Vec<Directive>) -> Result<(), Refused> {
+        match command {
+            HostCommand::OpenChat { chat, open } => self.open_chat_as(now, chat, open, out),
+            HostCommand::Send { chat, turn, message } => self.send_as(now, chat, turn, message, out),
+            HostCommand::Stop { chat } => self.stop_chat(now, chat, out),
+            HostCommand::Answer { question, answer } => self.answer_question(now, question, answer, out),
+            HostCommand::CloseChat { chat } => self.close(now, chat, out),
+            HostCommand::Shutdown => {
+                self.shut_down(now, out);
+                Ok(())
+            }
+            HostCommand::AddAppItem(_) => {
+                report(out, Level::Debug, "app items come in a later feature".to_owned());
+                Ok(())
+            }
+        }
+    }
+
+    /// Ends a call into the core: every connection makes what progress it
+    /// now can, viewers hear which chats changed, and the timer driver
+    /// when to wake the core next.
+    fn finish(&mut self, now: Now, out: &mut Vec<Directive>) {
+        self.advance_all(now, out);
+        for chat in std::mem::take(&mut self.dirty) {
+            if let Some(log) = self.logs.get(&chat) {
+                out.push(Directive::Viewer(crate::directive::ViewerDirective::Changed { chat, latest: log.latest() }));
+            }
+        }
+        let next = self.next_deadline();
+        if next != self.wake {
+            self.wake = next;
+            out.push(Directive::Timer(crate::directive::TimerDirective::WakeAt(next)));
+        }
+    }
+
+    /// A snapshot of everything the core keeps, as JSON: what tests and
+    /// recorded traces check.
+    #[cfg(test)]
+    pub(crate) fn snapshot(&self) -> serde_json::Value {
+        let pending: Vec<_> = (self.pending.iter())
+            .map(|((proc, id), pending)| serde_json::json!({ "proc": proc, "id": id, "pending": pending }))
+            .collect();
+        serde_json::json!({
+            "chats": self.chats.values().collect::<Vec<_>>(),
+            "runs": self.runs,
+            "conns": self.conns,
+            "procs": self.procs,
+            "pending": pending,
+            "asks": self.asks,
+            "wake": self.wake,
+            "next_id": self.ids.next,
+        })
+    }
+}
+
+/// Adds a report for the host's log to `out`.
+fn report(out: &mut Vec<Directive>, level: Level, message: String) {
+    out.push(Directive::Report(Report { level, message }));
 }

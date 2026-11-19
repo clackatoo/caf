@@ -1,0 +1,252 @@
+[
+  {
+    "at": 0,
+    "event": {
+      "Host": {
+        "OpenChat": {
+          "chat": 1000,
+          "open": {
+            "agent": "claude",
+            "cwd": "/work",
+            "session": "New",
+            "mcp_servers": []
+          }
+        }
+      }
+    }
+  },
+  {
+    "at": 0,
+    "event": {
+      "Agent": {
+        "process": 1002,
+        "event": {
+          "Frame": {
+            "Message": {
+              "Response": {
+                "id": {
+                  "Number": 1000
+                },
+                "outcome": {
+                  "Ok": {
+                    "protocolVersion": 1,
+                    "agentCapabilities": {
+                      "_meta": {
+                        "claudeCode": {
+                          "promptQueueing": true
+                        },
+                        "authStatus": {}
+                      },
+                      "promptCapabilities": {
+                        "image": true,
+                        "embeddedContext": true
+                      },
+                      "mcpCapabilities": {
+                        "http": true,
+                        "sse": true
+                      },
+                      "auth": {
+                        "logout": {}
+                      },
+                      "loadSession": true,
+                      "sessionCapabilities": {
+                        "additionalDirectories": {},
+                        "close": {},
+                        "delete": {},
+                        "fork": {},
+                        "list": {},
+                        "resume": {}
+                      }
+                    },
+                    "agentInfo": {
+                      "name": "@agentclientprotocol/claude-agent-acp",
+                      "title": "Claude Agent",
+                      "version": "0.98.0"
+                    },
+                    "authMethods": []
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "at": 0,
+    "event": {
+      "Agent": {
+        "process": 1002,
+        "event": {
+          "Frame": {
+            "Message": {
+              "Response": {
+                "id": {
+                  "Number": 1001
+                },
+                "outcome": {
+                  "Ok": {
+                    "sessionId": "sess-1"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "at": 2000,
+    "event": {
+      "Host": {
+        "Send": {
+          "chat": 1000,
+          "turn": 1003,
+          "message": {
+            "parts": [
+              {
+                "Text": "Run the tests"
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  {
+    "at": 2100,
+    "event": {
+      "Agent": {
+        "process": 1002,
+        "event": {
+          "Frame": {
+            "Message": {
+              "Notification": {
+                "method": "session/update",
+                "params": {
+                  "sessionId": "sess-1",
+                  "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {
+                      "type": "text",
+                      "text": "Running them."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "at": 2100,
+    "event": {
+      "Agent": {
+        "process": 1002,
+        "event": {
+          "Frame": {
+            "Message": {
+              "Request": {
+                "id": {
+                  "Number": 0
+                },
+                "method": "session/request_permission",
+                "params": {
+                  "sessionId": "sess-1",
+                  "toolCall": {
+                    "toolCallId": "toolu_01",
+                    "title": "Run `cargo test`",
+                    "kind": "execute",
+                    "rawInput": {
+                      "command": "cargo test"
+                    }
+                  },
+                  "options": [
+                    {
+                      "optionId": "allow",
+                      "name": "Allow",
+                      "kind": "allow_once"
+                    },
+                    {
+                      "optionId": "always",
+                      "name": "Always allow",
+                      "kind": "allow_always"
+                    },
+                    {
+                      "optionId": "reject",
+                      "name": "Reject",
+                      "kind": "reject_once"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "at": 2500,
+    "event": {
+      "Policy": {
+        "ticket": 1005,
+        "answer": "Allow"
+      }
+    }
+  },
+  {
+    "at": 2500,
+    "event": {
+      "Agent": {
+        "process": 1002,
+        "event": {
+          "Frame": {
+            "Message": {
+              "Notification": {
+                "method": "session/update",
+                "params": {
+                  "sessionId": "sess-1",
+                  "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "toolu_01",
+                    "status": "completed",
+                    "rawOutput": "test result: ok"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "at": 3000,
+    "event": {
+      "Agent": {
+        "process": 1002,
+        "event": {
+          "Frame": {
+            "Message": {
+              "Response": {
+                "id": {
+                  "Number": 1002
+                },
+                "outcome": {
+                  "Ok": {
+                    "stopReason": "end_turn"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]
