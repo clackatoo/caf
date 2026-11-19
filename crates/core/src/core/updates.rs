@@ -166,7 +166,7 @@ impl<A: AppItem> Core<A> {
                 Some(turn) => {
                     self.add_live_item(now, chat, turn, ItemKind::Unknown(unknown), Window::instant(now));
                 }
-                None => report(out, Level::Info, format!("chat {}: the agent said something outside any turn: {}", chat.0, unknown.what)),
+                None => report(out, Level::Info, format!("chat {}: the agent said, outside any turn: {}", chat.0, said_of(&unknown))),
             },
         }
     }
@@ -212,8 +212,16 @@ impl<A: AppItem> Core<A> {
                     self.end_item(now, chat, item);
                 }
             }
+            _ if self.runs.get(&chat).is_some_and(|run| run.dropped_tools.contains(&id)) => {
+                report(out, Level::Debug, format!("chat {}: dropped an update to a tool call dropped as in flight", chat.0));
+            }
             _ => {
-                let Some(turn) = self.live_turn(now, chat, out) else { return };
+                let Some(turn) = self.live_turn(now, chat, out) else {
+                    if let Some(run) = self.runs.get_mut(&chat) {
+                        run.dropped_tools.insert(id);
+                    }
+                    return;
+                };
                 let tool = change.new_tool();
                 let done = matches!(tool.status, ToolStatus::Done | ToolStatus::Failed);
                 let window = if done { Window::instant(now) } else { Window::open(now) };
@@ -364,6 +372,21 @@ impl ToolChange {
         tool
     }
 }
+
+/// What an update CAF couldn't place says, for a report: its kind, and
+/// for a notice its title and description, which are written for the
+/// user. Cleaned and capped, as the agent's words.
+fn said_of(unknown: &Unknown) -> String {
+    let text = |key: &str| unknown.raw.get(key).and_then(Value::as_str).map(|text| agent_text(text, MOST_NOTICE));
+    match (text("title"), text("description")) {
+        (Some(title), Some(description)) => format!("{}: {title}: {description}", unknown.what),
+        (Some(title), None) => format!("{}: {title}", unknown.what),
+        _ => unknown.what.clone(),
+    }
+}
+
+/// The longest title or description of a notice reported, in bytes.
+const MOST_NOTICE: usize = 1024;
 
 /// A tool call update, or a tool call read as far as it goes.
 fn tool_update(update: &Value) -> Option<Said> {

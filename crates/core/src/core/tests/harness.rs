@@ -12,7 +12,9 @@
 //! milliseconds since the script started.
 //!
 //! Every script also checks, whatever the test:
-//! - each event gives out at most one wake-up time;
+//! - each event gives out at most one wake-up time, and once woken the
+//!   core never waits to be woken at a time that has passed, which would
+//!   have the timer driver wake it over and over;
 //! - no request of the agent's is answered twice, and by the end each is
 //!   answered once, unless its process went before it could be;
 //! - its recording replays to the same directives and state.
@@ -227,7 +229,10 @@ impl Script {
 
     /// The timer driver wakes the core.
     pub(crate) fn woken(&mut self) -> Vec<Value> {
-        self.event(Event::Woken)
+        let out = self.event(Event::Woken);
+        let now = self.now().mono;
+        assert!(self.core.wake.is_none_or(|wake| wake > now), "woken, it waits for a time already past: {:?} at {now:?}", self.core.wake);
+        out
     }
 
     /// The policy answers.

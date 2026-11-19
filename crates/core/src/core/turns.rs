@@ -178,7 +178,9 @@ impl<A: AppItem> Core<A> {
 
     /// Ends the turn the agent started by itself, if one is open.
     pub(super) fn end_agent_turn(&mut self, now: Now, chat: ChatId) {
-        let Some(turn) = self.runs.get_mut(&chat).and_then(|run| run.agent_turn.take()) else { return };
+        let Some(run) = self.runs.get_mut(&chat) else { return };
+        run.quiet_by = None;
+        let Some(turn) = run.agent_turn.take() else { return };
         self.end_turn(now, chat, turn, TurnLife::Finished);
     }
 
@@ -216,12 +218,19 @@ impl<A: AppItem> Core<A> {
     }
 
     /// `chat`'s agent-started turn has been quiet long enough: it ends,
-    /// unless a tool of it still runs.
+    /// unless a tool of it is still running or waiting to, or the agent
+    /// waits on a question.
     pub(super) fn quiet(&mut self, now: Now, chat: ChatId) {
-        let Some(turn) = self.runs.get(&chat).and_then(|run| run.agent_turn) else { return };
-        let busy = (self.turn(chat, turn).into_iter())
+        let Some(turn) = self.runs.get(&chat).and_then(|run| run.agent_turn) else {
+            if let Some(run) = self.runs.get_mut(&chat) {
+                run.quiet_by = None;
+            }
+            return;
+        };
+        let tools = (self.turn(chat, turn).into_iter())
             .flat_map(|each| each.items.iter())
-            .any(|item| matches!(&item.kind, ItemKind::Tool(tool) if tool.status == ToolStatus::Running));
+            .any(|item| matches!(&item.kind, ItemKind::Tool(tool) if matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)));
+        let busy = tools || self.asks.values().any(|ask| ask.chat == chat);
         if busy {
             let quiet_by = now.mono.after(self.host.timers.quiet);
             if let Some(run) = self.runs.get_mut(&chat) {

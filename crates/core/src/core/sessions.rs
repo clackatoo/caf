@@ -71,6 +71,7 @@ impl<A: AppItem> Core<A> {
             agent_turn: None,
             quiet_by: None,
             held_until: None,
+            dropped_tools: std::collections::BTreeSet::new(),
             tools: BTreeMap::new(),
             import: None,
             replaying: false,

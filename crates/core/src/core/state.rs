@@ -295,6 +295,9 @@ pub(super) struct Run<A: AppItem> {
     /// A turn the agent started was just stopped: until then, what was in
     /// flight opens no new one.
     pub(super) held_until: Option<Mono>,
+    /// The tool calls dropped as in flight then: later updates to them are
+    /// dropped too, rather than open a tool with no title.
+    pub(super) dropped_tools: BTreeSet<String>,
     /// Its tool calls, by the agent's ids.
     pub(super) tools: BTreeMap<String, ItemId>,
     /// The history being replayed by `session/load`, the turn being
