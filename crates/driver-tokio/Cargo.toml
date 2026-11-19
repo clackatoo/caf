@@ -10,4 +10,7 @@ repository.workspace = true
 
 [dependencies]
 caf-core.workspace = true
-tokio.workspace = true
+libc.workspace = true
+rustix.workspace = true
+# net: AsyncFd for pidfds, and pipes for adapters' standard streams.
+tokio = { workspace = true, features = ["net"] }

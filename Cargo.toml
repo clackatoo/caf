@@ -15,6 +15,13 @@ caf-core = { path = "crates/core" }
 # ACP's types only: CAF frames and routes the messages itself. The same
 # pin as clackatoo, with the session notices clackatoo already declares.
 agent-client-protocol-schema = { version = "1.10", default-features = false, features = ["unstable_session_notices"] }
+# pidfd_send_signal with a flag rustix has no way to pass: signalling an
+# adapter's whole process group through its pidfd.
+libc = "0.2"
+# Finds line ends in an adapter's output. serde_json already builds it.
+memchr = "2.8"
+# pidfds and waitid, for watching, reaping and signalling adapters.
+rustix = { version = "1.1", features = ["process"] }
 serde = { version = "1.0", features = ["derive"] }
 # raw_value: a message's params stay unparsed until the core knows what
 # they are, so one big tool output is read once.

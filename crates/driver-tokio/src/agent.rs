@@ -2,20 +2,74 @@
 //!
 //! It knows nothing about which agent it runs, or about ACP beyond
 //! splitting lines: it starts programs, carries bytes and reports what
-//! happens, keeping the contract in
-//! [`AgentDirective`](caf_core::directive::AgentDirective)'s docs.
+//! happens, keeping the contract in [`AgentDirective`]'s docs.
 //!
 //! Each process is started in a process group of its own and watched
 //! through a pidfd. Signals go to the whole group through the pidfd, so
 //! the `claude` programs Claude's adapter starts stop with it. Lines of
 //! 256 KiB or more are parsed on a blocking thread, and handed on in
 //! order.
+//!
+//! # How it works
+//!
+//! Each process has a task of its own, which owns its pipes and its pidfd
+//! and does everything for it, so nothing it does waits on another
+//! process. Everything it reports goes through one queue, in order:
+//! [`AgentEvent::Started`] first, then frames in line order, error output,
+//! and the rest as it happens. A line of 256 KiB or more holds its place
+//! in the queue while a blocking thread parses it, one at a time per
+//! process, and what comes after it waits behind it.
+//!
+//! Nothing in the task waits on one thing alone: it reads, writes, hands
+//! on what it has read, and watches for exit all at once. So a core slow
+//! to take events doesn't stop writing, and a full input pipe doesn't
+//! stop reading. Reading pauses only while the queue is full, so a flood
+//! is held back by the pipe rather than by memory.
+//!
+//! # Signals
+//!
+//! A process group is signalled through its leader's pidfd with
+//! `PIDFD_SIGNAL_PROCESS_GROUP` (Linux 6.9 on), never by number: the
+//! pidfd holds the kernel's record of the leader, and its group hangs off
+//! that record for as long as anything is in it, so a signal can't reach
+//! another group that took the number, even after the leader is reaped.
+//! On an older kernel, or once the group is empty, the leader alone is
+//! signalled. SIGKILL goes to the leader too, in case it left its group.
+//! On an older kernel a group can't be seen once its leader is reaped, so
+//! [`AgentDirective::CheckGroup`] says it's empty then.
+//!
+//! # Exits
+//!
+//! Each process is reaped exactly once, through its pidfd, as soon as it
+//! exits. One forgotten before it exits is killed, with its group, and
+//! reaped. So is every process when the driver is dropped. If the tokio
+//! runtime itself shuts down first, a thread of its own reaps each process
+//! left.
+//!
+//! Writing to a process that has gone raises SIGPIPE, which Rust programs
+//! ignore. A host whose `main` isn't Rust's must ignore it too.
 
+use std::collections::{HashMap, VecDeque};
+use std::ffi::{OsStr, OsString};
+use std::io;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::process::CommandExt;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use caf_core::Ticket;
-use caf_core::directive::AgentDirective;
-use caf_core::event::AgentEvent;
+use caf_core::acp::{self, Frame, Framer, Line};
+use caf_core::agent::{EnvChange, SpawnCommand};
+use caf_core::directive::{AgentDirective, Signal};
+use caf_core::event::{AgentEvent, Exit};
+use rustix::process::{Pid, PidfdFlags, WaitId, WaitIdOptions, WaitIdStatus};
+use tokio::io::Interest;
+use tokio::io::unix::AsyncFd;
+use tokio::net::unix::pipe;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 /// Limits for the agent driver.
 #[non_exhaustive]
@@ -54,27 +108,892 @@ impl Default for AgentLimits {
 }
 
 /// Runs adapter processes for the core.
+///
+/// Dropping it kills every process it runs, with its process group, and
+/// reaps it.
 pub struct AgentDriver {
     limits: AgentLimits,
+    /// Each process's orders, by its ticket, until it's forgotten.
+    processes: HashMap<Ticket, mpsc::UnboundedSender<Order>>,
+    events: mpsc::Receiver<(Ticket, AgentEvent)>,
+    /// Kept so `events` never ends, and given to each process's task.
+    sender: mpsc::Sender<(Ticket, AgentEvent)>,
 }
+
+/// How many events may wait between the processes' tasks and
+/// [`AgentDriver::next`]. Each task keeps more of its own.
+const EVENTS: usize = 256;
+
+/// How many things a process may have waiting to be handed on before
+/// reading it pauses, however small they are: a flood of empty lines is
+/// no bytes, but each is a frame.
+const WAITING: usize = 4096;
+
+/// How much is read from a pipe at once.
+const READ: usize = 64 << 10;
+
+/// Writes up to this size are joined to the one before, so a burst of
+/// small messages takes few writes.
+const JOIN: usize = 64 << 10;
+
+/// What a process's `PATH` is when none of its directories is absolute:
+/// where programs are installed on any Linux. An empty `PATH` would mean
+/// the current folder.
+const SAFE_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
 
 impl AgentDriver {
     /// A driver with these limits.
     #[must_use]
     pub fn new(limits: AgentLimits) -> Self {
-        Self { limits }
+        let (sender, events) = mpsc::channel(EVENTS);
+        Self {
+            limits,
+            processes: HashMap::new(),
+            events,
+            sender,
+        }
     }
 
     /// Does one directive. Never blocks: starting, writing and signalling
     /// all return at once, and what they lead to is reported by
     /// [`AgentDriver::next`].
+    ///
+    /// A directive for a process that's been forgotten, or never started,
+    /// does nothing.
+    ///
+    /// # Panics
+    ///
+    /// If it starts a process outside a tokio runtime, which must have
+    /// its I/O and time drivers enabled.
     pub fn apply(&mut self, directive: AgentDirective) {
-        todo!()
+        let (process, order) = match directive {
+            AgentDirective::Start { process, command } => {
+                debug_assert!(
+                    !self.processes.contains_key(&process),
+                    "a ticket was used twice"
+                );
+                if self.processes.contains_key(&process) {
+                    return;
+                }
+                let (orders, inbox) = mpsc::unbounded_channel();
+                self.processes.insert(process, orders);
+                tokio::spawn(run(
+                    process,
+                    command,
+                    self.limits.clone(),
+                    inbox,
+                    self.sender.clone(),
+                ));
+                return;
+            }
+            AgentDirective::Write { process, bytes } => (process, Order::Write(bytes)),
+            AgentDirective::CloseInput { process } => (process, Order::CloseInput),
+            AgentDirective::Signal { process, signal } => (process, Order::Signal(signal)),
+            AgentDirective::CheckGroup { process } => (process, Order::CheckGroup),
+            AgentDirective::Forget { process } => {
+                if let Some(orders) = self.processes.remove(&process) {
+                    let _ = orders.send(Order::Forget);
+                }
+                return;
+            }
+            _ => return,
+        };
+        if let Some(orders) = self.processes.get(&process)
+            && orders.send(order).is_err()
+        {
+            // It never started.
+            self.processes.remove(&process);
+        }
     }
 
     /// The next thing that happened to any process, with the process's
     /// ticket. Pending forever while there are no processes.
+    ///
+    /// Cancel-safe: an event is never lost by dropping this future, so it
+    /// can be a branch of `select!`.
     pub async fn next(&mut self) -> (Ticket, AgentEvent) {
-        todo!()
+        loop {
+            let Some((process, event)) = self.events.recv().await else {
+                // Never: the driver keeps a sender itself.
+                return std::future::pending().await;
+            };
+            // What a forgotten process said last is dropped with it.
+            if self.processes.contains_key(&process) {
+                return (process, event);
+            }
+        }
+    }
+}
+
+/// A directive for one process, sent to its task.
+#[derive(Debug)]
+enum Order {
+    Write(Vec<u8>),
+    CloseInput,
+    Signal(Signal),
+    CheckGroup,
+    Forget,
+}
+
+/// A process's task: starts it, then does its orders and reports what
+/// happens to it until it's forgotten or the driver is dropped.
+async fn run(
+    ticket: Ticket,
+    command: SpawnCommand,
+    limits: AgentLimits,
+    mut orders: mpsc::UnboundedReceiver<Order>,
+    events: mpsc::Sender<(Ticket, AgentEvent)>,
+) {
+    let mut process = match Process::start(&command, limits) {
+        Ok(process) => process,
+        Err(error) => {
+            let event = AgentEvent::StartFailed {
+                error: error.to_string(),
+            };
+            let _ = events.send((ticket, event)).await;
+            return;
+        }
+    };
+    loop {
+        let deliver = matches!(process.queue.front(), Some(Queued::Ready(..)));
+        let room = process.room();
+        let mut stepped = false;
+        tokio::select! {
+            order = orders.recv() => match order {
+                Some(Order::Forget) => return process.forget().await,
+                Some(order) => process.order(order),
+                None => return process.abandon().await,
+            },
+            permit = events.reserve(), if deliver => match permit {
+                Ok(permit) => process.deliver(ticket, permit),
+                Err(_) => return process.abandon().await,
+            },
+            parsed = parsed(process.parsing.as_mut()) => process.parsed(parsed),
+            writable = writable(process.stdin.as_ref()), if !process.unsent.is_empty() => match writable {
+                Ok(()) => process.flush(),
+                Err(error) => process.write_failed(&error),
+            },
+            readable = readable(process.stdout.as_ref()), if room => {
+                stepped = match readable {
+                    Ok(()) => process.read_output(),
+                    Err(_) => process.close_output(),
+                };
+            },
+            readable = readable(process.stderr.as_ref()), if room => {
+                stepped = match readable {
+                    Ok(()) => process.read_errors(),
+                    Err(_) => process.close_errors(),
+                };
+            },
+            status = exit(&process.leader.pidfd), if !process.leader.reaped => process.exited(status),
+            () = until(process.drain) => process.stop_draining(),
+        }
+        if stepped {
+            tokio::task::yield_now().await;
+        }
+    }
+}
+
+/// A running process: its pipes, and what's on its way to and from it.
+struct Process {
+    limits: AgentLimits,
+    leader: Leader,
+    /// Its input, until it's closed or writing to it fails.
+    stdin: Option<pipe::Sender>,
+    /// What's waiting to be written to it.
+    unsent: Unsent,
+    /// Its input is to be closed once `unsent` is written.
+    closing: bool,
+    /// Its output, until it ends.
+    stdout: Option<pipe::Receiver>,
+    /// Its error output, until it ends.
+    stderr: Option<pipe::Receiver>,
+    framer: Framer,
+    /// Lines just framed, on their way into `queue`.
+    lines: Vec<Line>,
+    /// What's waiting to be handed on, in order.
+    queue: VecDeque<Queued>,
+    /// About how many bytes `queue` holds.
+    held: usize,
+    /// The one line being parsed elsewhere, if any: the first
+    /// [`Queued::Parsing`] in `queue`.
+    parsing: Option<JoinHandle<Frame>>,
+    /// When to stop waiting for its pipes to close, once it has exited.
+    drain: Option<Instant>,
+    buffer: Box<[u8]>,
+}
+
+/// Something waiting to be handed on.
+enum Queued {
+    /// Ready, and how many bytes it counts for.
+    Ready(AgentEvent, usize),
+    /// A big line, waiting its turn to be parsed elsewhere.
+    Big(Line),
+    /// The big line being parsed elsewhere, and how long it is.
+    Parsing(usize),
+}
+
+impl Process {
+    /// Starts `command`.
+    fn start(command: &SpawnCommand, limits: AgentLimits) -> io::Result<Self> {
+        let (leader, stdin, stdout, stderr) = spawn(command)?;
+        let mut process = Self {
+            framer: Framer::new(limits.biggest_line),
+            limits,
+            leader,
+            stdin: Some(stdin),
+            unsent: Unsent::default(),
+            closing: false,
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+            lines: Vec::new(),
+            queue: VecDeque::new(),
+            held: 0,
+            parsing: None,
+            drain: None,
+            buffer: vec![0; READ].into_boxed_slice(),
+        };
+        let pid = process.leader.pid;
+        process.push(AgentEvent::Started { pid }, 0);
+        Ok(process)
+    }
+
+    /// Whether there's room to read more.
+    fn room(&self) -> bool {
+        self.held < self.limits.parsing && self.queue.len() < WAITING
+    }
+
+    /// Adds `event`, counting for `bytes`, to what's to be handed on.
+    fn push(&mut self, event: AgentEvent, bytes: usize) {
+        self.held += bytes;
+        self.queue.push_back(Queued::Ready(event, bytes));
+    }
+
+    /// Hands on the first thing waiting, which is ready.
+    fn deliver(&mut self, ticket: Ticket, permit: mpsc::Permit<'_, (Ticket, AgentEvent)>) {
+        if let Some(Queued::Ready(event, bytes)) = self.queue.pop_front() {
+            self.held -= bytes;
+            permit.send((ticket, event));
+        }
+    }
+
+    fn order(&mut self, order: Order) {
+        match order {
+            Order::Write(bytes) => self.write(bytes),
+            Order::CloseInput => {
+                self.closing = true;
+                self.flush();
+            }
+            Order::Signal(signal) => match signal {
+                Signal::Term => {
+                    let _ = self.leader.signal(libc::SIGTERM);
+                }
+                Signal::Kill => self.leader.kill(),
+                _ => {}
+            },
+            Order::CheckGroup => {
+                let empty = self.leader.group_empty();
+                self.push(AgentEvent::Group { empty }, 0);
+            }
+            Order::Forget => {}
+        }
+    }
+
+    /// Writes `bytes`, keeping what the pipe won't take yet. Too much kept
+    /// means it isn't reading: it's taken as gone.
+    fn write(&mut self, bytes: Vec<u8>) {
+        if self.stdin.is_none() || self.closing || bytes.is_empty() {
+            return;
+        }
+        self.unsent.push(bytes);
+        self.flush();
+        if self.unsent.len > self.limits.unsent {
+            let unsent = self.unsent.len;
+            let error = io::Error::other(format!(
+                "it isn't reading its input: {unsent} bytes are waiting, more than the most, {}",
+                self.limits.unsent
+            ));
+            self.write_failed(&error);
+        }
+    }
+
+    /// Writes what's waiting until the pipe is full, then closes the pipe
+    /// if that was asked for and all is written.
+    fn flush(&mut self) {
+        let Some(stdin) = &self.stdin else {
+            return;
+        };
+        while let Some(bytes) = self.unsent.front() {
+            match stdin.try_write(bytes) {
+                Ok(written) => self.unsent.sent(written),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return self.write_failed(&error),
+            }
+        }
+        if self.closing && self.unsent.is_empty() {
+            self.stdin = None;
+        }
+    }
+
+    /// Writing failed: what's waiting is thrown away, nothing more is
+    /// written, and reading goes on.
+    fn write_failed(&mut self, error: &io::Error) {
+        self.unsent = Unsent::default();
+        self.stdin = None;
+        self.push(
+            AgentEvent::WriteFailed {
+                error: error.to_string(),
+            },
+            0,
+        );
+    }
+
+    /// Reads its output, up to a step's worth or until there's no room.
+    /// Returns whether it read a whole step, so more may be waiting.
+    fn read_output(&mut self) -> bool {
+        let step = self.limits.read_step.max(1);
+        let mut read = 0;
+        while read < step && self.room() {
+            let Some(stdout) = &self.stdout else {
+                return false;
+            };
+            let most = READ.min(step - read);
+            match stdout.try_read(&mut self.buffer[..most]) {
+                Ok(0) => return self.close_output(),
+                Ok(n) => {
+                    read += n;
+                    self.framer.push(&self.buffer[..n], &mut self.lines);
+                    self.queue_lines();
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return false,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => return self.close_output(),
+            }
+        }
+        read >= step
+    }
+
+    /// Its output has ended, or isn't waited for any more: the last line,
+    /// if unfinished, is handed on, then that it closed. Returns false, as
+    /// there's nothing more to read.
+    fn close_output(&mut self) -> bool {
+        self.framer.finish(&mut self.lines);
+        self.queue_lines();
+        self.stdout = None;
+        self.push(AgentEvent::OutputClosed, 0);
+        self.drained();
+        false
+    }
+
+    /// Reads its error output, up to a step's worth or until there's no
+    /// room, and hands it on as one piece. Returns whether it read a whole
+    /// step.
+    fn read_errors(&mut self) -> bool {
+        let Some(stderr) = &self.stderr else {
+            return false;
+        };
+        let step = self.limits.read_step.max(1);
+        let mut bytes = Vec::new();
+        let mut ended = false;
+        while bytes.len() < step && self.held + bytes.len() < self.limits.parsing {
+            let most = READ.min(step - bytes.len());
+            match stderr.try_read(&mut self.buffer[..most]) {
+                Ok(0) => {
+                    ended = true;
+                    break;
+                }
+                Ok(n) => bytes.extend_from_slice(&self.buffer[..n]),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => {
+                    ended = true;
+                    break;
+                }
+            }
+        }
+        let full = bytes.len() >= step;
+        if !bytes.is_empty() {
+            let len = bytes.len();
+            self.push(AgentEvent::Stderr(bytes), len);
+        }
+        if ended {
+            self.close_errors();
+        }
+        full
+    }
+
+    /// Its error output has ended, or isn't waited for any more. Returns
+    /// false, as there's nothing more to read.
+    fn close_errors(&mut self) -> bool {
+        self.stderr = None;
+        self.drained();
+        false
+    }
+
+    /// Stops waiting for its pipes once both have closed.
+    fn drained(&mut self) {
+        if self.stdout.is_none() && self.stderr.is_none() {
+            self.drain = None;
+        }
+    }
+
+    /// It has exited, and been reaped. What's left in its pipes is read,
+    /// a step's worth, before that's told: all it wrote itself is there
+    /// by now. Something it started may hold its pipes open, so they're
+    /// waited for only so long.
+    fn exited(&mut self, status: io::Result<WaitIdStatus>) {
+        self.leader.reaped = true;
+        self.read_output();
+        self.read_errors();
+        let exit = match status {
+            Ok(status) => match (status.exit_status(), status.terminating_signal()) {
+                (Some(code), _) => Exit::Code(code),
+                (None, Some(signal)) => Exit::Signal(signal),
+                (None, None) => Exit::Code(-1),
+            },
+            // Something else reaped it, so how it ended isn't known.
+            Err(_) => Exit::Code(-1),
+        };
+        self.push(AgentEvent::Exited(exit), 0);
+        if self.stdout.is_some() || self.stderr.is_some() {
+            self.drain = Some(Instant::now() + self.limits.drain);
+        }
+    }
+
+    /// It exited long enough ago: its pipes, held open by something it
+    /// started, aren't waited for any more.
+    fn stop_draining(&mut self) {
+        self.drain = None;
+        if self.stdout.is_some() {
+            self.close_output();
+        }
+        self.close_errors();
+    }
+
+    /// Moves the lines just framed into the queue: small ones parsed here
+    /// and now, big ones to wait their turn to be parsed elsewhere.
+    fn queue_lines(&mut self) {
+        for line in self.lines.drain(..) {
+            let len = line_len(&line);
+            if len >= self.limits.parse_elsewhere {
+                self.held += len;
+                self.queue.push_back(Queued::Big(line));
+            } else {
+                self.held += len;
+                self.queue
+                    .push_back(Queued::Ready(AgentEvent::Frame(acp::parse(line)), len));
+            }
+        }
+        self.parse_next();
+    }
+
+    /// Starts parsing the first big line waiting, unless one is being
+    /// parsed already.
+    fn parse_next(&mut self) {
+        if self.parsing.is_some() {
+            return;
+        }
+        let Some(queued) = (self.queue.iter_mut()).find(|queued| matches!(queued, Queued::Big(_)))
+        else {
+            return;
+        };
+        let Queued::Big(line) = std::mem::replace(queued, Queued::Parsing(0)) else {
+            unreachable!("found as a big line");
+        };
+        let len = line_len(&line);
+        *queued = Queued::Parsing(len);
+        self.parsing = Some(tokio::task::spawn_blocking(move || acp::parse(line)));
+    }
+
+    /// The big line being parsed elsewhere has been: it takes its place.
+    fn parsed(&mut self, parsed: Result<Frame, tokio::task::JoinError>) {
+        self.parsing = None;
+        let Some(queued) =
+            (self.queue.iter_mut()).find(|queued| matches!(queued, Queued::Parsing(_)))
+        else {
+            return;
+        };
+        let Queued::Parsing(len) = *queued else {
+            unreachable!("found as being parsed");
+        };
+        // Parsing can't panic; if it did, the line is junk.
+        let frame = parsed.unwrap_or(Frame::Junk { len });
+        *queued = Queued::Ready(AgentEvent::Frame(frame), len);
+        self.parse_next();
+    }
+
+    /// Forgotten: nothing more is read or reported. If it hasn't exited
+    /// yet, it's killed, with its group, and reaped.
+    async fn forget(mut self) {
+        self.stdin = None;
+        self.stdout = None;
+        self.stderr = None;
+        self.queue.clear();
+        if !self.leader.reaped {
+            self.leader.kill();
+            let _ = exit(&self.leader.pidfd).await;
+            self.leader.reaped = true;
+        }
+    }
+
+    /// The driver has gone: its group is killed, and it's reaped.
+    async fn abandon(self) {
+        self.leader.kill();
+        self.forget().await;
+    }
+}
+
+/// How many bytes a line counts for.
+fn line_len(line: &Line) -> usize {
+    match line {
+        Line::Whole(bytes) => bytes.len(),
+        Line::TooBig { head, .. } => head.len(),
+        _ => 0,
+    }
+}
+
+/// What's waiting to be written to a process, in pieces as it was given,
+/// so writing part of it copies nothing.
+#[derive(Default)]
+struct Unsent {
+    pieces: VecDeque<Vec<u8>>,
+    /// How much of the first piece has been written.
+    written: usize,
+    /// How many bytes are waiting.
+    len: usize,
+}
+
+impl Unsent {
+    fn push(&mut self, bytes: Vec<u8>) {
+        self.len += bytes.len();
+        match self.pieces.back_mut() {
+            Some(last) if last.len() + bytes.len() <= JOIN => last.extend_from_slice(&bytes),
+            _ => self.pieces.push_back(bytes),
+        }
+    }
+
+    /// What's to be written next.
+    fn front(&self) -> Option<&[u8]> {
+        self.pieces.front().map(|first| &first[self.written..])
+    }
+
+    /// `written` more bytes have been written.
+    fn sent(&mut self, written: usize) {
+        self.len -= written;
+        self.written += written;
+        if self
+            .pieces
+            .front()
+            .is_some_and(|first| self.written == first.len())
+        {
+            self.pieces.pop_front();
+            self.written = 0;
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+/// A process this driver started, leading a process group of its own,
+/// known by its pidfd.
+struct Leader {
+    pid: u32,
+    pidfd: AsyncFd<OwnedFd>,
+    /// Whether it has been reaped. Its pidfd still reaches its group.
+    reaped: bool,
+}
+
+/// `pidfd_send_signal`'s flag to signal the pidfd's process group, from
+/// `linux/pidfd.h`, which the libc crate doesn't have.
+const PIDFD_SIGNAL_PROCESS_GROUP: libc::c_uint = 4;
+
+impl Leader {
+    /// Sends signal number `signal` to its group. With nothing left in the
+    /// group, or a kernel too old to signal a group through a pidfd
+    /// (before Linux 6.9), it alone is sent it.
+    fn signal(&self, signal: libc::c_int) -> io::Result<()> {
+        let pidfd = self.pidfd.get_ref().as_fd();
+        match pidfd_send_signal(pidfd, signal, PIDFD_SIGNAL_PROCESS_GROUP) {
+            Err(error) if matches!(error.raw_os_error(), Some(libc::EINVAL | libc::ESRCH)) => {
+                pidfd_send_signal(pidfd, signal, 0)
+            }
+            sent => sent,
+        }
+    }
+
+    /// Sends SIGKILL to its group, and to it too, in case it left the
+    /// group and left something in it.
+    fn kill(&self) {
+        let _ = self.signal(libc::SIGKILL);
+        let _ = pidfd_send_signal(self.pidfd.get_ref().as_fd(), libc::SIGKILL, 0);
+    }
+
+    /// Whether everything in its group has gone, it included. One not yet
+    /// reaped counts, even once it has exited.
+    fn group_empty(&self) -> bool {
+        matches!(self.signal(0), Err(error) if error.raw_os_error() == Some(libc::ESRCH))
+    }
+}
+
+impl Drop for Leader {
+    /// A task dropped with its process not reaped, as when the runtime
+    /// shuts down: the group is killed, and a thread of its own reaps it,
+    /// so no zombie is left and the runtime isn't held up.
+    fn drop(&mut self) {
+        if self.reaped {
+            return;
+        }
+        self.kill();
+        let reap = |pidfd: BorrowedFd<'_>| {
+            let _ = rustix::process::waitid(WaitId::PidFd(pidfd), WaitIdOptions::EXITED);
+        };
+        match self.pidfd.get_ref().try_clone() {
+            Ok(pidfd) => {
+                let spawned = std::thread::Builder::new()
+                    .name("caf-reap".to_owned())
+                    .spawn(move || reap(pidfd.as_fd()));
+                if spawned.is_err() {
+                    reap(self.pidfd.get_ref().as_fd());
+                }
+            }
+            Err(_) => reap(self.pidfd.get_ref().as_fd()),
+        }
+    }
+}
+
+/// The `pidfd_send_signal` system call, with `flags`, which rustix's
+/// doesn't take, and signal 0, which its `Signal` can't be.
+#[allow(unsafe_code)]
+fn pidfd_send_signal(
+    pidfd: BorrowedFd<'_>,
+    signal: libc::c_int,
+    flags: libc::c_uint,
+) -> io::Result<()> {
+    // SAFETY: the system call takes an fd, borrowed for the call, a signal
+    // number, a pointer to a `siginfo_t`, which may be null, and flags. It
+    // reads no memory of ours, as the pointer is null, and writes none.
+    let sent = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            pidfd.as_raw_fd(),
+            signal,
+            std::ptr::null::<libc::siginfo_t>(),
+            flags,
+        )
+    };
+    if sent == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// Starts `command` in a process group of its own, with its standard
+/// streams piped. Returns it, by its pidfd, and its pipes.
+fn spawn(
+    command: &SpawnCommand,
+) -> io::Result<(Leader, pipe::Sender, pipe::Receiver, pipe::Receiver)> {
+    if !command.program.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} isn't an absolute path", command.program.display()),
+        ));
+    }
+    let mut child = command_for(command, std::env::var_os("PATH")).spawn()?;
+    // Taken first, so failing below closes them, which ends most programs.
+    let (Some(stdin), Some(stdout), Some(stderr)) =
+        (child.stdin.take(), child.stdout.take(), child.stderr.take())
+    else {
+        unreachable!("all three are piped");
+    };
+    let pid = child.id();
+    // Opened before anything waits for it: until then it can't be reaped,
+    // so its number still names it.
+    let pidfd = match rustix::process::pidfd_open(Pid::from_child(&child), PidfdFlags::empty()) {
+        Ok(pidfd) => pidfd,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error.into());
+        }
+    };
+    // From here on it's reaped through its pidfd, and the leader kills
+    // and reaps it if anything below fails.
+    drop(child);
+    // SAFETY: an `OwnedFd` stays open, and is the same fd, for as long as
+    // it's owned.
+    #[allow(unsafe_code)]
+    let registered = unsafe { AsyncFd::register_with_interest(pidfd, Interest::READABLE) };
+    let pidfd = match registered {
+        Ok(pidfd) => pidfd,
+        Err(error) => {
+            let (pidfd, error) = error.into_parts();
+            pidfd_send_signal(pidfd.as_fd(), libc::SIGKILL, PIDFD_SIGNAL_PROCESS_GROUP).ok();
+            pidfd_send_signal(pidfd.as_fd(), libc::SIGKILL, 0).ok();
+            let _ = rustix::process::waitid(WaitId::PidFd(pidfd.as_fd()), WaitIdOptions::EXITED);
+            return Err(error);
+        }
+    };
+    let leader = Leader {
+        pid,
+        pidfd,
+        reaped: false,
+    };
+    let stdin = pipe::Sender::from_owned_fd(OwnedFd::from(stdin))?;
+    let stdout = pipe::Receiver::from_owned_fd(OwnedFd::from(stdout))?;
+    let stderr = pipe::Receiver::from_owned_fd(OwnedFd::from(stderr))?;
+    Ok((leader, stdin, stdout, stderr))
+}
+
+/// What runs `command`, with `path` as the `PATH` it inherits. Its
+/// environment changes go on top of the inherited one, then `PATH` keeps
+/// only its absolute directories, so a project folder can't put programs
+/// on it. No `pre_exec` hook, so it can be started with `posix_spawn`.
+fn command_for(command: &SpawnCommand, mut path: Option<OsString>) -> Command {
+    let mut process = Command::new(&command.program);
+    process.args(&command.args);
+    for change in &command.env {
+        match change {
+            EnvChange::Set(name, value) if name == "PATH" => path = Some(value.clone()),
+            EnvChange::Remove(name) if name == "PATH" => path = None,
+            EnvChange::Set(name, value) => {
+                process.env(name, value);
+            }
+            EnvChange::Remove(name) => {
+                process.env_remove(name);
+            }
+            _ => {}
+        }
+    }
+    match path {
+        Some(path) => process.env("PATH", absolute_only(&path)),
+        None => process.env_remove("PATH"),
+    };
+    if let Some(cwd) = &command.cwd {
+        process.current_dir(cwd);
+    }
+    process
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    process
+}
+
+/// The absolute directories of `path`, a `PATH`, or [`SAFE_PATH`] if
+/// there are none.
+fn absolute_only(path: &OsStr) -> OsString {
+    let kept: Vec<&[u8]> = (path.as_bytes().split(|&byte| byte == b':'))
+        .filter(|dir| dir.starts_with(b"/"))
+        .collect();
+    if kept.is_empty() {
+        return OsString::from(SAFE_PATH);
+    }
+    OsString::from_vec(kept.join(&b':'))
+}
+
+/// Resolves once the process whose pidfd is `pidfd` has exited, reaping
+/// it. Cancel-safe: it's reaped only as this resolves.
+async fn exit(pidfd: &AsyncFd<OwnedFd>) -> io::Result<WaitIdStatus> {
+    loop {
+        let mut ready = pidfd.readable().await?;
+        let waited = rustix::process::waitid(
+            WaitId::PidFd(pidfd.get_ref().as_fd()),
+            WaitIdOptions::EXITED | WaitIdOptions::NOHANG,
+        )?;
+        match waited {
+            Some(status) => return Ok(status),
+            None => ready.clear_ready(),
+        }
+    }
+}
+
+/// Resolves when `pipe` may be read, or never if there's none.
+async fn readable(pipe: Option<&pipe::Receiver>) -> io::Result<()> {
+    match pipe {
+        Some(pipe) => pipe.readable().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Resolves when `pipe` may be written, or never if there's none.
+async fn writable(pipe: Option<&pipe::Sender>) -> io::Result<()> {
+    match pipe {
+        Some(pipe) => pipe.writable().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Resolves when the line being parsed elsewhere is, or never if there's
+/// none.
+async fn parsed(parsing: Option<&mut JoinHandle<Frame>>) -> Result<Frame, tokio::task::JoinError> {
+    match parsing {
+        Some(parsing) => parsing.await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Resolves at `at`, or never.
+async fn until(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_keeps_only_absolute_directories() {
+        assert_eq!(
+            absolute_only(OsStr::new("/usr/bin:bin:.::/bin:./x")),
+            "/usr/bin:/bin"
+        );
+        assert_eq!(absolute_only(OsStr::new("")), SAFE_PATH);
+        assert_eq!(absolute_only(OsStr::new("node_modules/.bin:.")), SAFE_PATH);
+    }
+
+    fn env_of(command: &Command) -> Vec<(OsString, Option<OsString>)> {
+        let mut env: Vec<_> = (command.get_envs())
+            .map(|(name, value)| (name.to_owned(), value.map(OsStr::to_owned)))
+            .collect();
+        env.sort();
+        env
+    }
+
+    #[test]
+    fn environment_changes_go_on_top_and_path_is_filtered_after() {
+        let mut spawn = SpawnCommand::new("/bin/true");
+        spawn.env = vec![
+            EnvChange::Set("A".into(), "1".into()),
+            EnvChange::Remove("B".into()),
+            EnvChange::Set("PATH".into(), "rel:/opt/bin".into()),
+        ];
+        let command = command_for(&spawn, Some("/usr/bin".into()));
+        assert_eq!(
+            env_of(&command),
+            [
+                ("A".into(), Some("1".into())),
+                ("B".into(), None),
+                ("PATH".into(), Some("/opt/bin".into())),
+            ]
+        );
+        assert_eq!(
+            env_of(&command_for(
+                &SpawnCommand::new("/bin/true"),
+                Some("./bin:/usr/bin".into())
+            )),
+            [("PATH".into(), Some("/usr/bin".into()))]
+        );
+        spawn.env = vec![EnvChange::Remove("PATH".into())];
+        assert_eq!(
+            env_of(&command_for(&spawn, Some("/usr/bin".into()))),
+            [("PATH".into(), None)]
+        );
     }
 }
