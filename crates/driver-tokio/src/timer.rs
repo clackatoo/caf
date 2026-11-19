@@ -2,8 +2,10 @@
 
 use std::time::{Duration, SystemTime};
 
+use std::pin::Pin;
+
 use caf_core::time::{Mono, Now, Wall};
-use tokio::time::Instant;
+use tokio::time::{Instant, Sleep};
 
 /// Keeps the core's single deadline, and gives the time.
 ///
@@ -15,7 +17,11 @@ use tokio::time::Instant;
 /// pause.
 pub struct TimerDriver {
     origin: Instant,
-    deadline: Option<Mono>,
+    /// When to wake, or never.
+    deadline: Option<Instant>,
+    /// One sleep, made on the first wait and moved to each new deadline,
+    /// rather than a new one for every wait.
+    sleep: Option<Pin<Box<Sleep>>>,
 }
 
 impl TimerDriver {
@@ -25,6 +31,7 @@ impl TimerDriver {
         Self {
             origin: Instant::now(),
             deadline: None,
+            sleep: None,
         }
     }
 
@@ -47,7 +54,8 @@ impl TimerDriver {
     /// Wakes at this time from now on, or never: the core's
     /// [`TimerDirective::WakeAt`](caf_core::directive::TimerDirective::WakeAt).
     pub fn wake_at(&mut self, at: Option<Mono>) {
-        self.deadline = at;
+        // A deadline too far off for the clock never comes.
+        self.deadline = at.and_then(|at| self.origin.checked_add(Duration::from_nanos(at.0)));
     }
 
     /// Resolves at the deadline, or never if there is none. Waking means
@@ -57,12 +65,19 @@ impl TimerDriver {
     /// does, so a loop doesn't spin while the core decides its next one.
     /// Cancel-safe: dropped before it resolves, it changes nothing.
     pub async fn woken(&mut self) {
-        // A deadline too far off for the clock never comes.
-        let at = (self.deadline).and_then(|at| self.origin.checked_add(Duration::from_nanos(at.0)));
-        let Some(at) = at else {
+        let Some(at) = self.deadline else {
             return std::future::pending().await;
         };
-        tokio::time::sleep_until(at).await;
+        let sleep = match &mut self.sleep {
+            Some(sleep) => {
+                if sleep.deadline() != at {
+                    sleep.as_mut().reset(at);
+                }
+                sleep
+            }
+            None => self.sleep.insert(Box::pin(tokio::time::sleep_until(at))),
+        };
+        sleep.as_mut().await;
         self.deadline = None;
     }
 }
