@@ -1,0 +1,17 @@
+/target
+
+# Trail's build cache and default output, beside the docs it builds
+/docs/learn/.trail-cache/
+/docs/learn/dist/
+
+# Claude Code's session locks and agent worktrees, but for the project's
+# settings.
+/.claude/*
+!/.claude/settings.json
+/CLAUDE.md
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*~
