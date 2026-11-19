@@ -15,7 +15,7 @@
 //! | `Agent` | [`AgentDriver::apply`] |
 //! | `Timer(WakeAt)` | [`TimerDriver::wake_at`] |
 //! | `Policy(Decide)` | [`Policy::decide`], whose future runs as a task of its own; its answer comes back as [`Event::Policy`] |
-//! | `Policy(Withdrawn)` | Nowhere: the decision runs on, and the core ignores its answer |
+//! | `Policy(Withdrawn)` | Stops that decision's task. An answer it gave already is still handed in, and the core ignores it |
 //! | `Viewer(Changed)` | Wakes the chat's watches, which read with [`Core::read`] |
 //! | `Report` | The [`log`] facade, target `caf` |
 //!
@@ -26,14 +26,15 @@
 //! watch further behind than that gets the whole chat again.
 
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufWriter, Write as _};
+use std::io::{BufWriter, Write};
 use std::os::unix::fs::OpenOptionsExt;
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use caf_core::acp::{Frame, Message};
-use caf_core::agent::AgentSpec;
+use caf_core::agent::{AgentSpec, EnvChange, McpServer};
 use caf_core::chat::{ChatState, UserMessage};
 use caf_core::directive::{Level, PolicyDirective, TimerDirective, ViewerDirective};
 use caf_core::event::{AgentEvent, HostCommand, PolicyAnswer};
@@ -45,7 +46,7 @@ use caf_core::{
 };
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot, watch};
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::{AbortHandle, JoinHandle, JoinSet};
 
 use crate::agent::{AgentDriver, AgentLimits};
 use crate::policy::{AlwaysAsk, Policy};
@@ -63,28 +64,40 @@ pub struct Config {
     /// Limits for the agent driver.
     pub agent_limits: AgentLimits,
     /// A file to record the run in, so it can be replayed into a fresh
-    /// [`Core`] as a test. `None` by default.
+    /// [`Core`] as a test. `None` by default. The file must not exist yet.
     ///
     /// It's JSON lines. The first holds the host and the agents:
     /// `{"caf_recording": 1, "host": …, "agents": […]}`. Each line after
     /// it is one event the core was given, with its time, in order:
     /// `{"now": …, "event": …}`. Calls such as [`ChatHandle::send`] are
     /// written as the [`Event::Host`] they stand for, with the id the core
-    /// gave out, and only if the core took them.
+    /// gave out, and only if the core took them. Read each line's event
+    /// back as an [`Event`].
     ///
-    /// **What's left out:** Claude's sign-in status
-    /// (`_auth/status_update`), which holds the account's email, and the
-    /// agents' environment changes, which may hold keys. The core changes
-    /// nothing for the first, and needs neither to end in the same state.
-    /// Everything else goes in as it came: what the user sent, what the
-    /// agent said, its error output, folders and MCP servers. Treat a
-    /// recording as private.
+    /// **What's hidden.** None of it changes what the core does:
+    /// - Claude's sign-in status (`_auth/status_update`) holds the
+    ///   account's email: its params are written as `null`.
+    /// - Each agent's arguments are left out, and its environment
+    ///   variables are written with their names but not their values.
+    /// - Each MCP server's environment variables and HTTP headers are
+    ///   written with their names but not their values.
     ///
-    /// The file is made afresh, readable only by its owner, and never
-    /// through a symbolic link. It's written on a thread of its own, so
-    /// the disk never holds CAF up, and it's complete once
-    /// [`Caf::shutdown`] returns. If it can't be made, or a write fails,
-    /// CAF says so in a warning and runs on without recording.
+    /// **What's kept**, as it came: the host, each agent's name, program,
+    /// folder and profile; what the user sent; everything the agent said;
+    /// its error output, as text, with any bytes that aren't UTF-8
+    /// replaced; folders; and each MCP server's name, program, arguments
+    /// and URL. So don't put secrets in MCP arguments or URLs, and treat a
+    /// recording as private: read it through before sharing it. Names of
+    /// variables and arguments are written as arrays of bytes, as Rust
+    /// writes them.
+    ///
+    /// The file is made new, readable only by its owner: if anything is
+    /// there already, even a link, CAF won't record. It's written on a
+    /// thread of its own, so the disk never holds CAF up, and it's complete
+    /// once [`Caf::shutdown`] returns. If it can't be made, if a write
+    /// fails, or if more than 256 MiB is waiting to be written because the
+    /// disk has fallen behind, CAF says so in a warning and stops
+    /// recording: what's in the file still replays, as far as it goes.
     pub record: Option<PathBuf>,
 }
 
@@ -106,16 +119,22 @@ impl Config {
 /// CAF, running on tokio. Cheap to clone: every clone talks to the same
 /// task.
 ///
-/// Once every clone, every [`ChatHandle`] and every [`Watch`] is dropped,
-/// CAF shuts down by itself, as if [`Caf::shutdown`] had been called.
+/// Once every clone and every [`ChatHandle`] is dropped, CAF shuts down by
+/// itself, as if [`Caf::shutdown`] had been called. A [`Watch`] doesn't
+/// keep it running.
 pub struct Caf<A: AppItem = NoAppItems> {
     commands: mpsc::Sender<Command<A>>,
+    last: LastWords<A>,
+    /// Closed once the task has ended and `last` is filled in.
+    ended: watch::Receiver<()>,
 }
 
 impl<A: AppItem> Clone for Caf<A> {
     fn clone(&self) -> Self {
         Self {
             commands: self.commands.clone(),
+            last: Arc::clone(&self.last),
+            ended: self.ended.clone(),
         }
     }
 }
@@ -124,7 +143,8 @@ impl<A: AppItem> Clone for Caf<A> {
 /// adapter has stopped.
 ///
 /// It resolves when the task ends: once shut down, every adapter has
-/// stopped, and a recording, if asked for, is complete.
+/// exited and been reaped, what it started has been sent SIGKILL, and a
+/// recording, if asked for, is complete.
 ///
 /// # Panics
 ///
@@ -205,6 +225,8 @@ impl<A: AppItem> Caf<A> {
         let recorder = (config.record.as_ref())
             .and_then(|path| Recorder::start(path, &config.host, &config.agents));
         let (commands, inbox) = mpsc::channel(COMMANDS);
+        let last = LastWords::default();
+        let (ending, ended) = watch::channel(());
         let task = Task {
             core: Core::new(config.host, config.agents),
             agents: AgentDriver::new(config.agent_limits),
@@ -212,7 +234,10 @@ impl<A: AppItem> Caf<A> {
             policy: config.policy,
             deciding: JoinSet::new(),
             tickets: HashMap::new(),
+            decisions: HashMap::new(),
             feeds: HashMap::new(),
+            last: Arc::clone(&last),
+            ending: Some(ending),
             recorder,
             inbox,
             listening: true,
@@ -221,7 +246,12 @@ impl<A: AppItem> Caf<A> {
             out: Vec::new(),
         };
         let task = tokio::spawn(task.run());
-        (Self { commands }, Running { task })
+        let caf = Self {
+            commands,
+            last,
+            ended,
+        };
+        (caf, Running { task })
     }
 
     /// Opens a chat. It's ready to take messages at once: they wait until
@@ -246,8 +276,9 @@ impl<A: AppItem> Caf<A> {
 
     /// Stops everything: every session closed, every adapter stopped.
     ///
-    /// Returns once that's done, or at once if CAF has already shut down.
-    /// From the moment it's called, anything else asked of CAF is
+    /// Returns once every adapter has exited and been reaped, and what it
+    /// started has been sent SIGKILL; or at once if CAF has already shut
+    /// down. From the moment it's called, anything else asked of CAF is
     /// [`Error::Gone`], but watches go on getting what changes.
     pub async fn shutdown(&self) {
         let (reply, done) = oneshot::channel();
@@ -270,25 +301,6 @@ impl<A: AppItem> Caf<A> {
         (self.commands.send(command(reply)).await).map_err(|_| Error::Gone)?;
         // The task drops the reply when it's shutting down.
         Ok(answer.await.map_err(|_| Error::Gone)??)
-    }
-
-    /// What changed in `chat` since `since`, and a way to hear of more if
-    /// `subscribe`. `None` if there's no such chat, or the task has gone.
-    async fn read(
-        &self,
-        chat: ChatId,
-        since: Option<ChangeNo>,
-        subscribe: bool,
-    ) -> Option<Seen<A>> {
-        let (reply, answer) = oneshot::channel();
-        let read = Command::Read {
-            chat,
-            since,
-            subscribe,
-            reply,
-        };
-        self.commands.send(read).await.ok()?;
-        answer.await.ok()?
     }
 }
 
@@ -356,10 +368,12 @@ impl<A: AppItem> ChatHandle<A> {
     #[must_use]
     pub fn watch(&self) -> Watch<A> {
         Watch {
-            caf: self.caf.clone(),
+            commands: self.caf.commands.downgrade(),
+            last: Arc::clone(&self.caf.last),
+            caf_ended: self.caf.ended.clone(),
             chat: self.id,
             since: None,
-            feed: None,
+            wake: None,
             ended: false,
         }
     }
@@ -371,13 +385,19 @@ impl<A: AppItem> ChatHandle<A> {
 /// watch that isn't read: how far behind it may fall before it gets the
 /// whole chat again is
 /// [`Limits::kept_changes`](caf_core::host::Limits::kept_changes).
+///
+/// It doesn't keep CAF running: once every [`Caf`] and [`ChatHandle`] is
+/// dropped, CAF shuts down, and the watch ends.
 pub struct Watch<A: AppItem = NoAppItems> {
-    caf: Caf<A>,
+    commands: mpsc::WeakSender<Command<A>>,
+    last: LastWords<A>,
+    /// Closed once CAF's task has ended.
+    caf_ended: watch::Receiver<()>,
     chat: ChatId,
     /// The last change it has had.
     since: Option<ChangeNo>,
-    /// How it hears of changes, once it has read once.
-    feed: Option<Subscription<A>>,
+    /// How it hears of changes, once it has read the open chat.
+    wake: Option<watch::Receiver<()>>,
     /// It has had its last update.
     ended: bool,
 }
@@ -396,8 +416,9 @@ impl<A: AppItem> Watch<A> {
     /// The next update, or `None` once the chat is closed or CAF has shut
     /// down.
     ///
-    /// When CAF shuts down, a watch that hasn't seen the chat as shutting
-    /// down left it gets it as one last [`Update::Picture`].
+    /// When CAF shuts down, a watch that hasn't seen how it left the chat
+    /// gets that as one last [`Update::Picture`], even if it never read
+    /// before.
     ///
     /// Cancel-safe: dropped before it resolves, it loses nothing.
     pub async fn next(&mut self) -> Option<Update<A>> {
@@ -407,15 +428,24 @@ impl<A: AppItem> Watch<A> {
             }
             // Marked seen before reading, so a change after the read
             // wakes the wait below.
-            if let Some(feed) = &mut self.feed {
-                feed.wake.borrow_and_update();
+            if let Some(wake) = &mut self.wake {
+                wake.borrow_and_update();
             }
-            let subscribe = self.feed.is_none();
-            let Some(seen) = self.caf.read(self.chat, self.since, subscribe).await else {
-                return self.last_words();
+            let seen = match self.read().await {
+                Got::Seen(seen) => *seen,
+                Got::NoChat => {
+                    self.ended = true;
+                    return None;
+                }
+                Got::Gone => {
+                    // CAF may still be shutting down: its last words come
+                    // once it has.
+                    while self.caf_ended.changed().await.is_ok() {}
+                    return self.last_words();
+                }
             };
-            if let Some(feed) = seen.feed {
-                self.feed = Some(feed);
+            if let Some(wake) = seen.wake {
+                self.wake = Some(wake);
             }
             self.ended = seen.closed;
             if let Some(update) = seen.update {
@@ -425,19 +455,45 @@ impl<A: AppItem> Watch<A> {
             if self.ended {
                 return None;
             }
-            let feed = self.feed.as_mut()?;
-            if feed.wake.changed().await.is_err() {
-                return self.last_words();
+            // A read of a chat that's open always gives a way to wait.
+            let wake = self.wake.as_mut()?;
+            if wake.changed().await.is_err() {
+                // The chat was closed or CAF has ended: the next read says
+                // which.
+                self.wake = None;
             }
+        }
+    }
+
+    /// What changed since this watch last read, and a way to hear of more
+    /// if it has none.
+    async fn read(&self) -> Got<A> {
+        let Some(commands) = self.commands.upgrade() else {
+            return Got::Gone;
+        };
+        let (reply, answer) = oneshot::channel();
+        let read = Command::Read {
+            chat: self.chat,
+            since: self.since,
+            subscribe: self.wake.is_none(),
+            reply,
+        };
+        if commands.send(read).await.is_err() {
+            return Got::Gone;
+        }
+        drop(commands);
+        match answer.await {
+            Ok(Some(seen)) => Got::Seen(Box::new(seen)),
+            Ok(None) => Got::NoChat,
+            Err(_) => Got::Gone,
         }
     }
 
     /// The chat as CAF left it, if this watch hasn't seen it yet: once.
     fn last_words(&mut self) -> Option<Update<A>> {
         self.ended = true;
-        let feed = self.feed.as_ref()?;
-        let last = feed.last.lock().unwrap_or_else(PoisonError::into_inner);
-        let (chat, latest) = last.as_ref()?;
+        let last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        let (chat, latest) = last.get(&self.chat)?;
         let behind = self.since.is_none_or(|since| since < *latest);
         behind.then(|| Update::Picture(chat.clone()))
     }
@@ -478,6 +534,16 @@ enum Command<A: AppItem> {
     },
 }
 
+/// What a watch's read got.
+enum Got<A: AppItem> {
+    /// What it found.
+    Seen(Box<Seen<A>>),
+    /// There's no such chat.
+    NoChat,
+    /// CAF has gone, or is going: every handle on it was dropped.
+    Gone,
+}
+
 /// What a watch's read found.
 struct Seen<A: AppItem> {
     /// What it hadn't seen, if anything.
@@ -486,27 +552,13 @@ struct Seen<A: AppItem> {
     latest: Option<ChangeNo>,
     /// The chat is closed: nothing more will change.
     closed: bool,
-    /// How to hear of changes, if it asked.
-    feed: Option<Subscription<A>>,
+    /// How to hear of changes, if it asked and the chat is open.
+    wake: Option<watch::Receiver<()>>,
 }
 
-/// The chat as CAF left it when it ended, with its last change's number.
-type LastWords<A> = Arc<Mutex<Option<(Chat<A>, ChangeNo)>>>;
-
-/// A watch's way of hearing of a chat's changes.
-struct Subscription<A: AppItem> {
-    /// Marked changed whenever the chat changes; closed when the task
-    /// ends.
-    wake: watch::Receiver<()>,
-    /// Filled in just before the task ends.
-    last: LastWords<A>,
-}
-
-/// The task's side of a chat's subscriptions.
-struct Feed<A: AppItem> {
-    wake: watch::Sender<()>,
-    last: LastWords<A>,
-}
+/// Every chat as CAF left it when its task ended, with its last change's
+/// number. Empty until then.
+type LastWords<A> = Arc<Mutex<HashMap<ChatId, (Chat<A>, ChangeNo)>>>;
 
 /// The task: the core and its drivers.
 struct Task<A: AppItem> {
@@ -518,8 +570,13 @@ struct Task<A: AppItem> {
     deciding: JoinSet<PolicyAnswer>,
     /// Each decision's ticket, by its task.
     tickets: HashMap<tokio::task::Id, Ticket>,
-    /// The chats being watched.
-    feeds: HashMap<ChatId, Feed<A>>,
+    /// Each decision's task, by its ticket, to stop it if it's withdrawn.
+    decisions: HashMap<Ticket, AbortHandle>,
+    /// Each open chat's watches, woken when it changes.
+    feeds: HashMap<ChatId, watch::Sender<()>>,
+    last: LastWords<A>,
+    /// Dropped once `last` is filled in, to tell the watches.
+    ending: Option<watch::Sender<()>>,
     recorder: Option<Recorder>,
     inbox: mpsc::Receiver<Command<A>>,
     /// Whether any handle is left to send commands.
@@ -547,16 +604,17 @@ impl<A: AppItem> Task<A> {
                 Some(decided) = self.deciding.join_next_with_id() => self.decided(decided),
             }
         }
-        for (&chat, feed) in &self.feeds {
-            if let (Some(whole), Some(Read::Picture { latest, .. })) =
-                (self.core.chat(chat), self.core.read(chat, None))
-            {
-                *feed.last.lock().unwrap_or_else(PoisonError::into_inner) =
-                    Some((whole.clone(), latest));
+        {
+            let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+            for whole in self.core.chats() {
+                if let Some(Read::Picture { latest, .. }) = self.core.read(whole.id, None) {
+                    last.insert(whole.id, (whole.clone(), latest));
+                }
             }
         }
         // Closing every watch's wake-up channel tells them it's over.
         self.feeds.clear();
+        self.ending = None;
         if let Some(recorder) = self.recorder.take() {
             recorder.finish().await;
         }
@@ -584,7 +642,7 @@ impl<A: AppItem> Task<A> {
             }
             _ if self.shutting_down => {}
             Command::Open { open, reply } => {
-                let recorded = self.recorder.is_some().then(|| open.clone());
+                let recorded = self.recorder.is_some().then(|| hide_mcp_secrets(&open));
                 let result = self.host(
                     |core, now, out| core.open_chat(now, open, out),
                     |&chat| recorded.map(|open| HostCommand::OpenChat { chat, open }),
@@ -673,9 +731,7 @@ impl<A: AppItem> Task<A> {
     /// Gives the core what a driver reported.
     fn give(&mut self, event: Event<A>) {
         let now = self.timers.now();
-        if let Some(recorder) = &mut self.recorder
-            && !private(&event)
-        {
+        if let Some(recorder) = &mut self.recorder {
             recorder.record(now, &event);
         }
         self.core.handle(now, event, &mut self.out);
@@ -690,19 +746,41 @@ impl<A: AppItem> Task<A> {
     ) {
         let (id, answer) = match decided {
             Ok(decided) => decided,
-            Err(error) => {
-                if !error.is_panic() {
-                    // Cancelled: only as the runtime shuts down.
-                    self.tickets.remove(&error.id());
-                    return;
-                }
+            Err(error) if error.is_panic() => {
                 log::warn!(target: "caf", "the policy panicked deciding a permission request: refused");
                 (error.id(), PolicyAnswer::Refuse)
             }
+            // Stopped, because the request was withdrawn.
+            Err(error) => {
+                if let Some(ticket) = self.tickets.remove(&error.id()) {
+                    self.decisions.remove(&ticket);
+                }
+                return;
+            }
         };
         if let Some(ticket) = self.tickets.remove(&id) {
+            self.decisions.remove(&ticket);
             self.give(Event::Policy { ticket, answer });
         }
+    }
+
+    /// Starts deciding a permission request. A policy that panics, in
+    /// `decide` itself or in the future it gives, refuses.
+    fn decide(
+        &mut self,
+        ticket: Ticket,
+        chat: ChatId,
+        request: caf_core::directive::PermissionRequest,
+    ) {
+        let policy = &mut self.policy;
+        let deciding = std::panic::catch_unwind(AssertUnwindSafe(|| policy.decide(chat, request)))
+            .unwrap_or_else(|_| {
+                log::warn!(target: "caf", "the policy panicked deciding a permission request: refused");
+                Box::pin(std::future::ready(PolicyAnswer::Refuse))
+            });
+        let handle = self.deciding.spawn(deciding);
+        self.tickets.insert(handle.id(), ticket);
+        self.decisions.insert(ticket, handle);
     }
 
     /// Hands each of the core's directives to its driver.
@@ -716,16 +794,20 @@ impl<A: AppItem> Task<A> {
                     ticket,
                     chat,
                     request,
-                }) => {
-                    let deciding = self.deciding.spawn(self.policy.decide(chat, request));
-                    self.tickets.insert(deciding.id(), ticket);
+                }) => self.decide(ticket, chat, request),
+                Directive::Policy(PolicyDirective::Withdrawn { ticket }) => {
+                    if let Some(decision) = self.decisions.remove(&ticket) {
+                        decision.abort();
+                    }
                 }
-                // A withdrawn decision runs on: the core ignores its
-                // answer, as it does any stale ticket's.
-                Directive::Policy(_) => {}
                 Directive::Viewer(ViewerDirective::Changed { chat, .. }) => {
                     if let Some(feed) = self.feeds.get(&chat) {
-                        feed.wake.send_replace(());
+                        feed.send_replace(());
+                    }
+                    // A closed chat changes no more: its watches read the
+                    // last of it and end.
+                    if self.closed(chat) {
+                        self.feeds.remove(&chat);
                     }
                 }
                 Directive::Report(report) => log_report(&report),
@@ -736,9 +818,16 @@ impl<A: AppItem> Task<A> {
         self.out = out;
     }
 
+    /// Whether `chat` is closed, or was never there.
+    fn closed(&self, chat: ChatId) -> bool {
+        self.core
+            .chat(chat)
+            .is_none_or(|whole| whole.state == ChatState::Closed)
+    }
+
     /// What a watch that has seen up to `since` hasn't seen of `chat`.
     fn read(&mut self, chat: ChatId, since: Option<ChangeNo>, subscribe: bool) -> Option<Seen<A>> {
-        let closed = self.core.chat(chat)?.state == ChatState::Closed;
+        let closed = self.closed(chat);
         let (update, latest) = match self.core.read(chat, since)? {
             Read::Changes([]) => (None, since),
             Read::Changes(changes) => (
@@ -746,39 +835,52 @@ impl<A: AppItem> Task<A> {
                 changes.last().map(|last| last.no),
             ),
             Read::Picture { chat, latest } => (Some(Update::Picture(chat.clone())), Some(latest)),
-            // No other kind of read is given yet.
+            // No other kind of read is given yet. One added later needs
+            // handling here, or its watches end.
             _ => return None,
         };
-        let feed = subscribe.then(|| {
-            let feed = self.feeds.entry(chat).or_insert_with(|| Feed {
-                wake: watch::Sender::new(()),
-                last: Arc::default(),
-            });
-            Subscription {
-                wake: feed.wake.subscribe(),
-                last: Arc::clone(&feed.last),
-            }
+        let wake = (subscribe && !closed).then(|| {
+            let feed = (self.feeds.entry(chat)).or_insert_with(|| watch::Sender::new(()));
+            feed.subscribe()
         });
         Some(Seen {
             update,
             latest,
             closed,
-            feed,
+            wake,
         })
     }
 }
 
-/// Whether `event` holds something a recording must never have: Claude's
-/// sign-in status, which holds the account's email.
-fn private<A: AppItem>(event: &Event<A>) -> bool {
-    let Event::Agent {
-        event: AgentEvent::Frame(Frame::Message(message)),
-        ..
-    } = event
-    else {
-        return false;
-    };
-    matches!(message, Message::Notification { method, .. } | Message::Request { method, .. } if method == "_auth/status_update")
+/// What's written in a recording for "redacted".
+const HIDDEN: &str = "[redacted]";
+
+/// `open`, with its MCP servers' variables' and headers' values hidden.
+fn hide_mcp_secrets(open: &OpenChat) -> OpenChat {
+    let mut open = open.clone();
+    for server in &mut open.mcp_servers {
+        match server {
+            McpServer::Stdio { command, .. } => hide_values(&mut command.env),
+            McpServer::Http { headers, .. } => {
+                for (_, value) in headers {
+                    HIDDEN.clone_into(value);
+                }
+            }
+            // No other kind is given yet. One added later needs its secrets
+            // hidden here.
+            _ => {}
+        }
+    }
+    open
+}
+
+/// Hides the values of the variables `env` sets, keeping their names.
+fn hide_values(env: &mut [EnvChange]) {
+    for change in env {
+        if let EnvChange::Set(_, value) = change {
+            *value = HIDDEN.into();
+        }
+    }
 }
 
 /// Hands a report to the `log` facade.
@@ -791,10 +893,33 @@ fn log_report(report: &Report) {
     log::log!(target: "caf", level, "{}", report.message);
 }
 
+/// How much a recording may have waiting to be written before CAF stops
+/// recording.
+const RECORDING_BEHIND: usize = 256 << 20;
+
+/// Claude's sign-in status, which holds the account's email.
+const SIGN_IN_STATUS: &str = "_auth/status_update";
+
 /// Writes a recording, on a thread of its own.
 struct Recorder {
     lines: std::sync::mpsc::Sender<String>,
+    shared: Arc<Shared>,
+    /// How much may wait to be written.
+    most: usize,
+    /// It has stopped recording.
+    stopped: bool,
     thread: std::thread::JoinHandle<()>,
+    /// Where it writes, for warnings.
+    path: String,
+}
+
+/// What a recorder and its thread both see.
+#[derive(Default)]
+struct Shared {
+    /// Bytes waiting to be written.
+    waiting: AtomicUsize,
+    /// A write failed: nothing more is written.
+    failed: AtomicBool,
 }
 
 /// A recording's first line.
@@ -816,24 +941,11 @@ struct Step<'a, A: AppItem> {
 impl Recorder {
     /// Makes the file and writes its first line, or says why it couldn't.
     fn start(path: &PathBuf, host: &Host, agents: &[AgentSpec]) -> Option<Self> {
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(path);
-        let file = match file {
-            Ok(file) => file,
-            Err(error) => {
-                log::warn!(target: "caf", "can't record to {}: {error}", path.display());
-                return None;
-            }
-        };
         let agents = (agents.iter())
             .map(|agent| {
                 let mut agent = agent.clone();
-                agent.command.env.clear();
+                agent.command.args.clear();
+                hide_values(&mut agent.command.env);
                 agent
             })
             .collect();
@@ -842,22 +954,89 @@ impl Recorder {
             host,
             agents,
         };
-        let header = serde_json::to_string(&header).unwrap_or_default();
+        let header = match serde_json::to_string(&header) {
+            Ok(header) => header,
+            Err(error) => {
+                log::warn!(target: "caf", "can't record: the host or agents can't be written: {error}");
+                return None;
+            }
+        };
+        // New, so it's never a link, a pipe or someone else's file.
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path);
+        match file {
+            Ok(file) => Some(Self::spawn(
+                path.display().to_string(),
+                BufWriter::new(file),
+                header,
+                RECORDING_BEHIND,
+            )),
+            Err(error) => {
+                log::warn!(target: "caf", "can't record to {}: {error}", path.display());
+                None
+            }
+        }
+    }
+
+    /// Writes `header` then each line recorded to `writer`, on a thread,
+    /// stopping if more than `most` bytes are waiting.
+    fn spawn(
+        path: String,
+        writer: impl Write + Send + 'static,
+        header: String,
+        most: usize,
+    ) -> Self {
         let (lines, inbox) = std::sync::mpsc::channel();
-        let _ = lines.send(header);
-        let path = path.clone();
-        let thread = std::thread::spawn(move || write_lines(&path, file, &inbox));
-        Some(Self { lines, thread })
+        let shared = Arc::new(Shared::default());
+        let mut recorder = Self {
+            lines,
+            shared: Arc::clone(&shared),
+            most,
+            stopped: false,
+            thread: std::thread::spawn({
+                let path = path.clone();
+                move || write_lines(&path, writer, &inbox, &shared)
+            }),
+            path,
+        };
+        recorder.send(header);
+        recorder
     }
 
     /// Writes one event.
     fn record<A: AppItem>(&mut self, now: Now, event: &Event<A>) {
-        match serde_json::to_string(&Step { now, event }) {
-            Ok(line) => {
-                let _ = self.lines.send(line);
-            }
-            Err(error) => log::warn!(target: "caf", "can't record an event: {error}"),
+        if self.stopped {
+            return;
         }
+        match line(now, event) {
+            Ok(line) => self.send(line),
+            Err(error) => self.stop(&format!("an event can't be written: {error}")),
+        }
+    }
+
+    /// Hands a line to the thread, unless too much is waiting already.
+    fn send(&mut self, line: String) {
+        if self.shared.failed.load(Ordering::Relaxed) {
+            // The thread said why.
+            self.stopped = true;
+            return;
+        }
+        let waiting = self.shared.waiting.fetch_add(line.len(), Ordering::Relaxed);
+        if waiting + line.len() > self.most {
+            self.shared.waiting.fetch_sub(line.len(), Ordering::Relaxed);
+            self.stop("the disk has fallen behind");
+            return;
+        }
+        let _ = self.lines.send(line);
+    }
+
+    /// Stops recording, saying why.
+    fn stop(&mut self, why: &str) {
+        log::warn!(target: "caf", "stopped recording to {}: {why}", self.path);
+        self.stopped = true;
     }
 
     /// Waits for everything to be written.
@@ -868,26 +1047,137 @@ impl Recorder {
     }
 }
 
+/// `event` at `now`, as a recording's line: with Claude's sign-in status
+/// emptied, and error output as text.
+fn line<A: AppItem>(now: Now, event: &Event<A>) -> serde_json::Result<String> {
+    let Event::Agent {
+        process,
+        event: agent,
+    } = event
+    else {
+        return serde_json::to_string(&Step { now, event });
+    };
+    let hidden = match agent {
+        AgentEvent::Stderr(bytes) => {
+            let text = String::from_utf8_lossy(bytes);
+            let event =
+                serde_json::json!({ "Agent": { "process": process, "event": { "Stderr": text } } });
+            return serde_json::to_string(&serde_json::json!({ "now": now, "event": event }));
+        }
+        AgentEvent::Frame(Frame::Message(Message::Notification { method, .. }))
+            if method == SIGN_IN_STATUS =>
+        {
+            Message::Notification {
+                method: method.clone(),
+                params: None,
+            }
+        }
+        AgentEvent::Frame(Frame::Message(Message::Request { id, method, .. }))
+            if method == SIGN_IN_STATUS =>
+        {
+            Message::Request {
+                id: id.clone(),
+                method: method.clone(),
+                params: None,
+            }
+        }
+        _ => return serde_json::to_string(&Step { now, event }),
+    };
+    let event = Event::<A>::Agent {
+        process: *process,
+        event: AgentEvent::Frame(Frame::Message(hidden)),
+    };
+    serde_json::to_string(&Step { now, event: &event })
+}
+
 /// Writes lines as they come until there are no more, flushing whenever
 /// none are waiting. After a failure, lines are read and dropped, so CAF
 /// never waits on them.
-fn write_lines(path: &std::path::Path, file: File, inbox: &std::sync::mpsc::Receiver<String>) {
-    fn line(file: &mut BufWriter<File>, line: &str) -> std::io::Result<()> {
-        file.write_all(line.as_bytes())?;
-        file.write_all(b"\n")
-    }
-    let mut file = Some(BufWriter::new(file));
+fn write_lines(
+    path: &str,
+    mut writer: impl Write,
+    inbox: &std::sync::mpsc::Receiver<String>,
+    shared: &Shared,
+) {
+    let fail = |error: std::io::Error| {
+        log::warn!(target: "caf", "stopped recording to {path}: {error}");
+        shared.failed.store(true, Ordering::Relaxed);
+    };
     while let Ok(first) = inbox.recv() {
-        let Some(writing) = &mut file else { continue };
-        let mut result = line(writing, &first);
-        while result.is_ok()
-            && let Ok(next) = inbox.try_recv()
-        {
-            result = line(writing, &next);
+        let mut line = Some(first);
+        while let Some(each) = line {
+            shared.waiting.fetch_sub(each.len(), Ordering::Relaxed);
+            if !shared.failed.load(Ordering::Relaxed)
+                && let Err(error) =
+                    (writer.write_all(each.as_bytes())).and_then(|()| writer.write_all(b"\n"))
+            {
+                fail(error);
+            }
+            line = inbox.try_recv().ok();
         }
-        if let Err(error) = result.and_then(|()| writing.flush()) {
-            log::warn!(target: "caf", "stopped recording to {}: {error}", path.display());
-            file = None;
+        if !shared.failed.load(Ordering::Relaxed)
+            && let Err(error) = writer.flush()
+        {
+            fail(error);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use caf_core::time::{Mono, Wall};
+
+    use super::*;
+
+    /// A writer that keeps what it's given, and waits to be let go before
+    /// taking anything.
+    struct Stalled {
+        go: mpsc::Receiver<()>,
+        kept: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for Stalled {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let _ = self.go.recv_timeout(Duration::from_secs(60));
+            self.kept.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_recording_stops_when_the_disk_falls_behind() {
+        let (go, wait) = mpsc::channel();
+        let kept = Arc::new(Mutex::new(Vec::new()));
+        let writer = Stalled {
+            go: wait,
+            kept: Arc::clone(&kept),
+        };
+        let mut recorder = Recorder::spawn("test".into(), writer, "{}".into(), 300);
+        let now = Now {
+            wall: Wall(0),
+            mono: Mono(0),
+        };
+        for _ in 0..20 {
+            recorder.record(now, &Event::<NoAppItems>::Woken);
+        }
+        assert!(recorder.stopped, "it stops rather than holding more");
+        drop(go);
+        recorder.finish().await;
+        let kept = String::from_utf8(kept.lock().unwrap().clone()).unwrap();
+        let lines: Vec<&str> = kept.lines().collect();
+        assert!(lines.len() > 1 && lines.len() < 20, "{lines:?}");
+        assert_eq!(lines[0], "{}");
+        // What it did write replays, as far as it goes.
+        for line in &lines[1..] {
+            let step: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(step["event"], "Woken");
         }
     }
 }

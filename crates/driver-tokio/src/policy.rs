@@ -15,6 +15,12 @@ use caf_core::event::PolicyAnswer;
 pub trait Policy: Send + 'static {
     /// Decides one request. It may take as long as it needs: the core uses
     /// the answer only if the request still stands by then.
+    ///
+    /// Return at once, and do the work in the future: `decide` itself runs
+    /// on CAF's task, so a slow one holds up every chat. The future runs
+    /// as a task of its own, and is dropped if the request is withdrawn,
+    /// such as when the user stops the turn. A panic, in `decide` or in
+    /// its future, refuses the request.
     fn decide(&mut self, chat: ChatId, request: PermissionRequest) -> Pin<Box<dyn Future<Output = PolicyAnswer> + Send>>;
 }
 

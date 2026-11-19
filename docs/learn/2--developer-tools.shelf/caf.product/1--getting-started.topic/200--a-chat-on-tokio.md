@@ -51,8 +51,10 @@ read. If it falls further behind than the chat's list of changes is long
 (`Limits::kept_changes`, 4096 by default), it gets the whole chat again.
 
 `next` returns `None` once the chat is closed or CAF has shut down. A watch
-that hadn't yet seen how shutting down left the chat gets it as one last
-picture first.
+that hasn't seen how shutting down left the chat gets it as one last picture
+first, even one that never read before.
+
+A watch doesn't keep CAF running: see [Shut down](#shut-down).
 
 ## Answer questions and stop turns
 
@@ -62,8 +64,10 @@ to do things, and CAF asks when a session is slow to open. Answer each with
 a second answer, or an answer to a question that's gone, is refused.
 
 The default policy, `AlwaysAsk`, puts every permission request to the user.
-A program can give `Config::policy` its own, which may take as long as it
-needs. If it panics, the request is refused.
+A program can give `Config::policy` its own. Its `decide` should return at
+once, with a future that does the work: that future may take as long as it
+needs, and is dropped if the request is withdrawn, such as when the user
+stops the turn. If either panics, the request is refused.
 
 `ChatHandle::stop` stops the running turn and drops the ones waiting.
 
@@ -74,10 +78,13 @@ caf.shutdown().await;
 running.await;
 ```
 
-`shutdown` returns once every adapter has stopped, and everything they
-started with them. From the moment it's called, anything else asked of CAF
-fails with `Error::Gone`. If every handle on CAF is dropped, it shuts down by
-itself.
+`shutdown` returns once every adapter has exited and been reaped, and what
+each started has been sent SIGKILL. From the moment it's called, anything
+else asked of CAF fails with `Error::Gone`.
+
+If every `Caf` and `ChatHandle` is dropped, CAF shuts down by itself. Watches
+don't count: a task still waiting on a watch gets the chat's last picture,
+then `None`.
 
 ## Logs
 
@@ -87,9 +94,10 @@ the account email Claude's adapter sends.
 
 ## Record a run
 
-Set `Config::record` to a file, and CAF writes down everything the core is
-given, with its time, as JSON lines. Replayed into a fresh `Core`, a recording
-ends in the same state, so a real session becomes a test.
+Set `Config::record` to a file that doesn't exist yet, and CAF writes down
+everything the core is given, with its time, as JSON lines. Replayed into a
+fresh `Core`, a recording ends in the same state, so a real session becomes a
+test.
 
 ```rust
 let mut config = Config::new(host, agents);
@@ -108,24 +116,45 @@ Each line after it is one event, in order:
 {"now": {"wall": 1795600000000, "mono": 1953000000}, "event": {"Host": {"Send": {…}}}}
 ```
 
-To replay it, make a `Core` from the first line with `Core::new`, and give it
-each event with `Core::handle` at its time.
+To replay it, make a `Core` from the first line with `Core::new`, read each
+line's event as an `Event`, and give it to `Core::handle` at its time.
 
-Two things are left out, and the core needs neither to end in the same
-state:
+### What's hidden
 
-- **Claude's sign-in status** (`_auth/status_update`), which holds the
-  account's email.
-- **The agents' environment changes**, which may hold keys.
+None of this changes what the core does with the recording:
 
-Everything else goes in as it came: what the user sent, what the agent said,
-its error output, folders and MCP servers. Treat a recording as private, and
-read it through before you share it.
+- **Claude's sign-in status** (`_auth/status_update`) holds the account's
+  email. It's written with its params as `null`.
+- **Each agent's arguments** are left out, and **its environment variables**
+  are written with their names but not their values.
+- **Each MCP server's environment variables and HTTP headers** are written
+  with their names but not their values.
 
-The file is made afresh, readable only by you, and never through a symbolic
-link. It's written on a thread of its own, so the disk never holds CAF up,
-and it's complete once `shutdown` returns. If it can't be made, CAF logs a
-warning and runs on without recording.
+### What's kept
+
+Everything else goes in as it came:
+
+- the host, and each agent's name, program, folder and profile;
+- what the user sent, and everything the agent said;
+- the agent's error output, as text, with any bytes that aren't UTF-8
+  replaced;
+- folders;
+- each MCP server's name, program, arguments and URL.
+
+So don't put secrets in MCP arguments or URLs. Names of variables and
+arguments are written as arrays of bytes, as Rust writes them. Treat a
+recording as private, and read it through before you share it.
+
+### How it's written
+
+The file is made new, readable only by you. If anything is at that path
+already, even a link, CAF logs a warning and doesn't record. It's written on
+a thread of its own, so the disk never holds CAF up, and it's complete once
+`shutdown` returns.
+
+If a write fails, or more than 256 MiB waits to be written because the disk
+has fallen behind, CAF logs a warning and stops recording. What's in the file
+still replays, as far as it goes.
 
 ## What goes where
 
@@ -137,7 +166,7 @@ gives goes to its driver:
 | Agent | `AgentDriver::apply` |
 | Timer | `TimerDriver::wake_at` |
 | Policy: decide | The policy, whose answer comes back to the core |
-| Policy: withdrawn | Nowhere: the core ignores the answer when it comes |
+| Policy: withdrawn | Stops that decision |
 | Viewer | Wakes the chat's watches |
 | Report | The `log` facade |
 

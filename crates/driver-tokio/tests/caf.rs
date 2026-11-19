@@ -3,11 +3,10 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use caf_core::agent::{AgentSpec, EnvChange, SpawnCommand};
+use caf_core::agent::{AgentSpec, EnvChange, McpServer, SpawnCommand};
 use caf_core::change::Change;
 use caf_core::chat::{ChatState, FailureReason, ItemKind, Lost, Turn, TurnLife, UserMessage};
 use caf_core::directive::PermissionRequest;
@@ -615,6 +614,7 @@ async fn shutting_down_leaves_no_processes() {
     );
     assert!(!gone(fake_pid) && !gone(holder_pid));
 
+    let never_read = chat.watch();
     shut_down(&caf, running).await;
     // The adapter is reaped by the time CAF has stopped; what it started
     // goes with its group.
@@ -624,10 +624,14 @@ async fn shutting_down_leaves_no_processes() {
         panic!("the watch gets how CAF left the chat")
     };
     assert_eq!(last.turns[0].life, TurnLife::CutOff);
-    assert!(
-        chat.watch().next().await.is_none(),
-        "nothing to watch once CAF has gone"
-    );
+    // Watches that never read get how CAF left the chat too, once.
+    for mut late in [never_read, chat.watch()] {
+        let Some(Update::Picture(last)) = late.next().await else {
+            panic!("a watch that never read gets how CAF left the chat")
+        };
+        assert_eq!(last.turns[0].life, TurnLife::CutOff);
+        assert!(late.next().await.is_none());
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -657,6 +661,13 @@ async fn a_watch_that_falls_behind_gets_a_fresh_picture() {
         other => panic!("a watch far behind gets a picture, not {other:?}"),
     }
     shut_down(&caf, running).await;
+}
+
+/// Whether `text` holds `secret`, as text or as the array of bytes Rust
+/// writes an `OsString` as.
+fn holds(text: &str, secret: &str) -> bool {
+    let bytes: Vec<String> = secret.bytes().map(|byte| byte.to_string()).collect();
+    text.contains(secret) || text.contains(&bytes.join(","))
 }
 
 /// A recording's header.
@@ -699,6 +710,7 @@ async fn a_recorded_run_replays_to_the_same_state() {
     }}});
     let script = dir.script("script.jsonl", &after_handshake(&[
         json!({"notify": {"method": "_auth/status_update", "params": {"email": "someone@example.com"}}}),
+        json!({"stderr": "warming up"}),
         prompt(),
         say("s1", "Looking."),
         ask,
@@ -716,6 +728,7 @@ async fn a_recorded_run_replays_to_the_same_state() {
         "SECRET_KEY".into(),
         "sk-do-not-record".into(),
     ));
+    agent.command.args = vec!["--key".into(), "sk-arg-do-not-record".into()];
     let mut config = Config::new(host(), vec![agent]);
     config.record = Some(recording.clone());
     let (caf, running) = start(config);
@@ -756,10 +769,31 @@ async fn a_recorded_run_replays_to_the_same_state() {
         !text.contains("example.com"),
         "the account email is never recorded"
     );
-    assert!(!text.contains("_auth/status_update"));
     assert!(
-        !text.contains("sk-do-not-record"),
-        "agents' environments aren't recorded"
+        text.contains(r#"{"Notification":{"method":"_auth/status_update","params":null}}"#),
+        "the sign-in status is recorded, without its params"
+    );
+    assert!(
+        !holds(&text, "sk-do-not-record"),
+        "agents' variables' values aren't recorded"
+    );
+    assert!(
+        !holds(&text, "sk-arg-do-not-record"),
+        "agents' arguments aren't recorded"
+    );
+    let header: Header = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    let command = &header.agents[0].command;
+    assert!(command.args.is_empty());
+    assert!(
+        command
+            .env
+            .contains(&EnvChange::Set("SECRET_KEY".into(), "[redacted]".into())),
+        "{:?}",
+        command.env
+    );
+    assert!(
+        text.contains(r#""event":{"Stderr":"warming up\n"}"#),
+        "error output is written as text"
     );
     let core = replay(&text);
     assert_eq!(core.chat(chat.id), Some(&last));
@@ -872,20 +906,44 @@ impl Policy for Panics {
     }
 }
 
-/// A policy that allows everything, once the test lets it.
-struct WhenLet(Arc<tokio::sync::Notify>);
+/// A policy that never decides, and says when its decision is dropped.
+struct NeverDecides(Option<tokio::sync::oneshot::Sender<()>>);
 
-impl Policy for WhenLet {
+/// Says it's dropped.
+struct Dropped(Option<tokio::sync::oneshot::Sender<()>>);
+
+impl Drop for Dropped {
+    fn drop(&mut self) {
+        if let Some(dropped) = self.0.take() {
+            let _ = dropped.send(());
+        }
+    }
+}
+
+impl Policy for NeverDecides {
     fn decide(
         &mut self,
         _: ChatId,
         _: PermissionRequest,
     ) -> Pin<Box<dyn Future<Output = PolicyAnswer> + Send>> {
-        let notify = Arc::clone(&self.0);
+        let dropped = Dropped(self.0.take());
         Box::pin(async move {
-            notify.notified().await;
-            PolicyAnswer::Allow
+            let _dropped = dropped;
+            std::future::pending().await
         })
+    }
+}
+
+/// A policy whose `decide` panics, before it gives a future.
+struct PanicsAtOnce;
+
+impl Policy for PanicsAtOnce {
+    fn decide(
+        &mut self,
+        _: ChatId,
+        _: PermissionRequest,
+    ) -> Pin<Box<dyn Future<Output = PolicyAnswer> + Send>> {
+        panic!("a policy with a bug, outside its future")
     }
 }
 
@@ -932,7 +990,7 @@ async fn a_policy_that_panics_refuses() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_late_answer_to_a_withdrawn_request_does_nothing() {
+async fn a_withdrawn_decision_is_stopped() {
     let dir = Dir::new();
     let script = dir.script(
         "script.jsonl",
@@ -946,8 +1004,8 @@ async fn a_late_answer_to_a_withdrawn_request_does_nothing() {
         ]),
     );
     let mut config = Config::new(host(), vec![fake(&dir, &script)]);
-    let answer = Arc::new(tokio::sync::Notify::new());
-    config.policy = Box::new(WhenLet(Arc::clone(&answer)));
+    let (dropped, decision_dropped) = tokio::sync::oneshot::channel();
+    config.policy = Box::new(NeverDecides(Some(dropped)));
     let (caf, running) = start(config);
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
@@ -965,12 +1023,174 @@ async fn a_late_answer_to_a_withdrawn_request_does_nothing() {
         last_life(chat) == Some(&TurnLife::Stopped)
     })
     .await;
-    // Only now does the policy answer: the core ignores it.
-    answer.notify_one();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Stopping withdrew the request, which stopped the decision, long
+    // before shutting down would have.
+    let stopped = tokio::time::timeout(PATIENCE, decision_dropped).await;
+    assert!(matches!(stopped, Ok(Ok(()))), "the decision was dropped");
     assert_eq!(last_life(&picture(&chat).await), Some(&TurnLife::Stopped));
     shut_down(&caf, running).await;
     let answers = answers_to(&dir, 0);
     assert_eq!(answers.len(), 1, "answered once: {answers:#?}");
     assert_eq!(answers[0]["result"]["outcome"]["outcome"], "cancelled");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_policy_that_panics_in_decide_refuses_and_caf_goes_on() {
+    let dir = Dir::new();
+    let script = dir.script(
+        "script.jsonl",
+        &after_handshake(&[
+            prompt(),
+            ask_to_run(),
+            json!({"await": {"to": "ask", "expect": {"result": {"outcome": {"outcome": "selected", "optionId": "reject"}}}, "timeout": 60_000}}),
+            end_turn(),
+            prompt(),
+            say("s1", "still here"),
+            end_turn(),
+        ]),
+    );
+    let mut config = Config::new(host(), vec![fake(&dir, &script)]);
+    config.policy = Box::new(PanicsAtOnce);
+    let (caf, running) = start(config);
+    let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
+    let mut watch = chat.watch();
+    chat.send(UserMessage::text("Clean up")).await.unwrap();
+    until(&chat, &mut watch, "the first turn", finished).await;
+    chat.send(UserMessage::text("Again")).await.unwrap();
+    let done = until(&chat, &mut watch, "the second turn", |chat| {
+        chat.turns.len() == 2 && finished(chat)
+    })
+    .await;
+    assert_eq!(words(&done.turns[1]), "still here");
+    shut_down(&caf, running).await;
+    assert_eq!(answers_to(&dir, 0).len(), 1, "{:#?}", dir.record());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_secrets_are_hidden_in_a_recording() {
+    let dir = Dir::new();
+    let script = dir.script("script.jsonl", &handshake("s1"));
+    let recording = dir.path("run.jsonl");
+    let mut config = Config::new(host(), vec![fake(&dir, &script)]);
+    config.record = Some(recording.clone());
+    let (caf, running) = start(config);
+    let mut open = OpenChat::new("fake", &dir.0);
+    let mut tool = SpawnCommand::new("/bin/true");
+    tool.env = vec![EnvChange::Set(
+        "GITHUB_TOKEN".into(),
+        "ghp_do_not_record".into(),
+    )];
+    open.mcp_servers = vec![
+        McpServer::Stdio {
+            name: "gh".into(),
+            command: tool,
+        },
+        McpServer::Http {
+            name: "maps".into(),
+            url: "http://127.0.0.1:9/mcp".into(),
+            headers: vec![("Authorization".into(), "Bearer do-not-record".into())],
+        },
+    ];
+    caf.open_chat(open).await.unwrap();
+    shut_down(&caf, running).await;
+    let text = std::fs::read_to_string(&recording).unwrap();
+    assert!(!holds(&text, "ghp_do_not_record"));
+    assert!(!holds(&text, "do-not-record"));
+    // Their names are kept.
+    assert!(holds(&text, "GITHUB_TOKEN"));
+    assert!(text.contains(r#"["Authorization","[redacted]"]"#), "{text}");
+    // And the core takes it as it did.
+    replay(&text);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_recording_never_replaces_a_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Dir::new();
+    let there = dir.path("there.jsonl");
+    std::fs::write(&there, "keep").unwrap();
+    std::fs::set_permissions(&there, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let mut config = Config::new(host(), Vec::new());
+    config.record = Some(there.clone());
+    let (caf, running) = start(config);
+    shut_down(&caf, running).await;
+    assert_eq!(std::fs::read_to_string(&there).unwrap(), "keep");
+    let mode = std::fs::metadata(&there).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o644);
+}
+
+#[test]
+fn a_recording_never_waits_on_a_pipe() {
+    let dir = Dir::new();
+    let pipe = dir.path("pipe");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&pipe)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let (done, started) = std::sync::mpsc::channel();
+    // On a thread of its own, so a start that waits on the pipe fails the
+    // test rather than hanging it.
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut config = Config::new(host(), Vec::new());
+            config.record = Some(pipe);
+            let (caf, running) = start(config);
+            let _ = done.send(());
+            shut_down(&caf, running).await;
+        });
+    });
+    assert!(
+        started.recv_timeout(PATIENCE).is_ok(),
+        "starting waited on the pipe"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_watch_doesnt_keep_caf_running() {
+    let dir = Dir::new();
+    dir.script("script.jsonl", &handshake("s1"));
+    let shell = r#"echo $$ > "$DIR/fake.pid"; exec "$FAKE" "$DIR/script.jsonl" --record "$DIR/record.jsonl""#;
+    let (caf, running) = start(Config::new(host(), vec![fake_by_shell(&dir, shell)]));
+    let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
+    let mut read = chat.watch();
+    until(&chat, &mut read, "the session", |chat| {
+        matches!(chat.state, ChatState::Open { .. })
+    })
+    .await;
+    let pid = read_pid(&dir.path("fake.pid")).await;
+    let mut unread = chat.watch();
+    // A watch waiting on a task, as an app's would be.
+    let waiting = tokio::spawn(async move {
+        let mut last = None;
+        while let Some(update) = read.next().await {
+            last = Some(update);
+        }
+        last
+    });
+    drop((caf, chat));
+    assert!(
+        tokio::time::timeout(PATIENCE, running).await.is_ok(),
+        "CAF stops though watches are left"
+    );
+    assert!(gone(pid));
+    let last = tokio::time::timeout(PATIENCE, waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    let Some(Update::Picture(last)) = last else {
+        panic!("the waiting watch gets how CAF left the chat: {last:?}")
+    };
+    assert!(matches!(
+        last.state,
+        ChatState::Lost {
+            reason: Lost::ShutDown
+        }
+    ));
+    assert!(matches!(unread.next().await, Some(Update::Picture(_))));
+    assert!(unread.next().await.is_none());
 }
