@@ -4,6 +4,8 @@ mod harness;
 
 mod basics;
 mod process;
+mod shared;
+mod stop;
 
 use serde_json::{Value, json};
 

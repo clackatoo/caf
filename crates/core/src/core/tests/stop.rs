@@ -1,0 +1,137 @@
+//! Stop: answering the agent's questions first, waiting for it to stop,
+//! and giving up on it if it doesn't.
+
+use serde_json::json;
+
+use super::harness::{Script, assert_has, host, replies, sent, with, writes};
+use super::{CHAT, PROC, SESSION, claude_init};
+use crate::core::{OpenChat, Refused};
+use crate::event::{AgentEvent, Exit};
+
+/// A permission request from the agent, as Claude's adapter sends one.
+pub(super) fn permission(id: u64, tool: &str) -> serde_json::Value {
+    json!({
+        "jsonrpc": "2.0", "id": id, "method": "session/request_permission",
+        "params": {
+            "sessionId": SESSION,
+            "toolCall": { "toolCallId": tool, "title": "Run `cargo test`", "kind": "execute", "rawInput": { "command": "cargo test" } },
+            "options": [
+                { "optionId": "allow", "name": "Allow", "kind": "allow_once" },
+                { "optionId": "always", "name": "Always allow", "kind": "allow_always" },
+                { "optionId": "reject", "name": "Reject", "kind": "reject_once" }
+            ]
+        }
+    })
+}
+
+#[test]
+fn stop_answers_the_agents_questions_then_tells_it_and_waits() {
+    let mut script = Script::with_claude();
+    let (turn, _) = script.send(CHAT, "go");
+    let turn = turn.expect("sent");
+    let out = script.says(PROC, &permission(7, "tool-1"));
+    assert_has(&json!(with(&out, "decide")), &json!([{ "decide": 1005, "chat": CHAT.0, "title": "Run `cargo test`", "input": "{\"command\":\"cargo test\"}" }]));
+
+    script.at(500);
+    let (stopped, out) = script.stop(CHAT);
+    stopped.expect("stopping");
+    // ACP: the questions are answered "cancelled" before the agent hears
+    // to stop.
+    let written = writes(&out);
+    assert_eq!(written[0].1, json!({ "jsonrpc": "2.0", "id": 7, "result": { "outcome": { "outcome": "cancelled" } } }));
+    assert_eq!(written[1].1["method"], "session/cancel");
+    assert_eq!(written[1].1["params"], json!({ "sessionId": SESSION }));
+    assert!(out.contains(&json!({ "withdrawn": 1005 })));
+    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 15_500 })]);
+    assert_has(&script.chat(CHAT), &json!({ "turns": [{ "id": turn.0, "life": "Stopping" }] }));
+
+    script.at(600);
+    let out = script.answers(PROC, 1002, &json!({ "stopReason": "cancelled" }));
+    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": null })]);
+    assert_has(&script.chat(CHAT), &json!({ "turns": [{
+        "id": turn.0,
+        "life": "Stopped",
+        "items": [{ "id": 1004, "kind": { "Tool": { "title": "Run `cargo test`", "kind": "Execute", "status": "Failed" } } }]
+    }] }));
+}
+
+#[test]
+fn an_agent_that_doesnt_stop_fails_the_turn_and_is_restarted() {
+    let mut script = Script::with_claude();
+    let (turn, _) = script.send(CHAT, "go");
+    script.at(1000);
+    script.stop(CHAT).0.expect("stopping");
+
+    script.at(16_000);
+    let out = script.woken();
+    assert_eq!(with(&out, "signal"), [json!({ "signal": PROC, "is": "Term" })]);
+    assert_has(&script.chat(CHAT), &json!({
+        "state": { "Lost": { "reason": "Restarted" } },
+        "turns": [{ "id": turn.expect("sent").0, "life": { "Failed": { "reason": "DidNotStop", "agent_said": null, "remedy": "SendAgain" } } }]
+    }));
+    assert_eq!(script.state()["pending"], json!([]));
+
+    // Its late answer changes nothing.
+    let before = script.chat(CHAT);
+    let out = script.answers(PROC, 1002, &json!({ "stopReason": "cancelled" }));
+    assert_eq!(with(&out, "report").len(), 1);
+    assert_eq!(script.chat(CHAT), before);
+
+    // The next message continues the session on a new process.
+    script.agent(PROC, AgentEvent::Exited(Exit::Signal(15)));
+    script.agent(PROC, AgentEvent::OutputClosed);
+    script.agent(PROC, AgentEvent::Group { empty: true });
+    let (_, out) = script.send(CHAT, "again");
+    assert_has(&json!(with(&out, "start")), &json!([{ "start": 1005 }]));
+    let out = script.answers(1005, 1000, &claude_init());
+    sent(&out, "session/resume");
+}
+
+#[test]
+fn stop_refuses_when_theres_nothing_to_stop_and_waits_for_a_stop_already_asked() {
+    let mut script = Script::with_claude();
+    assert_eq!(script.stop(CHAT).0, Err(Refused::NothingToStop));
+    script.send(CHAT, "go").0.expect("sent");
+    script.stop(CHAT).0.expect("stopping");
+    let (again, out) = script.stop(CHAT);
+    again.expect("still stopping");
+    assert!(writes(&out).is_empty(), "the agent is told once");
+}
+
+#[test]
+fn stop_while_opening_abandons_the_open_and_a_late_session_is_closed() {
+    let mut script = Script::new(host());
+    script.open(OpenChat::new("claude", "/work")).0.expect("opened");
+    let (turn, _) = script.send(CHAT, "hello");
+    let out = script.answers(PROC, 1000, &claude_init());
+    sent(&out, "session/new");
+
+    let (stopped, out) = script.stop(CHAT);
+    stopped.expect("stopped");
+    assert!(writes(&out).is_empty(), "nothing to tell the agent");
+    assert_has(&script.chat(CHAT), &json!({
+        "state": { "Lost": { "reason": "Stopped" } },
+        "turns": [{ "id": turn.expect("sent").0, "life": "Stopped" }]
+    }));
+
+    let out = script.answers(PROC, 1001, &json!({ "sessionId": "late" }));
+    assert_eq!(sent(&out, "session/close")["params"], json!({ "sessionId": "late" }));
+    assert_has(&script.chat(CHAT), &json!({ "state": { "Lost": { "reason": "Stopped" } } }));
+    // Closing it has a watchdog: 60 s.
+    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 60_000 })]);
+    script.answers(PROC, 1002, &json!({}));
+}
+
+#[test]
+fn a_permission_request_answered_after_stop_is_refused() {
+    let mut script = Script::with_claude();
+    script.send(CHAT, "go").0.expect("sent");
+    let out = script.says(PROC, &permission(9, "tool-1"));
+    let ticket = with(&out, "decide")[0]["decide"].as_u64().expect("a ticket");
+    script.policy(ticket, crate::event::PolicyAnswer::AskUser);
+    let question = script.chat(CHAT)["questions"][0]["id"].as_u64().expect("asked");
+    script.stop(CHAT).0.expect("stopping");
+    let (late, out) = script.answer(crate::ids::QuestionId(question), crate::question::Answer::Permission(crate::question::OptionId("allow".to_owned())));
+    assert_eq!(late, Err(Refused::NoSuchQuestion));
+    assert!(replies(&out, &json!(9)).is_empty());
+}
