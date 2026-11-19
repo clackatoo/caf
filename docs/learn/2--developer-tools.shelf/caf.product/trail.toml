@@ -1,5 +1,6 @@
 title = "CAF"
 monogram = "Cf"
-color = "#0d9488"
+icon = "caf.svg"
+color = "#F8CE57"
 
 description = "The Clackatoo Agent Framework: a Rust library for building robust, feature-rich chats with coding agents into your own program."
