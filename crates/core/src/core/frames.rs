@@ -11,7 +11,7 @@ use serde_json::value::RawValue;
 
 use super::wire::{INVALID_REQUEST, METHOD_NOT_FOUND};
 use super::{Core, report};
-use crate::acp::{Frame, Message, RequestId, RpcError};
+use crate::acp::{Frame, Message, RequestId, RpcError, Shape};
 use crate::chat::AppItem;
 use crate::directive::{Directive, Level};
 use crate::ids::Ticket;
@@ -49,23 +49,27 @@ impl<A: AppItem> Core<A> {
                 };
                 self.answered(now, proc, id, reply, out);
             }
-            // To wire up: the agent driver is adding to `TooBig` whether
-            // the line's head showed `result`/`error` (an answer) or
-            // `params` (a request). Today an id with a method is taken for
-            // a request and an id without one for an answer, so a request
-            // whose method lies past the head is wrongly ended as an
-            // answer, and never refused. Sort these two arms by that field
-            // instead, falling back to the method only where it says
-            // neither.
-            Frame::TooBig { id: Some(id), method: Some(method), len } => {
-                report(out, Level::Warn, format!("refused a request of {len} bytes, too big to read: {}", shown(&method)));
-                if !self.reply(proc, &id, Err((INVALID_REQUEST, "too big to read".to_owned())), out) {
-                    report(out, Level::Debug, "couldn't answer it: its process has gone".to_owned());
+            // A line too big to read: its head says whether it was an answer
+            // or a request, by the keys found there, so a request whose
+            // method lies past the head is still refused rather than taken
+            // for an answer. Only where the head says neither does the
+            // method decide.
+            Frame::TooBig { id: Some(id), method, len, shape, .. } => {
+                let request = match shape {
+                    Shape::Call => true,
+                    Shape::Answer => false,
+                    _ => method.is_some(),
+                };
+                if request {
+                    let what = method.as_deref().map_or_else(|| "its method unknown".to_owned(), shown);
+                    report(out, Level::Warn, format!("refused a request of {len} bytes, too big to read: {what}"));
+                    if !self.reply(proc, &id, Err((INVALID_REQUEST, "too big to read".to_owned())), out) {
+                        report(out, Level::Debug, "couldn't answer it: its process has gone".to_owned());
+                    }
+                } else {
+                    report(out, Level::Warn, format!("an answer of {len} bytes was too big to read"));
+                    self.answered(now, proc, id, Reply::Unreadable, out);
                 }
-            }
-            Frame::TooBig { id: Some(id), method: None, len } => {
-                report(out, Level::Warn, format!("an answer of {len} bytes was too big to read"));
-                self.answered(now, proc, id, Reply::Unreadable, out);
             }
             Frame::TooBig { id: None, len, .. } => {
                 report(out, Level::Warn, format!("dropped a message of {len} bytes, too big to read, with no id"));

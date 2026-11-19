@@ -6,7 +6,7 @@ use serde_json::json;
 
 use super::harness::{Script, replies, with};
 use super::{CHAT, PROC};
-use crate::acp::{Frame, RequestId};
+use crate::acp::{Frame, RequestId, Shape};
 use crate::event::{AgentEvent, Exit};
 
 #[test]
@@ -36,14 +36,18 @@ fn an_answer_to_a_request_caf_never_sent_is_reported() {
 #[test]
 fn a_line_too_big_to_read_still_ends_what_it_was() {
     let mut script = Script::with_claude();
-    let out = script.agent(PROC, AgentEvent::Frame(Frame::TooBig { id: Some(RequestId::Number(9)), method: Some("fs/read_text_file".to_owned()), len: 70 << 20 }));
+    let out = script.agent(PROC, AgentEvent::Frame(Frame::TooBig { id: Some(RequestId::Number(9)), method: Some("fs/read_text_file".to_owned()), len: 70 << 20, shape: Shape::Call }));
     assert_eq!(replies(&out, &json!(9))[0]["error"], json!({ "code": -32600, "message": "too big to read" }));
+    // A request whose method lies past the head is still a request: its
+    // head showed params, so it's refused rather than taken for an answer.
+    let out = script.agent(PROC, AgentEvent::Frame(Frame::TooBig { id: Some(RequestId::Number(10)), method: None, len: 70 << 20, shape: Shape::Call }));
+    assert_eq!(replies(&out, &json!(10))[0]["error"], json!({ "code": -32600, "message": "too big to read" }));
 
     script.send(CHAT, "go").0.expect("sent");
-    script.agent(PROC, AgentEvent::Frame(Frame::TooBig { id: Some(RequestId::Number(1002)), method: None, len: 70 << 20 }));
+    script.agent(PROC, AgentEvent::Frame(Frame::TooBig { id: Some(RequestId::Number(1002)), method: None, len: 70 << 20, shape: Shape::Answer }));
     assert_eq!(script.chat(CHAT)["turns"][0]["life"], json!({ "Failed": { "reason": "BadAnswer", "agent_said": null, "remedy": "SendAgain" } }));
 
-    let out = script.agent(PROC, AgentEvent::Frame(Frame::TooBig { id: None, method: None, len: 70 << 20 }));
+    let out = script.agent(PROC, AgentEvent::Frame(Frame::TooBig { id: None, method: None, len: 70 << 20, shape: Shape::Unknown }));
     assert_eq!(with(&out, "report")[0]["report"], "Warn");
     let out = script.agent(PROC, AgentEvent::Frame(Frame::Junk { len: 12 }));
     assert_eq!(with(&out, "report")[0]["report"], "Debug");

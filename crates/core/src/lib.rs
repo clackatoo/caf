@@ -85,7 +85,6 @@
 //!    agent is cleaned, capped and kept apart from CAF's own words.
 
 // `acp`'s framer and parser are being written apart from the rest.
-#[allow(unused_variables, dead_code)]
 pub mod acp;
 pub mod agent;
 pub mod change;

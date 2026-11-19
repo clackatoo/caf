@@ -34,7 +34,7 @@ fn guarantee_1_every_agent_request_answered_once() {
         let out = script.says(PROC, &json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": {} }));
         assert_eq!(answered(&out, &json!(id)), 1, "{method}");
     }
-    let out = script.agent(PROC, AgentEvent::Frame(Frame::TooBig { id: Some(RequestId::Number(6)), method: Some("x".to_owned()), len: 1 << 30 }));
+    let out = script.agent(PROC, AgentEvent::Frame(Frame::TooBig { id: Some(RequestId::Number(6)), method: Some("x".to_owned()), len: 1 << 30, shape: crate::acp::Shape::Call }));
     assert_eq!(answered(&out, &json!(6)), 1);
     let mut nobodys = permission(7, "t7");
     nobodys["params"]["sessionId"] = json!("nobody");
