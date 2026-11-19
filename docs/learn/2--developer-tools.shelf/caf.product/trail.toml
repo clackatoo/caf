@@ -1,0 +1,5 @@
+title = "CAF"
+monogram = "Cf"
+color = "#0d9488"
+
+description = "The Clackatoo Agent Framework: a Rust library for building robust, feature-rich chats with coding agents into your own program."

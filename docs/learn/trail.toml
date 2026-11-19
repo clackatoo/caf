@@ -1,0 +1,5 @@
+sitename = "CAF Docs"
+title = "CAF Docs"
+description = "Using and developing CAF, the Clackatoo Agent Framework: a Rust library for robust chats with coding agents."
+footer = "Peios Learn"
+featured = ["caf"]
