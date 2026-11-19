@@ -25,29 +25,6 @@
 //! to take events doesn't stop writing, and a full input pipe doesn't
 //! stop reading. Reading pauses only while the queue is full, so a flood
 //! is held back by the pipe rather than by memory.
-//!
-//! # Signals
-//!
-//! A process group is signalled through its leader's pidfd with
-//! `PIDFD_SIGNAL_PROCESS_GROUP` (Linux 6.9 on), never by number: the
-//! pidfd holds the kernel's record of the leader, and its group hangs off
-//! that record for as long as anything is in it, so a signal can't reach
-//! another group that took the number, even after the leader is reaped.
-//! On an older kernel, or once the group is empty, the leader alone is
-//! signalled. SIGKILL goes to the leader too, in case it left its group.
-//! On an older kernel a group can't be seen once its leader is reaped, so
-//! [`AgentDirective::CheckGroup`] says it's empty then.
-//!
-//! # Exits
-//!
-//! Each process is reaped exactly once, through its pidfd, as soon as it
-//! exits. One forgotten before it exits is killed, with its group, and
-//! reaped. So is every process when the driver is dropped. If the tokio
-//! runtime itself shuts down first, a thread of its own reaps each process
-//! left.
-//!
-//! Writing to a process that has gone raises SIGPIPE, which Rust programs
-//! ignore. A host whose `main` isn't Rust's must ignore it too.
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
@@ -81,8 +58,9 @@ pub struct AgentLimits {
     pub biggest_line: usize,
     /// Lines this long or longer are parsed off the task. 256 KiB.
     pub parse_elsewhere: usize,
-    /// How much may wait to be parsed before reading pauses, so a flood
-    /// is held back by the pipe rather than by memory. 64 MiB.
+    /// How much of one process's output may wait, parsed or not, to be
+    /// handed on before reading it pauses, so a flood is held back by the
+    /// pipe rather than by memory. 64 MiB.
     pub parsing: usize,
     /// How much is read before yielding to other tasks. 1 MiB.
     pub read_step: usize,
@@ -109,8 +87,37 @@ impl Default for AgentLimits {
 
 /// Runs adapter processes for the core.
 ///
-/// Dropping it kills every process it runs, with its process group, and
-/// reaps it.
+/// It keeps the contract written on [`AgentDirective`]. What else a host
+/// should know:
+///
+/// - **Signals** go to a process's whole group through its pidfd, with
+///   `PIDFD_SIGNAL_PROCESS_GROUP` (Linux 6.9 on), never by process number:
+///   the pidfd holds the kernel's record of the process, and its group
+///   hangs off that record for as long as anything is in it, so a signal
+///   can't reach another group that took the number, even once the
+///   process is reaped. Once the group is empty, or on an older kernel,
+///   the process alone is signalled. SIGKILL goes to it too, in case it
+///   left its group.
+/// - **Before Linux 6.9** a group can't be seen once its leader is
+///   reaped, so [`AgentDirective::CheckGroup`] says it's empty then, even
+///   if something the process started is still running.
+/// - **Exits:** each process is reaped exactly once, through its pidfd,
+///   as soon as it exits, and before [`AgentEvent::Exited`] is reported.
+///   If something else reaped it first, as a host ignoring SIGCHLD does,
+///   it's reported as `Exit::Code(-1)`.
+/// - **[`AgentEvent::OutputClosed`]** is also reported when a process
+///   exited [`AgentLimits::drain`] ago and something it started still
+///   holds its output open: its output isn't waited for any more.
+/// - **[`AgentDirective::Forget`]** of a process that hasn't exited kills
+///   its group and reaps it. Dropping the driver kills every group it
+///   started, and reaps what's left. If the tokio runtime shuts down
+///   first, a thread of its own reaps each process left.
+/// - **SIGPIPE:** writing to a process that has gone raises it. Rust
+///   programs ignore it; a host whose `main` isn't Rust's must too.
+/// - **A process another thread starts** holds every pipe open in this
+///   one for a moment, until it starts its program. So the first write to
+///   a process that just closed its input can still succeed, and only the
+///   next one fails.
 pub struct AgentDriver {
     limits: AgentLimits,
     /// Each process's orders, by its ticket, until it's forgotten.
@@ -285,7 +292,7 @@ async fn run(
                     Err(_) => process.close_errors(),
                 };
             },
-            status = exit(&process.leader.pidfd), if !process.leader.reaped => process.exited(status),
+            status = exit(&process.leader.pidfd), if process.leader.watched() => process.exited(status),
             () = until(process.drain) => process.stop_draining(),
         }
         if stepped {
@@ -542,18 +549,21 @@ impl Process {
     /// a step's worth, before that's told: all it wrote itself is there
     /// by now. Something it started may hold its pipes open, so they're
     /// waited for only so long.
-    fn exited(&mut self, status: io::Result<WaitIdStatus>) {
+    fn exited(&mut self, status: io::Result<Option<WaitIdStatus>>) {
+        let Ok(status) = status else {
+            // It can't be watched, as the runtime is going: it's left for
+            // the leader to kill and reap as it's dropped.
+            self.leader.unwatchable = true;
+            return;
+        };
         self.leader.reaped = true;
         self.read_output();
         self.read_errors();
-        let exit = match status {
-            Ok(status) => match (status.exit_status(), status.terminating_signal()) {
-                (Some(code), _) => Exit::Code(code),
-                (None, Some(signal)) => Exit::Signal(signal),
-                (None, None) => Exit::Code(-1),
-            },
+        let exit = match status.map(|status| (status.exit_status(), status.terminating_signal())) {
+            Some((Some(code), _)) => Exit::Code(code),
+            Some((None, Some(signal))) => Exit::Signal(signal),
             // Something else reaped it, so how it ended isn't known.
-            Err(_) => Exit::Code(-1),
+            Some((None, None)) | None => Exit::Code(-1),
         };
         self.push(AgentEvent::Exited(exit), 0);
         if self.stdout.is_some() || self.stderr.is_some() {
@@ -630,10 +640,13 @@ impl Process {
         self.stdout = None;
         self.stderr = None;
         self.queue.clear();
-        if !self.leader.reaped {
+        if self.leader.watched() {
             self.leader.kill();
-            let _ = exit(&self.leader.pidfd).await;
-            self.leader.reaped = true;
+            // If it can't be waited for, the leader reaps it as it's
+            // dropped.
+            if exit(&self.leader.pidfd).await.is_ok() {
+                self.leader.reaped = true;
+            }
         }
     }
 
@@ -704,6 +717,8 @@ struct Leader {
     pidfd: AsyncFd<OwnedFd>,
     /// Whether it has been reaped. Its pidfd still reaches its group.
     reaped: bool,
+    /// Whether waiting for its exit failed, as when the runtime is going.
+    unwatchable: bool,
 }
 
 /// `pidfd_send_signal`'s flag to signal the pidfd's process group, from
@@ -711,6 +726,11 @@ struct Leader {
 const PIDFD_SIGNAL_PROCESS_GROUP: libc::c_uint = 4;
 
 impl Leader {
+    /// Whether its exit is still to be waited for.
+    fn watched(&self) -> bool {
+        !self.reaped && !self.unwatchable
+    }
+
     /// Sends signal number `signal` to its group. With nothing left in the
     /// group, or a kernel too old to signal a group through a pidfd
     /// (before Linux 6.9), it alone is sent it.
@@ -841,6 +861,7 @@ fn spawn(
         pid,
         pidfd,
         reaped: false,
+        unwatchable: false,
     };
     let stdin = pipe::Sender::from_owned_fd(OwnedFd::from(stdin))?;
     let stdout = pipe::Receiver::from_owned_fd(OwnedFd::from(stdout))?;
@@ -896,17 +917,21 @@ fn absolute_only(path: &OsStr) -> OsString {
 }
 
 /// Resolves once the process whose pidfd is `pidfd` has exited, reaping
-/// it. Cancel-safe: it's reaped only as this resolves.
-async fn exit(pidfd: &AsyncFd<OwnedFd>) -> io::Result<WaitIdStatus> {
+/// it, with how it exited: `None` if something else reaped it first. An
+/// error means it can't be waited for, and wasn't reaped. Cancel-safe:
+/// it's reaped only as this resolves.
+async fn exit(pidfd: &AsyncFd<OwnedFd>) -> io::Result<Option<WaitIdStatus>> {
     loop {
         let mut ready = pidfd.readable().await?;
         let waited = rustix::process::waitid(
             WaitId::PidFd(pidfd.get_ref().as_fd()),
             WaitIdOptions::EXITED | WaitIdOptions::NOHANG,
-        )?;
+        );
         match waited {
-            Some(status) => return Ok(status),
-            None => ready.clear_ready(),
+            Ok(Some(status)) => return Ok(Some(status)),
+            Ok(None) => ready.clear_ready(),
+            Err(rustix::io::Errno::CHILD) => return Ok(None),
+            Err(error) => return Err(error.into()),
         }
     }
 }
