@@ -57,10 +57,35 @@ pub struct Chat<A: AppItem = NoAppItems> {
     pub state: ChatState,
     /// Its turns, oldest first.
     pub turns: Vec<Turn<A>>,
+    /// How full the agent's memory (its context window) is, as it last
+    /// said, if it says.
+    pub usage: Option<Usage>,
     /// Questions waiting for an answer, oldest first. They aren't items:
     /// they come and go. Once one is answered, what was decided is written
     /// on the item it was about.
     pub questions: Vec<Question>,
+}
+
+/// How full the agent's memory is, as it says.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Usage {
+    /// Tokens in use.
+    pub used: u64,
+    /// Tokens it can hold.
+    pub size: u64,
+    /// What the session has cost so far, if the agent says.
+    pub cost: Option<Cost>,
+}
+
+/// An amount of money.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Cost {
+    /// How much.
+    pub amount: f64,
+    /// In what, as an ISO 4217 code such as `USD`.
+    pub currency: String,
 }
 
 /// Where a chat stands with its agent.

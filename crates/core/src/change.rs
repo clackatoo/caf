@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::chat::{AppItem, Chat, ChatState, Item, NoAppItems, ToolCall, Turn, TurnLife};
+use crate::chat::{AppItem, Chat, ChatState, Item, NoAppItems, ToolCall, Turn, TurnLife, Usage};
 use crate::ids::{ChangeNo, ItemId, QuestionId, TurnId};
 use crate::question::Question;
 use crate::time::End;
@@ -72,6 +72,8 @@ pub enum Change<A: AppItem = NoAppItems> {
         /// When.
         end: End,
     },
+    /// The agent said how full its memory is.
+    Usage(Usage),
     /// A question was asked.
     QuestionAsked(Question),
     /// A question was answered or withdrawn.
