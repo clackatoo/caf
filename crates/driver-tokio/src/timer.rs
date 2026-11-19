@@ -1,8 +1,7 @@
 //! The timer driver: wakes the core at the one time it asked for.
 
-use std::time::{Duration, SystemTime};
-
 use std::pin::Pin;
+use std::time::{Duration, SystemTime};
 
 use caf_core::time::{Mono, Now, Wall};
 use tokio::time::{Instant, Sleep};

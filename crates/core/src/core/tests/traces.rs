@@ -78,7 +78,8 @@ fn replay_recording(text: &str) -> (Core, Vec<Vec<serde_json::Value>>) {
     let header: Header = serde_json::from_str(lines.next().expect("a header")).expect("the header reads");
     let mut core = Core::new(header.host, header.agents);
     let mut outs = Vec::new();
-    for line in lines {
+    // A recording cut short says so, and ends there.
+    for line in lines.take_while(|line| !line.starts_with(r#"{"stopped":"#)) {
         let step: Step = serde_json::from_str(line).expect("a step reads");
         let mut out = Vec::new();
         core.handle(step.now, step.event, &mut out);

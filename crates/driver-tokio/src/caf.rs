@@ -25,7 +25,7 @@
 //! ([`Limits::kept_changes`](caf_core::host::Limits::kept_changes)). A
 //! watch further behind than that gets the whole chat again.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufWriter, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::panic::AssertUnwindSafe;
@@ -72,7 +72,8 @@ pub struct Config {
     /// `{"now": …, "event": …}`. Calls such as [`ChatHandle::send`] are
     /// written as the [`Event::Host`] they stand for, with the id the core
     /// gave out, and only if the core took them. Read each line's event
-    /// back as an [`Event`].
+    /// back as an [`Event`]. A recording cut short ends with
+    /// `{"stopped": …}`, saying why: a replay stops there.
     ///
     /// **What's hidden.** None of it changes what the core does:
     /// - Claude's sign-in status (`_auth/status_update`) holds the
@@ -84,8 +85,9 @@ pub struct Config {
     ///
     /// **What's kept**, as it came: the host, each agent's name, program,
     /// folder and profile; what the user sent; everything the agent said;
-    /// its error output, as text, with any bytes that aren't UTF-8
-    /// replaced; folders; and each MCP server's name, program, arguments
+    /// its error output, exactly, as text where a piece of it is UTF-8 and
+    /// as bytes where it isn't, such as one that ends partway through a
+    /// character; folders; and each MCP server's name, program, arguments
     /// and URL. So don't put secrets in MCP arguments or URLs, and treat a
     /// recording as private: read it through before sharing it. Names of
     /// variables and arguments are written as arrays of bytes, as Rust
@@ -94,10 +96,12 @@ pub struct Config {
     /// The file is made new, readable only by its owner: if anything is
     /// there already, even a link, CAF won't record. It's written on a
     /// thread of its own, so the disk never holds CAF up, and it's complete
-    /// once [`Caf::shutdown`] returns. If it can't be made, if a write
-    /// fails, or if more than 256 MiB is waiting to be written because the
-    /// disk has fallen behind, CAF says so in a warning and stops
-    /// recording: what's in the file still replays, as far as it goes.
+    /// once [`Caf::shutdown`] returns. If it can't be made, or a write
+    /// fails, CAF says so in a warning and stops recording. If more than
+    /// 256 MiB is waiting to be written because the disk has fallen
+    /// behind, it stops too, and once what came before is written, ends
+    /// the file with `{"stopped": …}`. Either way, what's in the file still
+    /// replays, as far as it goes.
     pub record: Option<PathBuf>,
 }
 
@@ -367,6 +371,9 @@ impl<A: AppItem> ChatHandle<A> {
     /// rather than holding changes without end.
     #[must_use]
     pub fn watch(&self) -> Watch<A> {
+        let mut last = (self.caf.last.lock()).unwrap_or_else(PoisonError::into_inner);
+        last.watched.insert(self.id);
+        drop(last);
         Watch {
             commands: self.caf.commands.downgrade(),
             last: Arc::clone(&self.caf.last),
@@ -493,7 +500,7 @@ impl<A: AppItem> Watch<A> {
     fn last_words(&mut self) -> Option<Update<A>> {
         self.ended = true;
         let last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
-        let (chat, latest) = last.get(&self.chat)?;
+        let (chat, latest) = last.chats.get(&self.chat)?;
         let behind = self.since.is_none_or(|since| since < *latest);
         behind.then(|| Update::Picture(chat.clone()))
     }
@@ -556,9 +563,26 @@ struct Seen<A: AppItem> {
     wake: Option<watch::Receiver<()>>,
 }
 
-/// Every chat as CAF left it when its task ended, with its last change's
-/// number. Empty until then.
-type LastWords<A> = Arc<Mutex<HashMap<ChatId, (Chat<A>, ChangeNo)>>>;
+/// The chats some watch was made for, and each as CAF left it when its
+/// task ended, with its last change's number.
+type LastWords<A> = Arc<Mutex<Last<A>>>;
+
+/// See [`LastWords`].
+struct Last<A: AppItem> {
+    /// The chats some watch was made for.
+    watched: HashSet<ChatId>,
+    /// Each of them as CAF left it. Empty until the task ends.
+    chats: HashMap<ChatId, (Chat<A>, ChangeNo)>,
+}
+
+impl<A: AppItem> Default for Last<A> {
+    fn default() -> Self {
+        Self {
+            watched: HashSet::new(),
+            chats: HashMap::new(),
+        }
+    }
+}
 
 /// The task: the core and its drivers.
 struct Task<A: AppItem> {
@@ -606,9 +630,14 @@ impl<A: AppItem> Task<A> {
         }
         {
             let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
-            for whole in self.core.chats() {
-                if let Some(Read::Picture { latest, .. }) = self.core.read(whole.id, None) {
-                    last.insert(whole.id, (whole.clone(), latest));
+            let Last { watched, chats } = &mut *last;
+            for &chat in &*watched {
+                if let Some(Read::Picture {
+                    chat: whole,
+                    latest,
+                }) = self.core.read(chat, None)
+                {
+                    chats.insert(chat, (whole.clone(), latest));
                 }
             }
         }
@@ -1033,10 +1062,14 @@ impl Recorder {
         let _ = self.lines.send(line);
     }
 
-    /// Stops recording, saying why.
+    /// Stops recording, saying why: in a warning, and in a last line
+    /// written once everything before it has been.
     fn stop(&mut self, why: &str) {
         log::warn!(target: "caf", "stopped recording to {}: {why}", self.path);
         self.stopped = true;
+        let last = serde_json::json!({ "stopped": why }).to_string();
+        self.shared.waiting.fetch_add(last.len(), Ordering::Relaxed);
+        let _ = self.lines.send(last);
     }
 
     /// Waits for everything to be written.
@@ -1048,7 +1081,7 @@ impl Recorder {
 }
 
 /// `event` at `now`, as a recording's line: with Claude's sign-in status
-/// emptied, and error output as text.
+/// emptied, and error output as text where it's UTF-8.
 fn line<A: AppItem>(now: Now, event: &Event<A>) -> serde_json::Result<String> {
     let Event::Agent {
         process,
@@ -1058,8 +1091,13 @@ fn line<A: AppItem>(now: Now, event: &Event<A>) -> serde_json::Result<String> {
         return serde_json::to_string(&Step { now, event });
     };
     let hidden = match agent {
+        // As text where it's UTF-8, so a person can read it. A chunk can
+        // end partway through a character, and is then written as bytes,
+        // so the core is given exactly what it was given before.
         AgentEvent::Stderr(bytes) => {
-            let text = String::from_utf8_lossy(bytes);
+            let Ok(text) = std::str::from_utf8(bytes) else {
+                return serde_json::to_string(&Step { now, event });
+            };
             let event =
                 serde_json::json!({ "Agent": { "process": process, "event": { "Stderr": text } } });
             return serde_json::to_string(&serde_json::json!({ "now": now, "event": event }));
@@ -1174,10 +1212,78 @@ mod tests {
         let lines: Vec<&str> = kept.lines().collect();
         assert!(lines.len() > 1 && lines.len() < 20, "{lines:?}");
         assert_eq!(lines[0], "{}");
-        // What it did write replays, as far as it goes.
-        for line in &lines[1..] {
+        // What it did write replays, as far as it goes, and then it says
+        // why it stopped.
+        let (stopped, steps) = lines[1..].split_last().unwrap();
+        for line in steps {
             let step: serde_json::Value = serde_json::from_str(line).unwrap();
             assert_eq!(step["event"], "Woken");
         }
+        assert_eq!(*stopped, r#"{"stopped":"the disk has fallen behind"}"#);
+    }
+
+    #[test]
+    fn error_output_split_inside_a_character_replays_exactly() {
+        use caf_core::agent::SpawnCommand;
+        use caf_core::directive::AgentDirective;
+        use caf_core::profiles::ProfileChoice;
+        let agents = vec![AgentSpec::new(
+            "plain",
+            SpawnCommand::new("/opt/plain"),
+            ProfileChoice::Cautious,
+        )];
+        let host = Host::new("test", "1.0.0");
+        let now = Now {
+            wall: Wall(0),
+            mono: Mono(0),
+        };
+        let mut live = Core::<NoAppItems>::new(host.clone(), agents.clone());
+        let mut out = Vec::new();
+        let chat = live
+            .open_chat(now, OpenChat::new("plain", "/work"), &mut out)
+            .unwrap();
+        let Some(process) = out.iter().find_map(|directive| match directive {
+            Directive::Agent(AgentDirective::Start { process, .. }) => Some(*process),
+            _ => None,
+        }) else {
+            panic!("an adapter started: {out:?}")
+        };
+        let mut lines = vec![
+            serde_json::to_string(&Step {
+                now,
+                event: &Event::<NoAppItems>::Host(HostCommand::OpenChat {
+                    chat,
+                    open: OpenChat::new("plain", "/work"),
+                }),
+            })
+            .unwrap(),
+        ];
+        // "café" and "naïve", each cut inside its accented letter.
+        for chunk in [&b"caf\xc3"[..], b"\xa9 na\xc3", b"\xafve\n"] {
+            let event = Event::Agent {
+                process,
+                event: AgentEvent::Stderr(chunk.to_vec()),
+            };
+            lines.push(line(now, &event).unwrap());
+            live.handle(now, event, &mut out);
+        }
+        let mut replayed = Core::<NoAppItems>::new(host, agents);
+        for each in &lines {
+            #[derive(serde::Deserialize)]
+            struct Step {
+                now: Now,
+                event: Event,
+            }
+            let step: Step = serde_json::from_str(each).unwrap();
+            replayed.handle(step.now, step.event, &mut out);
+        }
+        assert_eq!(live.connections()[0].stderr, ["café naïve"]);
+        assert_eq!(replayed.connections(), live.connections());
+        // Whole characters are still written as text.
+        let whole = Event::<NoAppItems>::Agent {
+            process,
+            event: AgentEvent::Stderr("café\n".into()),
+        };
+        assert!(line(now, &whole).unwrap().contains(r#""Stderr":"café\n""#));
     }
 }

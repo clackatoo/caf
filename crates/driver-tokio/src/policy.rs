@@ -21,7 +21,11 @@ pub trait Policy: Send + 'static {
     /// as a task of its own, and is dropped if the request is withdrawn,
     /// such as when the user stops the turn. A panic, in `decide` or in
     /// its future, refuses the request.
-    fn decide(&mut self, chat: ChatId, request: PermissionRequest) -> Pin<Box<dyn Future<Output = PolicyAnswer> + Send>>;
+    fn decide(
+        &mut self,
+        chat: ChatId,
+        request: PermissionRequest,
+    ) -> Pin<Box<dyn Future<Output = PolicyAnswer> + Send>>;
 }
 
 /// Asks the user about everything. The default.
@@ -29,7 +33,11 @@ pub trait Policy: Send + 'static {
 pub struct AlwaysAsk;
 
 impl Policy for AlwaysAsk {
-    fn decide(&mut self, _: ChatId, _: PermissionRequest) -> Pin<Box<dyn Future<Output = PolicyAnswer> + Send>> {
+    fn decide(
+        &mut self,
+        _: ChatId,
+        _: PermissionRequest,
+    ) -> Pin<Box<dyn Future<Output = PolicyAnswer> + Send>> {
         Box::pin(std::future::ready(PolicyAnswer::AskUser))
     }
 }
@@ -39,7 +47,11 @@ impl Policy for AlwaysAsk {
 pub struct RefuseAll;
 
 impl Policy for RefuseAll {
-    fn decide(&mut self, _: ChatId, _: PermissionRequest) -> Pin<Box<dyn Future<Output = PolicyAnswer> + Send>> {
+    fn decide(
+        &mut self,
+        _: ChatId,
+        _: PermissionRequest,
+    ) -> Pin<Box<dyn Future<Output = PolicyAnswer> + Send>> {
         Box::pin(std::future::ready(PolicyAnswer::Refuse))
     }
 }

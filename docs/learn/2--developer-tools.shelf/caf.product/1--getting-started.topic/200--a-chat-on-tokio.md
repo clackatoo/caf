@@ -117,7 +117,8 @@ Each line after it is one event, in order:
 ```
 
 To replay it, make a `Core` from the first line with `Core::new`, read each
-line's event as an `Event`, and give it to `Core::handle` at its time.
+line's event as an `Event`, and give it to `Core::handle` at its time. A
+recording cut short ends with a `stopped` line (see below): stop there.
 
 ### What's hidden
 
@@ -136,8 +137,9 @@ Everything else goes in as it came:
 
 - the host, and each agent's name, program, folder and profile;
 - what the user sent, and everything the agent said;
-- the agent's error output, as text, with any bytes that aren't UTF-8
-  replaced;
+- the agent's error output, exactly: as text where a piece of it is UTF-8,
+  and as bytes where it isn't, such as one that ends partway through a
+  character;
 - folders;
 - each MCP server's name, program, arguments and URL.
 
@@ -152,9 +154,16 @@ already, even a link, CAF logs a warning and doesn't record. It's written on
 a thread of its own, so the disk never holds CAF up, and it's complete once
 `shutdown` returns.
 
-If a write fails, or more than 256 MiB waits to be written because the disk
-has fallen behind, CAF logs a warning and stops recording. What's in the file
-still replays, as far as it goes.
+If a write fails, CAF logs a warning and stops recording. If more than
+256 MiB waits to be written because the disk has fallen behind, it stops too,
+and once what came before is written, it ends the file with a line saying
+why:
+
+```json
+{"stopped": "the disk has fallen behind"}
+```
+
+Either way, what's in the file still replays, as far as it goes.
 
 ## What goes where
 

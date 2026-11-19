@@ -693,7 +693,8 @@ fn replay(text: &str) -> Core {
     assert_eq!(header.caf_recording, 1);
     let mut core = Core::new(header.host, header.agents);
     let mut out = Vec::new();
-    for line in lines {
+    // A recording cut short says so, and ends there.
+    for line in lines.take_while(|line| !line.starts_with(r#"{"stopped":"#)) {
         let step: Step = serde_json::from_str(line).expect("a step reads");
         core.handle(step.now, step.event, &mut out);
     }
