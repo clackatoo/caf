@@ -10,7 +10,7 @@
 use serde_json::{Value, json};
 
 use super::clean::agent_text;
-use super::state::{Ask, Open};
+use super::state::Ask;
 use super::wire::CANCELLED;
 use super::{Core, Refused, report};
 use crate::acp::RequestId;
@@ -49,7 +49,7 @@ impl<A: AppItem> Core<A> {
         }
         let options = options(params.get("options"));
         let call = params.get("toolCall").cloned().unwrap_or(Value::Null);
-        let tool = self.tool_for(now, chat, &call);
+        let tool = self.tool_named(now, chat, &call);
         let title = (call.get("title").and_then(Value::as_str))
             .map(|title| agent_text(title, MOST_LABEL))
             .or_else(|| match &self.item(chat, tool?)?.kind {
@@ -74,25 +74,6 @@ impl<A: AppItem> Core<A> {
             chat,
             request: PermissionRequest { title, input },
         }));
-    }
-
-    /// The tool call a permission request names: the one CAF has seen, or
-    /// a new one from what the request says of it.
-    fn tool_for(&mut self, now: Now, chat: ChatId, call: &Value) -> Option<crate::ids::ItemId> {
-        let id = call.get("toolCallId").and_then(Value::as_str)?;
-        if let Some(item) = self.runs.get(&chat).and_then(|run| run.tools.get(id)) {
-            return Some(*item);
-        }
-        let mut update = call.clone();
-        update["sessionUpdate"] = json!("tool_call_update");
-        let session = self.runs.get(&chat).and_then(|run| run.session.clone())?;
-        let proc = match self.runs.get(&chat)?.open {
-            Open::Live { proc } | Open::Asked { proc, .. } => proc,
-            _ => return None,
-        };
-        let mut ignored = Vec::new();
-        self.update(now, proc, &json!({ "sessionId": session.0, "update": update }), &mut ignored);
-        self.runs.get(&chat).and_then(|run| run.tools.get(id)).copied()
     }
 
     /// The policy answered.
@@ -155,7 +136,15 @@ impl<A: AppItem> Core<A> {
             Some(option) => json!({ "outcome": { "outcome": "selected", "optionId": option.0 } }),
             None => cancelled(),
         };
-        self.reply(ask.proc, &ask.id, Ok(outcome), out);
+        self.reply_or_report(ask.proc, &ask.id, Ok(outcome), out);
+    }
+
+    /// Answers the agent's request, or reports that its process has gone
+    /// and it can't be.
+    fn reply_or_report(&mut self, proc: Ticket, id: &RequestId, result: Result<Value, (i64, String)>, out: &mut Vec<Directive>) {
+        if !self.reply(proc, id, result, out) {
+            report(out, Level::Debug, "couldn't answer a permission request: its process has gone".to_owned());
+        }
     }
 
     /// The user answered `question`.
@@ -192,7 +181,7 @@ impl<A: AppItem> Core<A> {
             return;
         };
         if let Some(ask) = self.forget_ask(ticket, out) {
-            self.reply(proc, &ask.id, Err((CANCELLED, "cancelled".to_owned())), out);
+            self.reply_or_report(proc, &ask.id, Err((CANCELLED, "cancelled".to_owned())), out);
         }
     }
 
@@ -201,7 +190,7 @@ impl<A: AppItem> Core<A> {
         let tickets: Vec<Ticket> = (self.asks.iter()).filter(|(_, ask)| ask.chat == chat).map(|(&ticket, _)| ticket).collect();
         for ticket in tickets {
             if let Some(ask) = self.forget_ask(ticket, out) {
-                self.reply(ask.proc, &ask.id, Ok(cancelled()), out);
+                self.reply_or_report(ask.proc, &ask.id, Ok(cancelled()), out);
             }
         }
     }

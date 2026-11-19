@@ -68,5 +68,4 @@ fn a_chat_starts_its_adapter_opens_a_session_and_runs_a_turn() {
         "items": [{ "kind": { "Words": "On it." }, "window": { "end": { "At": 1_800_000_003_000_i64 } } }],
         "imported": false
     }] }));
-    script.replay();
 }

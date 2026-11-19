@@ -10,6 +10,14 @@
 //!
 //! Ids start at 1000, and the clock is always given in: `at` sets it in
 //! milliseconds since the script started.
+//!
+//! Every script also checks, whatever the test:
+//! - each event gives out at most one wake-up time;
+//! - no request of the agent's is answered twice, and by the end each is
+//!   answered once, unless its process went before it could be;
+//! - its recording replays to the same directives and state.
+
+use std::collections::BTreeMap;
 
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
@@ -44,6 +52,9 @@ pub(crate) struct Script {
     trace: Vec<(u64, String)>,
     /// What each event gave out, rendered.
     outs: Vec<Vec<Value>>,
+    /// The agent's requests, by process and id, and how often each was
+    /// answered.
+    answers: BTreeMap<(u64, String), usize>,
 }
 
 /// The agents a test offers: Claude, as the Claude profile expects it.
@@ -70,6 +81,7 @@ impl Script {
             ms: 0,
             trace: Vec::new(),
             outs: Vec::new(),
+            answers: BTreeMap::new(),
         }
     }
 
@@ -105,6 +117,16 @@ impl Script {
     /// Keeps and returns what an event gave out, rendered.
     fn done(&mut self, out: &[Directive]) -> Vec<Value> {
         let rendered: Vec<Value> = out.iter().map(render).collect();
+        assert!(with(&rendered, "wake_at").len() <= 1, "one wake-up at most: {rendered:#?}");
+        for directive in &rendered {
+            let Some(proc) = directive.get("write").and_then(Value::as_u64) else { continue };
+            let message = &directive["message"];
+            if message.get("method").is_none() {
+                let count = self.answers.entry((proc, message["id"].to_string())).or_default();
+                *count += 1;
+                assert_eq!(*count, 1, "the agent's request {} answered twice", message["id"]);
+            }
+        }
         self.outs.push(rendered.clone());
         rendered
     }
@@ -181,6 +203,9 @@ impl Script {
 
     /// Process `proc` writes `message`, a JSON-RPC message.
     pub(crate) fn says(&mut self, proc: u64, message: &Value) -> Vec<Value> {
+        if let (Some(id), Some(_)) = (message.get("id"), message.get("method")) {
+            self.answers.entry((proc, id.to_string())).or_default();
+        }
         self.agent(proc, AgentEvent::Frame(frame(message)))
     }
 
@@ -238,12 +263,30 @@ impl Script {
         assert_eq!(core.snapshot(), self.state(), "the replay ends in the same state");
     }
 
+    /// Checks every request of the agent's was answered once, unless its
+    /// process went before it could be.
+    fn check_answers(&self) {
+        for ((proc, id), &count) in &self.answers {
+            let writable = self.core.procs.get(&Ticket(*proc)).is_some_and(|each| each.writable());
+            assert!(count == 1 || !writable, "the agent's request {id} to {proc} was never answered");
+        }
+    }
+
     /// The recording, as one JSON document.
     pub(crate) fn recording(&self) -> Value {
         let steps: Vec<Value> = (self.trace.iter())
             .map(|(ms, json)| json!({ "at": ms, "event": serde_json::from_str::<Value>(json).expect("JSON") }))
             .collect();
         Value::Array(steps)
+    }
+}
+
+impl Drop for Script {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            self.check_answers();
+            self.replay();
+        }
     }
 }
 

@@ -3,6 +3,7 @@
 mod harness;
 
 mod basics;
+mod process;
 
 use serde_json::{Value, json};
 

@@ -51,14 +51,19 @@
 //!
 //! 1. **Every request the agent sends is answered, exactly once:** by the
 //!    policy, by the user, by the core's own safe refusal, or with an
-//!    error. A request is never left waiting because CAF forgot it.
+//!    error. A request is never left waiting because CAF forgot it. The
+//!    one exception is a request from a process that has gone, which
+//!    nothing can be written to: it's dropped, and reported.
 //! 2. **Every request CAF sends ends**, with an answer, an error, or a
 //!    terminal outcome when its connection is lost. Every request has a
 //!    watchdog ([`host::Timers`]) except a prompt, which may run as long as
 //!    the agent works; once the user stops it, it has one too.
 //! 3. **Nothing the agent sends is silently dropped.** An update CAF can't
 //!    read becomes an [`ItemKind::Unknown`] with its original data, and a
-//!    message that fits nowhere becomes a [`Report`].
+//!    message that fits nowhere becomes a [`Report`]. So do updates about
+//!    the whole chat (its plan, commands, mode, settings and title) until
+//!    the features that keep them. The one thing CAF drops on purpose is
+//!    Claude's sign-in status, which holds the account's email.
 //! 4. **Every event names what it belongs to**: a turn, an item, a session,
 //!    a process. A late update lands on its own row, never on whatever is
 //!    current.

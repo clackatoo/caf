@@ -154,12 +154,26 @@ impl<A: AppItem> Core<A> {
             Said::Tool { id, change } => self.live_tool(now, chat, id, change),
             Said::Usage(usage) => self.set_usage(chat, usage),
             Said::User(_) => report(out, Level::Debug, "the agent told the user's message back: not kept twice".to_owned()),
-            Said::Later(what) => report(out, Level::Debug, format!("kept for a later feature: {what}")),
+            Said::Later(what) => report(out, Level::Debug, format!("not kept yet, until a later feature: {what}")),
             Said::Unknown(unknown) => {
                 let Some(turn) = self.live_turn(now, chat) else { return };
                 self.add_live_item(now, chat, turn, ItemKind::Unknown(unknown), Window::instant(now));
             }
         }
+    }
+
+    /// The tool call a permission request names, `call`: the one CAF has
+    /// seen, or a new one from what the request says of it.
+    pub(super) fn tool_named(&mut self, now: Now, chat: ChatId, call: &Value) -> Option<ItemId> {
+        let id = call.get("toolCallId").and_then(Value::as_str)?;
+        if let Some(item) = self.runs.get(&chat).and_then(|run| run.tools.get(id)) {
+            return Some(*item);
+        }
+        let mut update = call.clone();
+        update["sessionUpdate"] = Value::from("tool_call_update");
+        let Said::Tool { id, change } = self.read_update(update) else { return None };
+        self.live_tool(now, chat, id.clone(), change);
+        self.runs.get(&chat).and_then(|run| run.tools.get(&id)).copied()
     }
 
     /// Adds an item to a live turn, ending words or thinking before it.
@@ -239,7 +253,7 @@ impl<A: AppItem> Core<A> {
                 return;
             }
             Said::Usage(usage) => return self.set_usage(chat, usage),
-            Said::Later(what) => return report(out, Level::Debug, format!("kept for a later feature: {what}")),
+            Said::Later(what) => return report(out, Level::Debug, format!("not kept yet, until a later feature: {what}")),
             Said::Unknown(unknown) => ItemKind::Unknown(unknown),
         };
         self.import_item(chat, kind);

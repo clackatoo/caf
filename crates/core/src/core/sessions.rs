@@ -118,8 +118,10 @@ impl<A: AppItem> Core<A> {
         let Some(run) = self.runs.get(&chat) else { return };
         let conn = run.conn;
         if let Some(session) = &run.session {
+            // Only a chat that asked for it, or has it, holds it.
             let held = (self.runs.iter()).any(|(&other, them)| {
-                other != chat && them.conn == conn && them.open != Open::Idle && them.session.as_ref() == Some(session)
+                let holds = matches!(them.open, Open::Asked { .. } | Open::Live { .. });
+                other != chat && them.conn == conn && holds && them.session.as_ref() == Some(session)
             });
             if held {
                 return self.session_lost(now, chat, Lost::InUse, false, out);
