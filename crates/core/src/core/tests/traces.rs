@@ -56,7 +56,9 @@ fn print_claude_turn() {
 /// changes no state: the adapter's path and the chat's folder, a stack
 /// trace on stderr naming a home folder, the user's own skills from the
 /// command lists, and their own agents and models from the session's
-/// settings. Claude's sign-in status is never recorded.
+/// settings. The kit itself wrote Claude's sign-in status without its
+/// params, the agent's variables without their values, and error output
+/// as text.
 const CLAUDE_LIVE: &str = include_str!("traces/claude-0.98.0-live.jsonl");
 
 /// Replays a recording of the tokio kit's into a fresh core, returning
@@ -95,7 +97,7 @@ fn a_live_claude_run_replays_to_its_end() {
         "state": { "Lost": { "reason": "ShutDown" } },
         "turns": [
             { "starter": { "User": { "parts": [{ "Text": "Reply with exactly the word pong." }] } }, "life": "Finished", "items": [{ "kind": { "Words": "pong" } }] },
-            { "starter": { "User": {} }, "life": "Stopped", "items": [{ "kind": { "Words": "The Last Watch at Gannet Rock\n\nEvery evening for" } }] }
+            { "starter": { "User": {} }, "life": "Stopped", "items": [{ "kind": { "Words": "**The Keeper of Halden Rock**\n\nFor thirty-one years, Ed" } }] }
         ],
         "questions": []
     }));
@@ -105,6 +107,8 @@ fn a_live_claude_run_replays_to_its_end() {
     let all: Vec<_> = outs.iter().flatten().cloned().collect();
     assert_eq!(writes(&all).iter().filter(|(_, message)| message["method"] == "session/cancel").count(), 1);
     assert_eq!(with(&all, "forget").len(), 1);
+    // Claude's sign-in status came, and was recorded without the email.
+    assert_eq!(CLAUDE_LIVE.matches(r#""method":"_auth/status_update","params":null"#).count(), 3);
     // The same recording replays the same way again.
     let (again, outs_again) = replay_recording(CLAUDE_LIVE);
     assert_eq!(outs_again, outs);
