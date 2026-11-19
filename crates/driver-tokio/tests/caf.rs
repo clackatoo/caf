@@ -3,6 +3,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -871,17 +872,18 @@ impl Policy for Panics {
     }
 }
 
-/// A policy that allows everything, slowly.
-struct Slowly;
+/// A policy that allows everything, once the test lets it.
+struct WhenLet(Arc<tokio::sync::Notify>);
 
-impl Policy for Slowly {
+impl Policy for WhenLet {
     fn decide(
         &mut self,
         _: ChatId,
         _: PermissionRequest,
     ) -> Pin<Box<dyn Future<Output = PolicyAnswer> + Send>> {
-        Box::pin(async {
-            tokio::time::sleep(Duration::from_millis(500)).await;
+        let notify = Arc::clone(&self.0);
+        Box::pin(async move {
+            notify.notified().await;
             PolicyAnswer::Allow
         })
     }
@@ -932,33 +934,40 @@ async fn a_policy_that_panics_refuses() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_late_answer_to_a_withdrawn_request_does_nothing() {
     let dir = Dir::new();
-    let script = dir.script("script.jsonl", &after_handshake(&[
-        prompt(),
-        ask_to_run(),
-        json!({"await": {"to": "ask", "expect": {"result": {"outcome": {"outcome": "cancelled"}}}, "timeout": 60_000}}),
-        json!({"wait": {"method": "session/cancel"}}),
-        json!({"respond": {"to": "prompt", "result": {"stopReason": "cancelled"}}}),
-    ]));
+    let script = dir.script(
+        "script.jsonl",
+        &after_handshake(&[
+            prompt(),
+            ask_to_run(),
+            say("s1", "asking"),
+            json!({"await": {"to": "ask", "expect": {"result": {"outcome": {"outcome": "cancelled"}}}, "timeout": 60_000}}),
+            json!({"wait": {"method": "session/cancel"}}),
+            json!({"respond": {"to": "prompt", "result": {"stopReason": "cancelled"}}}),
+        ]),
+    );
     let mut config = Config::new(host(), vec![fake(&dir, &script)]);
-    config.policy = Box::new(Slowly);
+    let answer = Arc::new(tokio::sync::Notify::new());
+    config.policy = Box::new(WhenLet(Arc::clone(&answer)));
     let (caf, running) = start(config);
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     chat.send(UserMessage::text("Clean up")).await.unwrap();
-    until(&chat, &mut watch, "the turn to run", |chat| {
-        last_life(chat) == Some(&TurnLife::Running)
+    // A process's lines reach the core in order, so once the words after
+    // the request are in, the policy has the request.
+    until(&chat, &mut watch, "the words after the request", |chat| {
+        chat.turns
+            .first()
+            .is_some_and(|turn| words(turn) == "asking")
     })
     .await;
-    // Give the agent's request time to reach the policy, then stop
-    // before the policy answers.
-    tokio::time::sleep(Duration::from_millis(100)).await;
     chat.stop().await.unwrap();
     until(&chat, &mut watch, "the turn to stop", |chat| {
         last_life(chat) == Some(&TurnLife::Stopped)
     })
     .await;
-    // The policy's answer comes after this, and changes nothing.
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    // Only now does the policy answer: the core ignores it.
+    answer.notify_one();
+    tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(last_life(&picture(&chat).await), Some(&TurnLife::Stopped));
     shut_down(&caf, running).await;
     let answers = answers_to(&dir, 0);
