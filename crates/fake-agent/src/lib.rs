@@ -75,7 +75,7 @@
 //! | `"stop_reading"`, `"resume_reading"` | Stops reading stdin, so the client's writes block, and starts again |
 //! | `"close_stdout"`, `"close_stderr"` | Closes one, and carries on |
 //! | `"wait_closed"` | Waits until stdin closes, and carries on |
-//! | `{"wait_file": PATH}` | Waits until a file is there, so the test says when to go on |
+//! | `{"wait_file": {"path", "timeout"}}` | Waits until a file is there, so the test says when to go on ([`WaitFile`]) |
 //! | `"hang"` | Does nothing more, ever, but run handlers |
 //! | `{"spawn_holder": {"pid_file", "secs"}}` | Starts a process holding stdout and stderr, before any `close_stdout`, until its pid file goes ([`SpawnHolder`]) |
 //! | `{"include": PATH}` | Puts another script's steps here, or a handler's |
@@ -160,7 +160,8 @@
 //! - **Stdout can't be written,** because nobody reads it: the fake exits
 //!   with 0. After `"close_stdout"`, writes to stdout are skipped.
 //! - **A check fails** (a `wait` or `await` whose message doesn't match
-//!   its `expect`, a timeout, a name never given): the fake says why on
+//!   its `expect`, a timeout of a `wait`, `await` or `wait_file`, a name
+//!   never given): the fake says why on
 //!   stderr, without waiting for anyone to read it, and in the record,
 //!   and exits with [`EXIT_CHECK_FAILED`].
 //!
@@ -258,7 +259,7 @@ pub use binary::binary;
 pub use run::run;
 pub use script::{
     Await, CancelRequest, Chunk, LongLine, Notify, On, Output, Request, Respond, RpcError, Script,
-    ScriptError, SpawnHolder, Step, Update, Wait,
+    ScriptError, SpawnHolder, Step, Update, Wait, WaitFile,
 };
 
 /// The environment variable that names the program for [`binary`] to

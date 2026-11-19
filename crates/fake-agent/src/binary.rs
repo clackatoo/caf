@@ -125,19 +125,11 @@ impl Place {
             profile_dir.pop();
         }
         let profile = name(&profile_dir);
-        // Cargo marks the target folder with this file.
-        let marked = |dir: &Path| dir.join("CACHEDIR.TAG").is_file();
-        let parent = profile_dir.parent().map(Path::to_path_buf);
-        let grandparent = parent.as_deref().and_then(Path::parent);
-        let (target_dir, triple) = match (parent.as_deref(), grandparent) {
-            (Some(parent), _) if marked(parent) => (parent.to_path_buf(), None),
-            (Some(parent), Some(grandparent)) if marked(grandparent) => {
-                (grandparent.to_path_buf(), Some(name(parent)))
-            }
-            _ => panic!(
+        let Some((target_dir, triple)) = target_of(&profile_dir) else {
+            panic!(
                 "{} isn't in a folder Cargo made: set {BIN_VAR}",
                 test.display()
-            ),
+            );
         };
         Self {
             target_dir,
@@ -145,6 +137,22 @@ impl Place {
             profile,
             profile_dir,
         }
+    }
+}
+
+/// The target folder a profile's folder is in, and the target it was
+/// built for with `--target`, if any. Cargo marks the target folder with
+/// `CACHEDIR.TAG`. The grandparent is looked at first: with `--target`,
+/// the triple's folder may be marked too, and it isn't the target folder.
+fn target_of(profile_dir: &Path) -> Option<(PathBuf, Option<String>)> {
+    let marked = |dir: &Path| dir.join("CACHEDIR.TAG").is_file();
+    let parent = profile_dir.parent()?;
+    match parent.parent() {
+        Some(grandparent) if marked(grandparent) => {
+            Some((grandparent.to_path_buf(), Some(name(parent))))
+        }
+        _ if marked(parent) => Some((parent.to_path_buf(), None)),
+        _ => None,
     }
 }
 
@@ -212,7 +220,44 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
 
-    use super::{fresh, sources};
+    use super::{fresh, sources, target_of};
+
+    /// A folder of its own, removed when dropped.
+    struct Dir(PathBuf);
+
+    impl Dir {
+        fn new(name: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("caf-fake-agent-{name}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn the_target_folder_is_found_with_or_without_a_triple() {
+        let dir = Dir::new("target-of");
+        let target = dir.0.join("target");
+        let debug = target.join("debug");
+        let cross = target.join("x86_64-unknown-linux-gnu").join("release");
+        std::fs::create_dir_all(&debug).unwrap();
+        std::fs::create_dir_all(&cross).unwrap();
+        assert_eq!(target_of(&debug), None, "nothing marked yet");
+        std::fs::write(target.join("CACHEDIR.TAG"), "").unwrap();
+        assert_eq!(target_of(&debug), Some((target.clone(), None)));
+        // Built with --target, even if the triple's folder is marked too.
+        std::fs::write(cross.parent().unwrap().join("CACHEDIR.TAG"), "").unwrap();
+        assert_eq!(
+            target_of(&cross),
+            Some((target.clone(), Some("x86_64-unknown-linux-gnu".into())))
+        );
+    }
 
     #[test]
     fn dep_info_names_its_sources() {

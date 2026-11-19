@@ -84,10 +84,9 @@ pub enum Step {
     CloseStderr,
     /// Waits until the client closes stdin, and carries on.
     WaitClosed,
-    /// Waits until this file, an absolute path, is there, reading
-    /// meanwhile: so a test can say when the script goes on, even while
-    /// the fake isn't reading stdin.
-    WaitFile(PathBuf),
+    /// Waits until a file is there, reading meanwhile: so a test can say
+    /// when the script goes on, even while the fake isn't reading stdin.
+    WaitFile(WaitFile),
     /// Does nothing more, ever, but run handlers: not even exit when stdin
     /// closes.
     Hang,
@@ -118,6 +117,18 @@ pub struct Wait {
     /// The name later steps call it by. Its method, if left out.
     #[serde(default, rename = "as", skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// How many milliseconds to wait before the check fails. Forever, if
+    /// left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+}
+
+/// Waits until a file is there.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WaitFile {
+    /// The file: an absolute path.
+    pub path: PathBuf,
     /// How many milliseconds to wait before the check fails. Forever, if
     /// left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -493,7 +504,7 @@ fn check(step: &Step, in_handler: bool) -> Result<(), String> {
         {
             Err("a handler's steps can't wait or sleep".into())
         }
-        Step::WaitFile(path) if !path.is_absolute() => {
+        Step::WaitFile(WaitFile { path, .. }) if !path.is_absolute() => {
             Err("a file to wait for must be an absolute path".into())
         }
         Step::On(_) if in_handler => Err("a handler can't add handlers".into()),
@@ -575,7 +586,7 @@ mod tests {
         assert!(wrong(r#"{"on": {"do": ["hang"]}}"#).contains("can't wait"));
         assert!(wrong(r#"{"on": {"do": [{"sleep": 5}]}}"#).contains("can't wait or sleep"));
         assert!(wrong(r#"{"on": {"do": [{"spawn_holder": {}}]}}"#).contains("can't wait"));
-        assert!(wrong(r#"{"wait_file": "go"}"#).contains("absolute"));
+        assert!(wrong(r#"{"wait_file": {"path": "go"}}"#).contains("absolute"));
         assert!(
             wrong(r#"{"respond": {"id_from": "params/requestId", "result": 1}}"#)
                 .contains("isn't a JSON pointer")

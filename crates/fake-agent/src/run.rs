@@ -380,9 +380,14 @@ impl Fake<'_> {
                 }
                 self.handle()
             }
-            Step::WaitFile(path) => {
+            Step::WaitFile(wait) => {
+                let until = deadline(wait.timeout);
                 // Polled, as files give no notice, reading meanwhile.
-                while !path.exists() {
+                while !wait.path.exists() {
+                    if past(until) {
+                        return self
+                            .fail(&format!("timed out waiting for {}", wait.path.display()));
+                    }
                     self.handle()?;
                     self.hear(deadline(Some(10)));
                 }

@@ -974,7 +974,7 @@ fn it_can_stop_reading() {
         &script,
         format!(
             "\"stop_reading\"\n{{\"note\": \"stopped\"}}\n{}\n\"resume_reading\"\n{}\n{}\n",
-            json!({"wait_file": go}),
+            json!({"wait_file": {"path": go}}),
             json!({"wait": {"method": "_test/last"}}),
             json!({"note": "read it all"}),
         ),
@@ -1103,4 +1103,22 @@ fn a_fallback_leaves_what_a_later_handler_takes() {
     );
     fake.close_stdin();
     assert_eq!(fake.exit().code(), Some(0));
+}
+
+#[test]
+fn waiting_for_a_file_can_time_out() {
+    let dir = Dir::new();
+    let never = dir.path("never");
+    let script = dir.path("script.jsonl");
+    std::fs::write(
+        &script,
+        format!("{}\n", json!({"wait_file": {"path": never, "timeout": 50}})),
+    )
+    .unwrap();
+    let mut fake = Fake::start_in(dir, &script);
+    assert_eq!(fake.exit().code(), Some(EXIT_CHECK_FAILED));
+    assert_eq!(
+        fake.record(),
+        [json!({"failed": format!("timed out waiting for {}", never.display())})]
+    );
 }
