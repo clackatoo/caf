@@ -4,7 +4,9 @@
 
 use serde_json::json;
 
-use super::harness::{Script, assert_has, host};
+use super::harness::{Script, assert_has, host, render, with, writes};
+use crate::core::Core;
+use crate::ids::ChatId;
 use super::stop::permission;
 use super::{CHAT, PROC, SESSION};
 use crate::event::PolicyAnswer;
@@ -43,4 +45,68 @@ fn a_recorded_claude_turn_replays_from_json() {
 #[ignore = "prints the recording, to make the trace"]
 fn print_claude_turn() {
     println!("{}", serde_json::to_string_pretty(&claude_turn().recording()).expect("JSON"));
+}
+
+/// A real run of claude-agent-acp 0.98.0 on Haiku, recorded by the tokio
+/// kit (`Config::record`): the chat asks for "pong" and gets it, then
+/// asks for a long story and stops it as the words come in, then CAF
+/// shuts down.
+///
+/// Scrubbed before it was checked in, of what's the user's own and
+/// changes no state: the adapter's path and the chat's folder, a stack
+/// trace on stderr naming a home folder, the user's own skills from the
+/// command lists, and their own agents and models from the session's
+/// settings. Claude's sign-in status is never recorded.
+const CLAUDE_LIVE: &str = include_str!("traces/claude-0.98.0-live.jsonl");
+
+/// Replays a recording of the tokio kit's into a fresh core, returning
+/// it and what each event gave out.
+fn replay_recording(text: &str) -> (Core, Vec<Vec<serde_json::Value>>) {
+    #[derive(serde::Deserialize)]
+    struct Header {
+        host: crate::host::Host,
+        agents: Vec<crate::agent::AgentSpec>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Step {
+        now: crate::time::Now,
+        event: crate::event::Event,
+    }
+    let mut lines = text.lines();
+    let header: Header = serde_json::from_str(lines.next().expect("a header")).expect("the header reads");
+    let mut core = Core::new(header.host, header.agents);
+    let mut outs = Vec::new();
+    for line in lines {
+        let step: Step = serde_json::from_str(line).expect("a step reads");
+        let mut out = Vec::new();
+        core.handle(step.now, step.event, &mut out);
+        let rendered: Vec<_> = out.iter().map(render).collect();
+        assert!(with(&rendered, "wake_at").len() <= 1, "one wake-up at most: {rendered:#?}");
+        outs.push(rendered);
+    }
+    (core, outs)
+}
+
+#[test]
+fn a_live_claude_run_replays_to_its_end() {
+    let (core, outs) = replay_recording(CLAUDE_LIVE);
+    let chat = serde_json::to_value(core.chat(ChatId(1)).expect("the chat")).expect("chats serialise");
+    assert_has(&chat, &json!({
+        "state": { "Lost": { "reason": "ShutDown" } },
+        "turns": [
+            { "starter": { "User": { "parts": [{ "Text": "Reply with exactly the word pong." }] } }, "life": "Finished", "items": [{ "kind": { "Words": "pong" } }] },
+            { "starter": { "User": {} }, "life": "Stopped", "items": [{ "kind": { "Words": "The Last Watch at Gannet Rock\n\nEvery evening for" } }] }
+        ],
+        "questions": []
+    }));
+    assert_eq!(chat["usage"]["used"].as_u64().map(|used| used > 0), Some(true), "{chat:#}");
+    assert!(core.is_idle(), "every adapter stopped");
+    // The stop was sent as a cancel, and the adapter's process let go.
+    let all: Vec<_> = outs.iter().flatten().cloned().collect();
+    assert_eq!(writes(&all).iter().filter(|(_, message)| message["method"] == "session/cancel").count(), 1);
+    assert_eq!(with(&all, "forget").len(), 1);
+    // The same recording replays the same way again.
+    let (again, outs_again) = replay_recording(CLAUDE_LIVE);
+    assert_eq!(outs_again, outs);
+    assert_eq!(again.snapshot(), core.snapshot());
 }
