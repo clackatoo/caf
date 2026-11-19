@@ -4,6 +4,9 @@ mod harness;
 
 mod basics;
 mod continuing;
+mod failures;
+mod frames;
+mod permissions;
 mod process;
 mod shared;
 mod stop;
