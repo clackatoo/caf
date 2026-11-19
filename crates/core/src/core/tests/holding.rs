@@ -139,3 +139,42 @@ fn a_session_being_closed_isnt_opened_again_until_it_is() {
     script.answers(PROC, 1003, &json!({}));
     script.answers(PROC, 1004, &json!({ "stopReason": "end_turn" }));
 }
+
+#[test]
+fn an_open_given_up_on_still_holds_its_session_until_it_answers() {
+    let mut script = Script::new(host());
+    script.open(continuing("plain", "old")).0.expect("opened");
+    script.answers(PROC, 1000, &plain_init(true));
+    script.stop(CHAT).0.expect("stopped");
+    script.at(60_000);
+    script.woken();
+    assert_eq!(script.state()["pending"], json!([]));
+    let (_, out) = script.send(CHAT, "again");
+    assert!(writes(&out).is_empty(), "the first load may still be replaying");
+    let out = script.answers(PROC, 1001, &json!({}));
+    sent(&out, "session/load");
+    script.answers(PROC, 1002, &json!({}));
+    script.answers(PROC, 1003, &json!({ "stopReason": "end_turn" }));
+}
+
+#[test]
+fn a_chat_waiting_on_a_hold_is_asked_if_it_lasts() {
+    let mut script = Script::new(host());
+    script.open(continuing("plain", "old")).0.expect("opened");
+    script.answers(PROC, 1000, &plain_init(true));
+    script.stop(CHAT).0.expect("stopped");
+    script.at(60_000);
+    script.woken();
+    script.at(61_000);
+    let (_, out) = script.send(CHAT, "again");
+    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 91_000 })]);
+    script.at(91_000);
+    script.woken();
+    assert_has(&script.chat(CHAT), &json!({ "state": "Opening", "questions": [{ "kind": { "SlowToOpen": { "adapter_answered": true } } }] }));
+    // Once the hold ends the chat asks, and the question goes.
+    let out = script.answers(PROC, 1001, &json!({}));
+    sent(&out, "session/load");
+    assert_eq!(script.chat(CHAT)["questions"], json!([]));
+    script.answers(PROC, 1002, &json!({}));
+    script.answers(PROC, 1003, &json!({ "stopReason": "end_turn" }));
+}

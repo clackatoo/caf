@@ -119,7 +119,7 @@ impl<A: AppItem> Core<A> {
             report(out, level, "an answer with an id CAF never uses".to_owned());
             return;
         };
-        if self.procs.get_mut(&proc).is_some_and(|each| each.given_up.remove(&id)) {
+        if self.procs.get_mut(&proc).is_some_and(|each| each.given_up.remove(&id).is_some()) {
             let session = match &reply {
                 Reply::Result(result) => result.get("sessionId").and_then(Value::as_str),
                 _ => None,

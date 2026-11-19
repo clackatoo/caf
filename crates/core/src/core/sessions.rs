@@ -76,6 +76,7 @@ impl<A: AppItem> Core<A> {
             import: None,
             replaying: false,
             slow: None,
+            held_by: None,
             note: None,
             resent: None,
         });
@@ -125,8 +126,18 @@ impl<A: AppItem> Core<A> {
         if let Some(session) = &run.session {
             match self.holder(chat, proc, session) {
                 Some(Hold::Chat) => return self.session_lost(now, chat, Lost::InUse, false, out),
-                // It waits: whatever holds it ends, by its own deadline.
-                Some(Hold::Going) => return,
+                // It waits for whatever holds it to let it go, and is asked
+                // whether to keep waiting if that takes long.
+                Some(Hold::Going) => {
+                    let wait = now.mono.after(self.host.timers.session_open);
+                    if let Some(run) = self.runs.get_mut(&chat)
+                        && run.held_by.is_none()
+                        && run.slow.is_none()
+                    {
+                        run.held_by = Some(wait);
+                    }
+                    return;
+                }
                 None => {}
             }
         }
@@ -163,14 +174,19 @@ impl<A: AppItem> Core<A> {
         {
             run.open = Open::Asked { proc, id };
             run.replaying = how == How::Load;
+            run.held_by = None;
+            // A new wait starts, with a deadline of its own.
+            if let Some(question) = run.slow {
+                self.unask_slow(chat, question);
+            }
         }
     }
 
     /// What keeps `chat` from opening `session` on `proc`, if anything.
     /// A session is held, across every connection of the chat's agent, by
     /// another chat that has it or asked for it, by any request still
-    /// opening it (even one nobody waits for) or closing it, and by any
-    /// other process
+    /// opening it (even one nobody waits for, or has given up on) or
+    /// closing it, and by any other process
     /// that had it and isn't let go yet.
     fn holder(&self, chat: ChatId, proc: Ticket, session: &AgentSessionId) -> Option<Hold> {
         let agent = &self.chats.get(&chat)?.agent;
@@ -193,8 +209,10 @@ impl<A: AppItem> Core<A> {
             };
             about && agents_proc(on)
         });
+        let given_up = (self.procs.iter())
+            .any(|(on, each)| each.given_up.values().any(|asked| asked.as_ref() == Some(&session.0)) && agents_proc(on));
         let elsewhere = (self.procs.iter()).any(|(on, each)| *on != proc && each.sessions.contains(&session.0) && agents_proc(on));
-        (opening || elsewhere).then_some(Hold::Going)
+        (opening || given_up || elsewhere).then_some(Hold::Going)
     }
 
     /// The agent answered request `id` of `proc`, which asked for `chat`'s
@@ -315,6 +333,7 @@ impl<A: AppItem> Core<A> {
         let Some(run) = self.runs.get_mut(&chat) else { return };
         let opening = matches!(run.open, Open::Wanted | Open::Asked { .. });
         run.open = Open::Idle;
+        run.held_by = None;
         let running = run.running.take();
         let slow = run.slow;
         self.end_replay(chat);
@@ -428,8 +447,13 @@ impl<A: AppItem> Core<A> {
                 }
             }
             // Waiting for the adapter itself: every chat waiting on it
-            // waits again, and is asked again together.
+            // waits again, and is asked again together. Waiting on a hold,
+            // the wait starts again as the chat is next asked for.
             Open::Wanted => {
+                if let Some(run) = self.runs.get_mut(&chat) {
+                    run.held_by = None;
+                }
+                let Some(run) = self.runs.get(&chat) else { return };
                 let conn = run.conn;
                 let current = self.conns.get(&conn).and_then(|each| each.current);
                 if let Some(each) = current.and_then(|proc| self.procs.get_mut(&proc))
@@ -481,6 +505,7 @@ impl<A: AppItem> Core<A> {
         if matches!(run.open, Open::Asked { .. } | Open::Wanted) {
             run.open = Open::Idle;
         }
+        run.held_by = None;
         let slow = run.slow;
         self.end_replay(chat);
         if let Some(question) = slow {

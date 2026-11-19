@@ -35,6 +35,8 @@ enum Due {
     Stop(ChatId),
     /// A turn a chat's agent started by itself has been quiet a while.
     Quiet(ChatId),
+    /// A chat has waited a while for its session to be let go.
+    Held(ChatId),
 }
 
 impl<A: AppItem> Core<A> {
@@ -63,7 +65,10 @@ impl<A: AppItem> Core<A> {
         let requests = (self.pending.iter()).filter_map(|(&(proc, id), pending)| Some((pending.deadline?, Due::Request(proc, id))));
         let stops = (self.runs.iter()).filter_map(|(&chat, run)| Some((run.running.as_ref()?.stop_by?, Due::Stop(chat))));
         let quiet = (self.runs.iter()).filter_map(|(&chat, run)| Some((run.quiet_by?, Due::Quiet(chat))));
-        procs.chain(requests).chain(stops).chain(quiet)
+        let held = (self.runs.iter())
+            .filter(|(_, run)| run.open == Open::Wanted)
+            .filter_map(|(&chat, run)| Some((run.held_by?, Due::Held(chat))));
+        procs.chain(requests).chain(stops).chain(quiet).chain(held)
     }
 
     /// The timer driver woke the core: whatever is due is done.
@@ -93,6 +98,12 @@ impl<A: AppItem> Core<A> {
             Due::Request(proc, id) => self.overdue(now, proc, id, out),
             Due::Stop(chat) => self.stop_overdue(now, chat, out),
             Due::Quiet(chat) => self.quiet(now, chat),
+            Due::Held(chat) => {
+                if let Some(run) = self.runs.get_mut(&chat) {
+                    run.held_by = None;
+                }
+                self.slow(now, chat, true);
+            }
         }
     }
 
@@ -118,11 +129,14 @@ impl<A: AppItem> Core<A> {
         match pending.purpose {
             // Nobody waits for these any more: they just end.
             Purpose::Open { abandoned: true, .. } | Purpose::Prompt { abandoned: true, .. } => {
-                let open = matches!(pending.purpose, Purpose::Open { .. });
+                let open = match &pending.purpose {
+                    Purpose::Open { session, .. } => Some(session.as_ref().map(|session| session.0.clone())),
+                    _ => None,
+                };
                 self.pending.remove(&(proc, id));
                 // A session it opens even so is still closed.
-                if let Some(each) = self.procs.get_mut(&proc).filter(|_| open) {
-                    each.given_up.insert(id);
+                if let (Some(each), Some(session)) = (self.procs.get_mut(&proc), open) {
+                    each.given_up.insert(id, session);
                 }
                 report(out, Level::Debug, format!("gave up on request {id} of process {}, which nobody waited for", proc.0));
             }

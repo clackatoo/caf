@@ -163,7 +163,7 @@ impl<A: AppItem> Core<A> {
             ending: None,
             group: Group::Unwatched,
             sessions: std::collections::BTreeSet::new(),
-            given_up: std::collections::BTreeSet::new(),
+            given_up: std::collections::BTreeMap::new(),
         });
         self.request(now, proc, ("initialize", params), Purpose::Initialize, None, out);
     }

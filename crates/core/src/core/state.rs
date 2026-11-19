@@ -90,9 +90,11 @@ pub(super) struct Proc {
     /// The sessions it has had open: until it's let go, no other process
     /// opens them.
     pub(super) sessions: BTreeSet<String>,
-    /// Requests to open a session CAF gave up waiting for: one that
-    /// answers late with a session gets it closed.
-    pub(super) given_up: BTreeSet<i64>,
+    /// Requests to open a session CAF gave up waiting for, with the
+    /// session each asked for, if not a new one. Until one answers, its
+    /// session is held, as it may still be replaying; one that answers
+    /// late with a session gets it closed.
+    pub(super) given_up: BTreeMap<i64, Option<String>>,
 }
 
 impl Proc {
@@ -307,6 +309,9 @@ pub(super) struct Run<A: AppItem> {
     pub(super) replaying: bool,
     /// The question asking whether to keep waiting for it to open.
     pub(super) slow: Option<QuestionId>,
+    /// Waiting for something that holds its session to let it go: when to
+    /// ask whether to keep waiting.
+    pub(super) held_by: Option<Mono>,
     /// Something to say once the session is open.
     pub(super) note: Option<Note>,
     /// A turn sent again after its session was dropped: it isn't sent a
