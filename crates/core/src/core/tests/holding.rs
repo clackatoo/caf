@@ -122,3 +122,20 @@ fn a_slow_adapter_nobody_waits_for_is_stopped_and_the_next_message_starts_anothe
     assert_eq!(with(&out, "start").len(), 1);
     assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 60_000 })]);
 }
+
+#[test]
+fn a_session_being_closed_isnt_opened_again_until_it_is() {
+    let mut script = Script::new(host());
+    script.open(continuing("claude", "X")).0.expect("opened");
+    script.answers(PROC, 1000, &claude_init());
+    script.stop(CHAT).0.expect("stopped");
+    script.send(CHAT, "again").0.expect("waits");
+    // The abandoned resume opens late: closed, and not resumed meanwhile.
+    let out = script.answers(PROC, 1001, &json!({}));
+    sent(&out, "session/close");
+    assert_eq!(writes(&out).len(), 1, "{out:#?}");
+    let out = script.answers(PROC, 1002, &json!(null));
+    assert_has(&sent(&out, "session/resume"), &json!({ "params": { "sessionId": "X" } }));
+    script.answers(PROC, 1003, &json!({}));
+    script.answers(PROC, 1004, &json!({ "stopReason": "end_turn" }));
+}

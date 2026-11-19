@@ -167,7 +167,8 @@ impl<A: AppItem> Core<A> {
     /// What keeps `chat` from opening `session` on `proc`, if anything.
     /// A session is held, across every connection of the chat's agent, by
     /// another chat that has it or asked for it, by any request still
-    /// opening it (even one nobody waits for), and by any other process
+    /// opening it (even one nobody waits for) or closing it, and by any
+    /// other process
     /// that had it and isn't let go yet.
     fn holder(&self, chat: ChatId, proc: Ticket, session: &AgentSessionId) -> Option<Hold> {
         let agent = &self.chats.get(&chat)?.agent;
@@ -184,7 +185,11 @@ impl<A: AppItem> Core<A> {
             return Some(Hold::Chat);
         }
         let opening = (self.pending.iter()).any(|((on, _), pending)| {
-            matches!(&pending.purpose, Purpose::Open { session: Some(asked), .. } if asked == session) && agents_proc(on)
+            let about = match &pending.purpose {
+                Purpose::Open { session: Some(asked), .. } | Purpose::Close { session: asked } => asked == session,
+                _ => false,
+            };
+            about && agents_proc(on)
         });
         let elsewhere = (self.procs.iter()).any(|(on, each)| *on != proc && each.sessions.contains(&session.0) && agents_proc(on));
         (opening || elsewhere).then_some(Hold::Going)
