@@ -3,6 +3,7 @@
 mod harness;
 
 mod basics;
+mod continuing;
 mod process;
 mod shared;
 mod stop;

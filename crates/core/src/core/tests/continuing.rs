@@ -1,0 +1,127 @@
+//! Continuing a session the agent knows: resumed, loaded with its history
+//! imported, or, when that can't be, a new one the chat says it is.
+
+use serde_json::{Value, json};
+
+use super::harness::{Script, assert_has, host, replies, sent, with};
+use super::{CHAT, PROC, claude_init, plain_init};
+use crate::core::{OpenChat, SessionChoice};
+use crate::ids::AgentSessionId;
+
+/// Opening a chat with `agent` that continues session `old`.
+fn continuing(agent: &str, old: &str) -> OpenChat {
+    let mut open = OpenChat::new(agent, "/work");
+    open.session = SessionChoice::Continue(AgentSessionId(old.to_owned()));
+    open
+}
+
+/// A chunk of `kind` saying `text`.
+fn chunk(kind: &str, text: &str) -> Value {
+    json!({ "sessionUpdate": kind, "content": { "type": "text", "text": text } })
+}
+
+#[test]
+fn a_session_the_agent_no_longer_has_is_opened_new_and_the_chat_says_so() {
+    let mut script = Script::new(host());
+    script.open(continuing("claude", "old")).0.expect("opened");
+    let out = script.answers(PROC, 1000, &claude_init());
+    assert_has(&sent(&out, "session/resume"), &json!({ "params": { "sessionId": "old", "cwd": "/work", "mcpServers": [] } }));
+    let out = script.fails(PROC, 1001, &json!({ "code": -32002, "message": "Resource not found: old" }));
+    let new = sent(&out, "session/new");
+    assert!(new["params"].get("sessionId").is_none());
+    script.answers(PROC, 1002, &json!({ "sessionId": "fresh" }));
+    assert_has(&script.chat(CHAT), &json!({
+        "state": { "Open": { "session": "fresh" } },
+        "turns": [{ "starter": "Caf", "life": "Finished", "items": [{ "kind": { "Note": "SessionGone" } }] }]
+    }));
+}
+
+#[test]
+fn an_agent_that_cant_continue_sessions_gets_a_new_one_and_the_chat_says_so() {
+    let mut script = Script::new(host());
+    script.open(continuing("plain", "old")).0.expect("opened");
+    let out = script.answers(PROC, 1000, &plain_init(false));
+    // The cautious profile declares nothing risky.
+    sent(&out, "session/new");
+    script.answers(PROC, 1001, &json!({ "sessionId": "fresh" }));
+    assert_has(&script.chat(CHAT), &json!({ "turns": [{ "starter": "Caf", "items": [{ "kind": { "Note": "CannotContinue" } }] }] }));
+}
+
+#[test]
+fn a_loaded_session_imports_its_history_and_nothing_replayed_acts() {
+    let mut script = Script::new(host());
+    let (_, out) = script.open(continuing("plain", "old"));
+    let declared = &sent(&out, "initialize")["params"]["clientCapabilities"];
+    assert_eq!(declared, &json!({ "fs": { "readTextFile": false, "writeTextFile": false }, "terminal": false }));
+    let out = script.answers(PROC, 1000, &plain_init(true));
+    assert_has(&sent(&out, "session/load"), &json!({ "id": 1001, "params": { "sessionId": "old" } }));
+    let (waiting, _) = script.send(CHAT, "and now?");
+
+    script.at(10_000);
+    script.update(PROC, "old", &chunk("user_message_chunk", "first"));
+    script.update(PROC, "old", &chunk("user_message_chunk", "with context"));
+    script.update(PROC, "old", &chunk("agent_thought_chunk", "hmm"));
+    script.update(PROC, "old", &chunk("agent_message_chunk", "Sure, "));
+    script.update(PROC, "old", &chunk("agent_message_chunk", "done."));
+    script.update(PROC, "old", &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Edit", "kind": "edit", "status": "in_progress" }));
+    script.update(PROC, "old", &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "content": [{ "type": "content", "content": { "type": "text", "text": "edited" } }] }));
+    script.at(20_000);
+    let out = script.update(PROC, "old", &chunk("user_message_chunk", "second"));
+    // Each update replayed shows the agent is still at it.
+    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 50_000 })]);
+    let out = script.says(PROC, &json!({
+        "jsonrpc": "2.0", "id": 3, "method": "session/request_permission",
+        "params": { "sessionId": "old", "toolCall": { "toolCallId": "t2" }, "options": [{ "optionId": "y", "name": "Yes", "kind": "allow_once" }] }
+    }));
+    assert_eq!(replies(&out, &json!(3))[0]["result"], json!({ "outcome": { "outcome": "cancelled" } }));
+    assert!(with(&out, "decide").is_empty(), "no policy is asked");
+    // A replayed turn shows once it's whole: the first is, the second
+    // isn't yet.
+    assert_eq!(script.chat(CHAT)["turns"].as_array().map(Vec::len), Some(2));
+
+    let out = script.answers(PROC, 1001, &json!({}));
+    assert_has(&sent(&out, "session/prompt"), &json!({ "params": { "sessionId": "old", "prompt": [{ "text": "and now?" }] } }));
+    let unknown = json!({ "start": null, "end": "Unknown" });
+    assert_has(&script.chat(CHAT), &json!({
+        "state": { "Open": { "session": "old" } },
+        "turns": [
+            { "id": waiting.expect("queued").0, "life": "Running" },
+            {
+                "starter": { "User": { "parts": [{ "Text": "first" }, { "Text": "with context" }] } },
+                "life": "Finished", "imported": true, "window": unknown,
+                "items": [
+                    { "kind": { "Thinking": "hmm" }, "window": unknown },
+                    { "kind": { "Words": "Sure, done." } },
+                    { "kind": { "Tool": { "title": "Edit", "kind": "Edit", "status": "Failed", "output": "edited" } } }
+                ]
+            },
+            { "starter": { "User": { "parts": [{ "Text": "second" }] } }, "imported": true, "items": [] }
+        ]
+    }));
+
+    // After the load: chat-wide updates aren't turns, and a later update
+    // to a replayed tool call lands on its own item.
+    let out = script.update(PROC, "old", &json!({ "sessionUpdate": "available_commands_update", "availableCommands": [] }));
+    assert_eq!(with(&out, "report").len(), 1);
+    script.update(PROC, "old", &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed" }));
+    assert_has(&script.chat(CHAT)["turns"][1]["items"][2], &json!({ "kind": { "Tool": { "status": "Done" } } }));
+    assert_eq!(script.chat(CHAT)["turns"][0]["items"], json!([]));
+    script.answers(PROC, 1002, &json!({ "stopReason": "end_turn" }));
+}
+
+#[test]
+fn a_load_that_fails_fails_the_waiting_message_visibly() {
+    let mut script = Script::new(host());
+    script.open(continuing("plain", "old")).0.expect("opened");
+    script.answers(PROC, 1000, &plain_init(true));
+    let (waiting, _) = script.send(CHAT, "and now?");
+    script.update(PROC, "old", &chunk("user_message_chunk", "first"));
+    script.fails(PROC, 1001, &json!({ "code": -32603, "message": "Internal error: disk \u{202e}full" }));
+    assert_has(&script.chat(CHAT), &json!({
+        "state": { "Lost": { "reason": { "Refused": { "message": "Internal error: disk <U+202E>full" } } } },
+        "turns": [
+            { "id": waiting.expect("queued").0, "life": { "Failed": { "reason": "Other", "agent_said": "Internal error: disk <U+202E>full" } } },
+            { "imported": true, "starter": { "User": { "parts": [{ "Text": "first" }] } } }
+        ]
+    }));
+}
