@@ -67,6 +67,8 @@ impl<A: AppItem> Core<A> {
             open: Open::Wanted,
             running: None,
             agent_turn: None,
+            quiet_by: None,
+            held_until: None,
             tools: BTreeMap::new(),
             import: None,
             replaying: false,

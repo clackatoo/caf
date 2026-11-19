@@ -31,6 +31,8 @@ enum Due {
     Request(Ticket, i64),
     /// A chat's agent hasn't stopped in time.
     Stop(ChatId),
+    /// A turn a chat's agent started by itself has been quiet a while.
+    Quiet(ChatId),
 }
 
 impl<A: AppItem> Core<A> {
@@ -56,7 +58,8 @@ impl<A: AppItem> Core<A> {
         });
         let requests = (self.pending.iter()).filter_map(|(&(proc, id), pending)| Some((pending.deadline?, Due::Request(proc, id))));
         let stops = (self.runs.iter()).filter_map(|(&chat, run)| Some((run.running.as_ref()?.stop_by?, Due::Stop(chat))));
-        procs.chain(requests).chain(stops)
+        let quiet = (self.runs.iter()).filter_map(|(&chat, run)| Some((run.quiet_by?, Due::Quiet(chat))));
+        procs.chain(requests).chain(stops).chain(quiet)
     }
 
     /// The timer driver woke the core: whatever is due is done.
@@ -84,6 +87,7 @@ impl<A: AppItem> Core<A> {
             Due::Group(proc) => self.check_group(proc, out),
             Due::Request(proc, id) => self.overdue(now, proc, id, out),
             Due::Stop(chat) => self.stop_overdue(now, chat, out),
+            Due::Quiet(chat) => self.quiet(now, chat),
         }
     }
 

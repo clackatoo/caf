@@ -65,11 +65,12 @@ fn thinking_isnt_kept_for_a_host_that_doesnt_show_it() {
 #[test]
 fn what_the_agent_says_outside_a_prompt_is_a_turn_it_started() {
     let mut script = Script::with_claude();
-    script.update(PROC, SESSION, &json!({ "sessionUpdate": "notice", "severity": "info", "title": "Task done" }));
     script.update(PROC, SESSION, &words("The build finished."));
+    // Once a turn is open, a notice is kept in it.
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "notice", "severity": "info", "title": "Task done" }));
     assert_has(&script.chat(CHAT), &json!({ "turns": [{
         "starter": "Agent", "life": "Running",
-        "items": [{ "kind": { "Unknown": { "what": "notice", "raw": { "title": "Task done" } } } }, { "kind": { "Words": "The build finished." } }]
+        "items": [{ "kind": { "Words": "The build finished." } }, { "kind": { "Unknown": { "what": "notice", "raw": { "title": "Task done" } } } }]
     }] }));
     script.send(CHAT, "thanks").0.expect("sent");
     assert_has(&script.chat(CHAT), &json!({ "turns": [{ "starter": "Agent", "life": "Finished" }, { "life": "Running" }] }));

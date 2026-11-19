@@ -166,8 +166,12 @@ fn guarantee_4_every_event_names_what_it_belongs_to() {
         { "items": [{ "kind": { "Tool": { "title": "Build", "status": "Done", "output": "ok" } } }] },
         { "items": [{ "kind": { "Words": "now" } }] }
     ] }));
-    assert_has(&script.chat(OTHER), &json!({ "turns": [{ "starter": "Agent", "items": [{ "kind": { "Words": "elsewhere" } }] }] }));
+    assert_has(&script.chat(OTHER), &json!({ "turns": [{ "starter": "Agent", "life": "Running", "items": [{ "kind": { "Words": "elsewhere" } }] }] }));
     script.answers(PROC, 1004, &json!({ "stopReason": "end_turn" }));
+    // Its own turn ends on its own deadline, once quiet.
+    script.at(60_000);
+    script.woken();
+    assert_has(&script.chat(OTHER), &json!({ "turns": [{ "starter": "Agent", "life": "Finished" }] }));
 }
 
 #[test]

@@ -14,6 +14,7 @@ mod process;
 mod shared;
 mod stop;
 mod traces;
+mod woken;
 
 use serde_json::{Value, json};
 

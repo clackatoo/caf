@@ -49,7 +49,7 @@ impl<A: AppItem> Core<A> {
         }
         let options = options(params.get("options"));
         let call = params.get("toolCall").cloned().unwrap_or(Value::Null);
-        let tool = self.tool_named(now, chat, &call);
+        let tool = self.tool_named(now, chat, &call, out);
         let title = (call.get("title").and_then(Value::as_str))
             .map(|title| agent_text(title, MOST_LABEL))
             .or_else(|| match &self.item(chat, tool?)?.kind {

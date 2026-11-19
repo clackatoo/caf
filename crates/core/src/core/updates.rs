@@ -133,10 +133,20 @@ impl<A: AppItem> Core<A> {
 
     /// Takes in what the agent says live.
     fn live(&mut self, now: Now, chat: ChatId, said: Said, out: &mut Vec<Directive>) {
+        // Anything the agent says keeps a turn it started going.
+        let quiet = self.host.timers.quiet;
+        if let Some(run) = self.runs.get_mut(&chat)
+            && run.agent_turn.is_some()
+        {
+            run.quiet_by = Some(now.mono.after(quiet));
+        }
         match said {
             Said::Text { thinking: true, .. } if !self.host.shows.thinking => {}
+            Said::Text { text, .. } if text.trim().is_empty() && self.open_turn(chat).is_none() => {
+                report(out, Level::Debug, "ignored blank words outside any turn".to_owned());
+            }
             Said::Text { text, thinking } => {
-                let Some(turn) = self.live_turn(now, chat) else { return };
+                let Some(turn) = self.live_turn(now, chat, out) else { return };
                 let last = self.turn(chat, turn).and_then(|each| each.items.last());
                 let grows = last.filter(|item| item.window.end == End::Open).and_then(|item| match &item.kind {
                     ItemKind::Words(_) if !thinking => Some(item.id),
@@ -151,20 +161,23 @@ impl<A: AppItem> Core<A> {
                     }
                 }
             }
-            Said::Tool { id, change } => self.live_tool(now, chat, id, change),
+            Said::Tool { id, change } => self.live_tool(now, chat, id, change, out),
             Said::Usage(usage) => self.set_usage(chat, usage),
             Said::User(_) => report(out, Level::Debug, "the agent told the user's message back: not kept twice".to_owned()),
             Said::Later(what) => report(out, Level::Debug, format!("not kept yet, until a later feature: {what}")),
-            Said::Unknown(unknown) => {
-                let Some(turn) = self.live_turn(now, chat) else { return };
-                self.add_live_item(now, chat, turn, ItemKind::Unknown(unknown), Window::instant(now));
-            }
+            // Not the agent's own output: it never opens a turn.
+            Said::Unknown(unknown) => match self.open_turn(chat) {
+                Some(turn) => {
+                    self.add_live_item(now, chat, turn, ItemKind::Unknown(unknown), Window::instant(now));
+                }
+                None => report(out, Level::Info, format!("chat {}: the agent said something outside any turn: {}", chat.0, unknown.what)),
+            },
         }
     }
 
     /// The tool call a permission request names, `call`: the one CAF has
     /// seen, or a new one from what the request says of it.
-    pub(super) fn tool_named(&mut self, now: Now, chat: ChatId, call: &Value) -> Option<ItemId> {
+    pub(super) fn tool_named(&mut self, now: Now, chat: ChatId, call: &Value, out: &mut Vec<Directive>) -> Option<ItemId> {
         let id = call.get("toolCallId").and_then(Value::as_str)?;
         if let Some(item) = self.runs.get(&chat).and_then(|run| run.tools.get(id)) {
             return Some(*item);
@@ -172,7 +185,7 @@ impl<A: AppItem> Core<A> {
         let mut update = call.clone();
         update["sessionUpdate"] = Value::from("tool_call_update");
         let Said::Tool { id, change } = self.read_update(update) else { return None };
-        self.live_tool(now, chat, id.clone(), change);
+        self.live_tool(now, chat, id.clone(), change, out);
         self.runs.get(&chat).and_then(|run| run.tools.get(&id)).copied()
     }
 
@@ -188,7 +201,7 @@ impl<A: AppItem> Core<A> {
 
     /// A tool call, new or changed. A change to one CAF has seen lands on
     /// its own item, in whichever turn that is.
-    fn live_tool(&mut self, now: Now, chat: ChatId, id: String, change: ToolChange) {
+    fn live_tool(&mut self, now: Now, chat: ChatId, id: String, change: ToolChange, out: &mut Vec<Directive>) {
         let known = self.runs.get(&chat).and_then(|run| run.tools.get(&id).copied());
         let current = known.and_then(|item| match &self.item(chat, item)?.kind {
             ItemKind::Tool(tool) => Some(tool.clone()),
@@ -204,7 +217,7 @@ impl<A: AppItem> Core<A> {
                 }
             }
             _ => {
-                let Some(turn) = self.live_turn(now, chat) else { return };
+                let Some(turn) = self.live_turn(now, chat, out) else { return };
                 let tool = change.new_tool();
                 let done = matches!(tool.status, ToolStatus::Done | ToolStatus::Failed);
                 let window = if done { Window::instant(now) } else { Window::open(now) };

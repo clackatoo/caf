@@ -289,6 +289,11 @@ pub(super) struct Run<A: AppItem> {
     /// A turn the agent started by itself, open while it says things
     /// outside any prompt.
     pub(super) agent_turn: Option<TurnId>,
+    /// When that turn has been quiet long enough to end.
+    pub(super) quiet_by: Option<Mono>,
+    /// A turn the agent started was just stopped: until then, what was in
+    /// flight opens no new one.
+    pub(super) held_until: Option<Mono>,
     /// Its tool calls, by the agent's ids.
     pub(super) tools: BTreeMap<String, ItemId>,
     /// The history being replayed by `session/load`, the turn being
@@ -303,7 +308,7 @@ pub(super) struct Run<A: AppItem> {
 }
 
 /// Where a chat is with its session.
-#[derive(Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub(super) enum Open {
     /// Not open, and not wanted until a message comes.
     Idle,

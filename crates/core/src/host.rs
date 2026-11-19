@@ -109,6 +109,11 @@ pub struct Timers {
     /// How long after Stop the agent may take to end the turn, before
     /// CAF ends it as failed and restarts the session. 15 s.
     pub stop: Duration,
+    /// How long a turn the agent started by itself may be quiet, with no
+    /// tool running, before CAF takes it to have ended: ACP doesn't say
+    /// when one ends. Long, as a turn ended too soon splits in two when
+    /// the agent goes on. 1 min, as clackatoo.
+    pub quiet: Duration,
     /// How long any other request CAF sends may go unanswered (closing a
     /// session, changing a setting) before the adapter is treated as stuck
     /// and restarted. A prompt has no such limit: an agent may work on one
@@ -171,6 +176,7 @@ impl Default for Timers {
             initialize: Duration::from_secs(30),
             session_open: Duration::from_secs(30),
             stop: Duration::from_secs(15),
+            quiet: Duration::from_mins(1),
             request: Duration::from_secs(60),
             gone: Duration::from_secs(2),
             kill_after: Duration::from_secs(2),

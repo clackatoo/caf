@@ -188,8 +188,12 @@ pub enum Starter {
     /// The user sent this.
     User(UserMessage),
     /// The agent started it by itself, for example when a background job
-    /// it was waiting on finished: what it says outside any prompt. It
-    /// ends when the next message is sent.
+    /// it was waiting on finished: its words, thinking or tools outside
+    /// any prompt. ACP doesn't say when such a turn ends, so it ends when
+    /// it has been quiet a while ([`Timers::quiet`]), when the user stops
+    /// it, when the next message is sent, or when its session is lost.
+    ///
+    /// [`Timers::quiet`]: crate::host::Timers::quiet
     Agent,
     /// Another chat's agent sent this. *Later.*
     OtherChat {

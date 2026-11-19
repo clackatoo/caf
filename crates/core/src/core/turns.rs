@@ -140,6 +140,7 @@ impl<A: AppItem> Core<A> {
             && run.agent_turn == Some(turn)
         {
             run.agent_turn = None;
+            run.quiet_by = None;
         }
     }
 
@@ -149,12 +150,23 @@ impl<A: AppItem> Core<A> {
         self.end_turn(now, chat, turn, TurnLife::Finished);
     }
 
-    /// The turn the agent's live output goes into: the running turn, or
-    /// one it started by itself.
-    pub(super) fn live_turn(&mut self, now: Now, chat: ChatId) -> Option<TurnId> {
+    /// The turn open for the agent's output: the running turn, or one it
+    /// started by itself.
+    pub(super) fn open_turn(&self, chat: ChatId) -> Option<TurnId> {
         let run = self.runs.get(&chat)?;
-        if let Some(turn) = run.running.as_ref().map(|running| running.turn).or(run.agent_turn) {
+        run.running.as_ref().map(|running| running.turn).or(run.agent_turn)
+    }
+
+    /// The turn the agent's live output goes into: the open turn, or a new
+    /// one it started by itself, unless one was just stopped and this was
+    /// in flight.
+    pub(super) fn live_turn(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) -> Option<TurnId> {
+        if let Some(turn) = self.open_turn(chat) {
             return Some(turn);
+        }
+        if self.runs.get(&chat)?.held_until.is_some_and(|until| now.mono < until) {
+            report(out, Level::Debug, format!("chat {}: dropped what the agent had in flight as its turn was stopped", chat.0));
+            return None;
         }
         let turn = TurnId(self.ids.take());
         self.add_turn(chat, Turn {
@@ -165,8 +177,27 @@ impl<A: AppItem> Core<A> {
             items: Vec::new(),
             imported: false,
         });
-        self.runs.get_mut(&chat)?.agent_turn = Some(turn);
+        let run = self.runs.get_mut(&chat)?;
+        run.agent_turn = Some(turn);
+        run.quiet_by = Some(now.mono.after(self.host.timers.quiet));
         Some(turn)
+    }
+
+    /// `chat`'s agent-started turn has been quiet long enough: it ends,
+    /// unless a tool of it still runs.
+    pub(super) fn quiet(&mut self, now: Now, chat: ChatId) {
+        let Some(turn) = self.runs.get(&chat).and_then(|run| run.agent_turn) else { return };
+        let busy = (self.turn(chat, turn).into_iter())
+            .flat_map(|each| each.items.iter())
+            .any(|item| matches!(&item.kind, ItemKind::Tool(tool) if tool.status == ToolStatus::Running));
+        if busy {
+            let quiet_by = now.mono.after(self.host.timers.quiet);
+            if let Some(run) = self.runs.get_mut(&chat) {
+                run.quiet_by = Some(quiet_by);
+            }
+        } else {
+            self.end_agent_turn(now, chat);
+        }
     }
 
     /// Stops `chat`'s running turn and its waiting ones, or its opening.
@@ -176,12 +207,16 @@ impl<A: AppItem> Core<A> {
         let waiting = self.waiting_turns(chat);
         let opening = matches!(run.open, Open::Wanted | Open::Asked { .. }) && whole.state != ChatState::Closed;
         let running = run.running.as_ref().map(|running| (running.turn, running.proc, running.stop_by.is_some()));
-        if waiting.is_empty() && running.is_none() && !opening {
+        let agent_turn = run.agent_turn;
+        if waiting.is_empty() && running.is_none() && agent_turn.is_none() && !opening {
             return Err(Refused::NothingToStop);
         }
         // ACP: open permission requests are answered "cancelled" before
         // the agent is told to stop.
         self.withdraw_asks(chat, out);
+        if let Some(turn) = agent_turn {
+            self.stop_agent_turn(now, chat, turn, out);
+        }
         if let Some((turn, proc, false)) = running {
             let session = self.runs.get(&chat).and_then(|run| run.session.clone());
             match session.filter(|_| self.procs.get(&proc).is_some_and(|each| each.askable())) {
@@ -207,6 +242,18 @@ impl<A: AppItem> Core<A> {
             self.stop_opening(now, chat, out);
         }
         Ok(())
+    }
+
+    /// Stops a turn the agent started by itself. ACP doesn't say when such a
+    /// turn ends, so it ends now, and what the agent had in flight opens
+    /// no new turn for a moment.
+    fn stop_agent_turn(&mut self, now: Now, chat: ChatId, turn: TurnId, out: &mut Vec<Directive>) {
+        let Some(run) = self.runs.get_mut(&chat) else { return };
+        run.held_until = Some(now.mono.after(IN_FLIGHT));
+        if let (Open::Live { proc }, Some(session)) = (run.open, run.session.clone()) {
+            self.notify(proc, "session/cancel", json!({ "sessionId": session.0 }), out);
+        }
+        self.end_turn(now, chat, turn, TurnLife::Stopped);
     }
 
     /// Stops waiting for `chat`'s running prompt: its answer, if it comes,
@@ -246,6 +293,10 @@ impl<A: AppItem> Core<A> {
         self.session_lost(now, chat, crate::chat::Lost::Restarted, true, out);
     }
 }
+
+/// How long after a turn the agent started is stopped what it says opens
+/// no new turn: it was in flight. 2 s, as clackatoo.
+const IN_FLIGHT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// How a turn ends, by the stop reason in the agent's answer `result`.
 fn ended_by(result: &Value) -> TurnLife {
