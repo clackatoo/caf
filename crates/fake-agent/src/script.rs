@@ -72,7 +72,8 @@ pub enum Step {
     Signal(i32),
     /// Stops reading stdin, so the pipe fills and the client's writes
     /// block. What it read already still counts, and so may the line it's
-    /// reading, and up to 8 KiB after it.
+    /// reading, and up to 8 KiB after it. Stdin closing isn't noticed
+    /// until it reads again.
     StopReading,
     /// Reads stdin again.
     ResumeReading,

@@ -739,21 +739,19 @@ impl Fake<'_> {
     }
 
     /// A check failed: says so in the record and on stderr, and ends.
-    /// Stderr is written without blocking, so a client that never reads it
-    /// still sees the fake exit.
+    /// Stderr is written on a thread, waited for only briefly, so a client
+    /// that never reads it still sees the fake exit; the fake ends either
+    /// way, and the thread with it.
     fn fail<T>(&mut self, why: &str) -> Result<T, End> {
         self.record.write(&json!({"failed": why}));
-        if let Some(err) = &mut self.err {
-            let fd = err.as_raw_fd();
-            // SAFETY: fcntl on a descriptor this owns has no memory
-            // effects.
-            unsafe {
-                let flags = libc::fcntl(fd, libc::F_GETFL);
-                if flags >= 0 {
-                    libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-                }
-            }
-            let _ = err.write_all(format!("caf-fake-agent: {why}\n").as_bytes());
+        if let Some(mut err) = self.err.take() {
+            let line = format!("caf-fake-agent: {why}\n");
+            let (done, written) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = err.write_all(line.as_bytes());
+                let _ = done.send(());
+            });
+            let _ = written.recv_timeout(Duration::from_millis(200));
         }
         Err(End(EXIT_CHECK_FAILED))
     }
