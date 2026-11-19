@@ -17,6 +17,7 @@
 //!     match update {
 //!         Update::Picture(chat) => draw_all(&chat),
 //!         Update::Changes(changes) => changes.iter().for_each(draw_change),
+//!         _ => {}
 //!     }
 //! }
 //! caf.shutdown().await;
@@ -27,9 +28,6 @@
 //! host that wires the core up itself: [`AgentDriver`] runs adapter
 //! processes, [`TimerDriver`] wakes the core, and a [`Policy`] answers
 //! permission requests.
-
-// The API draft for review: bodies are `todo!()` until it is approved.
-#![allow(unused_variables, dead_code)]
 
 mod agent;
 mod caf;

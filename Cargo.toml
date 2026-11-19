@@ -18,6 +18,8 @@ agent-client-protocol-schema = { version = "1.10", default-features = false, fea
 # pidfd_send_signal with a flag rustix has no way to pass: signalling an
 # adapter's whole process group through its pidfd.
 libc = "0.2"
+# Where the tokio kit sends the core's reports.
+log = "0.4"
 # Finds line ends in an adapter's output. serde_json already builds it.
 memchr = "2.8"
 # pidfds and waitid, for watching, reaping and signalling adapters.

@@ -85,8 +85,12 @@ name = "caf-driver-tokio"
 version = "0.0.0"
 dependencies = [
  "caf-core",
+ "caf-fake-agent",
  "libc",
+ "log",
  "rustix",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

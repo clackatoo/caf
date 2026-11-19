@@ -11,11 +11,17 @@ repository.workspace = true
 [dependencies]
 caf-core.workspace = true
 libc.workspace = true
+log.workspace = true
 rustix.workspace = true
+# Recording a run as JSON lines.
+serde.workspace = true
+serde_json.workspace = true
 # net: AsyncFd for pidfds, and pipes for adapters' standard streams.
 tokio = { workspace = true, features = ["net"] }
 
 [dev-dependencies]
+caf-fake-agent = { path = "../fake-agent" }
+serde_json.workspace = true
 # rt-multi-thread: races between a process's task and the driver.
 # test-util: timer tests on tokio's paused clock.
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "test-util"] }
