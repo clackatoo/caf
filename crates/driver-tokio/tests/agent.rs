@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use caf_core::Ticket;
-use caf_core::acp::{Frame, Message, RequestId};
+use caf_core::acp::{Frame, Message, RequestId, Shape};
 use caf_core::agent::{EnvChange, SpawnCommand};
 use caf_core::directive::{AgentDirective, Signal};
 use caf_core::event::{AgentEvent, Exit};
@@ -238,7 +238,7 @@ async fn a_line_too_big_is_dropped_and_its_id_kept() {
     let too_big = find(&events, |event| {
         matches!(
             event,
-            AgentEvent::Frame(Frame::TooBig { id: Some(RequestId::Number(5)), method: Some(method), len })
+            AgentEvent::Frame(Frame::TooBig { id: Some(RequestId::Number(5)), method: Some(method), shape: Shape::Call, len })
                 if method == "fs/write_text_file" && *len == big.len() - 1
         )
     });

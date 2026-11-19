@@ -2,13 +2,14 @@
 //! reading their JSON-RPC shape.
 //!
 //! This module has no state about sessions and does no I/O, so a driver
-//! can use it wherever it likes. clackatoo parses messages of 256 KiB or
-//! more on another thread, so a big tool output doesn't stall its loop.
-//! What it produces, [`Frame`]s, is what the agent driver hands the core.
+//! can use it wherever it likes. What it produces, [`Frame`]s, is what the
+//! agent driver hands the core.
 //!
-//! Splitting and parsing are separate steps for that reason:
-//! [`Framer::push`] only finds line ends, which is cheap, and [`parse`]
-//! does the JSON, which may be slow.
+//! Splitting and parsing are separate steps: [`Framer::push`] only finds
+//! line ends, which is cheap, and [`parse`] does the JSON, which may be
+//! slow. Parsing a few megabytes of tool output takes milliseconds, so a
+//! driver can parse big lines on another thread, and a big message
+//! doesn't hold up everything else it does.
 //!
 //! What the messages *mean* (sessions, prompts, updates) is the core's
 //! business, read through each adapter's profile. Their types come from
@@ -16,7 +17,6 @@
 
 use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use serde_json::value::RawValue;
 
 /// How much of a line too long to accept is kept, to find its id and
@@ -27,10 +27,6 @@ const HEAD: usize = 64 << 10;
 /// error, or an error that isn't one: JSON-RPC's internal error, as the
 /// agent's side broke, not CAF's.
 const BROKEN_ANSWER: i64 = -32603;
-
-/// The biggest whole number a float holds exactly, and so the biggest
-/// id written as one (`5.0`) that's read as a number.
-const EXACT_FLOAT: f64 = 9_007_199_254_740_992.0;
 
 /// Splits an adapter's output into lines, one JSON-RPC message each.
 ///
@@ -161,25 +157,33 @@ impl Framer {
 ///   arrives. Bad bytes outside a string break the JSON, and make junk.
 /// - **`jsonrpc`** may be missing, as some adapters leave it out, but if
 ///   it's there it must be `"2.0"`.
-/// - **Ids** are whole numbers that fit an `i64`, strings or `null`. A
-///   whole number written as a float (`5.0`) is read as the number, as a
+/// - **Ids** are whole numbers that fit an `i64`, strings or `null`.
+///   Numbers are read from their text, exactly. One written with a
+///   fraction of only zeros (`5.0`) is read as the whole number, as a
 ///   JavaScript adapter can't tell the two apart. Any other id (`1.5`,
-///   2⁶³, `true`, an object) can't be answered faithfully, so its message
-///   is junk.
+///   `1.0000000000000001`, `5e0`, 2⁶³, `true`, an object) can't be
+///   answered faithfully, so its message is junk.
 /// - **Batches** (arrays of messages) are junk: no adapter sends them, so
 ///   they aren't read yet.
 /// - **Too-big lines** give their id and method if their head holds them:
 ///   a number is believed only when what follows it was read too, since
-///   `12` cut off may have been `123`.
+///   `12` cut off may have been `123`. Their [`Shape`] says whether the
+///   head showed an answer's keys or a request's.
 #[must_use]
 pub fn parse(line: Line) -> Frame {
     match line {
         Line::Whole(bytes) => read_whole(&bytes),
         Line::TooBig { head, len } => {
             let head = Head::of(&head);
+            let shape = match (head.answer, head.call) {
+                (true, false) => Shape::Answer,
+                (false, true) => Shape::Call,
+                _ => Shape::Unknown,
+            };
             Frame::TooBig {
                 id: head.id,
                 method: head.method,
+                shape,
                 len,
             }
         }
@@ -200,7 +204,7 @@ fn read_whole(bytes: &[u8]) -> Frame {
     {
         return junk;
     }
-    let id = match wire.id.map(request_id) {
+    let id = match wire.id.as_deref().map(request_id) {
         Some(None) => return junk,
         Some(id) => id,
         None => None,
@@ -229,7 +233,7 @@ fn read_whole(bytes: &[u8]) -> Frame {
 struct Wire {
     jsonrpc: Option<String>,
     #[serde(default, deserialize_with = "present")]
-    id: Option<Value>,
+    id: Option<Box<RawValue>>,
     method: Option<String>,
     params: Option<Box<RawValue>>,
     #[serde(default, deserialize_with = "present")]
@@ -285,22 +289,28 @@ fn outcome(
     }
 }
 
-/// `id` as a request id, if it's one CAF can answer faithfully.
-fn request_id(id: Value) -> Option<RequestId> {
-    match id {
-        Value::Null => Some(RequestId::Null),
-        Value::String(id) => Some(RequestId::String(id)),
-        Value::Number(id) => id
-            .as_i64()
-            .or_else(|| {
-                let float = id.as_f64()?;
-                // In range, so the cast is exact.
-                #[allow(clippy::cast_possible_truncation)]
-                (float.fract() == 0.0 && float.abs() <= EXACT_FLOAT).then_some(float as i64)
-            })
-            .map(RequestId::Number),
+/// `id` as a request id, if it's one CAF can answer faithfully. Numbers
+/// are read from their text, never through a float, which can't hold
+/// every `i64` and may be read a little off.
+fn request_id(id: &RawValue) -> Option<RequestId> {
+    let text = id.get();
+    match text.as_bytes().first()? {
+        b'n' => Some(RequestId::Null),
+        b'"' => serde_json::from_str(text).ok().map(RequestId::String),
+        b'-' | b'0'..=b'9' => whole_number(text).map(RequestId::Number),
         _ => None,
     }
+}
+
+/// `number`, JSON number text, if it's a whole number that fits an
+/// `i64`: written plainly (`5`), or with a fraction of only zeros
+/// (`5.0`). An exponent (`5e0`) isn't read.
+fn whole_number(number: &str) -> Option<i64> {
+    let (whole, fraction) = number.split_once('.').unwrap_or((number, "0"));
+    if !fraction.bytes().all(|digit| digit == b'0') {
+        return None;
+    }
+    whole.parse().ok()
 }
 
 /// What the head of a line too long to accept says, read until it's cut
@@ -309,6 +319,10 @@ fn request_id(id: Value) -> Option<RequestId> {
 struct Head {
     id: Option<RequestId>,
     method: Option<String>,
+    /// It had a `result` or `error` key.
+    answer: bool,
+    /// It had a `method` or `params` key.
+    call: bool,
 }
 
 impl Head {
@@ -340,16 +354,25 @@ impl<'de> Visitor<'de> for &mut Head {
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
         // A number is believed only once the next key is read: cut off,
         // `12` may have been `123`.
-        let mut number = None;
+        let mut number: Option<Box<RawValue>> = None;
         while let Some(key) = map.next_key::<String>()? {
             if let Some(id) = number.take() {
-                self.id = request_id(id);
+                self.id = request_id(&id);
             }
+            self.answer |= matches!(key.as_str(), "result" | "error");
+            self.call |= matches!(key.as_str(), "method" | "params");
             match key.as_str() {
-                "id" => match map.next_value()? {
-                    Value::Number(id) => number = Some(Value::Number(id)),
-                    id => self.id = request_id(id),
-                },
+                "id" => {
+                    let id: Box<RawValue> = map.next_value()?;
+                    if id
+                        .get()
+                        .starts_with(['-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'])
+                    {
+                        number = Some(id);
+                    } else {
+                        self.id = request_id(&id);
+                    }
+                }
                 "method" => self.method = Some(map.next_value()?),
                 _ => {
                     map.next_value::<IgnoredAny>()?;
@@ -357,7 +380,7 @@ impl<'de> Visitor<'de> for &mut Head {
             }
         }
         if let Some(id) = number {
-            self.id = request_id(id);
+            self.id = request_id(&id);
         }
         Ok(())
     }
@@ -378,6 +401,9 @@ pub enum Frame {
         id: Option<RequestId>,
         /// Its method, if found.
         method: Option<String>,
+        /// What its head showed it to be. An id without a method may be an
+        /// answer, or a request whose method came later in the line.
+        shape: Shape,
         /// Its length in bytes.
         len: usize,
     },
@@ -387,6 +413,21 @@ pub enum Frame {
         /// Its length in bytes.
         len: usize,
     },
+}
+
+/// What the head of a line too long to accept showed it to be, by the
+/// keys found there, whatever their values.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Shape {
+    /// It had `result` or `error`, and neither `method` nor `params`: an
+    /// answer.
+    Answer,
+    /// It had `method` or `params`, and neither `result` nor `error`: a
+    /// request if it has an id, else a notification.
+    Call,
+    /// It had none of them, or both kinds.
+    Unknown,
 }
 
 /// A JSON-RPC 2.0 message, sorted by shape. Its params and result stay
@@ -448,6 +489,8 @@ pub struct RpcError {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
+
     use super::*;
 
     /// A line, in a form tests can compare.
@@ -717,16 +760,36 @@ mod tests {
         assert_eq!(id(r#""x\"y""#), Some(RequestId::String("x\"y".to_owned())));
         assert_eq!(id(r#""""#), Some(RequestId::String(String::new())));
         assert_eq!(id("null"), Some(RequestId::Null));
-        // A whole number written as a float is the number.
+        // A whole number written with a fraction of zeros is the number.
         assert_eq!(id("5.0"), Some(RequestId::Number(5)));
-        assert_eq!(id("1e3"), Some(RequestId::Number(1000)));
+        assert_eq!(id("5.000"), Some(RequestId::Number(5)));
         assert_eq!(id("-0.0"), Some(RequestId::Number(0)));
+        assert_eq!(
+            id("9223372036854775807.0"),
+            Some(RequestId::Number(i64::MAX))
+        );
         // Anything else can't be answered faithfully.
         assert_eq!(id("1.5"), None);
         assert_eq!(id("9223372036854775808"), None);
         assert_eq!(id("18446744073709551615"), None);
         assert_eq!(id("1e300"), None);
-        assert_eq!(id("9007199254740994.0"), None);
+        // Read from the text, never through a float.
+        assert_eq!(
+            id("9007199254740991.0"),
+            Some(RequestId::Number(9_007_199_254_740_991))
+        );
+        assert_eq!(
+            id("9007199254740993.0"),
+            Some(RequestId::Number(9_007_199_254_740_993))
+        );
+        assert_eq!(
+            id("9007199254740993"),
+            Some(RequestId::Number(9_007_199_254_740_993))
+        );
+        assert_eq!(id("1.0000000000000001"), None);
+        assert_eq!(id("1e3"), None);
+        assert_eq!(id("1.0e0"), None);
+        assert_eq!(id("9223372036854775808.0"), None);
         assert_eq!(id("true"), None);
         assert_eq!(id("{}"), None);
         assert_eq!(id("[1]"), None);
@@ -828,7 +891,9 @@ mod tests {
             head: head.as_bytes().to_vec(),
             len: 1 << 30,
         }) {
-            Frame::TooBig { id, method, len } => {
+            Frame::TooBig {
+                id, method, len, ..
+            } => {
                 assert_eq!(len, 1 << 30);
                 (id, method)
             }
@@ -942,11 +1007,63 @@ mod tests {
             framer.push(piece, &mut out);
         }
         let [line] = <[Line; 1]>::try_from(out).unwrap();
-        let Frame::TooBig { id, method, len } = parse(line) else {
+        let Frame::TooBig {
+            id,
+            method,
+            shape,
+            len,
+        } = parse(line)
+        else {
             panic!("not too big");
         };
         assert_eq!(id, Some(RequestId::Number(9)));
         assert_eq!(method.as_deref(), Some("fs/write_text_file"));
         assert_eq!(len, HEAD * 2 + 3);
+        assert_eq!(shape, Shape::Call);
+    }
+
+    fn shape(head: &str) -> Shape {
+        match parse(Line::TooBig {
+            head: head.as_bytes().to_vec(),
+            len: 1 << 30,
+        }) {
+            Frame::TooBig { shape, .. } => shape,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_too_big_line_says_whether_its_head_looked_like_an_answer_or_a_call() {
+        assert_eq!(
+            shape(r#"{"jsonrpc":"2.0","id":3,"result":{"content":"aaa"#),
+            Shape::Answer
+        );
+        assert_eq!(
+            shape(r#"{"jsonrpc":"2.0","id":3,"error":{"code":"#),
+            Shape::Answer
+        );
+        assert_eq!(
+            shape(r#"{"jsonrpc":"2.0","id":3,"method":"m","params":{"#),
+            Shape::Call
+        );
+        assert_eq!(
+            shape(r#"{"jsonrpc":"2.0","method":"session/update","params":{"#),
+            Shape::Call
+        );
+        // A request whose method comes after its params, past the head.
+        assert_eq!(
+            shape(r#"{"jsonrpc":"2.0","id":3,"params":{"content":"aaa"#),
+            Shape::Call
+        );
+        assert_eq!(shape(r#"{"jsonrpc":"2.0","id":3,"x":"aaa"#), Shape::Unknown);
+        assert_eq!(shape(r#"{"id":3,"result":1,"params":"#), Shape::Unknown);
+        assert_eq!(shape("xxxx"), Shape::Unknown);
+        // Keys inside params don't count.
+        assert_eq!(
+            shape(r#"{"id":3,"params":{"result":1,"error":"#),
+            Shape::Call
+        );
+        // A key whose value was cut off counts.
+        assert_eq!(shape(r#"{"id":3,"result""#), Shape::Answer);
     }
 }
