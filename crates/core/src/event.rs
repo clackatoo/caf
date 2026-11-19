@@ -3,7 +3,7 @@
 //! Each event is handed to [`Core::handle`](crate::Core::handle) with the
 //! time it happened. The list is closed: drivers report only these.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::acp::Frame;
 use crate::chat::{AppItem, NoAppItems, UserMessage};
@@ -105,7 +105,10 @@ pub enum AgentEvent {
     /// Bytes it wrote to its error output. The core keeps the last few
     /// lines, for explaining failures, and looks for sign-in prompts and
     /// secrets in them.
-    Stderr(Vec<u8>),
+    ///
+    /// It's written as an array of bytes, and read from one or from text,
+    /// so a recording can hold it as text a person can read.
+    Stderr(#[serde(deserialize_with = "bytes_or_text")] Vec<u8>),
     /// Its output ended.
     OutputClosed,
     /// Writing to it failed: it's gone, though it may still be writing.
@@ -151,3 +154,17 @@ pub enum PolicyAnswer {
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum StorageEvent {}
+
+/// Bytes, read from an array of bytes or from text.
+fn bytes_or_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Either {
+        Text(String),
+        Bytes(Vec<u8>),
+    }
+    Ok(match Either::deserialize(deserializer)? {
+        Either::Text(text) => text.into_bytes(),
+        Either::Bytes(bytes) => bytes,
+    })
+}

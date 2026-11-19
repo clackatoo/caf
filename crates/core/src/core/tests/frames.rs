@@ -72,3 +72,14 @@ fn a_request_from_a_process_that_has_gone_is_dropped_and_reported() {
     assert!(replies(&out, &json!(5)).is_empty());
     assert_eq!(with(&out, "report").len(), 1);
 }
+
+#[test]
+fn error_output_reads_back_from_bytes_or_text() {
+    use crate::event::Event;
+    let bytes: Event = serde_json::from_str(r#"{"Agent":{"process":7,"event":{"Stderr":[104,105,10]}}}"#).expect("bytes");
+    let text: Event = serde_json::from_str(r#"{"Agent":{"process":7,"event":{"Stderr":"hi\n"}}}"#).expect("text");
+    for event in [bytes, text] {
+        let Event::Agent { event: AgentEvent::Stderr(read), .. } = event else { panic!("{event:?}") };
+        assert_eq!(read, b"hi\n");
+    }
+}
