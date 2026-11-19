@@ -3,13 +3,16 @@
 mod harness;
 
 mod basics;
+mod chats;
 mod continuing;
 mod failures;
 mod frames;
+mod guarantees;
 mod permissions;
 mod process;
 mod shared;
 mod stop;
+mod traces;
 
 use serde_json::{Value, json};
 
@@ -76,10 +79,5 @@ impl Script {
         let new = sent(&out, "session/new");
         let new_id = new["id"].as_u64().expect("an id");
         self.answers(PROC, new_id, &json!({ "sessionId": SESSION }));
-    }
-
-    /// The id of the one `method` request in `out`.
-    fn id_of(out: &[Value], method: &str) -> u64 {
-        sent(out, method)["id"].as_u64().expect("an id")
     }
 }

@@ -272,6 +272,24 @@ impl Script {
         }
     }
 
+    /// A script that gives a core the recording `json` (see
+    /// [`Script::recording`]), made for `host`.
+    pub(crate) fn from_recording(host: Host, json: &str) -> Self {
+        #[derive(serde::Deserialize)]
+        struct Step {
+            at: u64,
+            event: Box<RawValue>,
+        }
+        let steps: Vec<Step> = serde_json::from_str(json).expect("a recording");
+        let mut script = Self::new(host);
+        for step in steps {
+            let event: Event = serde_json::from_str(step.event.get()).expect("a recorded event");
+            script.at(step.at);
+            script.event(event);
+        }
+        script
+    }
+
     /// The recording, as one JSON document.
     pub(crate) fn recording(&self) -> Value {
         let steps: Vec<Value> = (self.trace.iter())
