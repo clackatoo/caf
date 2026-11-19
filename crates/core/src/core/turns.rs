@@ -195,7 +195,7 @@ impl<A: AppItem> Core<A> {
                 }
                 // Its process is going: nothing more will come of it.
                 None => {
-                    self.give_up_prompt(chat);
+                    self.give_up_prompt(now, chat);
                     self.end_turn(now, chat, turn, TurnLife::Stopped);
                 }
             }
@@ -210,13 +210,16 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Stops waiting for `chat`'s running prompt: its answer, if it comes,
-    /// changes nothing.
-    fn give_up_prompt(&mut self, chat: ChatId) -> Option<Running> {
+    /// changes nothing. The request keeps a watchdog, so it ends even if
+    /// the agent never answers.
+    pub(super) fn give_up_prompt(&mut self, now: Now, chat: ChatId) -> Option<Running> {
+        let watchdog = now.mono.after(self.host.timers.request);
         let running = self.runs.get_mut(&chat)?.running.take()?;
         if let Some(pending) = self.pending.get_mut(&(running.proc, running.id))
             && let Purpose::Prompt { abandoned, .. } = &mut pending.purpose
         {
             *abandoned = true;
+            pending.deadline = Some(watchdog);
         }
         Some(running)
     }
@@ -226,7 +229,7 @@ impl<A: AppItem> Core<A> {
     /// is mid-turn on it; otherwise only this chat's session is closed,
     /// where the agent can, and opened again with its next message.
     pub(super) fn stop_overdue(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) {
-        let Some(running) = self.give_up_prompt(chat) else { return };
+        let Some(running) = self.give_up_prompt(now, chat) else { return };
         report(out, Level::Warn, format!("chat {}: the agent didn't stop when asked", chat.0));
         let failed = failure(FailureReason::DidNotStop, Some(Remedy::SendAgain));
         self.end_turn(now, chat, running.turn, TurnLife::Failed(failed));

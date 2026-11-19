@@ -356,7 +356,7 @@ impl<A: AppItem> Core<A> {
                     // Restarting would cut another chat's turn off: this
                     // session is just asked for again.
                     report(out, Level::Info, format!("chat {}: asking again, as another chat is busy", chat.0));
-                    self.abandon_open(chat);
+                    self.abandon_open(now, chat);
                     self.want_open(now, chat, out);
                 }
                 Some(proc) => {
@@ -398,7 +398,7 @@ impl<A: AppItem> Core<A> {
     /// Stops waiting for `chat`'s session: its waiting messages end as
     /// stopped.
     pub(super) fn stop_opening(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) {
-        self.abandon_open(chat);
+        self.abandon_open(now, chat);
         for turn in self.waiting_turns(chat) {
             self.set_life(now, chat, turn, TurnLife::Stopped);
         }
@@ -410,13 +410,16 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Stops waiting for `chat`'s session to open. No answer is sent;
-    /// one that opens anyway is closed (see [`Core::close_late`]).
-    pub(super) fn abandon_open(&mut self, chat: ChatId) {
+    /// one that opens anyway is closed (see [`Core::close_late`]). The
+    /// request keeps a watchdog, so it ends even if the agent never
+    /// answers.
+    pub(super) fn abandon_open(&mut self, now: Now, chat: ChatId) {
+        let watchdog = now.mono.after(self.host.timers.request);
         let Some(run) = self.runs.get_mut(&chat) else { return };
         if let Open::Asked { proc, id } = run.open
             && let Some(pending) = self.pending.get_mut(&(proc, id))
         {
-            pending.deadline = None;
+            pending.deadline = Some(watchdog);
             if let Purpose::Open { abandoned, .. } = &mut pending.purpose {
                 *abandoned = true;
             }
@@ -469,12 +472,7 @@ impl<A: AppItem> Core<A> {
     /// and any session it's opening.
     fn wind_down(&mut self, now: Now, chat: ChatId, life: TurnLife, out: &mut Vec<Directive>) {
         self.withdraw_asks(chat, out);
-        if let Some(running) = self.runs.get_mut(&chat).and_then(|run| run.running.take()) {
-            if let Some(pending) = self.pending.get_mut(&(running.proc, running.id))
-                && let Purpose::Prompt { abandoned, .. } = &mut pending.purpose
-            {
-                *abandoned = true;
-            }
+        if let Some(running) = self.give_up_prompt(now, chat) {
             if let Some(session) = self.runs.get(&chat).and_then(|run| run.session.clone()) {
                 self.notify(running.proc, "session/cancel", json!({ "sessionId": session.0 }), out);
             }
@@ -484,7 +482,7 @@ impl<A: AppItem> Core<A> {
             self.set_life(now, chat, turn, TurnLife::Stopped);
         }
         self.end_agent_turn(now, chat);
-        self.abandon_open(chat);
+        self.abandon_open(now, chat);
     }
 
     /// Stops everything.

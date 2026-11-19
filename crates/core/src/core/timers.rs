@@ -107,6 +107,11 @@ impl<A: AppItem> Core<A> {
         let Some(pending) = self.pending.get_mut(&(proc, id)) else { return };
         pending.deadline = None;
         match pending.purpose {
+            // Nobody waits for these any more: they just end.
+            Purpose::Open { abandoned: true, .. } | Purpose::Prompt { abandoned: true, .. } => {
+                self.pending.remove(&(proc, id));
+                report(out, Level::Debug, format!("gave up on request {id} of process {}, which nobody waited for", proc.0));
+            }
             // Slow, not failed: the user chooses.
             Purpose::Open { chat, .. } => {
                 if self.runs.get(&chat).is_some_and(|run| run.open == Open::Asked { proc, id }) {

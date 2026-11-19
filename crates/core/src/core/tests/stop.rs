@@ -109,6 +109,8 @@ fn stop_while_opening_abandons_the_open_and_a_late_session_is_closed() {
     let (stopped, out) = script.stop(CHAT);
     stopped.expect("stopped");
     assert!(writes(&out).is_empty(), "nothing to tell the agent");
+    // Abandoned, the open still has a watchdog: 60 s.
+    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 60_000 })]);
     assert_has(&script.chat(CHAT), &json!({
         "state": { "Lost": { "reason": "Stopped" } },
         "turns": [{ "id": turn.expect("sent").0, "life": "Stopped" }]
@@ -117,8 +119,8 @@ fn stop_while_opening_abandons_the_open_and_a_late_session_is_closed() {
     let out = script.answers(PROC, 1001, &json!({ "sessionId": "late" }));
     assert_eq!(sent(&out, "session/close")["params"], json!({ "sessionId": "late" }));
     assert_has(&script.chat(CHAT), &json!({ "state": { "Lost": { "reason": "Stopped" } } }));
-    // Closing it has a watchdog: 60 s.
-    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 60_000 })]);
+    // Closing it has a watchdog too.
+    assert_eq!(script.state()["pending"][0]["pending"]["deadline"], json!(60_000_000_000_u64));
     script.answers(PROC, 1002, &json!({}));
 }
 

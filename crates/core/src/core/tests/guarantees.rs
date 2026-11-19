@@ -99,6 +99,15 @@ fn guarantee_2_every_caf_request_ends() {
     assert_has(&script.chat(CHAT), &json!({ "turns": [{ "life": { "Failed": { "reason": "DidNotStop" } } }] }));
     assert_eq!(script.state()["pending"], json!([]));
 
+    // So does a request nobody waits for any more: it just ends.
+    let mut abandoned = Script::new(host());
+    abandoned.open(OpenChat::new("claude", "/work")).0.expect("opened");
+    abandoned.answers(PROC, 1000, &super::claude_init());
+    abandoned.close(CHAT).0.expect("closed");
+    abandoned.at(60_000);
+    abandoned.woken();
+    assert_eq!(abandoned.state()["pending"], json!([]));
+
     // And a lost connection ends every request in flight.
     script.agent(PROC, AgentEvent::OutputClosed);
     script.agent(PROC, AgentEvent::Group { empty: true });
