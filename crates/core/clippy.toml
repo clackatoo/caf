@@ -1,0 +1,31 @@
+# caf-core does no I/O: it never reads a clock, starts a process, touches
+# a file or the network, or sleeps. Time comes in with every event, and
+# everything else goes out as a directive. This makes the rule something
+# clippy checks rather than a comment.
+disallowed-types = [
+    { path = "std::time::Instant", reason = "the core never reads a clock: use the `Now` it's given" },
+    { path = "std::time::SystemTime", reason = "the core never reads a clock: use the `Now` it's given" },
+    { path = "std::fs::File", reason = "the core does no I/O: ask the storage driver" },
+    { path = "std::process::Command", reason = "the core does no I/O: ask the agent driver" },
+    { path = "std::process::Child", reason = "the core does no I/O: ask the agent driver" },
+    { path = "std::net::TcpStream", reason = "the core does no I/O" },
+    { path = "std::net::TcpListener", reason = "the core does no I/O" },
+    { path = "std::net::UdpSocket", reason = "the core does no I/O" },
+    { path = "std::thread::JoinHandle", reason = "the core starts no threads: drivers do the work" },
+]
+disallowed-methods = [
+    { path = "std::time::Instant::now", reason = "the core never reads a clock: use the `Now` it's given" },
+    { path = "std::time::SystemTime::now", reason = "the core never reads a clock: use the `Now` it's given" },
+    { path = "std::thread::sleep", reason = "the core never blocks" },
+    { path = "std::thread::spawn", reason = "the core starts no threads: drivers do the work" },
+    { path = "std::fs::read", reason = "the core does no I/O: ask the storage driver" },
+    { path = "std::fs::read_to_string", reason = "the core does no I/O: ask the storage driver" },
+    { path = "std::fs::write", reason = "the core does no I/O: ask the storage driver" },
+    { path = "std::fs::read_dir", reason = "the core does no I/O: ask the storage driver" },
+    { path = "std::fs::metadata", reason = "the core does no I/O: ask the storage driver" },
+    { path = "std::fs::create_dir_all", reason = "the core does no I/O: ask the storage driver" },
+    { path = "std::fs::remove_file", reason = "the core does no I/O: ask the storage driver" },
+    { path = "std::env::var", reason = "the core reads no environment: the host says what it needs" },
+    { path = "std::env::var_os", reason = "the core reads no environment: the host says what it needs" },
+    { path = "std::env::current_dir", reason = "the core reads no environment: the host says what it needs" },
+]

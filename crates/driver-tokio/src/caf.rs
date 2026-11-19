@@ -89,6 +89,12 @@ impl std::error::Error for Error {}
 
 impl<A: AppItem> Caf<A> {
     /// Starts CAF in a task of its own, on the current tokio runtime.
+    ///
+    /// # Panics
+    ///
+    /// If `config.agent_limits.biggest_line` isn't the host's
+    /// `limits.biggest_message`: the driver and the core must agree on what
+    /// a too-big line is.
     #[must_use]
     pub fn start(config: Config) -> (Self, Running) {
         todo!()
