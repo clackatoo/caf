@@ -44,6 +44,7 @@ impl Mono {
 ///
 /// The times are when CAF heard of things, not when the agent did them:
 /// ACP carries no timestamps.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Window {
     /// When CAF first heard of it. `None` only for history imported from
@@ -54,6 +55,7 @@ pub struct Window {
 }
 
 /// The end of a [`Window`].
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum End {
     /// It's still going.

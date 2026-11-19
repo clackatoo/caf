@@ -25,7 +25,7 @@ use crate::time::Now;
 /// time.
 ///
 /// ```ignore
-/// let mut core = Core::<NoAppItems>::new(Host::default(), vec![claude]);
+/// let mut core = Core::<NoAppItems>::new(Host::new("clackatoo", "2026.12.1"), vec![claude]);
 /// let mut out = Vec::new();
 /// let chat = core.open_chat(now, OpenChat::new("claude", "/home/me/project"), &mut out)?;
 /// let turn = core.send(now, chat, UserMessage::text("Fix the tests"), &mut out)?;
@@ -39,6 +39,7 @@ pub struct Core<A: AppItem = NoAppItems> {
 }
 
 /// What to open a chat with.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenChat {
     /// The agent, by the name the host gave it.
@@ -65,6 +66,7 @@ impl OpenChat {
 }
 
 /// Which session a chat opens.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionChoice {
     /// A new one.
@@ -107,6 +109,7 @@ pub enum Refused {
 }
 
 /// What the host can see of a connection: one adapter process.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionInfo {
     /// Its id.

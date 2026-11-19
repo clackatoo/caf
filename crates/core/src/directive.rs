@@ -16,10 +16,8 @@ use crate::time::Mono;
 pub enum Directive {
     /// For the agent driver.
     Agent(AgentDirective),
-    /// For the timer driver: wake the core at this time, replacing any
-    /// earlier request, or never. There is only ever one: the core asks
-    /// for its earliest deadline.
-    WakeAt(Option<Mono>),
+    /// For the timer driver.
+    Timer(TimerDirective),
     /// For the policy driver.
     Policy(PolicyDirective),
     /// For the viewer driver.
@@ -49,6 +47,7 @@ pub enum Directive {
 ///   leaves a zombie.
 ///
 /// [`AgentEvent::WriteFailed`]: crate::event::AgentEvent::WriteFailed
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum AgentDirective {
     /// Start a process in a process group of its own, with its standard
@@ -93,6 +92,7 @@ pub enum AgentDirective {
 }
 
 /// A signal for a process group.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Signal {
     /// SIGTERM: please stop.
@@ -101,7 +101,17 @@ pub enum Signal {
     Kill,
 }
 
+/// Work for the timer driver.
+#[non_exhaustive]
+#[derive(Debug, Serialize, Deserialize)]
+pub enum TimerDirective {
+    /// Wake the core at this time, replacing any earlier request, or never.
+    /// There is only ever one: the core asks for its earliest deadline.
+    WakeAt(Option<Mono>),
+}
+
 /// Work for the policy driver.
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum PolicyDirective {
     /// Decide whether the agent may do this, and answer with
@@ -127,6 +137,7 @@ pub enum PolicyDirective {
 /// What the agent wants to do, for the policy to decide on. In feature 1
 /// it's as the agent described it; the typed action ("run `cargo test` in
 /// this folder") comes with the Permission Engine.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PermissionRequest {
     /// What the agent calls it.
@@ -136,6 +147,7 @@ pub struct PermissionRequest {
 }
 
 /// Work for the viewer driver.
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ViewerDirective {
     /// A chat changed: viewers watching it should read its changes, up to
@@ -154,6 +166,7 @@ pub enum ViewerDirective {
 pub enum StorageDirective {}
 
 /// Something the host should log.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Report {
     /// How much it matters.
@@ -165,6 +178,7 @@ pub struct Report {
 }
 
 /// How much a report matters.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Level {
     /// Detail, for debugging.

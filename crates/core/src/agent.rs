@@ -13,6 +13,7 @@ use crate::ids::AgentName;
 use crate::profiles::ProfileChoice;
 
 /// An agent the host offers.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSpec {
     /// The name chats ask for it by.
@@ -25,7 +26,20 @@ pub struct AgentSpec {
     pub profile: ProfileChoice,
 }
 
+impl AgentSpec {
+    /// An agent called `name`, started by `command`, with `profile`.
+    #[must_use]
+    pub fn new(name: impl Into<String>, command: SpawnCommand, profile: ProfileChoice) -> Self {
+        Self {
+            name: AgentName(name.into()),
+            command,
+            profile,
+        }
+    }
+}
+
 /// How to start a program.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpawnCommand {
     /// The program, by absolute path. Never looked up on `PATH`, and never
@@ -44,7 +58,22 @@ pub struct SpawnCommand {
     pub cwd: Option<PathBuf>,
 }
 
+impl SpawnCommand {
+    /// Run `program` with no arguments, in the inherited environment.
+    /// Set the other fields to change that.
+    #[must_use]
+    pub fn new(program: impl Into<PathBuf>) -> Self {
+        Self {
+            program: program.into(),
+            args: Vec::new(),
+            env: Vec::new(),
+            cwd: None,
+        }
+    }
+}
+
 /// One change to a program's environment.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EnvChange {
     /// Set a variable.
@@ -56,6 +85,7 @@ pub enum EnvChange {
 /// An MCP server to give the agent's session: the only way ACP lets an
 /// app give an agent tools. CAF passes it through untouched: it never
 /// wraps it, proxies it or shortens its timeouts.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum McpServer {
     /// A program the agent starts and talks to over its standard input

@@ -29,6 +29,7 @@ pub struct Framer {
 }
 
 /// One line from an adapter, not yet parsed.
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum Line {
     /// A whole line, without its newline.
@@ -73,6 +74,7 @@ pub fn parse(line: Line) -> Frame {
 
 /// One line from an adapter, read as far as JSON-RPC: what the agent
 /// driver hands the core.
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Frame {
     /// A JSON-RPC message.
@@ -98,6 +100,7 @@ pub enum Frame {
 
 /// A JSON-RPC 2.0 message, sorted by shape. Its params and result stay
 /// raw JSON until the core knows what they are.
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
     /// A request: a method with an id. The agent wants an answer.
@@ -128,6 +131,7 @@ pub enum Message {
 
 /// A JSON-RPC request id. CAF's own are always numbers; an agent's can be
 /// anything JSON-RPC allows.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RequestId {
     /// A number.

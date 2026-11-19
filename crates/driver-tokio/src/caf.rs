@@ -10,6 +10,7 @@ use crate::agent::AgentLimits;
 use crate::policy::{AlwaysAsk, Policy};
 
 /// What to start CAF with.
+#[non_exhaustive]
 pub struct Config {
     /// The host's description of itself.
     pub host: Host,
@@ -22,11 +23,12 @@ pub struct Config {
 }
 
 impl Config {
-    /// The defaults, offering these agents.
+    /// The defaults for `host`, offering these agents. Set any field to
+    /// change it.
     #[must_use]
-    pub fn new(agents: Vec<AgentSpec>) -> Self {
+    pub fn new(host: Host, agents: Vec<AgentSpec>) -> Self {
         Self {
-            host: Host::default(),
+            host,
             agents,
             policy: Box::new(AlwaysAsk),
             agent_limits: AgentLimits::default(),
@@ -58,9 +60,32 @@ impl std::future::Future for Running {
     }
 }
 
-/// CAF has shut down, so nothing can be asked of it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Gone;
+/// Why something asked of CAF wasn't done.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Error {
+    /// The core refused it, and changed nothing.
+    Refused(Refused),
+    /// CAF has shut down, so nothing can be asked of it.
+    Gone,
+}
+
+impl From<Refused> for Error {
+    fn from(refused: Refused) -> Self {
+        Self::Refused(refused)
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused(refused) => write!(f, "CAF refused: {refused:?}"),
+            Self::Gone => f.write_str("CAF has shut down"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 impl<A: AppItem> Caf<A> {
     /// Starts CAF in a task of its own, on the current tokio runtime.
@@ -74,8 +99,8 @@ impl<A: AppItem> Caf<A> {
     ///
     /// # Errors
     ///
-    /// The core's refusal, or [`Gone`].
-    pub async fn open_chat(&self, open: OpenChat) -> Result<ChatHandle<A>, Result<Refused, Gone>> {
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    pub async fn open_chat(&self, open: OpenChat) -> Result<ChatHandle<A>, Error> {
         todo!()
     }
 
@@ -103,8 +128,8 @@ impl<A: AppItem> ChatHandle<A> {
     ///
     /// # Errors
     ///
-    /// The core's refusal, or [`Gone`].
-    pub async fn send(&self, message: UserMessage) -> Result<TurnId, Result<Refused, Gone>> {
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    pub async fn send(&self, message: UserMessage) -> Result<TurnId, Error> {
         todo!()
     }
 
@@ -112,8 +137,8 @@ impl<A: AppItem> ChatHandle<A> {
     ///
     /// # Errors
     ///
-    /// The core's refusal, or [`Gone`].
-    pub async fn stop(&self) -> Result<(), Result<Refused, Gone>> {
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    pub async fn stop(&self) -> Result<(), Error> {
         todo!()
     }
 
@@ -121,8 +146,8 @@ impl<A: AppItem> ChatHandle<A> {
     ///
     /// # Errors
     ///
-    /// The core's refusal, or [`Gone`].
-    pub async fn answer(&self, question: QuestionId, answer: Answer) -> Result<(), Result<Refused, Gone>> {
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    pub async fn answer(&self, question: QuestionId, answer: Answer) -> Result<(), Error> {
         todo!()
     }
 
@@ -130,8 +155,8 @@ impl<A: AppItem> ChatHandle<A> {
     ///
     /// # Errors
     ///
-    /// The core's refusal, or [`Gone`].
-    pub async fn close(self) -> Result<(), Result<Refused, Gone>> {
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    pub async fn close(self) -> Result<(), Error> {
         todo!()
     }
 
@@ -150,6 +175,7 @@ pub struct Watch<A: AppItem = NoAppItems> {
 }
 
 /// What a watch gets.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub enum Update<A: AppItem = NoAppItems> {
     /// The whole chat, as it is: at the start, and after falling behind.

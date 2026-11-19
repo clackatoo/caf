@@ -18,6 +18,7 @@ use caf_core::directive::AgentDirective;
 use caf_core::event::AgentEvent;
 
 /// Limits for the agent driver.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentLimits {
     /// The biggest line accepted. Must match the core's

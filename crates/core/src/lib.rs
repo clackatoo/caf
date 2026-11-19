@@ -35,6 +35,16 @@
 //! features add behaviour without reshaping them. Items and variants
 //! marked *later* are declared but not yet produced.
 //!
+//! # Closed, but growing
+//!
+//! Every enum CAF owns, and every struct it hands out or takes as
+//! settings, is `#[non_exhaustive]`. That doesn't make them open: apps
+//! can't add variants, and their own kind of item goes only through
+//! [`ItemKind::App`]. It lets CAF add variants and fields later without
+//! breaking anyone's code. So a `match` on one needs a `_` arm, and
+//! settings are made with their constructor and changed by setting
+//! fields.
+//!
 //! # Guarantees
 //!
 //! Each of these has a test.
@@ -43,8 +53,9 @@
 //!    policy, by the user, by the core's own safe refusal, or with an
 //!    error. A request is never left waiting because CAF forgot it.
 //! 2. **Every request CAF sends ends**, with an answer, an error, or a
-//!    terminal outcome when its connection is lost. Nothing is pending
-//!    forever without a watchdog.
+//!    terminal outcome when its connection is lost. Every request has a
+//!    watchdog ([`host::Timers`]) except a prompt, which may run as long as
+//!    the agent works; once the user stops it, it has one too.
 //! 3. **Nothing the agent sends is silently dropped.** An update CAF can't
 //!    read becomes an [`ItemKind::Unknown`] with its original data, and a
 //!    message that fits nowhere becomes a [`Report`].

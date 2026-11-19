@@ -11,6 +11,7 @@ use crate::ids::{ItemId, QuestionId};
 use crate::time::Window;
 
 /// A question waiting for an answer.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Question {
     /// Its id, to answer it by.
@@ -34,6 +35,7 @@ pub enum QuestionKind {
 }
 
 /// The agent asks permission.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Permission {
     /// The tool call it's about, once CAF has seen it. It may arrive
@@ -46,6 +48,7 @@ pub struct Permission {
 }
 
 /// One answer an agent offers to a permission question.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PermissionOption {
     /// Its id, to answer with.
@@ -61,6 +64,7 @@ pub struct PermissionOption {
 pub struct OptionId(pub String);
 
 /// What a permission answer means.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OptionKind {
     /// Allow this once.
@@ -77,6 +81,7 @@ pub enum OptionKind {
 }
 
 /// The session is taking long to open.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SlowToOpen {
     /// Whether the adapter has answered at all. If it hasn't, the trouble
@@ -85,6 +90,7 @@ pub struct SlowToOpen {
 }
 
 /// An answer to a question.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Answer {
     /// Choose one of a permission question's options.
@@ -94,6 +100,7 @@ pub enum Answer {
 }
 
 /// What to do about a session that's slow to open.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SlowChoice {
     /// Keep waiting. What a host should pick when the user dismisses the

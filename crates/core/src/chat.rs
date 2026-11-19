@@ -43,6 +43,7 @@ impl AppItem for NoAppItems {
 }
 
 /// A chat: the user's conversation with an agent.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "A: AppItem")]
 pub struct Chat<A: AppItem = NoAppItems> {
@@ -63,6 +64,7 @@ pub struct Chat<A: AppItem = NoAppItems> {
 }
 
 /// Where a chat stands with its agent.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChatState {
     /// Starting its agent or opening its session. Messages sent now wait.
@@ -84,6 +86,7 @@ pub enum ChatState {
 }
 
 /// Why a chat lost its session.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Lost {
     /// The adapter couldn't be started.
@@ -108,6 +111,7 @@ pub enum Lost {
 }
 
 /// One turn: something started it, the agent worked, and it ended.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "A: AppItem")]
 pub struct Turn<A: AppItem = NoAppItems> {
@@ -127,6 +131,7 @@ pub struct Turn<A: AppItem = NoAppItems> {
 }
 
 /// What started a turn.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Starter {
     /// The user sent this.
@@ -146,6 +151,7 @@ pub enum Starter {
 }
 
 /// A message to an agent.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserMessage {
     /// Its parts, in order.
@@ -173,6 +179,7 @@ pub enum Part {
 }
 
 /// Where a turn is in its life.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TurnLife {
     /// Waiting to be sent: its chat is opening, or another turn is
@@ -193,6 +200,7 @@ pub enum TurnLife {
 }
 
 /// Why a turn failed, and what the user can do about it.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Failure {
     /// What went wrong, in CAF's own words.
@@ -247,6 +255,7 @@ pub enum Remedy {
 }
 
 /// One thing the agent did in a turn.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "A: AppItem")]
 pub struct Item<A: AppItem = NoAppItems> {
@@ -287,6 +296,7 @@ pub enum ItemKind<A: AppItem = NoAppItems> {
 }
 
 /// A tool call.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "A: AppItem")]
 pub struct ToolCall<A: AppItem = NoAppItems> {
@@ -331,6 +341,7 @@ pub enum ToolKind {
 }
 
 /// Where a tool call is.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolStatus {
     /// Not started yet, such as while waiting for permission.
@@ -344,6 +355,7 @@ pub enum ToolStatus {
 }
 
 /// The agent compacted its memory. *Later.*
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Compacted {}
 
@@ -353,6 +365,7 @@ pub struct Compacted {}
 pub enum Note {}
 
 /// Something the agent sent that CAF couldn't read.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Unknown {
     /// What it said it was, such as the update's tag.

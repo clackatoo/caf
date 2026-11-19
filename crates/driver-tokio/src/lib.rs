@@ -4,7 +4,12 @@
 //! send messages, and watch them change.
 //!
 //! ```ignore
-//! let (caf, running) = Caf::<NoAppItems>::start(Config::new(vec![claude]));
+//! let claude = AgentSpec::new(
+//!     "claude",
+//!     SpawnCommand::new("/home/me/.local/share/caf/agents/claude-0.98.0/bin/claude-agent-acp"),
+//!     ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
+//! );
+//! let (caf, running) = Caf::<NoAppItems>::start(Config::new(Host::new("eyespy", "0.4.0"), vec![claude]));
 //! let chat = caf.open_chat(OpenChat::new("claude", "/home/me/project")).await?;
 //! let mut watch = chat.watch();
 //! chat.send(UserMessage::text("Fix the tests")).await?;
@@ -32,6 +37,6 @@ mod policy;
 mod timer;
 
 pub use agent::{AgentDriver, AgentLimits};
-pub use caf::{Caf, ChatHandle, Config, Gone, Running, Update, Watch};
+pub use caf::{Caf, ChatHandle, Config, Error, Running, Update, Watch};
 pub use policy::{AlwaysAsk, Policy, RefuseAll};
 pub use timer::TimerDriver;

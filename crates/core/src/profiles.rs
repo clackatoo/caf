@@ -19,6 +19,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Which profile an agent should have.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProfileChoice {
     /// One CAF knows.
@@ -43,6 +44,7 @@ pub enum Builtin {
 
 /// What became of a connection's profile once its adapter said who it
 /// is.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfileReport {
     /// The profile in use.
@@ -54,6 +56,7 @@ pub struct ProfileReport {
 }
 
 /// An adapter's name and version, as it gave them.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdapterInfo {
     /// Its name, such as `@agentclientprotocol/claude-agent-acp`.
@@ -63,6 +66,7 @@ pub struct AdapterInfo {
 }
 
 /// How far CAF has checked the adapter it's talking to.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Checked {
     /// This exact version is checked: every feature its profile lists is

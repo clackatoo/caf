@@ -30,7 +30,7 @@ impl TimerDriver {
     }
 
     /// Wakes at this time from now on, or never: the core's
-    /// [`Directive::WakeAt`](caf_core::Directive::WakeAt).
+    /// [`TimerDirective::WakeAt`](caf_core::directive::TimerDirective::WakeAt).
     pub fn wake_at(&mut self, at: Option<Mono>) {
         self.deadline = at;
     }

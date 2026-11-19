@@ -16,6 +16,7 @@ use crate::question::Question;
 use crate::time::End;
 
 /// A change, with its number.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "A: AppItem")]
 pub struct Numbered<A: AppItem = NoAppItems> {
@@ -78,6 +79,7 @@ pub enum Change<A: AppItem = NoAppItems> {
 }
 
 /// What a viewer gets when it asks for a chat's changes.
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum Read<'a, A: AppItem = NoAppItems> {
     /// The changes after the one it named, oldest first: none if it's up

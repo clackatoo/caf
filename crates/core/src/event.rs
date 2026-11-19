@@ -87,6 +87,7 @@ pub enum HostCommand<A: AppItem = NoAppItems> {
 }
 
 /// What happened to an adapter process, in the order it happened.
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum AgentEvent {
     /// It started.
@@ -124,6 +125,7 @@ pub enum AgentEvent {
 }
 
 /// How a process exited.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Exit {
     /// With this code.
@@ -133,6 +135,7 @@ pub enum Exit {
 }
 
 /// The policy's answer to "is this allowed?".
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PolicyAnswer {
     /// Allowed, once.

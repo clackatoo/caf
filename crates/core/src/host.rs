@@ -12,8 +12,17 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 /// The host's description of itself, given when the core is made.
+///
+/// Make one with [`Host::new`] and set any field to change it. Like every
+/// settings struct in CAF, it's `non_exhaustive`, so a field added later
+/// breaks nobody.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Host {
+    /// The host's name, such as `clackatoo`, told to every agent.
+    pub name: String,
+    /// The host's version, told to every agent.
+    pub version: String,
     /// What it can show the user.
     pub shows: Shows,
     /// Which chats share an adapter process.
@@ -26,6 +35,7 @@ pub struct Host {
 
 /// What the host can show the user. A `false` here never stops CAF
 /// working: CAF answers or leaves out what can't be shown.
+#[non_exhaustive]
 #[allow(clippy::struct_excessive_bools)] // one plain answer each
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Shows {
@@ -49,6 +59,7 @@ pub struct Shows {
 /// saves memory (Claude's adapter is about 115 MB). The cost is that
 /// restarting the process to rescue one session affects the others. CAF
 /// tells every affected chat when that happens, whichever is chosen.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Grouping {
     /// One process per agent, shared by all its chats: what clackatoo
@@ -60,6 +71,7 @@ pub enum Grouping {
 }
 
 /// Size limits. Defaults are what clackatoo uses today.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limits {
     /// The biggest message accepted from an agent. A longer one is
@@ -80,6 +92,7 @@ pub struct Limits {
 /// How long to wait for things. Every timer is the host's to set:
 /// tests set them all. Defaults are what clackatoo uses today, or, for
 /// the new watchdogs, what its timings suggest.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Timers {
     /// How long an adapter may take to answer `initialize` before the
@@ -93,6 +106,11 @@ pub struct Timers {
     /// How long after Stop the agent may take to end the turn, before
     /// CAF ends it as failed and restarts the session. 15 s.
     pub stop: Duration,
+    /// How long any other request CAF sends may go unanswered (closing a
+    /// session, changing a setting) before the adapter is treated as stuck
+    /// and restarted. A prompt has no such limit: an agent may work on one
+    /// for an hour. 60 s.
+    pub request: Duration,
     /// How long CAF keeps listening to an adapter that has gone, for its
     /// last words. 2 s.
     pub gone: Duration,
@@ -104,9 +122,14 @@ pub struct Timers {
     pub group_poll: Duration,
 }
 
-impl Default for Host {
-    fn default() -> Self {
+impl Host {
+    /// A host of this name and version, with the defaults for the rest.
+    /// Change any other field by setting it.
+    #[must_use]
+    pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
         Self {
+            name: name.into(),
+            version: version.into(),
             shows: Shows::default(),
             grouping: Grouping::PerAgent,
             limits: Limits::default(),
@@ -144,6 +167,7 @@ impl Default for Timers {
             initialize: Duration::from_secs(30),
             session_open: Duration::from_secs(30),
             stop: Duration::from_secs(15),
+            request: Duration::from_secs(60),
             gone: Duration::from_secs(2),
             kill_after: Duration::from_secs(2),
             group_poll: Duration::from_millis(50),
