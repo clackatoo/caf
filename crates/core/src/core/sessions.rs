@@ -38,6 +38,8 @@ impl<A: AppItem> Core<A> {
         if !open.cwd.is_absolute() {
             return Err(Refused::RelativeFolder);
         }
+        let cwd = open.cwd.to_str().ok_or(Refused::Unsendable)?.to_owned();
+        let mcp_sent = open.mcp_servers.iter().map(mcp_server).collect::<Option<Vec<_>>>().ok_or(Refused::Unsendable)?;
         if self.chats.contains_key(&chat) {
             report(out, Level::Warn, format!("chat {} is already open", chat.0));
             return Ok(());
@@ -58,8 +60,9 @@ impl<A: AppItem> Core<A> {
         self.dirty.insert(chat);
         self.runs.insert(chat, Run {
             conn,
-            cwd: open.cwd,
+            cwd,
             mcp: open.mcp_servers,
+            mcp_sent,
             session: match open.session {
                 SessionChoice::New => None,
                 SessionChoice::Continue(session) => Some(session),
@@ -142,7 +145,7 @@ impl<A: AppItem> Core<A> {
         }
         let mut params = json!({
             "cwd": run.cwd,
-            "mcpServers": run.mcp.iter().map(mcp_server).collect::<Vec<_>>(),
+            "mcpServers": run.mcp_sent,
         });
         if let Some(session) = &run.session {
             params["sessionId"] = json!(session.0);
@@ -584,32 +587,30 @@ fn keepable(session: &str) -> bool {
     !session.is_empty() && session.len() <= MOST_SESSION_ID && !session.chars().any(char::is_control)
 }
 
-/// An MCP server as ACP sends it.
-fn mcp_server(server: &McpServer) -> Value {
-    let pairs = |pairs: Vec<(String, String)>| -> Vec<Value> {
-        pairs.into_iter().map(|(name, value)| json!({ "name": name, "value": value })).collect()
-    };
-    match server {
+/// An MCP server as ACP sends it: `None` if it can't be sent exactly.
+/// ACP can only set a server's variables, and has no folder to start it
+/// in.
+fn mcp_server(server: &McpServer) -> Option<Value> {
+    let pair = |name: &str, value: &str| json!({ "name": name, "value": value });
+    Some(match server {
         McpServer::Stdio { name, command } => {
+            if command.cwd.is_some() {
+                return None;
+            }
             let env = (command.env.iter())
-                .filter_map(|change| match change {
-                    EnvChange::Set(name, value) => Some((name.to_string_lossy().into_owned(), value.to_string_lossy().into_owned())),
-                    // ACP can only set variables.
+                .map(|change| match change {
+                    EnvChange::Set(name, value) => Some(pair(name.to_str()?, value.to_str()?)),
                     _ => None,
                 })
-                .collect();
-            json!({
-                "name": name,
-                "command": command.program,
-                "args": command.args.iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>(),
-                "env": pairs(env),
-            })
+                .collect::<Option<Vec<_>>>()?;
+            let args = (command.args.iter()).map(|arg| arg.to_str()).collect::<Option<Vec<_>>>()?;
+            json!({ "name": name, "command": command.program.to_str()?, "args": args, "env": env })
         }
         McpServer::Http { name, url, headers } => json!({
             "type": "http",
             "name": name,
             "url": url,
-            "headers": pairs(headers.clone()),
+            "headers": headers.iter().map(|(name, value)| pair(name, value)).collect::<Vec<_>>(),
         }),
-    }
+    })
 }

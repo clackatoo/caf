@@ -3,7 +3,6 @@
 //! each chat's place in all that.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
 
 use serde::Serialize;
 
@@ -276,10 +275,12 @@ pub(super) struct Ask {
 pub(super) struct Run<A: AppItem> {
     /// Its connection.
     pub(super) conn: ConnectionId,
-    /// The folder the agent works in.
-    pub(super) cwd: PathBuf,
+    /// The folder the agent works in, as it's sent.
+    pub(super) cwd: String,
     /// The tools given to it.
     pub(super) mcp: Vec<McpServer>,
+    /// The tools given to it, as they're sent.
+    pub(super) mcp_sent: Vec<serde_json::Value>,
     /// Its session as the agent knows it: open, or to be continued.
     pub(super) session: Option<AgentSessionId>,
     /// Where it is with its session.

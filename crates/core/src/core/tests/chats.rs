@@ -130,7 +130,7 @@ fn mcp_servers_go_with_the_session_unless_the_agent_cant_take_them() {
     let mut open = OpenChat::new("claude", "/work");
     let mut command = SpawnCommand::new("/opt/tools/serve");
     command.args = vec!["--stdio".into()];
-    command.env = vec![EnvChange::Set("TOKEN".into(), "t".into()), EnvChange::Remove("HOME".into())];
+    command.env = vec![EnvChange::Set("TOKEN".into(), "t".into())];
     open.mcp_servers = vec![
         McpServer::Stdio { name: "tools".to_owned(), command },
         McpServer::Http { name: "map".to_owned(), url: "http://localhost:9/mcp".to_owned(), headers: vec![("Auth".to_owned(), "x".to_owned())] },
@@ -188,4 +188,34 @@ fn connections_say_what_each_adapter_is_and_serves() {
     assert_eq!((one.id.0, &one.agent.0, &one.chats), (1001, &"claude".to_owned(), &vec![CHAT]));
     assert_eq!(one.profile.as_ref().map(|report| report.checked), Some(crate::profiles::Checked::Yes));
     script.shutdown();
+}
+
+#[cfg(unix)]
+#[test]
+fn what_cant_be_sent_to_the_agent_exactly_is_refused() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let bad = || OsStr::from_bytes(b"/opt/\xff").to_owned();
+    let mut script = Script::new(host());
+    assert_eq!(script.open(OpenChat::new("claude", bad())).0, Err(Refused::Unsendable));
+    let with_server = |change: &dyn Fn(&mut SpawnCommand)| {
+        let mut command = SpawnCommand::new("/opt/tools/serve");
+        change(&mut command);
+        let mut open = OpenChat::new("claude", "/work");
+        open.mcp_servers = vec![McpServer::Stdio { name: "tools".to_owned(), command }];
+        open
+    };
+    let refused: [&dyn Fn(&mut SpawnCommand); 6] = [
+        &|command| command.program = bad().into(),
+        &|command| command.args = vec![bad()],
+        &|command| command.env = vec![EnvChange::Set("X".into(), bad())],
+        &|command| command.env = vec![EnvChange::Set(bad(), "x".into())],
+        // ACP can only set variables, and has no folder for a server.
+        &|command| command.env = vec![EnvChange::Remove("HOME".into())],
+        &|command| command.cwd = Some("/tmp".into()),
+    ];
+    for change in refused {
+        assert_eq!(script.open(with_server(change)).0, Err(Refused::Unsendable));
+    }
+    assert!(script.core.connections().is_empty(), "nothing was started");
 }

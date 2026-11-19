@@ -132,6 +132,11 @@ pub enum Refused {
     NoSuchAgent,
     /// The folder isn't absolute.
     RelativeFolder,
+    /// Something can't be sent to the agent exactly as it is: a folder,
+    /// program, argument or variable that isn't valid UTF-8, or what ACP
+    /// can't say for an MCP server (a variable to remove, or a folder to
+    /// start in). CAF never sends something else in its place.
+    Unsendable,
     /// The chat already has as many messages waiting as the host allows.
     QueueFull,
     /// The message has a part this agent can't take.
@@ -214,7 +219,8 @@ impl<A: AppItem> Core<A> {
     ///
     /// # Errors
     ///
-    /// [`Refused::NoSuchAgent`] or [`Refused::RelativeFolder`].
+    /// [`Refused::NoSuchAgent`], [`Refused::RelativeFolder`] or
+    /// [`Refused::Unsendable`].
     pub fn open_chat(&mut self, now: Now, open: OpenChat, out: &mut Vec<Directive>) -> Result<ChatId, Refused> {
         let chat = ChatId(self.ids.next);
         self.command(now, HostCommand::OpenChat { chat, open }, out)?;
