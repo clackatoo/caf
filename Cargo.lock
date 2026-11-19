@@ -82,6 +82,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "caf-fake-agent"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cc"
 version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
