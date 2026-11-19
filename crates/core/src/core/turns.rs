@@ -317,10 +317,20 @@ impl<A: AppItem> Core<A> {
         }
         let session = self.runs.get(&chat).and_then(|run| run.session.clone());
         let closes = self.procs.get(&running.proc).and_then(|each| each.caps()).is_some_and(|caps| caps.close);
-        if let (Some(session), true) = (session, closes) {
-            let wait = self.host.timers.request;
-            let params = json!({ "sessionId": session.0 });
-            self.request(now, running.proc, ("session/close", params), Purpose::Close { session }, Some(wait), out);
+        match (session, closes) {
+            (Some(session), true) => {
+                let wait = self.host.timers.request;
+                let params = json!({ "sessionId": session.0 });
+                self.request(now, running.proc, ("session/close", params), Purpose::Close { session }, Some(wait), out);
+            }
+            // It can't be closed, and may still be running the stuck turn:
+            // never continued, a new one is opened instead.
+            _ => {
+                if let Some(run) = self.runs.get_mut(&chat) {
+                    run.session = None;
+                    run.note = Some(crate::chat::Note::SessionStuck);
+                }
+            }
         }
         self.session_lost(now, chat, crate::chat::Lost::Restarted, true, out);
     }

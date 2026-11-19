@@ -434,6 +434,10 @@ pub enum Note {
     /// The agent can't continue sessions, so a new one was opened: it
     /// remembers nothing from before.
     CannotContinue,
+    /// The agent's session was stuck, and couldn't be closed, so a new one
+    /// was opened rather than continue it: it remembers nothing from
+    /// before.
+    SessionStuck,
 }
 
 /// Something the agent sent that CAF couldn't read.

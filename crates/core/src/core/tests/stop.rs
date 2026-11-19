@@ -137,3 +137,50 @@ fn a_permission_request_answered_after_stop_is_refused() {
     assert_eq!(late, Err(Refused::NoSuchQuestion));
     assert!(replies(&out, &json!(9)).is_empty());
 }
+
+#[test]
+fn a_session_opening_after_caf_gave_up_on_it_is_still_closed() {
+    let mut script = Script::new(host());
+    script.open(OpenChat::new("claude", "/work")).0.expect("opened");
+    script.answers(PROC, 1000, &claude_init());
+    script.stop(CHAT).0.expect("stopped");
+    script.at(60_000);
+    script.woken();
+    assert_eq!(script.state()["pending"], json!([]));
+    let out = script.answers(PROC, 1001, &json!({ "sessionId": "very-late" }));
+    assert_eq!(sent(&out, "session/close")["params"], json!({ "sessionId": "very-late" }));
+    script.answers(PROC, 1002, &json!({}));
+}
+
+#[test]
+fn a_turn_being_stopped_when_its_adapter_dies_ends_stopped() {
+    let mut script = Script::with_claude();
+    let (turn, _) = script.send(CHAT, "go");
+    script.stop(CHAT).0.expect("stopping");
+    script.agent(PROC, AgentEvent::Exited(Exit::Code(1)));
+    script.agent(PROC, AgentEvent::OutputClosed);
+    assert_has(&script.chat(CHAT), &json!({ "turns": [{ "id": turn.expect("sent").0, "life": "Stopped" }] }));
+}
+
+#[test]
+fn a_stuck_session_that_cant_be_closed_isnt_continued() {
+    let mut script = Script::new(host());
+    script.open(OpenChat::new("plain", "/a")).0.expect("opened");
+    script.answers(PROC, 1000, &super::plain_init(true));
+    script.answers(PROC, 1001, &json!({ "sessionId": "a" }));
+    let (other, _) = script.open(OpenChat::new("plain", "/b"));
+    let other = other.expect("opened");
+    script.answers(PROC, 1002, &json!({ "sessionId": "b" }));
+    script.send(CHAT, "stuck").0.expect("sent");
+    script.send(other, "busy").0.expect("sent");
+    script.stop(CHAT).0.expect("stopping");
+    script.at(15_000);
+    let out = script.woken();
+    assert!(with(&out, "signal").is_empty(), "the other chat's turn goes on");
+    let (_, out) = script.send(CHAT, "again");
+    assert!(sent(&out, "session/new")["params"].get("sessionId").is_none());
+    script.answers(PROC, 1005, &json!({ "sessionId": "a2" }));
+    assert_has(&script.chat(CHAT), &json!({ "turns": [{}, { "starter": "Caf", "items": [{ "kind": { "Note": "SessionStuck" } }] }, { "life": "Running" }] }));
+    script.answers(PROC, 1004, &json!({ "stopReason": "end_turn" }));
+    script.answers(PROC, 1006, &json!({ "stopReason": "end_turn" }));
+}

@@ -259,11 +259,25 @@ fn guarantee_8_restarts_are_visible_to_every_chat_on_the_adapter() {
     script.answers(PROC, 1002, &json!({ "sessionId": "sess-2" }));
     script.send(CHAT, "stuck").0.expect("sent");
     script.stop(CHAT).0.expect("stopping");
+    // Sent while the stuck turn stops: it waits, and survives the restart.
+    let (waiting, _) = script.send(CHAT, "then this");
     script.at(15_000);
     let out = script.woken();
     assert_eq!(with(&out, "changed").len(), 2, "both chats hear");
-    assert_has(&script.chat(CHAT), &json!({ "state": { "Lost": { "reason": "Restarted" } } }));
+    assert_has(&script.chat(CHAT), &json!({
+        "state": "Opening",
+        "turns": [{ "life": { "Failed": { "reason": "DidNotStop" } } }, { "id": waiting.expect("queued").0, "life": "Waiting" }]
+    }));
     assert_has(&script.chat(OTHER), &json!({ "state": { "Lost": { "reason": "Restarted" } } }));
+    script.agent(PROC, AgentEvent::OutputClosed);
+    let out = script.agent(PROC, AgentEvent::Group { empty: true });
+    let new = with(&out, "start")[0]["start"].as_u64().expect("started");
+    let out = script.answers(new, 1000, &super::claude_init());
+    // Only the chat with a message waiting opens again now.
+    assert_has(&sent(&out, "session/resume"), &json!({ "params": { "sessionId": SESSION } }));
+    let out = script.answers(new, 1001, &json!({}));
+    assert_has(&sent(&out, "session/prompt"), &json!({ "params": { "prompt": [{ "text": "then this" }] } }));
+    script.answers(new, 1002, &json!({ "stopReason": "end_turn" }));
 }
 
 #[test]

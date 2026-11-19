@@ -316,7 +316,9 @@ impl<A: AppItem> Core<A> {
         }
         let failure = failure_for(&lost);
         if let Some(running) = running {
-            self.end_turn(now, chat, running.turn, TurnLife::Failed(failure.clone()));
+            // A turn being stopped ends as the user asked.
+            let life = if running.stop_by.is_some() { TurnLife::Stopped } else { TurnLife::Failed(failure.clone()) };
+            self.end_turn(now, chat, running.turn, life);
         }
         self.end_agent_turn(now, chat);
         if self.chats.get(&chat).is_none_or(|whole| whole.state == ChatState::Closed) {
@@ -333,7 +335,8 @@ impl<A: AppItem> Core<A> {
         }
     }
 
-    /// Adds a turn of CAF's own to `chat`, saying `note`.
+    /// Adds a turn of CAF's own to `chat`, saying `note`: before any
+    /// message waiting to go, as what it says comes first.
     pub(super) fn say(&mut self, now: Now, chat: ChatId, note: Note) {
         let turn = crate::ids::TurnId(self.ids.take());
         let item = crate::chat::Item {
@@ -342,7 +345,7 @@ impl<A: AppItem> Core<A> {
             parent: None,
             kind: ItemKind::Note(note),
         };
-        self.add_turn(chat, Turn {
+        self.add_turn_before_waiting(chat, Turn {
             id: turn,
             starter: Starter::Caf,
             life: TurnLife::Finished,

@@ -113,7 +113,12 @@ impl<A: AppItem> Core<A> {
         match pending.purpose {
             // Nobody waits for these any more: they just end.
             Purpose::Open { abandoned: true, .. } | Purpose::Prompt { abandoned: true, .. } => {
+                let open = matches!(pending.purpose, Purpose::Open { .. });
                 self.pending.remove(&(proc, id));
+                // A session it opens even so is still closed.
+                if let Some(each) = self.procs.get_mut(&proc).filter(|_| open) {
+                    each.given_up.insert(id);
+                }
                 report(out, Level::Debug, format!("gave up on request {id} of process {}, which nobody waited for", proc.0));
             }
             // Slow, not failed: the user chooses.

@@ -49,6 +49,14 @@ impl<A: AppItem> Core<A> {
                 };
                 self.answered(now, proc, id, reply, out);
             }
+            // To wire up: the agent driver is adding to `TooBig` whether
+            // the line's head showed `result`/`error` (an answer) or
+            // `params` (a request). Today an id with a method is taken for
+            // a request and an id without one for an answer, so a request
+            // whose method lies past the head is wrongly ended as an
+            // answer, and never refused. Sort these two arms by that field
+            // instead, falling back to the method only where it says
+            // neither.
             Frame::TooBig { id: Some(id), method: Some(method), len } => {
                 report(out, Level::Warn, format!("refused a request of {len} bytes, too big to read: {}", shown(&method)));
                 if !self.reply(proc, &id, Err((INVALID_REQUEST, "too big to read".to_owned())), out) {
@@ -111,6 +119,16 @@ impl<A: AppItem> Core<A> {
             report(out, level, "an answer with an id CAF never uses".to_owned());
             return;
         };
+        if self.procs.get_mut(&proc).is_some_and(|each| each.given_up.remove(&id)) {
+            let session = match &reply {
+                Reply::Result(result) => result.get("sessionId").and_then(Value::as_str),
+                _ => None,
+            };
+            if let Some(session) = session {
+                self.close_late(now, proc, crate::ids::AgentSessionId(session.to_owned()), out);
+            }
+            return;
+        }
         let Some(pending) = self.pending.remove(&(proc, id)) else {
             report(out, level, format!("an answer to request {id}, which CAF never sent or has ended"));
             return;

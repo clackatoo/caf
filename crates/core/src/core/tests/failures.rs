@@ -151,7 +151,9 @@ fn a_prompt_to_a_session_the_adapter_dropped_opens_a_new_one_and_sends_it_there(
         assert_has(&sent(&out, "session/prompt"), &json!({ "params": { "sessionId": "fresh", "prompt": [{ "text": "go" }] } }));
         assert_has(&script.chat(CHAT), &json!({
             "state": { "Open": { "session": "fresh" } },
-            "turns": [{ "id": turn.expect("sent").0, "life": "Running" }, { "starter": "Caf", "items": [{ "kind": { "Note": "SessionGone" } }] }]
+            // The note comes before the message, sent again to the new
+            // session.
+            "turns": [{ "starter": "Caf", "items": [{ "kind": { "Note": "SessionGone" } }] }, { "id": turn.expect("sent").0, "life": "Running" }]
         }));
         script.answers(PROC, 1004, &json!({ "stopReason": "end_turn" }));
     }

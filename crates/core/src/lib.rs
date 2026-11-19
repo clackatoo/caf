@@ -57,7 +57,10 @@
 //! 2. **Every request CAF sends ends**, with an answer, an error, or a
 //!    terminal outcome when its connection is lost. Every request has a
 //!    watchdog ([`host::Timers`]) except a prompt, which may run as long as
-//!    the agent works; once the user stops it, it has one too.
+//!    the agent works; once the user stops it, it has one too. Where the
+//!    user may well choose to wait (starting an adapter, opening a
+//!    session), the watchdog asks them whether to, and waits as they
+//!    choose.
 //! 3. **Nothing the agent sends is silently dropped.** An update CAF can't
 //!    read becomes an [`ItemKind::Unknown`] with its original data in the
 //!    turn that's open, and a message that fits nowhere becomes a

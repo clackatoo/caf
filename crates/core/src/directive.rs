@@ -84,7 +84,10 @@ pub enum AgentDirective {
         process: Ticket,
     },
     /// Stop reading it and let it go. It must already have exited, or
-    /// been killed.
+    /// been killed. A process that couldn't be started
+    /// ([`AgentEvent::StartFailed`](crate::event::AgentEvent::StartFailed))
+    /// never ran: the core sends nothing more for it, not even this, so
+    /// the driver keeps nothing of it.
     Forget {
         /// The process.
         process: Ticket,
