@@ -65,10 +65,16 @@ pub struct AgentLimits {
     /// How much is read before yielding to other tasks. 1 MiB.
     pub read_step: usize,
     /// How much unsent input may build up for one process before it's
-    /// treated as stuck and reported gone. 64 MiB.
+    /// watched for being stuck. 64 MiB.
     pub unsent: usize,
-    /// How long a process may take to let go of its pipes after it
-    /// exits, before they're dropped. 10 s.
+    /// How long more than [`unsent`](Self::unsent) may wait with none of
+    /// it taken before the process is treated as stuck and reported gone.
+    /// A process that's reading is never failed, however big one write
+    /// is. 30 s.
+    pub stuck: Duration,
+    /// How long a process's pipes may stay open with nothing coming
+    /// through, once it has exited, before they're dropped. Time spent with
+    /// reading paused, waiting for the core, doesn't count. 10 s.
     pub drain: Duration,
 }
 
@@ -80,6 +86,7 @@ impl Default for AgentLimits {
             parsing: 64 << 20,
             read_step: 1 << 20,
             unsent: 64 << 20,
+            stuck: Duration::from_secs(30),
             drain: Duration::from_secs(10),
         }
     }
@@ -90,6 +97,8 @@ impl Default for AgentLimits {
 /// It keeps the contract written on [`AgentDirective`]. What else a host
 /// should know:
 ///
+/// - **Linux 5.4 or later** is needed: each process is watched and reaped
+///   through a pidfd. On an older kernel every start fails.
 /// - **Signals** go to a process's whole group through its pidfd, with
 ///   `PIDFD_SIGNAL_PROCESS_GROUP` (Linux 6.9 on), never by process number:
 ///   the pidfd holds the kernel's record of the process, and its group
@@ -97,7 +106,8 @@ impl Default for AgentLimits {
 ///   can't reach another group that took the number, even once the
 ///   process is reaped. Once the group is empty, or on an older kernel,
 ///   the process alone is signalled. SIGKILL goes to it too, in case it
-///   left its group.
+///   left its group; SIGTERM doesn't, so a process that left its group
+///   while something stayed in it isn't sent SIGTERM itself.
 /// - **Before Linux 6.9** a group can't be seen once its leader is
 ///   reaped, so [`AgentDirective::CheckGroup`] says it's empty then, even
 ///   if something the process started is still running.
@@ -105,9 +115,18 @@ impl Default for AgentLimits {
 ///   as soon as it exits, and before [`AgentEvent::Exited`] is reported.
 ///   If something else reaped it first, as a host ignoring SIGCHLD does,
 ///   it's reported as `Exit::Code(-1)`.
-/// - **[`AgentEvent::OutputClosed`]** is also reported when a process
-///   exited [`AgentLimits::drain`] ago and something it started still
-///   holds its output open: its output isn't waited for any more.
+/// - **[`AgentEvent::OutputClosed`]** is also reported when a process has
+///   exited and something it started holds its output open with nothing
+///   coming through for [`AgentLimits::drain`]: its output isn't waited
+///   for any more. Something that goes on writing is read until the core
+///   forgets the process.
+/// - **Writes after [`AgentDirective::CloseInput`]**, or after
+///   [`AgentEvent::WriteFailed`], are dropped without a word: nothing more
+///   is written.
+/// - **Memory:** each process may hold up to
+///   [`AgentLimits::biggest_line`] of a line not yet ended, and
+///   [`AgentLimits::parsing`] of lines waiting for the core, so 128 MiB by
+///   default, besides its unsent input.
 /// - **[`AgentDirective::Forget`]** of a process that hasn't exited kills
 ///   its group and reaps it. Dropping the driver kills every group it
 ///   started, and reaps what's left. If the tokio runtime shuts down
@@ -205,11 +224,10 @@ impl AgentDriver {
             }
             _ => return,
         };
-        if let Some(orders) = self.processes.get(&process)
-            && orders.send(order).is_err()
-        {
-            // It never started.
-            self.processes.remove(&process);
+        // One that couldn't start keeps its ticket until it's forgotten,
+        // so its `StartFailed` is still handed on; orders to it do nothing.
+        if let Some(orders) = self.processes.get(&process) {
+            let _ = orders.send(order);
         }
     }
 
@@ -264,6 +282,10 @@ async fn run(
     loop {
         let deliver = matches!(process.queue.front(), Some(Queued::Ready(..)));
         let room = process.room();
+        if !room && process.drain.is_some() {
+            // Waiting for the core isn't waiting for the pipes.
+            process.drain = Some(later(process.limits.drain));
+        }
         let mut stepped = false;
         tokio::select! {
             order = orders.recv() => match order {
@@ -293,7 +315,8 @@ async fn run(
                 };
             },
             status = exit(&process.leader.pidfd), if process.leader.watched() => process.exited(status),
-            () = until(process.drain) => process.stop_draining(),
+            () = until(process.drain), if room => process.stop_draining(),
+            () = until(process.stuck_since.map(|since| since + process.limits.stuck.min(LONGEST))) => process.stuck(),
         }
         if stepped {
             tokio::task::yield_now().await;
@@ -325,8 +348,12 @@ struct Process {
     /// The one line being parsed elsewhere, if any: the first
     /// [`Queued::Parsing`] in `queue`.
     parsing: Option<JoinHandle<Frame>>,
-    /// When to stop waiting for its pipes to close, once it has exited.
+    /// When to stop waiting for its pipes to close, once it has exited:
+    /// pushed back whenever something is read, or reading is paused.
     drain: Option<Instant>,
+    /// Since when more than the most unsent input has waited with none of
+    /// it taken.
+    stuck_since: Option<Instant>,
     buffer: Box<[u8]>,
 }
 
@@ -358,6 +385,7 @@ impl Process {
             held: 0,
             parsing: None,
             drain: None,
+            stuck_since: None,
             buffer: vec![0; READ].into_boxed_slice(),
         };
         let pid = process.leader.pid;
@@ -406,22 +434,13 @@ impl Process {
         }
     }
 
-    /// Writes `bytes`, keeping what the pipe won't take yet. Too much kept
-    /// means it isn't reading: it's taken as gone.
+    /// Writes `bytes`, keeping what the pipe won't take yet.
     fn write(&mut self, bytes: Vec<u8>) {
         if self.stdin.is_none() || self.closing || bytes.is_empty() {
             return;
         }
         self.unsent.push(bytes);
         self.flush();
-        if self.unsent.len > self.limits.unsent {
-            let unsent = self.unsent.len;
-            let error = io::Error::other(format!(
-                "it isn't reading its input: {unsent} bytes are waiting, more than the most, {}",
-                self.limits.unsent
-            ));
-            self.write_failed(&error);
-        }
     }
 
     /// Writes what's waiting until the pipe is full, then closes the pipe
@@ -430,9 +449,13 @@ impl Process {
         let Some(stdin) = &self.stdin else {
             return;
         };
+        let mut moved = false;
         while let Some(bytes) = self.unsent.front() {
             match stdin.try_write(bytes) {
-                Ok(written) => self.unsent.sent(written),
+                Ok(written) => {
+                    self.unsent.sent(written);
+                    moved = true;
+                }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => return self.write_failed(&error),
@@ -441,12 +464,30 @@ impl Process {
         if self.closing && self.unsent.is_empty() {
             self.stdin = None;
         }
+        // Past the most, the clock starts, and starts again whenever the
+        // pipe takes some: only input that isn't moving counts.
+        self.stuck_since = match self.stuck_since {
+            _ if self.unsent.len <= self.limits.unsent => None,
+            Some(since) if !moved => Some(since),
+            _ => Some(Instant::now()),
+        };
+    }
+
+    /// More than the most unsent input has waited too long with none of
+    /// it taken: it isn't reading, so it's taken as gone.
+    fn stuck(&mut self) {
+        let error = io::Error::other(format!(
+            "it isn't reading its input: {} bytes have waited {:?} with none taken",
+            self.unsent.len, self.limits.stuck
+        ));
+        self.write_failed(&error);
     }
 
     /// Writing failed: what's waiting is thrown away, nothing more is
     /// written, and reading goes on.
     fn write_failed(&mut self, error: &io::Error) {
         self.unsent = Unsent::default();
+        self.stuck_since = None;
         self.stdin = None;
         self.push(
             AgentEvent::WriteFailed {
@@ -470,6 +511,7 @@ impl Process {
                 Ok(0) => return self.close_output(),
                 Ok(n) => {
                     read += n;
+                    self.heard();
                     self.framer.push(&self.buffer[..n], &mut self.lines);
                     self.queue_lines();
                 }
@@ -521,6 +563,7 @@ impl Process {
         }
         let full = bytes.len() >= step;
         if !bytes.is_empty() {
+            self.heard();
             let len = bytes.len();
             self.push(AgentEvent::Stderr(bytes), len);
         }
@@ -538,6 +581,14 @@ impl Process {
         false
     }
 
+    /// Something came through its pipes: once it has exited, they're
+    /// waited for a while longer.
+    fn heard(&mut self) {
+        if self.drain.is_some() {
+            self.drain = Some(later(self.limits.drain));
+        }
+    }
+
     /// Stops waiting for its pipes once both have closed.
     fn drained(&mut self) {
         if self.stdout.is_none() && self.stderr.is_none() {
@@ -547,8 +598,10 @@ impl Process {
 
     /// It has exited, and been reaped. What's left in its pipes is read,
     /// a step's worth, before that's told: all it wrote itself is there
-    /// by now. Something it started may hold its pipes open, so they're
-    /// waited for only so long.
+    /// by now. That's best effort: nothing is read if there's no room, or
+    /// if the runtime hasn't yet seen that the pipes can be read. Something
+    /// it started may hold its pipes open, so they're waited for only
+    /// while something comes through.
     fn exited(&mut self, status: io::Result<Option<WaitIdStatus>>) {
         let Ok(status) = status else {
             // It can't be watched, as the runtime is going: it's left for
@@ -567,12 +620,13 @@ impl Process {
         };
         self.push(AgentEvent::Exited(exit), 0);
         if self.stdout.is_some() || self.stderr.is_some() {
-            self.drain = Some(Instant::now() + self.limits.drain);
+            self.drain = Some(later(self.limits.drain));
         }
     }
 
-    /// It exited long enough ago: its pipes, held open by something it
-    /// started, aren't waited for any more.
+    /// Nothing has come through its pipes for long enough since it exited:
+    /// they're held open by something it started, and aren't waited for any
+    /// more.
     fn stop_draining(&mut self) {
         self.drain = None;
         if self.stdout.is_some() {
@@ -959,6 +1013,15 @@ async fn parsed(parsing: Option<&mut JoinHandle<Frame>>) -> Result<Frame, tokio:
         Some(parsing) => parsing.await,
         None => std::future::pending().await,
     }
+}
+
+/// The longest any limit waits: longer is as good as never, and an
+/// instant past the end of the clock can't be made.
+const LONGEST: Duration = Duration::from_secs(365 * 24 * 60 * 60);
+
+/// The instant `by` from now.
+fn later(by: Duration) -> Instant {
+    Instant::now() + by.min(LONGEST)
 }
 
 /// Resolves at `at`, or never.

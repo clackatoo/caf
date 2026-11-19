@@ -1,13 +1,18 @@
 //! The timer driver: wakes the core at the one time it asked for.
 
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use caf_core::time::{Mono, Now, Wall};
+use tokio::time::Instant;
 
 /// Keeps the core's single deadline, and gives the time.
 ///
 /// It's also where the kit's [`Now`] comes from: [`Mono`] counts from the
 /// moment the driver was made, and the wall clock is the system's.
+///
+/// [`Mono`] and waking both follow tokio's clock, so a test that pauses
+/// it (`tokio::time::pause`) moves them together. The wall clock doesn't
+/// pause.
 pub struct TimerDriver {
     origin: Instant,
     deadline: Option<Mono>,
@@ -57,7 +62,7 @@ impl TimerDriver {
         let Some(at) = at else {
             return std::future::pending().await;
         };
-        tokio::time::sleep_until(at.into()).await;
+        tokio::time::sleep_until(at).await;
         self.deadline = None;
     }
 }

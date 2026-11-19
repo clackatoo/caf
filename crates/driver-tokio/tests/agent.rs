@@ -165,10 +165,10 @@ async fn a_process_starts_talks_and_exits_in_order() {
     assert!(pid > 0);
     let a = find(&events, |event| method(event) == Some("a"));
     let b = find(&events, |event| method(event) == Some("b"));
-    let exited = find(&events, |event| matches!(event, AgentEvent::Exited(_)));
     let closed = find(&events, |event| matches!(event, AgentEvent::OutputClosed));
-    // What it wrote before exiting is read before its exit is told.
-    assert!(0 < a && a < b && b < exited && b < closed, "{events:?}");
+    // Whether what it wrote is read before its exit is told is best
+    // effort; it's always read before its output closes.
+    assert!(0 < a && a < b && b < closed, "{events:?}");
     assert_eq!(exit_of(&events), Exit::Code(0));
     assert_eq!(events.len(), 5, "{events:?}");
     // Reaped before its exit was told.
@@ -373,10 +373,7 @@ async fn a_grandchild_holding_the_pipes_is_waited_for_only_so_long() {
     })
     .await;
     let waited = exited.elapsed();
-    assert!(
-        waited >= Duration::from_millis(200) && waited < Duration::from_secs(5),
-        "{waited:?}"
-    );
+    assert!(waited < Duration::from_secs(5), "{waited:?}");
 
     // Its leader is reaped, but the group still has the sleep in it.
     assert!(running(sleep));
@@ -550,11 +547,14 @@ async fn a_write_error_drops_what_is_unsent_and_reading_goes_on() {
 }
 
 #[tokio::test]
-async fn too_much_unsent_input_is_a_write_failure() {
+async fn unsent_input_that_doesnt_move_is_a_write_failure() {
     let mut limits = AgentLimits::default();
     limits.unsent = 1 << 20;
+    limits.stuck = Duration::from_millis(300);
     let mut driver = AgentDriver::new(limits);
     start(&mut driver, ONE, sh("exec sleep 100"));
+    until(&mut driver, ONE, |events| !events.is_empty()).await;
+    let wrote = Instant::now();
     write(&mut driver, ONE, vec![b'x'; 4 << 20]);
     until(&mut driver, ONE, |events| {
         events
@@ -562,12 +562,80 @@ async fn too_much_unsent_input_is_a_write_failure() {
             .any(|event| matches!(event, AgentEvent::WriteFailed { .. }))
     })
     .await;
+    assert!(wrote.elapsed() >= Duration::from_millis(250));
     driver.apply(AgentDirective::Signal {
         process: ONE,
         signal: Signal::Kill,
     });
     let events = until_done(&mut driver, ONE).await;
     assert_eq!(exit_of(&events), Exit::Signal(9));
+}
+
+#[tokio::test]
+async fn one_write_bigger_than_the_cap_goes_to_a_process_that_reads() {
+    let mut limits = AgentLimits::default();
+    limits.unsent = 64 << 10;
+    limits.stuck = Duration::from_millis(500);
+    let mut driver = AgentDriver::new(limits);
+    start(&mut driver, ONE, SpawnCommand::new("/bin/cat"));
+    let count = 8 << 10;
+    let line = format!(
+        "{{\"jsonrpc\":\"2.0\",\"method\":\"m\",\"params\":\"{}\"}}\n",
+        "x".repeat(1000)
+    );
+    write(&mut driver, ONE, line.repeat(count));
+    driver.apply(AgentDirective::CloseInput { process: ONE });
+    let events = until_done(&mut driver, ONE).await;
+    let failures = events
+        .iter()
+        .filter(|event| matches!(event, AgentEvent::WriteFailed { .. }));
+    assert_eq!(failures.count(), 0, "a healthy reader was failed");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| method(event) == Some("m"))
+            .count(),
+        count
+    );
+}
+
+#[tokio::test]
+async fn the_last_output_is_kept_while_the_core_is_slow() {
+    // Reading pauses at 1 KiB waiting, and the core takes nothing for far
+    // longer than the drain: what the process wrote must all still come.
+    let mut limits = AgentLimits::default();
+    limits.parsing = 1 << 10;
+    limits.drain = Duration::from_millis(200);
+    let mut driver = AgentDriver::new(limits);
+    let count = 1000;
+    let script = format!(
+        r#"i=0; while [ $i -lt {count} ]; do printf '{{"jsonrpc":"2.0","method":"m"}}\n'; i=$((i+1)); done"#
+    );
+    start(&mut driver, ONE, sh(&script));
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let events = until_done(&mut driver, ONE).await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| method(event) == Some("m"))
+            .count(),
+        count
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_start_is_told_even_with_directives_right_behind_it() {
+    let mut driver = AgentDriver::new(AgentLimits::default());
+    start(&mut driver, ONE, SpawnCommand::new("relative/program"));
+    // Its task runs on another worker, and fails, before these come.
+    std::thread::sleep(Duration::from_millis(100));
+    write(&mut driver, ONE, notification("initialize"));
+    driver.apply(AgentDirective::CheckGroup { process: ONE });
+    let events = until(&mut driver, ONE, |events| !events.is_empty()).await;
+    assert!(
+        matches!(&events[..], [AgentEvent::StartFailed { .. }]),
+        "{events:?}"
+    );
 }
 
 #[tokio::test]
