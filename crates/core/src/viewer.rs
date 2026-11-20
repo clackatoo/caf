@@ -254,6 +254,8 @@ pub enum Outcome {
     Refused(Refused),
     /// The host doesn't let viewers do this.
     NotAllowed,
+    /// CAF has shut down, or is shutting down: nothing was done.
+    Gone,
 }
 
 /// A viewer's copy of one chat, and how far it has read: what a viewer

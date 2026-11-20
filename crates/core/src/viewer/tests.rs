@@ -153,11 +153,12 @@ fn outcome_kind(outcome: &Outcome) -> usize {
         Outcome::Done => 2,
         Outcome::Refused(_) => 3,
         Outcome::NotAllowed => 4,
+        Outcome::Gone => 5,
     }
 }
 
 /// How many kinds of [`Outcome`] there are.
-const OUTCOMES: usize = 5;
+const OUTCOMES: usize = 6;
 
 /// Version 1 of the viewer wire: one of every message each way, every
 /// outcome, and every change.
@@ -309,6 +310,10 @@ fn version_1() -> (Vec<FromViewer>, Vec<ToViewer>) {
         ToViewer::Done {
             request: RequestNo(5),
             outcome: Outcome::NotAllowed,
+        },
+        ToViewer::Done {
+            request: RequestNo(6),
+            outcome: Outcome::Gone,
         },
     ];
     (from, to)

@@ -542,6 +542,15 @@
           "type": "NotAllowed"
         }
       }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 6,
+        "outcome": {
+          "type": "Gone"
+        }
+      }
     }
   ]
 }
