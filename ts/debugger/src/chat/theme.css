@@ -1,0 +1,50 @@
+/* The chat view's colours, light and dark, as the system prefers. The
+   rest of the app uses them too, but they live here so the chat view can
+   be lifted out whole. */
+
+:root {
+  --caf-bg: #ffffff;
+  --caf-panel: #f6f7f9;
+  --caf-inset: #eef0f3;
+  --caf-hover: #e9ecf0;
+  --caf-text: #1c2430;
+  --caf-muted: #5d6877;
+  --caf-faint: #8b95a3;
+  --caf-border: #dde1e6;
+  --caf-accent: #2f6db3;
+  --caf-accent-text: #ffffff;
+  --caf-user: #eaf2fc;
+  --caf-ok: #2f8a57;
+  --caf-warn: #a87412;
+  --caf-warn-bg: #fdf6e4;
+  --caf-error: #b8392b;
+  --caf-error-bg: #fcefed;
+  --caf-caf: #6a4fb3;
+  --caf-caf-bg: #f3f0fb;
+  --caf-mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+  --caf-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --caf-bg: #15191f;
+    --caf-panel: #1b2028;
+    --caf-inset: #11151a;
+    --caf-hover: #252c36;
+    --caf-text: #e4e8ee;
+    --caf-muted: #9ca6b4;
+    --caf-faint: #6c7686;
+    --caf-border: #2b333e;
+    --caf-accent: #6aa5e8;
+    --caf-accent-text: #0d1117;
+    --caf-user: #1d2a3a;
+    --caf-ok: #5cc184;
+    --caf-warn: #e0b452;
+    --caf-warn-bg: #2b2414;
+    --caf-error: #ec7a68;
+    --caf-error-bg: #2e1a17;
+    --caf-caf: #ad97f0;
+    --caf-caf-bg: #221d33;
+  }
+}
