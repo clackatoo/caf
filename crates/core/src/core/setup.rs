@@ -72,6 +72,7 @@ impl<A: AppItem> Core<A> {
             _ => return Err(Refused::NotInstallable),
         }
         let (install, size) = (recipe.install.clone(), recipe.size);
+        let private = private_folder(agent, recipe);
         // Starting it later needs the folder installs live in.
         if self.setup.machine.is_none() && self.setup.survey.is_none() {
             self.survey(out);
@@ -86,6 +87,7 @@ impl<A: AppItem> Core<A> {
             ticket,
             folder,
             install,
+            private,
         }));
         self.set_install(agent, InstallState::Installing { done: 0, size });
         Ok(())
@@ -143,6 +145,7 @@ impl<A: AppItem> Core<A> {
             command,
             link,
             code_after,
+            paste,
         }));
         if let Some(standing) = self.setup.agents.get_mut(agent) {
             standing.sign_in = SignInState::SigningIn(SignInLink {
@@ -930,6 +933,28 @@ pub(super) fn standing(launch: &Launch) -> Standing {
 
 /// The folder `agent` is installed in, as `recipe` says: `<agent>-<version>`.
 /// `None` if that can't name a folder.
+/// `agent`'s private folder, `<agent>-private`, if its recipe gives it
+/// one: any of its commands is given it.
+fn private_folder(agent: &AgentName, recipe: &Recipe) -> Option<String> {
+    let commands = [
+        Some(&recipe.adapter),
+        recipe.sign_in.as_ref().map(|sign_in| &sign_in.command),
+    ]
+    .into_iter()
+    .chain([
+        recipe.sign_out.as_ref(),
+        recipe.status.command.as_ref().map(|status| &status.command),
+    ]);
+    let uses = (commands.flatten()).any(|bundled| {
+        bundled
+            .env
+            .iter()
+            .any(|(_, value)| *value == EnvValue::PrivateFolder)
+    });
+    let private = format!("{}-private", agent.0);
+    (uses && is_folder_name(&private)).then_some(private)
+}
+
 fn folder(agent: &AgentName, recipe: &Recipe) -> Option<String> {
     let folder = format!("{}-{}", agent.0, recipe.version);
     is_folder_name(&folder).then_some(folder)

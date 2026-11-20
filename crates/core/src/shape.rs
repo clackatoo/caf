@@ -644,6 +644,7 @@ pub(crate) fn every_type(s: &mut Samples) {
             ticket: Ticket(7),
             folder: "claude-0.98.0".into(),
             install: recipe().install,
+            private: Some("claude-private".into()),
         },
         SetupDirective::Remove {
             ticket: Ticket(8),
@@ -654,6 +655,7 @@ pub(crate) fn every_type(s: &mut Samples) {
             command: command(),
             link: LinkFrom::Browser,
             code_after: None,
+            paste: true,
         },
         SetupDirective::Paste {
             ticket: Ticket(9),

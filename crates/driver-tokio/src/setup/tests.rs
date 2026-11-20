@@ -267,6 +267,7 @@ async fn npm_installs_from_the_lockfile_into_place() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: Install::Npm(package),
+        private: None,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert!(
@@ -298,6 +299,7 @@ async fn a_failed_npm_install_leaves_nothing() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: Install::Npm(package),
+        private: None,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert!(
@@ -321,6 +323,7 @@ async fn a_package_that_doesnt_match_its_lockfile_is_thrown_away() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: Install::Npm(package),
+        private: None,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert_eq!(
@@ -470,6 +473,7 @@ async fn downloads_are_checked_and_unpacked_into_place() {
             ticket,
             folder: folder.clone(),
             install: download(&server.url, &body, unpack),
+            private: None,
         });
         let events = done(&mut driver, ticket).await;
         assert!(
@@ -508,6 +512,7 @@ async fn a_download_that_doesnt_match_its_checksum_is_thrown_away() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: download(&server.url, b"something else", Unpack::TarGz),
+        private: None,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert_eq!(
@@ -529,6 +534,7 @@ async fn downloads_must_be_https() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: download(&server.url, &body, Unpack::TarGz),
+        private: None,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert!(
@@ -552,6 +558,7 @@ async fn an_install_stopped_partway_leaves_nothing() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: download(&server.url, &body, Unpack::No),
+        private: None,
     });
     // Half of it comes, and is told.
     loop {
@@ -591,6 +598,7 @@ async fn two_drivers_installing_one_folder_install_it_once() {
             ticket: Ticket(1000),
             folder: "fake-1.0.0".into(),
             install: download(&server.url, &body, Unpack::TarGz),
+            private: None,
         });
     }
     // One has the lock and is downloading; the other waits for it.
@@ -632,6 +640,7 @@ async fn waiting_for_another_install_can_be_stopped() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: Install::Download(Vec::new()),
+        private: None,
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
     driver.apply(SetupDirective::Stop {
@@ -655,6 +664,7 @@ async fn only_install_folders_can_be_installed_or_removed() {
             ticket,
             folder: folder.into(),
             install: Install::Download(Vec::new()),
+            private: None,
         });
         let events = done(&mut driver, ticket).await;
         assert!(
@@ -816,6 +826,7 @@ async fn a_sign_in_hands_back_the_link_its_browser_was_given() {
         command,
         link: LinkFrom::Browser,
         code_after: Some("Your code: ".into()),
+        paste: true,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     let (ends, found) = events.split_last().unwrap();
@@ -858,6 +869,7 @@ async fn a_sign_in_takes_its_link_from_its_output_and_a_pasted_code() {
         command,
         link: LinkFrom::Output("Open this link: ".into()),
         code_after: None,
+        paste: true,
     });
     assert_eq!(
         next_of(&mut driver, Ticket(1000)).await,
@@ -889,6 +901,7 @@ async fn a_sign_in_that_fails_or_is_stopped_ends_not_ok() {
         command: wrong,
         link: LinkFrom::Browser,
         code_after: None,
+        paste: true,
     });
     driver.apply(SetupDirective::Paste {
         ticket: Ticket(1000),
@@ -910,6 +923,7 @@ async fn a_sign_in_that_fails_or_is_stopped_ends_not_ok() {
         command: waiting,
         link: LinkFrom::Browser,
         code_after: None,
+        paste: true,
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
     driver.apply(SetupDirective::Stop {
@@ -966,6 +980,7 @@ async fn a_status_command_gives_only_the_fields_named() {
         command: fake_auth(&dir, &auth, &["auth", "login"]),
         link: LinkFrom::Browser,
         code_after: None,
+        paste: true,
     });
     assert_eq!(
         done(&mut driver, Ticket(1001)).await,
@@ -1040,6 +1055,7 @@ async fn a_sign_in_ends_though_what_it_started_holds_its_output() {
         command,
         link: LinkFrom::Output("Open: ".into()),
         code_after: None,
+        paste: true,
     });
     let events = tokio::time::timeout(Duration::from_secs(10), done(&mut driver, Ticket(1000)))
         .await

@@ -265,6 +265,7 @@ impl SetupDriver {
                 ticket,
                 folder,
                 install,
+                ..
             } => {
                 let (reporter, stop) = self.stoppable(ticket);
                 tokio::spawn(install::install(
