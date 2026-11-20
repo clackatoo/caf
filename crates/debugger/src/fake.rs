@@ -5,6 +5,10 @@
 //!
 //! - **Any message** is answered at once by a handler: a line of thinking,
 //!   then a few words, each a chunk of its own, and the turn ends.
+//! - **The message `fail`**, exactly, is answered at once with an error,
+//!   the first time in a chat: CAF fails the turn, offering Send again.
+//!   Sent again, it's answered as any message is, so Send again can be
+//!   seen to work.
 //! - **The message `ask`**, exactly, is waited for by the script itself,
 //!   round after round: a few words, then it asks permission to run a
 //!   command, and once that's answered, the turn ends. While the question
@@ -25,6 +29,9 @@ use serde_json::{Value, json};
 /// The message that makes the fake ask permission.
 pub const ASK: &str = "ask";
 
+/// The message that makes the fake fail the turn, the first time.
+pub const FAIL: &str = "fail";
+
 /// How many times `ask` can be sent to one fake: more are answered as
 /// any message is.
 const ROUNDS: u32 = 200;
@@ -35,7 +42,7 @@ const SESSION: &str = "fake-1";
 /// The words the fake says to any message.
 const REPLY: &str = "This is CAF's fake agent, with no model behind it, so it says this to \
                      every message. Send exactly \"ask\" to see it ask permission to run a \
-                     command.";
+                     command, or \"fail\" to see a turn fail.";
 
 /// The words before it asks.
 const ASKING: &str = "I'd like to run a command. Allow it, refuse it, or stop me.";
@@ -51,6 +58,11 @@ pub fn script() -> String {
         line(&json!({"on": {"method": "session/cancel", "do": [
             {"respond": {"to": "prompt", "result": {"stopReason": "cancelled"}}},
         ]}})),
+        line(
+            &json!({"on": {"method": "session/prompt", "match": prompt(FAIL), "once": true, "do": [
+                {"respond": {"error": {"code": -32603, "message": "The fake agent failed, as it was asked to. Send the message again, and it won't."}}},
+            ]}}),
+        ),
         line(&json!({"on": {"method": "session/prompt", "fallback": true, "do": reply()}})),
         // Anything else is refused, as an adapter refuses a method it
         // doesn't know.
@@ -106,9 +118,8 @@ fn reply() -> Value {
 /// One round of asking, for the message `ask`.
 fn asking(round: u32) -> Vec<Value> {
     let tool = format!("fake-{round}");
-    let ask_text = json!({"params": {"prompt": [{"type": "text", "text": ASK}]}});
     let mut steps = vec![
-        json!({"wait": {"method": "session/prompt", "match": ask_text, "as": "prompt"}}),
+        json!({"wait": {"method": "session/prompt", "match": prompt(ASK), "as": "prompt"}}),
         json!({"think": {"session": SESSION, "text": "They asked me to ask."}}),
     ];
     steps.extend(words(ASKING).map(|word| json!({"say": {"session": SESSION, "text": word}})));
@@ -125,6 +136,11 @@ fn asking(round: u32) -> Vec<Value> {
         json!({"respond": {"to": "prompt", "result": {"stopReason": "end_turn"}}}),
     ]);
     steps
+}
+
+/// A pattern matching a prompt of exactly `text`.
+fn prompt(text: &str) -> Value {
+    json!({"params": {"prompt": [{"type": "text", "text": text}]}})
 }
 
 /// Text in words, each with the space before it.

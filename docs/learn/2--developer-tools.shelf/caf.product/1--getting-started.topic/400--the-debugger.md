@@ -61,7 +61,9 @@ With no options, the debugger offers:
 - **`fake`**, always: CAF's fake agent, which has no model behind it, so the
   debugger is useful with no real agent and no cost. It answers any message
   at once with a few words. Send it exactly `ask`, and it asks permission
-  to run a command: answer it, or try Stop while it waits.
+  to run a command: answer it, or try Stop while it waits. Send it exactly
+  `fail`, and the turn fails, the first time in each chat, so sending it
+  again shows Send again working.
 
 The fake agent is built by Cargo as the debugger starts, so start the
 debugger with `cargo run`. Started any other way, it offers the fake agent
