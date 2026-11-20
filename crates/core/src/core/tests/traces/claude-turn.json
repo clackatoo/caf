@@ -2,13 +2,17 @@
   {
     "at": 0,
     "event": {
-      "Host": {
-        "OpenChat": {
+      "type": "Host",
+      "value": {
+        "type": "OpenChat",
+        "value": {
           "chat": 1000,
           "open": {
             "agent": "claude",
             "cwd": "/work",
-            "session": "New",
+            "session": {
+              "type": "New"
+            },
             "mcp_servers": []
           }
         }
@@ -18,14 +22,19 @@
   {
     "at": 0,
     "event": {
-      "Agent": {
+      "type": "Agent",
+      "value": {
         "process": 1002,
         "event": {
-          "Frame": {
-            "Message": {
-              "Response": {
+          "type": "Frame",
+          "value": {
+            "type": "Message",
+            "value": {
+              "type": "Response",
+              "value": {
                 "id": {
-                  "Number": 1000
+                  "type": "Number",
+                  "value": 1000
                 },
                 "outcome": {
                   "Ok": {
@@ -76,14 +85,19 @@
   {
     "at": 0,
     "event": {
-      "Agent": {
+      "type": "Agent",
+      "value": {
         "process": 1002,
         "event": {
-          "Frame": {
-            "Message": {
-              "Response": {
+          "type": "Frame",
+          "value": {
+            "type": "Message",
+            "value": {
+              "type": "Response",
+              "value": {
                 "id": {
-                  "Number": 1001
+                  "type": "Number",
+                  "value": 1001
                 },
                 "outcome": {
                   "Ok": {
@@ -100,14 +114,17 @@
   {
     "at": 2000,
     "event": {
-      "Host": {
-        "Send": {
+      "type": "Host",
+      "value": {
+        "type": "Send",
+        "value": {
           "chat": 1000,
           "turn": 1003,
           "message": {
             "parts": [
               {
-                "Text": "Run the tests"
+                "type": "Text",
+                "value": "Run the tests"
               }
             ]
           }
@@ -118,12 +135,16 @@
   {
     "at": 2100,
     "event": {
-      "Agent": {
+      "type": "Agent",
+      "value": {
         "process": 1002,
         "event": {
-          "Frame": {
-            "Message": {
-              "Notification": {
+          "type": "Frame",
+          "value": {
+            "type": "Message",
+            "value": {
+              "type": "Notification",
+              "value": {
                 "method": "session/update",
                 "params": {
                   "sessionId": "sess-1",
@@ -145,14 +166,19 @@
   {
     "at": 2100,
     "event": {
-      "Agent": {
+      "type": "Agent",
+      "value": {
         "process": 1002,
         "event": {
-          "Frame": {
-            "Message": {
-              "Request": {
+          "type": "Frame",
+          "value": {
+            "type": "Message",
+            "value": {
+              "type": "Request",
+              "value": {
                 "id": {
-                  "Number": 0
+                  "type": "Number",
+                  "value": 0
                 },
                 "method": "session/request_permission",
                 "params": {
@@ -193,21 +219,28 @@
   {
     "at": 2500,
     "event": {
-      "Policy": {
+      "type": "Policy",
+      "value": {
         "ticket": 1005,
-        "answer": "Allow"
+        "answer": {
+          "type": "Allow"
+        }
       }
     }
   },
   {
     "at": 2500,
     "event": {
-      "Agent": {
+      "type": "Agent",
+      "value": {
         "process": 1002,
         "event": {
-          "Frame": {
-            "Message": {
-              "Notification": {
+          "type": "Frame",
+          "value": {
+            "type": "Message",
+            "value": {
+              "type": "Notification",
+              "value": {
                 "method": "session/update",
                 "params": {
                   "sessionId": "sess-1",
@@ -228,14 +261,19 @@
   {
     "at": 3000,
     "event": {
-      "Agent": {
+      "type": "Agent",
+      "value": {
         "process": 1002,
         "event": {
-          "Frame": {
-            "Message": {
-              "Response": {
+          "type": "Frame",
+          "value": {
+            "type": "Message",
+            "value": {
+              "type": "Response",
+              "value": {
                 "id": {
-                  "Number": 1002
+                  "type": "Number",
+                  "value": 1002
                 },
                 "outcome": {
                   "Ok": {

@@ -83,6 +83,7 @@ pub struct Core<A: AppItem = NoAppItems> {
 /// What to open a chat with.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct OpenChat {
     /// The agent, by the name the host gave it.
     pub agent: AgentName,
@@ -110,6 +111,8 @@ impl OpenChat {
 /// Which session a chat opens.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum SessionChoice {
     /// A new one.
     New,
@@ -125,6 +128,8 @@ pub enum SessionChoice {
 /// nothing.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum Refused {
     /// No chat has that id.
     NoSuchChat,
@@ -158,6 +163,7 @@ pub enum Refused {
 /// What the host can see of a connection: one adapter process.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ConnectionInfo {
     /// Its id.
     pub id: ConnectionId,

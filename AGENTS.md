@@ -16,3 +16,10 @@ whole, their API reviewed by jack, before they're built.
 
 Keeping Acta and the docs up to date is part of doing the work, not an
 afterthought. The repo is public, so anything on main is public anyway.
+
+The TypeScript caf-sdk's types (`ts/sdk/src/types/`), and real JSON
+typed with them (`ts/sdk/test/shapes.gen.ts`), are generated from
+caf-core and checked in. After changing a type CAF serialises,
+regenerate them with
+`CAF_BLESS=1 cargo test -p caf-core --features ts typescript_types`;
+CI fails while they're stale.

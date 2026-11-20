@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 /// breaks nobody.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Host {
     /// The host's name, such as `clackatoo`, told to every agent.
     pub name: String,
@@ -38,6 +39,7 @@ pub struct Host {
 #[non_exhaustive]
 #[allow(clippy::struct_excessive_bools)] // one plain answer each
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Shows {
     /// Permission questions ("may the agent run this?"). Without them,
     /// whatever the policy driver says is final, and "ask the user"
@@ -61,6 +63,8 @@ pub struct Shows {
 /// tells every affected chat when that happens, whichever is chosen.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum Grouping {
     /// One process per agent, shared by all its chats: what clackatoo
     /// does today. The default.
@@ -73,6 +77,7 @@ pub enum Grouping {
 /// Size limits. Defaults are what clackatoo uses today.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Limits {
     /// The biggest message accepted from an agent. A longer one is
     /// dropped, and refused if it was a request, so nothing waits on it.
@@ -97,36 +102,45 @@ pub struct Limits {
 /// the new watchdogs, what its timings suggest.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Timers {
     /// How long an adapter may take to answer `initialize` before the
     /// chats waiting on it are told it's slow. 30 s. (Claude answers in
     /// about 240 ms.)
+    #[cfg_attr(feature = "ts", ts(as = "crate::ts::Duration"))]
     pub initialize: Duration,
     /// How long a session may take to open before the chat asks the user
     /// whether to keep waiting, retry or stop. Every message an agent
     /// replays while loading restarts it. 30 s.
+    #[cfg_attr(feature = "ts", ts(as = "crate::ts::Duration"))]
     pub session_open: Duration,
     /// How long after Stop the agent may take to end the turn, before
     /// CAF ends it as failed and restarts the session. 15 s.
+    #[cfg_attr(feature = "ts", ts(as = "crate::ts::Duration"))]
     pub stop: Duration,
     /// How long a turn the agent started by itself may be quiet, with no
     /// tool running, before CAF takes it to have ended: ACP doesn't say
     /// when one ends. Long, as a turn ended too soon splits in two when
     /// the agent goes on. 1 min, as clackatoo.
+    #[cfg_attr(feature = "ts", ts(as = "crate::ts::Duration"))]
     pub quiet: Duration,
     /// How long any other request CAF sends may go unanswered (closing a
     /// session, changing a setting) before the adapter is treated as stuck
     /// and restarted. A prompt has no such limit: an agent may work on one
     /// for an hour. 60 s.
+    #[cfg_attr(feature = "ts", ts(as = "crate::ts::Duration"))]
     pub request: Duration,
     /// How long CAF keeps listening to an adapter that has gone, for its
     /// last words. 2 s.
+    #[cfg_attr(feature = "ts", ts(as = "crate::ts::Duration"))]
     pub gone: Duration,
     /// How long a gentle stop waits before sending SIGTERM, and SIGTERM
     /// before SIGKILL. 2 s.
+    #[cfg_attr(feature = "ts", ts(as = "crate::ts::Duration"))]
     pub kill_after: Duration,
     /// How often CAF checks whether an old adapter's processes have all
     /// gone, before starting a new one on the same session. 50 ms.
+    #[cfg_attr(feature = "ts", ts(as = "crate::ts::Duration"))]
     pub group_poll: Duration,
 }
 

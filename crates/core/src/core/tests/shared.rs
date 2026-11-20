@@ -53,7 +53,7 @@ fn retry_while_another_chat_is_mid_turn_only_asks_again() {
         .expect("asked");
     assert_has(
         &script.chat(OTHER),
-        &json!({ "questions": [{ "kind": { "SlowToOpen": { "adapter_answered": true } } }] }),
+        &json!({ "questions": [{ "kind": { "type": "SlowToOpen", "value": { "adapter_answered": true } } }] }),
     );
 
     let (retried, out) = script.answer(QuestionId(question), Answer::SlowToOpen(SlowChoice::Retry));
@@ -72,11 +72,11 @@ fn retry_while_another_chat_is_mid_turn_only_asks_again() {
     script.answers(PROC, 1004, &json!({ "sessionId": "sess-2" }));
     assert_has(
         &script.chat(OTHER),
-        &json!({ "state": { "Open": { "session": "sess-2" } } }),
+        &json!({ "state": { "type": "Open", "value": { "session": "sess-2" } } }),
     );
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "life": "Running" }] }),
+        &json!({ "turns": [{ "life": { "type": "Running" } }] }),
     );
 }
 
@@ -104,11 +104,11 @@ fn retry_restarts_a_shared_adapter_every_chat_hears_and_waiting_messages_survive
     // Both chats hear.
     assert_has(
         &script.chat(CHAT),
-        &json!({ "state": { "Lost": { "reason": "Restarted" } } }),
+        &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "Restarted" } } } }),
     );
     assert_has(
         &script.chat(OTHER),
-        &json!({ "state": "Opening", "turns": [{ "id": waiting.0, "life": "Waiting" }] }),
+        &json!({ "state": { "type": "Opening" }, "turns": [{ "id": waiting.0, "life": { "type": "Waiting" } }] }),
     );
     assert_eq!(with(&out, "changed").len(), 2);
 
@@ -149,12 +149,12 @@ fn an_adapter_dying_tells_every_chat_on_it() {
     for chat in [CHAT, OTHER] {
         assert_has(
             &script.chat(chat),
-            &json!({ "state": { "Lost": { "reason": { "AgentStopped": { "stderr": [] } } } } }),
+            &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "AgentStopped", "value": { "stderr": [] } } } } }),
         );
     }
     assert_has(
         &script.chat(OTHER),
-        &json!({ "turns": [{ "life": { "Failed": { "reason": "AgentStopped" } } }] }),
+        &json!({ "turns": [{ "life": { "type": "Failed", "value": { "reason": { "type": "AgentStopped" } } } }] }),
     );
 }
 
@@ -168,6 +168,6 @@ fn one_session_is_never_opened_twice() {
     assert!(writes(&out).is_empty());
     assert_has(
         &script.chat(other.expect("opened")),
-        &json!({ "state": { "Lost": { "reason": "InUse" } } }),
+        &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "InUse" } } } }),
     );
 }

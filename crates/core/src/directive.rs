@@ -13,6 +13,8 @@ use crate::time::Mono;
 /// Work for a driver.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum Directive {
     /// For the agent driver.
     Agent(AgentDirective),
@@ -49,6 +51,8 @@ pub enum Directive {
 /// [`AgentEvent::WriteFailed`]: crate::event::AgentEvent::WriteFailed
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum AgentDirective {
     /// Start a process in a process group of its own, with its standard
     /// input, output and error piped. It's known as `process` from now on.
@@ -99,6 +103,8 @@ pub enum AgentDirective {
 /// A signal for a process group.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum Signal {
     /// SIGTERM: please stop.
     Term,
@@ -109,6 +115,8 @@ pub enum Signal {
 /// Work for the timer driver.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum TimerDirective {
     /// Wake the core at this time, replacing any earlier request, or never.
     /// There is only ever one: the core asks for its earliest deadline.
@@ -118,6 +126,8 @@ pub enum TimerDirective {
 /// Work for the policy driver.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum PolicyDirective {
     /// Decide whether the agent may do this, and answer with
     /// [`Event::Policy`](crate::Event::Policy) quoting the ticket. Take as
@@ -144,6 +154,7 @@ pub enum PolicyDirective {
 /// this folder") comes with the Permission Engine.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PermissionRequest {
     /// What the agent calls it.
     pub title: String,
@@ -154,6 +165,8 @@ pub struct PermissionRequest {
 /// Work for the viewer driver.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum ViewerDirective {
     /// A chat changed: viewers watching it should read its changes, up to
     /// `latest`, with [`Core::read`](crate::Core::read).
@@ -168,11 +181,14 @@ pub enum ViewerDirective {
 /// Work for the storage driver. *Later.*
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum StorageDirective {}
 
 /// Something the host should log.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Report {
     /// How much it matters.
     pub level: Level,
@@ -185,6 +201,8 @@ pub struct Report {
 /// How much a report matters.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum Level {
     /// Detail, for debugging.
     Debug,

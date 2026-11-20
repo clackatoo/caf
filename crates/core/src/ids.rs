@@ -11,6 +11,7 @@ macro_rules! id {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
         pub struct $name(pub u64);
     };
 }
@@ -56,10 +57,12 @@ id! {
 
 /// An agent, by the name the host gave it, such as `claude`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AgentName(pub String);
 
 /// A session as the agent knows it: its own id for it, kept so the
 /// session can be continued later. At most 256 bytes, with no control
 /// characters; anything else an agent sends is refused.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AgentSessionId(pub String);

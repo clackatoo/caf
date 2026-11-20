@@ -68,10 +68,13 @@ pub struct Config {
     /// A file to record the run in, so it can be replayed into a fresh
     /// [`Core`] as a test. `None` by default. The file must not exist yet.
     ///
-    /// It's JSON lines. The first holds the host and the agents:
-    /// `{"caf_recording": 1, "host": …, "agents": […]}`. Each line after
-    /// it is one event the core was given, with its time, in order:
-    /// `{"now": …, "event": …}`. Calls such as [`ChatHandle::send`] are
+    /// It's JSON lines, of version 2. The first holds the host and the
+    /// agents: `{"caf_recording": 2, "host": …, "agents": […]}`; a reader
+    /// checks the version before reading the rest. Each line
+    /// after it is one event the core was given, with its time, in order:
+    /// `{"now": …, "event": …}`. Everything is in CAF's one shape (see
+    /// caf-core's docs), such as `{"type": "Woken"}`, with each `type`
+    /// written before its `value`. Calls such as [`ChatHandle::send`] are
     /// written as the [`Event::Host`] they stand for, with the id the core
     /// gave out, and only if the core took them. Read each line's event
     /// back as an [`Event`]. A recording cut short ends with
@@ -1034,7 +1037,7 @@ impl Recorder {
             })
             .collect();
         let header = Header {
-            caf_recording: 1,
+            caf_recording: 2,
             host,
             agents,
         };
@@ -1153,8 +1156,10 @@ fn line<A: AppItem>(now: Now, event: &Event<A>) -> serde_json::Result<String> {
             let Ok(text) = std::str::from_utf8(bytes) else {
                 return serde_json::to_string(&Step { now, event });
             };
-            let event =
-                serde_json::json!({ "Agent": { "process": process, "event": { "Stderr": text } } });
+            let event = serde_json::json!({
+                "type": "Agent",
+                "value": { "process": process, "event": { "type": "Stderr", "value": text } },
+            });
             return serde_json::to_string(&serde_json::json!({ "now": now, "event": event }));
         }
         AgentEvent::Frame(Frame::Message(Message::Notification { method, .. }))
@@ -1272,7 +1277,7 @@ mod tests {
         let (stopped, steps) = lines[1..].split_last().unwrap();
         for line in steps {
             let step: serde_json::Value = serde_json::from_str(line).unwrap();
-            assert_eq!(step["event"], "Woken");
+            assert_eq!(step["event"], serde_json::json!({ "type": "Woken" }));
         }
         assert_eq!(*stopped, r#"{"stopped":"the disk has fallen behind"}"#);
     }
@@ -1339,6 +1344,10 @@ mod tests {
             process,
             event: AgentEvent::Stderr("café\n".into()),
         };
-        assert!(line(now, &whole).unwrap().contains(r#""Stderr":"café\n""#));
+        assert!(
+            line(now, &whole)
+                .unwrap()
+                .contains(r#"{"type":"Stderr","value":"café\n"}"#)
+        );
     }
 }

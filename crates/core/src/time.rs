@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 /// [`Wall`] is what to show and save, and [`Mono`] is what deadlines and
 /// durations are measured on, since a wall clock can jump.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Now {
     /// The calendar time, for showing and saving.
     pub wall: Wall,
@@ -21,6 +22,7 @@ pub struct Now {
 
 /// Calendar time: milliseconds since the Unix epoch, UTC.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Wall(pub i64);
 
 /// The host's steady clock: nanoseconds since an origin the host chooses
@@ -29,6 +31,7 @@ pub struct Wall(pub i64);
 /// Only comparable within one run of the host, so it's never saved. After
 /// a restart, the core measures again from the new origin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Mono(pub u64);
 
 impl Mono {
@@ -46,6 +49,7 @@ impl Mono {
 /// ACP carries no timestamps.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Window {
     /// When CAF first heard of it. `None` only for history imported from
     /// an agent's replay, where the times aren't known.
@@ -57,6 +61,8 @@ pub struct Window {
 /// The end of a [`Window`].
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum End {
     /// It's still going.
     Open,

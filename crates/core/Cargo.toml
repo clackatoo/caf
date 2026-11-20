@@ -13,7 +13,14 @@ agent-client-protocol-schema.workspace = true
 memchr.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+ts-rs = { workspace = true, optional = true }
+
+[dev-dependencies]
+rmp-serde.workspace = true
 
 [features]
 # Core::inspect: the core's whole state as JSON, for debugging tools only.
 inspect = []
+# TypeScript types for every type CAF serialises, through ts-rs: what the
+# TypeScript caf-sdk's are generated from (`ts/sdk/src/types/`).
+ts = ["dep:ts-rs"]

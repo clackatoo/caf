@@ -15,6 +15,7 @@ use crate::profiles::ProfileChoice;
 /// An agent the host offers.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AgentSpec {
     /// The name chats ask for it by.
     pub name: AgentName,
@@ -41,12 +42,14 @@ impl AgentSpec {
 /// How to start a program.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SpawnCommand {
     /// The program, by absolute path. Never looked up on `PATH`, and never
     /// run through `npx`, which stays resident and starts three times
     /// slower.
     pub program: PathBuf,
     /// Its arguments.
+    #[cfg_attr(feature = "ts", ts(as = "Vec<crate::ts::OsString>"))]
     pub args: Vec<OsString>,
     /// Changes to the environment it inherits. The profile adds its own,
     /// and the driver keeps only `PATH`'s absolute entries, so a project
@@ -75,11 +78,16 @@ impl SpawnCommand {
 /// One change to a program's environment.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum EnvChange {
     /// Set a variable.
-    Set(OsString, OsString),
+    Set(
+        #[cfg_attr(feature = "ts", ts(as = "crate::ts::OsString"))] OsString,
+        #[cfg_attr(feature = "ts", ts(as = "crate::ts::OsString"))] OsString,
+    ),
     /// Remove a variable.
-    Remove(OsString),
+    Remove(#[cfg_attr(feature = "ts", ts(as = "crate::ts::OsString"))] OsString),
 }
 
 /// An MCP server to give the agent's session: the only way ACP lets an
@@ -87,6 +95,8 @@ pub enum EnvChange {
 /// wraps it, proxies it or shortens its timeouts.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum McpServer {
     /// A program the agent starts and talks to over its standard input
     /// and output. Every agent supports this.

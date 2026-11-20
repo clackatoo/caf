@@ -51,7 +51,7 @@ fn stop_answers_the_agents_questions_then_tells_it_and_waits() {
     assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 15_500 })]);
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "id": turn.0, "life": "Stopping" }] }),
+        &json!({ "turns": [{ "id": turn.0, "life": { "type": "Stopping" } }] }),
     );
 
     script.at(600);
@@ -61,8 +61,8 @@ fn stop_answers_the_agents_questions_then_tells_it_and_waits() {
         &script.chat(CHAT),
         &json!({ "turns": [{
         "id": turn.0,
-        "life": "Stopped",
-        "items": [{ "id": 1004, "kind": { "Tool": { "title": "Run `cargo test`", "kind": "Execute", "status": "Failed" } } }]
+        "life": { "type": "Stopped" },
+        "items": [{ "id": 1004, "kind": { "type": "Tool", "value": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Failed" } } } }]
     }] }),
     );
 }
@@ -83,8 +83,8 @@ fn an_agent_that_doesnt_stop_fails_the_turn_and_is_restarted() {
     assert_has(
         &script.chat(CHAT),
         &json!({
-            "state": { "Lost": { "reason": "Restarted" } },
-            "turns": [{ "id": turn.expect("sent").0, "life": { "Failed": { "reason": "DidNotStop", "agent_said": null, "remedy": "SendAgain" } } }]
+            "state": { "type": "Lost", "value": { "reason": { "type": "Restarted" } } },
+            "turns": [{ "id": turn.expect("sent").0, "life": { "type": "Failed", "value": { "reason": { "type": "DidNotStop" }, "agent_said": null, "remedy": { "type": "SendAgain" } } } }]
         }),
     );
     assert_eq!(script.state()["pending"], json!([]));
@@ -135,8 +135,8 @@ fn stop_while_opening_abandons_the_open_and_a_late_session_is_closed() {
     assert_has(
         &script.chat(CHAT),
         &json!({
-            "state": { "Lost": { "reason": "Stopped" } },
-            "turns": [{ "id": turn.expect("sent").0, "life": "Stopped" }]
+            "state": { "type": "Lost", "value": { "reason": { "type": "Stopped" } } },
+            "turns": [{ "id": turn.expect("sent").0, "life": { "type": "Stopped" } }]
         }),
     );
 
@@ -147,7 +147,7 @@ fn stop_while_opening_abandons_the_open_and_a_late_session_is_closed() {
     );
     assert_has(
         &script.chat(CHAT),
-        &json!({ "state": { "Lost": { "reason": "Stopped" } } }),
+        &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "Stopped" } } } }),
     );
     // Closing it has a watchdog too.
     assert_eq!(
@@ -207,7 +207,7 @@ fn a_turn_being_stopped_when_its_adapter_dies_ends_stopped() {
     script.agent(PROC, AgentEvent::OutputClosed);
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "id": turn.expect("sent").0, "life": "Stopped" }] }),
+        &json!({ "turns": [{ "id": turn.expect("sent").0, "life": { "type": "Stopped" } }] }),
     );
 }
 
@@ -238,7 +238,7 @@ fn a_stuck_session_that_cant_be_closed_isnt_continued() {
     script.answers(PROC, 1005, &json!({ "sessionId": "a2" }));
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{}, { "starter": "Caf", "items": [{ "kind": { "Note": "SessionStuck" } }] }, { "life": "Running" }] }),
+        &json!({ "turns": [{}, { "starter": { "type": "Caf" }, "items": [{ "kind": { "type": "Note", "value": { "type": "SessionStuck" } } }] }, { "life": { "type": "Running" } }] }),
     );
     script.answers(PROC, 1004, &json!({ "stopReason": "end_turn" }));
     script.answers(PROC, 1006, &json!({ "stopReason": "end_turn" }));

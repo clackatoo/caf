@@ -14,6 +14,9 @@ use crate::question::Answer;
 /// Something that happened.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(concrete(A = NoAppItems), bound = "A: ts_rs::TS"))]
+#[serde(tag = "type", content = "value")]
 #[serde(bound = "A: AppItem")]
 pub enum Event<A: AppItem = NoAppItems> {
     /// The host asked for something. The host usually calls the core's
@@ -45,6 +48,9 @@ pub enum Event<A: AppItem = NoAppItems> {
 /// What the host asked for.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(concrete(A = NoAppItems), bound = "A: ts_rs::TS"))]
+#[serde(tag = "type", content = "value")]
 #[serde(bound = "A: AppItem")]
 pub enum HostCommand<A: AppItem = NoAppItems> {
     /// Open a chat, under this id.
@@ -89,6 +95,8 @@ pub enum HostCommand<A: AppItem = NoAppItems> {
 /// What happened to an adapter process, in the order it happened.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum AgentEvent {
     /// It started.
     Started {
@@ -108,7 +116,11 @@ pub enum AgentEvent {
     ///
     /// It's written as an array of bytes, and read from one or from text,
     /// so a recording can hold it as text a person can read.
-    Stderr(#[serde(deserialize_with = "bytes_or_text")] Vec<u8>),
+    Stderr(
+        #[serde(deserialize_with = "bytes_or_text")]
+        #[cfg_attr(feature = "ts", ts(type = "Array<number> | string"))]
+        Vec<u8>,
+    ),
     /// Its output ended.
     OutputClosed,
     /// Writing to it failed: it's gone, though it may still be writing.
@@ -130,6 +142,8 @@ pub enum AgentEvent {
 /// How a process exited.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum Exit {
     /// With this code.
     Code(i32),
@@ -140,6 +154,8 @@ pub enum Exit {
 /// The policy's answer to "is this allowed?".
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum PolicyAnswer {
     /// Allowed, once.
     Allow,
@@ -153,6 +169,8 @@ pub enum PolicyAnswer {
 /// The storage driver's report. *Later.*
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum StorageEvent {}
 
 /// Bytes, read from an array of bytes or from text.

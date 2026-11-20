@@ -35,12 +35,15 @@ fn an_adapter_that_dies_mid_turn_is_heard_out_then_replaced_once_its_group_is_em
     script.answers(PROC, 1002, &json!({ "stopReason": "end_turn" }));
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "id": first.0, "life": "Finished" }, { "id": second.0, "life": "Waiting" }] }),
+        &json!({ "turns": [{ "id": first.0, "life": { "type": "Finished" } }, { "id": second.0, "life": { "type": "Waiting" } }] }),
     );
 
     script.at(1200);
     let out = script.agent(PROC, AgentEvent::OutputClosed);
-    assert_has(&script.chat(CHAT), &json!({ "state": "Opening" }));
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "state": { "type": "Opening" } }),
+    );
     assert!(
         with(&out, "start").is_empty(),
         "nothing new starts while the old group may have something in it"
@@ -81,7 +84,7 @@ fn an_adapter_that_dies_mid_turn_is_heard_out_then_replaced_once_its_group_is_em
     );
     assert_has(
         &script.chat(CHAT),
-        &json!({ "state": { "Open": { "session": SESSION } } }),
+        &json!({ "state": { "type": "Open", "value": { "session": SESSION } } }),
     );
 }
 
@@ -99,8 +102,8 @@ fn an_adapter_that_dies_says_why_from_its_error_output() {
     assert_has(
         &script.chat(CHAT),
         &json!({
-            "state": { "Lost": { "reason": { "AgentStopped": { "stderr": ["Error: out of memory", "at line ^[[31m3 for <email>"] } } } },
-            "turns": [{ "life": { "Failed": { "reason": "AgentStopped", "agent_said": null, "remedy": "SendAgain" } } }]
+            "state": { "type": "Lost", "value": { "reason": { "type": "AgentStopped", "value": { "stderr": ["Error: out of memory", "at line ^[[31m3 for <email>"] } } } },
+            "turns": [{ "life": { "type": "Failed", "value": { "reason": { "type": "AgentStopped" }, "agent_said": null, "remedy": { "type": "SendAgain" } } } }]
         }),
     );
     assert_eq!(
@@ -133,7 +136,7 @@ fn a_gone_adapter_that_never_closes_its_output_is_given_up_on() {
     assert_eq!(with(&out, "check_group"), [json!({ "check_group": PROC })]);
     assert_has(
         &script.chat(CHAT),
-        &json!({ "state": { "Lost": { "reason": { "AgentStopped": {} } } } }),
+        &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "AgentStopped", "value": {} } } } }),
     );
 }
 
@@ -157,8 +160,8 @@ fn an_adapter_that_cant_start_fails_its_chats_waiting_messages() {
     assert_has(
         &script.chat(CHAT),
         &json!({
-            "state": { "Lost": { "reason": { "CouldNotStart": { "error": "No such file or directory" } } } },
-            "turns": [{ "id": turn.expect("sent").0, "life": { "Failed": { "reason": "AgentStopped", "remedy": "SendAgain" } } }]
+            "state": { "type": "Lost", "value": { "reason": { "type": "CouldNotStart", "value": { "error": "No such file or directory" } } } },
+            "turns": [{ "id": turn.expect("sent").0, "life": { "type": "Failed", "value": { "reason": { "type": "AgentStopped" }, "remedy": { "type": "SendAgain" } } } }]
         }),
     );
     // The next message tries again, as turn 1004, on process 1005.
@@ -186,8 +189,8 @@ fn a_failed_initialize_fails_the_connection_with_a_typed_reason() {
     assert_has(
         &script.chat(CHAT),
         &json!({
-            "state": { "Lost": { "reason": "SignInNeeded" } },
-            "turns": [{ "life": { "Failed": { "reason": "SignInNeeded" } } }]
+            "state": { "type": "Lost", "value": { "reason": { "type": "SignInNeeded" } } },
+            "turns": [{ "life": { "type": "Failed", "value": { "reason": { "type": "SignInNeeded" } } } }]
         }),
     );
 
@@ -203,7 +206,24 @@ fn a_failed_initialize_fails_the_connection_with_a_typed_reason() {
     );
     assert_has(
         &script.chat(CHAT),
-        &json!({ "state": { "Lost": { "reason": { "Incompatible": { "Protocol": { "version": 2 } } } } } }),
+        &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "Incompatible", "value": { "type": "Protocol", "value": { "version": 2 } } } } } }),
+    );
+
+    // A version JavaScript can't read exactly is kept as not said, never
+    // rounded.
+    let mut script = Script::new(host());
+    script
+        .open(OpenChat::new("claude", "/work"))
+        .0
+        .expect("opened");
+    script.answers(
+        PROC,
+        1000,
+        &json!({ "protocolVersion": 1_u64 << 53, "agentCapabilities": {} }),
+    );
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "Incompatible", "value": { "type": "Protocol", "value": { "version": null } } } } } }),
     );
 }
 
@@ -222,12 +242,12 @@ fn capabilities_are_read_leniently() {
     sent(&out, "session/new");
     assert_eq!(
         script.state()["procs"]["1002"]["init"],
-        json!({ "Ready": { "load": false, "resume": false, "close": false, "mcp_http": false } })
+        json!({ "type": "Ready", "value": { "load": false, "resume": false, "close": false, "mcp_http": false } })
     );
     // No agentInfo: the cautious profile.
     assert_has(
         &script.state(),
-        &json!({ "conns": { "1001": { "profile": { "profile": "Cautious", "adapter": null, "checked": "Mismatch" } } } }),
+        &json!({ "conns": { "1001": { "profile": { "profile": { "type": "Cautious" }, "adapter": null, "checked": { "type": "Mismatch" } } } } }),
     );
 }
 
@@ -244,7 +264,7 @@ fn an_adapter_slow_to_start_asks_whether_to_keep_waiting() {
     assert!(with(&out, "wake_at").is_empty());
     assert_has(
         &script.chat(CHAT),
-        &json!({ "questions": [{ "id": 1003, "kind": { "SlowToOpen": { "adapter_answered": false } } }] }),
+        &json!({ "questions": [{ "id": 1003, "kind": { "type": "SlowToOpen", "value": { "adapter_answered": false } } }] }),
     );
 
     script.at(31_000);
@@ -273,7 +293,10 @@ fn closing_the_last_chat_stops_its_adapter_gently_then_lets_it_go() {
         writes(&out).is_empty(),
         "no session/close: closing input ends every session"
     );
-    assert_has(&script.chat(CHAT), &json!({ "state": "Closed" }));
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "state": { "type": "Closed" } }),
+    );
 
     script.at(2100);
     assert_eq!(
@@ -301,8 +324,8 @@ fn shutting_down_cuts_turns_off_and_stops_every_adapter() {
     assert_has(
         &script.chat(CHAT),
         &json!({
-            "state": { "Lost": { "reason": "ShutDown" } },
-            "turns": [{ "id": turn.expect("sent").0, "life": "CutOff" }, { "id": waiting.expect("queued").0, "life": "Stopped" }]
+            "state": { "type": "Lost", "value": { "reason": { "type": "ShutDown" } } },
+            "turns": [{ "id": turn.expect("sent").0, "life": { "type": "CutOff" } }, { "id": waiting.expect("queued").0, "life": { "type": "Stopped" } }]
         }),
     );
     assert_eq!(
@@ -315,7 +338,7 @@ fn shutting_down_cuts_turns_off_and_stops_every_adapter() {
     // Stays as it was: shut down, not stopped by the agent.
     assert_has(
         &script.chat(CHAT),
-        &json!({ "state": { "Lost": { "reason": "ShutDown" } } }),
+        &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "ShutDown" } } } }),
     );
     let out = script.agent(PROC, AgentEvent::Group { empty: true });
     assert!(with(&out, "start").is_empty(), "nothing starts again");
@@ -367,7 +390,7 @@ fn retrying_an_adapter_that_hasnt_answered_restarts_it() {
     );
     assert_has(
         &script.chat(CHAT),
-        &json!({ "state": "Opening", "questions": [] }),
+        &json!({ "state": { "type": "Opening" }, "questions": [] }),
     );
     script.at(32_000);
     // SIGKILL follows SIGTERM if the group isn't empty by then.
@@ -397,7 +420,7 @@ fn giving_up_on_a_slow_session_stops_its_waiting_message() {
         .expect("asked");
     assert_has(
         &script.chat(CHAT),
-        &json!({ "questions": [{ "kind": { "SlowToOpen": { "adapter_answered": true } } }] }),
+        &json!({ "questions": [{ "kind": { "type": "SlowToOpen", "value": { "adapter_answered": true } } }] }),
     );
     script
         .answer(
@@ -409,9 +432,9 @@ fn giving_up_on_a_slow_session_stops_its_waiting_message() {
     assert_has(
         &script.chat(CHAT),
         &json!({
-            "state": { "Lost": { "reason": "Stopped" } },
+            "state": { "type": "Lost", "value": { "reason": { "type": "Stopped" } } },
             "questions": [],
-            "turns": [{ "id": turn.expect("sent").0, "life": "Stopped" }]
+            "turns": [{ "id": turn.expect("sent").0, "life": { "type": "Stopped" } }]
         }),
     );
     // The agent answering late gets its session closed.
@@ -437,8 +460,8 @@ fn a_session_refused_for_sign_in_says_so() {
     assert_has(
         &script.chat(CHAT),
         &json!({
-            "state": { "Lost": { "reason": "SignInNeeded" } },
-            "turns": [{ "id": turn.expect("sent").0, "life": { "Failed": { "reason": "SignInNeeded", "remedy": "SendAgain" } } }]
+            "state": { "type": "Lost", "value": { "reason": { "type": "SignInNeeded" } } },
+            "turns": [{ "id": turn.expect("sent").0, "life": { "type": "Failed", "value": { "reason": { "type": "SignInNeeded" }, "remedy": { "type": "SendAgain" } } } }]
         }),
     );
 }
@@ -457,7 +480,7 @@ fn a_process_that_exited_is_let_go_in_a_fixed_time_whatever_holds_its_output_ope
         let out = script.woken();
         assert!(with(&out, "forget").is_empty(), "not yet, at {ms}");
         script.agent(PROC, AgentEvent::Stderr(b"still here\n".to_vec()));
-        if script.state()["procs"]["1002"]["group"] == json!("Asked") {
+        if script.state()["procs"]["1002"]["group"] == json!({ "type": "Asked" }) {
             script.agent(PROC, AgentEvent::Group { empty: false });
         }
     }
