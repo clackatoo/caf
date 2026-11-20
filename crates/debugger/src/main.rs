@@ -143,15 +143,21 @@ async fn run(args: Args) -> Result<(), String> {
 }
 
 /// The fake agent's program, if it can be found or built: see
-/// [`caf_fake_agent::binary`].
+/// [`caf_fake_agent::binary`], which panics if it can't. Its panic is
+/// told as a warning, not printed as a crash.
 fn fake_agent() -> Option<PathBuf> {
-    match std::panic::catch_unwind(caf_fake_agent::binary) {
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let found = std::panic::catch_unwind(caf_fake_agent::binary);
+    std::panic::set_hook(hook);
+    match found {
         Ok(path) => Some(path),
-        Err(_) => {
-            log::warn!(
-                "the fake agent isn't offered: run the debugger with `cargo run`, or set {}",
-                caf_fake_agent::BIN_VAR
-            );
+        Err(panic) => {
+            let why = (panic.downcast_ref::<String>().map(String::as_str))
+                .or_else(|| panic.downcast_ref::<&str>().copied())
+                .unwrap_or("it can't be found");
+            // What it says says what to do.
+            log::warn!("the fake agent isn't offered: {why}");
             None
         }
     }
