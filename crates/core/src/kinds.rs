@@ -11,15 +11,17 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
+use crate::agent::{AgentStatus, CannotInstall, InstallFailure, InstallState, SignInState};
 use crate::change::{Change, Mismatch};
 use crate::chat::{
     Chat, ChatState, FailureReason, Incompatible, Item, ItemKind, Lost, Note, Part, Remedy,
     Starter, ToolCall, ToolKind, ToolStatus, Turn, TurnLife, UserMessage,
 };
 use crate::core::{Refused, SessionChoice};
+use crate::install::SignedInAs;
 use crate::question::{Answer, OptionKind, Question, QuestionKind, SlowChoice};
 use crate::time::{End, Window};
-use crate::viewer::{FromViewer, Outcome, ToViewer};
+use crate::viewer::{AgentAction, FromViewer, Outcome, ToViewer};
 
 /// An enum whose variants are named.
 pub(crate) trait Kinds: Serialize {
@@ -55,6 +57,16 @@ kinds!(FromViewer {
     "Stop" => FromViewer::Stop { .. },
     "Answer" => FromViewer::Answer { .. },
     "Close" => FromViewer::Close { .. },
+    "Agent" => FromViewer::Agent { .. },
+});
+
+kinds!(AgentAction {
+    "Install" => AgentAction::Install,
+    "StopInstall" => AgentAction::StopInstall,
+    "SignIn" => AgentAction::SignIn,
+    "Paste" => AgentAction::Paste(_),
+    "StopSignIn" => AgentAction::StopSignIn,
+    "SignOut" => AgentAction::SignOut,
 });
 
 kinds!(ToViewer {
@@ -64,7 +76,46 @@ kinds!(ToViewer {
     "Picture" => ToViewer::Picture { .. },
     "Changes" => ToViewer::Changes { .. },
     "Ended" => ToViewer::Ended { .. },
+    "Agents" => ToViewer::Agents(_),
     "Done" => ToViewer::Done { .. },
+});
+
+kinds!(InstallState {
+    "Host" => InstallState::Host,
+    "Unknown" => InstallState::Unknown,
+    "Missing" => InstallState::Missing { .. },
+    "Installing" => InstallState::Installing { .. },
+    "Installed" => InstallState::Installed { .. },
+    "Cannot" => InstallState::Cannot(_),
+});
+
+kinds!(CannotInstall {
+    "Node" => CannotInstall::Node { .. },
+    "Npm" => CannotInstall::Npm,
+    "Platform" => CannotInstall::Platform,
+    "Failed" => CannotInstall::Failed(_),
+});
+
+kinds!(InstallFailure {
+    "Offline" => InstallFailure::Offline,
+    "Corrupt" => InstallFailure::Corrupt,
+    "NoSpace" => InstallFailure::NoSpace,
+    "Stopped" => InstallFailure::Stopped,
+    "Other" => InstallFailure::Other(_),
+});
+
+kinds!(SignInState {
+    "Unknown" => SignInState::Unknown,
+    "SignedOut" => SignInState::SignedOut,
+    "SigningIn" => SignInState::SigningIn(_),
+    "SignedIn" => SignInState::SignedIn(_),
+});
+
+kinds!(SignedInAs {
+    "Account" => SignedInAs::Account,
+    "ApiKey" => SignedInAs::ApiKey,
+    "Gateway" => SignedInAs::Gateway,
+    "Unknown" => SignedInAs::Unknown,
 });
 
 kinds!(Outcome {
@@ -88,6 +139,10 @@ kinds!(Refused {
     "NoSuchQuestion" => Refused::NoSuchQuestion,
     "WrongAnswer" => Refused::WrongAnswer,
     "NothingToStop" => Refused::NothingToStop,
+    "NotInstallable" => Refused::NotInstallable,
+    "AlreadyInstalled" => Refused::AlreadyInstalled,
+    "CannotSignIn" => Refused::CannotSignIn,
+    "NotSigningIn" => Refused::NotSigningIn,
 });
 
 kinds!(SessionChoice {
@@ -137,6 +192,7 @@ kinds!(ChatState {
     "Open" => ChatState::Open { .. },
     "Lost" => ChatState::Lost { .. },
     "Closed" => ChatState::Closed,
+    "WaitingForAgent" => ChatState::WaitingForAgent,
 });
 
 kinds!(Lost {
@@ -244,6 +300,9 @@ kinds!(Note {
     "SessionGone" => Note::SessionGone,
     "CannotContinue" => Note::CannotContinue,
     "SessionStuck" => Note::SessionStuck,
+    "NotInstalled" => Note::NotInstalled,
+    "InstallFailed" => Note::InstallFailed,
+    "SignedIn" => Note::SignedIn,
 });
 
 kinds!(QuestionKind {
@@ -287,6 +346,7 @@ impl Seen {
     pub(crate) fn missing_on_the_wire(&self) -> Vec<String> {
         [
             self.missing::<FromViewer>(),
+            self.missing::<AgentAction>(),
             self.missing::<ToViewer>(),
             self.missing::<Outcome>(),
             self.missing::<Refused>(),
@@ -309,6 +369,11 @@ impl Seen {
             self.missing::<Note>(),
             self.missing::<QuestionKind>(),
             self.missing::<OptionKind>(),
+            self.missing::<InstallState>(),
+            self.missing::<CannotInstall>(),
+            self.missing::<InstallFailure>(),
+            self.missing::<SignInState>(),
+            self.missing::<SignedInAs>(),
         ]
         .into_iter()
         .flatten()
@@ -327,6 +392,7 @@ impl Seen {
                     self.mark(choice);
                 }
             }
+            FromViewer::Agent { action, .. } => self.mark(action),
             _ => {}
         }
     }
@@ -345,7 +411,23 @@ impl Seen {
                     self.mark(refused);
                 }
             }
+            ToViewer::Agents(agents) => agents.iter().for_each(|each| self.agent(each)),
             _ => {}
+        }
+    }
+
+    /// An agent's status, and everything in it.
+    fn agent(&mut self, agent: &AgentStatus) {
+        self.mark(&agent.install);
+        if let InstallState::Cannot(why) = &agent.install {
+            self.mark(why);
+            if let CannotInstall::Failed(failure) = why {
+                self.mark(failure);
+            }
+        }
+        self.mark(&agent.sign_in);
+        if let SignInState::SignedIn(how) = &agent.sign_in {
+            self.mark(how);
         }
     }
 

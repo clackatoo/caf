@@ -3,4 +3,4 @@
 /**
  * Something CAF says in a turn.
  */
-export type Note = { "type": "SessionGone" } | { "type": "CannotContinue" } | { "type": "SessionStuck" };
+export type Note = { "type": "SessionGone" } | { "type": "CannotContinue" } | { "type": "SessionStuck" } | { "type": "NotInstalled" } | { "type": "InstallFailed" } | { "type": "SignedIn" };

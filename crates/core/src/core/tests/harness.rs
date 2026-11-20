@@ -26,11 +26,11 @@ use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
 use crate::acp::{Frame, Message, RequestId, RpcError};
-use crate::agent::{AgentSpec, SpawnCommand};
+use crate::agent::{AgentSpec, EnvChange, SpawnCommand};
 use crate::chat::UserMessage;
 use crate::core::{Core, OpenChat, Refused};
 use crate::directive::{
-    AgentDirective, Directive, PolicyDirective, TimerDirective, ViewerDirective,
+    AgentDirective, Directive, PolicyDirective, SetupDirective, TimerDirective, ViewerDirective,
 };
 use crate::event::{AgentEvent, Event, HostCommand, PolicyAnswer};
 use crate::fixtures::{self, After};
@@ -468,8 +468,16 @@ pub(crate) fn frame(message: &Value) -> Frame {
 pub(crate) fn render(directive: &Directive) -> Value {
     match directive {
         Directive::Agent(agent) => match agent {
-            AgentDirective::Start { process, command } => {
-                json!({ "start": process.0, "program": command.program })
+            AgentDirective::Start {
+                process,
+                command,
+                hold,
+            } => {
+                let mut start = json!({ "start": process.0, "program": command.program });
+                if let Some(hold) = hold {
+                    start["hold"] = json!(hold);
+                }
+                start
             }
             AgentDirective::Write { process, bytes } => {
                 assert_eq!(bytes.last(), Some(&b'\n'), "each message ends its line");
@@ -500,10 +508,73 @@ pub(crate) fn render(directive: &Directive) -> Value {
             json!({ "changed": chat.0, "latest": latest.0 })
         }
         Directive::Storage(storage) => match *storage {},
+        Directive::Setup(setup) => render_setup(setup),
         Directive::Report(report) => {
             json!({ "report": format!("{:?}", report.level), "message": report.message })
         }
     }
+}
+
+/// A directive for the setup driver, as tests read it.
+fn render_setup(setup: &SetupDirective) -> Value {
+    match setup {
+        SetupDirective::Survey { ticket } => json!({ "survey": ticket.0 }),
+        SetupDirective::Install {
+            ticket,
+            folder,
+            install,
+        } => {
+            let how = serde_json::to_value(install).expect("installs serialise");
+            json!({ "install": ticket.0, "folder": folder, "how": how["type"] })
+        }
+        SetupDirective::Remove { ticket, folder } => {
+            json!({ "remove": ticket.0, "folder": folder })
+        }
+        SetupDirective::SignIn {
+            ticket,
+            command,
+            link,
+            code_after,
+        } => json!({
+            "sign_in": ticket.0,
+            "command": spawn(command),
+            "link": link,
+            "code_after": code_after,
+        }),
+        SetupDirective::Paste { ticket, text } => json!({ "paste": ticket.0, "text": text }),
+        SetupDirective::Run { ticket, command } => {
+            json!({ "run": ticket.0, "command": spawn(command) })
+        }
+        SetupDirective::Status {
+            ticket,
+            command,
+            signed_in,
+            how,
+        } => json!({
+            "status": ticket.0,
+            "command": spawn(command),
+            "signed_in": signed_in,
+            "how": how,
+        }),
+        SetupDirective::Stop { ticket } => json!({ "stop": ticket.0 }),
+    }
+}
+
+/// A command, as tests read it: its program, arguments and variables as
+/// text.
+pub(crate) fn spawn(command: &SpawnCommand) -> Value {
+    let text = |text: &std::ffi::OsString| text.to_string_lossy().into_owned();
+    let env: Vec<String> = (command.env.iter())
+        .map(|change| match change {
+            EnvChange::Set(name, value) => format!("{}={}", text(name), text(value)),
+            EnvChange::Remove(name) => format!("-{}", text(name)),
+        })
+        .collect();
+    json!({
+        "program": command.program,
+        "args": command.args.iter().map(text).collect::<Vec<_>>(),
+        "env": env,
+    })
 }
 
 /// Whether `actual` has everything `expected` has: every key of an

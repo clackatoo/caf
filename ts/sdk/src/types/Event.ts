@@ -2,6 +2,7 @@
 import type { AgentEvent } from "./AgentEvent.ts";
 import type { HostCommand } from "./HostCommand.ts";
 import type { PolicyAnswer } from "./PolicyAnswer.ts";
+import type { SetupEvent } from "./SetupEvent.ts";
 import type { StorageEvent } from "./StorageEvent.ts";
 import type { Ticket } from "./Ticket.ts";
 
@@ -24,4 +25,12 @@ ticket: Ticket,
 /**
  * The answer.
  */
-answer: PolicyAnswer, } } | { "type": "Storage", "value": StorageEvent };
+answer: PolicyAnswer, } } | { "type": "Storage", "value": StorageEvent } | { "type": "Setup", "value": { 
+/**
+ * The directive's ticket.
+ */
+ticket: Ticket, 
+/**
+ * What happened.
+ */
+event: SetupEvent, } };

@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 use std::time::Duration;
 
-use caf_core::agent::{AgentSpec, EnvChange, McpServer, SpawnCommand};
+use caf_core::agent::{AgentSpec, EnvChange, Launch, McpServer, SpawnCommand};
 use caf_core::change::Change;
 use caf_core::chat::{ChatState, FailureReason, ItemKind, Lost, Turn, TurnLife, UserMessage};
 use caf_core::directive::PermissionRequest;
@@ -728,11 +728,14 @@ async fn a_recorded_run_replays_to_the_same_state() {
     ]));
     let recording = dir.path("run.jsonl");
     let mut agent = fake(&dir, &script);
-    agent.command.env.push(EnvChange::Set(
+    let Launch::Command(command) = &mut agent.launch else {
+        panic!("the fake agent is started by a command")
+    };
+    command.env.push(EnvChange::Set(
         "SECRET_KEY".into(),
         "sk-do-not-record".into(),
     ));
-    agent.command.args = vec!["--key".into(), "sk-arg-do-not-record".into()];
+    command.args = vec!["--key".into(), "sk-arg-do-not-record".into()];
     let mut config = Config::new(host(), vec![agent]);
     config.record = Some(recording.clone());
     let (caf, running) = start(config);
@@ -788,7 +791,9 @@ async fn a_recorded_run_replays_to_the_same_state() {
         "agents' arguments aren't recorded"
     );
     let header: Header = serde_json::from_str(text.lines().next().unwrap()).unwrap();
-    let command = &header.agents[0].command;
+    let Launch::Command(command) = &header.agents[0].launch else {
+        panic!("the fake agent is recorded as started by a command")
+    };
     assert!(command.args.is_empty());
     assert!(
         command

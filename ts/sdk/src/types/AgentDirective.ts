@@ -32,7 +32,13 @@ process: Ticket,
 /**
  * How to start it.
  */
-command: SpawnCommand, } } | { "type": "Write", "value": { 
+command: SpawnCommand, 
+/**
+ * The install folder it runs from, if it's CAF's install of an
+ * agent. The driver holds a shared lock on it while the process
+ * runs, so no CAF program on the machine removes it meanwhile.
+ */
+hold: string | null, } } | { "type": "Write", "value": { 
 /**
  * The process.
  */

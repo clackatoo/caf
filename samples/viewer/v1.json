@@ -133,6 +133,67 @@
         "request": 9,
         "chat": 1
       }
+    },
+    {
+      "type": "Agent",
+      "value": {
+        "request": 10,
+        "agent": "claude",
+        "action": {
+          "type": "Install"
+        }
+      }
+    },
+    {
+      "type": "Agent",
+      "value": {
+        "request": 11,
+        "agent": "claude",
+        "action": {
+          "type": "StopInstall"
+        }
+      }
+    },
+    {
+      "type": "Agent",
+      "value": {
+        "request": 12,
+        "agent": "claude",
+        "action": {
+          "type": "SignIn"
+        }
+      }
+    },
+    {
+      "type": "Agent",
+      "value": {
+        "request": 13,
+        "agent": "claude",
+        "action": {
+          "type": "Paste",
+          "value": "code#state"
+        }
+      }
+    },
+    {
+      "type": "Agent",
+      "value": {
+        "request": 14,
+        "agent": "claude",
+        "action": {
+          "type": "StopSignIn"
+        }
+      }
+    },
+    {
+      "type": "Agent",
+      "value": {
+        "request": 15,
+        "agent": "claude",
+        "action": {
+          "type": "SignOut"
+        }
+      }
     }
   ],
   "to_viewer": [
@@ -635,6 +696,57 @@
                       "type": "SessionStuck"
                     }
                   }
+                },
+                {
+                  "id": 41,
+                  "window": {
+                    "start": 1800000000300,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000300
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Note",
+                    "value": {
+                      "type": "NotInstalled"
+                    }
+                  }
+                },
+                {
+                  "id": 42,
+                  "window": {
+                    "start": 1800000000300,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000300
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Note",
+                    "value": {
+                      "type": "InstallFailed"
+                    }
+                  }
+                },
+                {
+                  "id": 43,
+                  "window": {
+                    "start": 1800000000300,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000300
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Note",
+                    "value": {
+                      "type": "SignedIn"
+                    }
+                  }
                 }
               ],
               "imported": false
@@ -1035,6 +1147,15 @@
           {
             "no": 21,
             "change": {
+              "type": "State",
+              "value": {
+                "type": "WaitingForAgent"
+              }
+            }
+          },
+          {
+            "no": 22,
+            "change": {
               "type": "TurnAdded",
               "value": {
                 "id": 30,
@@ -1064,7 +1185,7 @@
             }
           },
           {
-            "no": 22,
+            "no": 23,
             "change": {
               "type": "TurnInserted",
               "value": {
@@ -1109,7 +1230,7 @@
             }
           },
           {
-            "no": 23,
+            "no": 24,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1124,7 +1245,7 @@
             }
           },
           {
-            "no": 24,
+            "no": 25,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1139,7 +1260,7 @@
             }
           },
           {
-            "no": 25,
+            "no": 26,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1154,7 +1275,7 @@
             }
           },
           {
-            "no": 26,
+            "no": 27,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1170,7 +1291,7 @@
             }
           },
           {
-            "no": 27,
+            "no": 28,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1186,7 +1307,7 @@
             }
           },
           {
-            "no": 28,
+            "no": 29,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1202,7 +1323,7 @@
             }
           },
           {
-            "no": 29,
+            "no": 30,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1227,7 +1348,7 @@
             }
           },
           {
-            "no": 30,
+            "no": 31,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1252,7 +1373,7 @@
             }
           },
           {
-            "no": 31,
+            "no": 32,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1277,7 +1398,7 @@
             }
           },
           {
-            "no": 32,
+            "no": 33,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1300,7 +1421,7 @@
             }
           },
           {
-            "no": 33,
+            "no": 34,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1325,7 +1446,7 @@
             }
           },
           {
-            "no": 34,
+            "no": 35,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1350,7 +1471,7 @@
             }
           },
           {
-            "no": 35,
+            "no": 36,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1375,7 +1496,7 @@
             }
           },
           {
-            "no": 36,
+            "no": 37,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1398,7 +1519,7 @@
             }
           },
           {
-            "no": 37,
+            "no": 38,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1423,7 +1544,7 @@
             }
           },
           {
-            "no": 38,
+            "no": 39,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1448,7 +1569,7 @@
             }
           },
           {
-            "no": 39,
+            "no": 40,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1473,7 +1594,7 @@
             }
           },
           {
-            "no": 40,
+            "no": 41,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1496,7 +1617,7 @@
             }
           },
           {
-            "no": 41,
+            "no": 42,
             "change": {
               "type": "ItemAdded",
               "value": {
@@ -1532,7 +1653,7 @@
             }
           },
           {
-            "no": 42,
+            "no": 43,
             "change": {
               "type": "Appended",
               "value": {
@@ -1542,7 +1663,7 @@
             }
           },
           {
-            "no": 43,
+            "no": 44,
             "change": {
               "type": "ToolChanged",
               "value": {
@@ -1565,7 +1686,7 @@
             }
           },
           {
-            "no": 44,
+            "no": 45,
             "change": {
               "type": "ItemEnded",
               "value": {
@@ -1578,7 +1699,7 @@
             }
           },
           {
-            "no": 45,
+            "no": 46,
             "change": {
               "type": "Usage",
               "value": {
@@ -1589,7 +1710,7 @@
             }
           },
           {
-            "no": 46,
+            "no": 47,
             "change": {
               "type": "QuestionAsked",
               "value": {
@@ -1620,7 +1741,7 @@
             }
           },
           {
-            "no": 47,
+            "no": 48,
             "change": {
               "type": "QuestionGone",
               "value": 26
@@ -1634,6 +1755,236 @@
       "value": {
         "chat": 1
       }
+    },
+    {
+      "type": "Agents",
+      "value": [
+        {
+          "name": "agent-0",
+          "install": {
+            "type": "Host"
+          },
+          "sign_in": {
+            "type": "Unknown"
+          }
+        },
+        {
+          "name": "agent-1",
+          "install": {
+            "type": "Unknown"
+          },
+          "sign_in": {
+            "type": "SignedOut"
+          }
+        },
+        {
+          "name": "agent-2",
+          "install": {
+            "type": "Missing",
+            "value": {
+              "size": 626797331
+            }
+          },
+          "sign_in": {
+            "type": "SigningIn",
+            "value": {
+              "url": null,
+              "code": null,
+              "paste": false
+            }
+          }
+        },
+        {
+          "name": "agent-3",
+          "install": {
+            "type": "Installing",
+            "value": {
+              "done": 1000000,
+              "size": 626797331
+            }
+          },
+          "sign_in": {
+            "type": "SigningIn",
+            "value": {
+              "url": "https://claude.com/cai/oauth/authorize",
+              "code": "ABCD-1234",
+              "paste": true
+            }
+          }
+        },
+        {
+          "name": "agent-4",
+          "install": {
+            "type": "Installed",
+            "value": {
+              "version": "0.98.0"
+            }
+          },
+          "sign_in": {
+            "type": "SignedIn",
+            "value": {
+              "type": "Account"
+            }
+          }
+        },
+        {
+          "name": "agent-5",
+          "install": {
+            "type": "Cannot",
+            "value": {
+              "type": "Node",
+              "value": {
+                "needs": 22,
+                "has": 20
+              }
+            }
+          },
+          "sign_in": {
+            "type": "SignedIn",
+            "value": {
+              "type": "ApiKey"
+            }
+          }
+        },
+        {
+          "name": "agent-6",
+          "install": {
+            "type": "Cannot",
+            "value": {
+              "type": "Node",
+              "value": {
+                "needs": 22,
+                "has": null
+              }
+            }
+          },
+          "sign_in": {
+            "type": "SignedIn",
+            "value": {
+              "type": "Gateway"
+            }
+          }
+        },
+        {
+          "name": "agent-7",
+          "install": {
+            "type": "Cannot",
+            "value": {
+              "type": "Npm"
+            }
+          },
+          "sign_in": {
+            "type": "SignedIn",
+            "value": {
+              "type": "Unknown"
+            }
+          }
+        },
+        {
+          "name": "agent-8",
+          "install": {
+            "type": "Cannot",
+            "value": {
+              "type": "Platform"
+            }
+          },
+          "sign_in": {
+            "type": "Unknown"
+          }
+        },
+        {
+          "name": "agent-9",
+          "install": {
+            "type": "Cannot",
+            "value": {
+              "type": "Failed",
+              "value": {
+                "type": "Offline"
+              }
+            }
+          },
+          "sign_in": {
+            "type": "SignedOut"
+          }
+        },
+        {
+          "name": "agent-10",
+          "install": {
+            "type": "Cannot",
+            "value": {
+              "type": "Failed",
+              "value": {
+                "type": "Corrupt"
+              }
+            }
+          },
+          "sign_in": {
+            "type": "SigningIn",
+            "value": {
+              "url": null,
+              "code": null,
+              "paste": false
+            }
+          }
+        },
+        {
+          "name": "agent-11",
+          "install": {
+            "type": "Cannot",
+            "value": {
+              "type": "Failed",
+              "value": {
+                "type": "NoSpace"
+              }
+            }
+          },
+          "sign_in": {
+            "type": "SigningIn",
+            "value": {
+              "url": "https://claude.com/cai/oauth/authorize",
+              "code": "ABCD-1234",
+              "paste": true
+            }
+          }
+        },
+        {
+          "name": "agent-12",
+          "install": {
+            "type": "Cannot",
+            "value": {
+              "type": "Failed",
+              "value": {
+                "type": "Stopped"
+              }
+            }
+          },
+          "sign_in": {
+            "type": "SignedIn",
+            "value": {
+              "type": "Account"
+            }
+          }
+        },
+        {
+          "name": "agent-13",
+          "install": {
+            "type": "Cannot",
+            "value": {
+              "type": "Failed",
+              "value": {
+                "type": "Other",
+                "value": "npm ERR! code EACCES"
+              }
+            }
+          },
+          "sign_in": {
+            "type": "SignedIn",
+            "value": {
+              "type": "ApiKey"
+            }
+          }
+        }
+      ]
     },
     {
       "type": "Done",
@@ -1810,6 +2161,54 @@
           "type": "Refused",
           "value": {
             "type": "NothingToStop"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 17,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "NotInstallable"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 18,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "AlreadyInstalled"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 19,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "CannotSignIn"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 20,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "NotSigningIn"
           }
         }
       }
