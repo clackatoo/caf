@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use self::record::Log;
 use self::state::{Ask, Conn, Ids, Pending, Proc, Run};
-use crate::agent::{AgentSpec, McpServer};
+use crate::agent::{AgentSpec, AgentStatus, McpServer};
 use crate::change::{Change, Mismatch, Read};
 use crate::chat::{AppItem, Chat, NoAppItems, UserMessage};
 use crate::directive::{Directive, Level, Report};
@@ -173,6 +173,16 @@ pub enum Refused {
     WrongAnswer,
     /// There's nothing to stop.
     NothingToStop,
+    /// CAF can't install this agent: the host starts it itself, or it
+    /// can't be installed on this machine.
+    NotInstallable,
+    /// It's installed already.
+    AlreadyInstalled,
+    /// CAF can't sign in to this agent: its profile has no sign-in, or it
+    /// isn't installed yet.
+    CannotSignIn,
+    /// No sign-in is under way for this agent.
+    NotSigningIn,
 }
 
 /// What the host can see of a connection: one adapter process.
@@ -242,8 +252,133 @@ impl<A: AppItem> Core<A> {
             Event::Woken => self.woken(now, out),
             Event::Policy { ticket, answer } => self.policy_answered(now, ticket, answer, out),
             Event::Storage(storage) => match storage {},
+            Event::Setup { ticket, event } => {
+                let _ = (ticket, event);
+                todo!("feature 3")
+            }
         }
         self.finish(now, out);
+    }
+
+    /// Looks at what's installed and what the machine has (Node, npm, its
+    /// platform). Call it when CAF starts, and again whenever the user may
+    /// have changed something, such as installing Node. Until the answer
+    /// comes, every installed-by-CAF agent's state is
+    /// [`InstallState::Unknown`](crate::agent::InstallState::Unknown).
+    pub fn check_agents(&mut self, now: Now, out: &mut Vec<Directive>) {
+        let _ = (now, out);
+        todo!()
+    }
+
+    /// Where every agent stands: installed or not, signed in or not, in
+    /// the order the host offered them.
+    #[must_use]
+    pub fn agents(&self) -> Vec<AgentStatus> {
+        todo!()
+    }
+
+    /// Installs an agent CAF installs itself, at the version its profile
+    /// was checked at. Chats waiting for it start once it's done, or are
+    /// told why it failed. Installing one already being installed does
+    /// nothing more.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::NoSuchAgent`]; [`Refused::NotInstallable`] if the host
+    /// starts it itself, or it can't be installed on this machine;
+    /// [`Refused::AlreadyInstalled`].
+    pub fn install(
+        &mut self,
+        now: Now,
+        agent: &AgentName,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
+        let _ = (now, agent, out);
+        todo!()
+    }
+
+    /// Stops installing an agent. Chats waiting for it have their waiting
+    /// messages stopped, with a note saying it wasn't installed.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::NoSuchAgent`], or [`Refused::NothingToStop`].
+    pub fn stop_install(
+        &mut self,
+        now: Now,
+        agent: &AgentName,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
+        let _ = (now, agent, out);
+        todo!()
+    }
+
+    /// Starts signing in to an agent, with its profile's own sign-in,
+    /// never one the agent suggests. Its state becomes
+    /// [`SignInState::SigningIn`](crate::agent::SignInState::SigningIn),
+    /// with the link once the command gives it. What a failed turn's
+    /// [`Remedy::SignIn`](crate::chat::Remedy::SignIn) does.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::NoSuchAgent`]; [`Refused::CannotSignIn`] if its profile
+    /// has no sign-in, or it isn't installed yet.
+    pub fn sign_in(
+        &mut self,
+        now: Now,
+        agent: &AgentName,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
+        let _ = (now, agent, out);
+        todo!()
+    }
+
+    /// Gives a sign-in under way what the user pasted, such as the code a
+    /// sign-in page on another machine showed them.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::NoSuchAgent`], or [`Refused::NotSigningIn`].
+    pub fn paste(
+        &mut self,
+        now: Now,
+        agent: &AgentName,
+        text: String,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
+        let _ = (now, agent, text, out);
+        todo!()
+    }
+
+    /// Stops a sign-in under way.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::NoSuchAgent`], or [`Refused::NotSigningIn`].
+    pub fn stop_sign_in(
+        &mut self,
+        now: Now,
+        agent: &AgentName,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
+        let _ = (now, agent, out);
+        todo!()
+    }
+
+    /// Signs out of an agent, with its profile's own command.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::NoSuchAgent`], or [`Refused::CannotSignIn`] if its
+    /// profile has no way to sign out.
+    pub fn sign_out(
+        &mut self,
+        now: Now,
+        agent: &AgentName,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
+        let _ = (now, agent, out);
+        todo!()
     }
 
     /// Opens a chat, and returns its id. Its agent is started, or its
@@ -436,6 +571,13 @@ impl<A: AppItem> Core<A> {
                 self.shut_down(now, out);
                 Ok(())
             }
+            HostCommand::CheckAgents
+            | HostCommand::Install(_)
+            | HostCommand::StopInstall(_)
+            | HostCommand::SignIn(_)
+            | HostCommand::Paste { .. }
+            | HostCommand::StopSignIn(_)
+            | HostCommand::SignOut(_) => todo!("feature 3"),
             HostCommand::AddAppItem(_) => {
                 report(
                     out,

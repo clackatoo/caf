@@ -59,6 +59,13 @@ pub struct ViewerRules {
     /// Watching a chat over again doesn't count, and a chat that has
     /// ended, or was unwatched, makes room for another.
     pub max_watches: usize,
+    /// Whether viewers may install agents, and sign in and out of them.
+    /// `false` by default: an install is hundreds of megabytes, and a
+    /// sign-in decides whose account the agent uses, so a host opts in.
+    /// Refused requests get [`Outcome::NotAllowed`].
+    ///
+    /// [`Outcome::NotAllowed`]: caf_core::viewer::Outcome::NotAllowed
+    pub agents: bool,
 }
 
 impl Default for ViewerRules {
@@ -67,6 +74,7 @@ impl Default for ViewerRules {
             open: Box::new(|_| None),
             act: true,
             max_watches: 256,
+            agents: false,
         }
     }
 }

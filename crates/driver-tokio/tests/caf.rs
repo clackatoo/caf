@@ -76,7 +76,7 @@ fn fake(dir: &Dir, script: &Path) -> AgentSpec {
             dir.path("record.jsonl").into(),
         ),
     ];
-    AgentSpec::new("fake", command, ProfileChoice::Cautious)
+    AgentSpec::command("fake", command, ProfileChoice::Cautious)
 }
 
 /// The fake started by a shell that runs it as it is told: for tests
@@ -88,7 +88,7 @@ fn fake_by_shell(dir: &Dir, shell: &str) -> AgentSpec {
         EnvChange::Set("FAKE".into(), caf_fake_agent::binary().into()),
         EnvChange::Set("DIR".into(), dir.0.clone().into()),
     ];
-    AgentSpec::new("fake", command, ProfileChoice::Cautious)
+    AgentSpec::command("fake", command, ProfileChoice::Cautious)
 }
 
 /// A host for tests: an adapter that has gone is waited for briefly.

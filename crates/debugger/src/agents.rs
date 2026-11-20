@@ -81,7 +81,7 @@ fn parse(text: &str, path: Option<&std::ffi::OsStr>) -> Result<Vec<AgentSpec>, S
             Profile::ClaudeAgentAcp => ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
             Profile::Cautious => ProfileChoice::Cautious,
         };
-        agents.push(AgentSpec::new(agent.name, command, profile));
+        agents.push(AgentSpec::command(agent.name, command, profile));
     }
     if agents.is_empty() {
         return Err("it names no agents".into());
@@ -97,7 +97,7 @@ pub fn found(fake: Option<&Path>, script: &Path) -> Vec<AgentSpec> {
     let mut agents = Vec::new();
     let path = std::env::var_os("PATH");
     if let Some(claude) = locate(Path::new(CLAUDE_ADAPTER), path.as_deref()) {
-        agents.push(AgentSpec::new(
+        agents.push(AgentSpec::command(
             "claude",
             SpawnCommand::new(claude),
             ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
@@ -106,7 +106,7 @@ pub fn found(fake: Option<&Path>, script: &Path) -> Vec<AgentSpec> {
     if let Some(fake) = fake {
         let mut command = SpawnCommand::new(fake);
         command.args = vec![script.as_os_str().to_owned()];
-        agents.push(AgentSpec::new("fake", command, ProfileChoice::Cautious));
+        agents.push(AgentSpec::command("fake", command, ProfileChoice::Cautious));
     }
     agents
 }

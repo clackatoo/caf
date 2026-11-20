@@ -374,7 +374,7 @@ pub(crate) fn every_type(s: &mut Samples) {
     s.both(&Limits::default());
     s.both(&Timers::default());
     // agent
-    let agent = AgentSpec::new("claude", command(), ProfileChoice::Cautious);
+    let agent = AgentSpec::command("claude", command(), ProfileChoice::Cautious);
     s.both(&agent);
     s.both(&command());
     s.both(&EnvChange::Remove("HOME".into()));
@@ -755,7 +755,7 @@ fn traces_with(s: &mut Samples, live: &str) {
 
     // The core tests' own recording, as the harness gives it: its ids
     // start at 1000.
-    let agents = vec![AgentSpec::new(
+    let agents = vec![AgentSpec::command(
         "claude",
         SpawnCommand::new("/opt/caf/claude-agent-acp"),
         ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),

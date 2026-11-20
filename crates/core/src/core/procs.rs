@@ -16,6 +16,7 @@ use super::clean::agent_text;
 use super::frames::Reply;
 use super::state::{Caps, Conn, Ending, Gone, Group, Init, Open, Proc, Purpose, Step};
 use super::{Core, report};
+use crate::agent::Launch;
 use crate::chat::{AppItem, Incompatible, Lost};
 use crate::directive::{AgentDirective, Directive, Level, Signal};
 use crate::event::AgentEvent;
@@ -178,7 +179,11 @@ impl<A: AppItem> Core<A> {
         each.current = Some(proc);
         out.push(Directive::Agent(AgentDirective::Start {
             process: proc,
-            command: spec.command.clone(),
+            command: match &spec.launch {
+                Launch::Command(command) => command.clone(),
+                Launch::Installed => todo!("feature 3: start from CAF's install"),
+            },
+            hold: None,
         }));
         let params = json!({
             "protocolVersion": PROTOCOL_VERSION,

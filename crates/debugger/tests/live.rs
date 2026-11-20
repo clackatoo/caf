@@ -179,7 +179,7 @@ impl Debugger {
         let script = fake::write(&dir.0).unwrap();
         let mut command = SpawnCommand::new(caf_fake_agent::binary());
         command.args = vec![script.into_os_string()];
-        let agents = vec![AgentSpec::new("fake", command, ProfileChoice::Cautious)];
+        let agents = vec![AgentSpec::command("fake", command, ProfileChoice::Cautious)];
         let recording = dir.0.join("run.jsonl");
         let live = live::start(agents, Some(recording.clone()));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -577,7 +577,7 @@ async fn the_recording_check_passes_with_secrets_the_recording_hides() {
     let mut command = SpawnCommand::new(caf_fake_agent::binary());
     command.args = vec![script.into_os_string()];
     command.env = vec![EnvChange::Set("AGENT_SECRET".into(), "s3cret-agent".into())];
-    let agents = vec![AgentSpec::new("fake", command, ProfileChoice::Cautious)];
+    let agents = vec![AgentSpec::command("fake", command, ProfileChoice::Cautious)];
     let recording = dir.0.join("run.jsonl");
     let live = live::start(agents, Some(recording.clone()));
     assert_eq!(live.recording.as_ref(), Some(&recording));
@@ -651,7 +651,7 @@ async fn a_recording_that_couldnt_be_made_is_none() {
     let script = fake::write(&dir.0).unwrap();
     let mut command = SpawnCommand::new(caf_fake_agent::binary());
     command.args = vec![script.into_os_string()];
-    let agents = vec![AgentSpec::new("fake", command, ProfileChoice::Cautious)];
+    let agents = vec![AgentSpec::command("fake", command, ProfileChoice::Cautious)];
     let live = live::start(agents, Some(dir.0.join("no/such/folder/run.jsonl")));
     assert!(live.recording.is_none());
     assert!(live.book.file.is_none(), "Hello says there's none");

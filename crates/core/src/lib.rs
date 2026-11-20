@@ -143,6 +143,7 @@ pub mod event;
 mod fixtures;
 pub mod host;
 pub mod ids;
+pub mod install;
 #[cfg(test)]
 mod kinds;
 pub mod profiles;

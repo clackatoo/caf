@@ -64,7 +64,7 @@ pub fn fake(dir: &Dir, script: &Path) -> AgentSpec {
             dir.path("record.jsonl").into(),
         ),
     ];
-    AgentSpec::new("fake", command, ProfileChoice::Cautious)
+    AgentSpec::command("fake", command, ProfileChoice::Cautious)
 }
 
 /// A host for tests: an adapter that has gone is waited for briefly.

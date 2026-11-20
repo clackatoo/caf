@@ -4,7 +4,7 @@
 //! send messages, and watch them change.
 //!
 //! ```ignore
-//! let claude = AgentSpec::new(
+//! let claude = AgentSpec::command(
 //!     "claude",
 //!     SpawnCommand::new("/home/me/.local/share/caf/agents/claude-0.98.0/bin/claude-agent-acp"),
 //!     ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
@@ -75,12 +75,14 @@
 mod agent;
 mod caf;
 mod policy;
+mod setup;
 mod steps;
 mod timer;
 pub mod viewer;
 
 pub use agent::{AgentDriver, AgentLimits};
-pub use caf::{Caf, ChatHandle, ChatsWatch, Config, Error, Running, Update, Watch};
+pub use caf::{AgentsWatch, Caf, ChatHandle, ChatsWatch, Config, Error, Running, Update, Watch};
 pub use policy::{AlwaysAsk, Policy, RefuseAll};
+pub use setup::SetupDriver;
 pub use steps::{Step, Steps};
 pub use timer::TimerDriver;

@@ -210,7 +210,9 @@ impl AgentDriver {
     /// its I/O and time drivers enabled.
     pub fn apply(&mut self, directive: AgentDirective) {
         let (process, order) = match directive {
-            AgentDirective::Start { process, command } => {
+            AgentDirective::Start {
+                process, command, ..
+            } => {
                 debug_assert!(
                     !self.processes.contains_key(&process),
                     "a ticket was used twice"

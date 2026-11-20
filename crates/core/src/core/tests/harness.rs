@@ -69,12 +69,12 @@ pub(crate) struct Script {
 pub(crate) fn agents() -> Vec<AgentSpec> {
     let claude = SpawnCommand::new("/opt/caf/claude-agent-acp");
     vec![
-        AgentSpec::new(
+        AgentSpec::command(
             "claude",
             claude,
             ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
         ),
-        AgentSpec::new(
+        AgentSpec::command(
             "plain",
             SpawnCommand::new("/opt/caf/plain-acp"),
             ProfileChoice::Cautious,

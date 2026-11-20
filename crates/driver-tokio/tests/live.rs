@@ -93,7 +93,7 @@ async fn claude_answers_and_stops() {
 
     let mut command = SpawnCommand::new(adapter());
     command.env = vec![EnvChange::Set("ANTHROPIC_MODEL".into(), "haiku".into())];
-    let claude = AgentSpec::new(
+    let claude = AgentSpec::command(
         "claude",
         command,
         ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),

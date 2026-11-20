@@ -126,6 +126,11 @@ pub enum ChatState {
     },
     /// Closed by the host. Nothing more happens to it.
     Closed,
+    /// Waiting for its agent: to be installed, or signed in to. Where the
+    /// agent stands is in its [`AgentStatus`](crate::agent::AgentStatus);
+    /// a view shows that, with Install or Sign in. Messages sent now wait,
+    /// and stopping the chat stops them, with a note.
+    WaitingForAgent,
 }
 
 /// Why a chat lost its session.
@@ -488,6 +493,15 @@ pub enum Note {
     /// was opened rather than continue it: it remembers nothing from
     /// before.
     SessionStuck,
+    /// The agent isn't installed, and the user chose not to install it now,
+    /// so the message that waited for it was stopped.
+    NotInstalled,
+    /// The agent's install failed, so the message that waited for it was
+    /// stopped. Why is in the agent's status.
+    InstallFailed,
+    /// The user signed in to the agent. A turn that failed for want of it
+    /// can be sent again.
+    SignedIn,
 }
 
 /// Something the agent sent that CAF couldn't read.

@@ -39,7 +39,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use caf_core::acp::{Frame, Message};
-use caf_core::agent::{AgentSpec, EnvChange, McpServer};
+use caf_core::agent::AgentStatus;
+use caf_core::agent::{AgentSpec, EnvChange, Launch, McpServer};
 use caf_core::chat::{ChatState, UserMessage};
 use caf_core::directive::{Level, PolicyDirective, TimerDirective, ViewerDirective};
 use caf_core::event::{AgentEvent, HostCommand, PolicyAnswer};
@@ -113,6 +114,10 @@ pub struct Config {
     /// the file with `{"stopped": …}`. Either way, what's in the file still
     /// replays, as far as it goes.
     pub record: Option<PathBuf>,
+    /// The folder agents CAF installs live in, shared by every CAF program
+    /// on the machine. `None` (the default) means
+    /// [`SetupDriver::default_root`](crate::SetupDriver::default_root).
+    pub installs: Option<PathBuf>,
 }
 
 impl Config {
@@ -126,6 +131,7 @@ impl Config {
             policy: Box::new(AlwaysAsk),
             agent_limits: AgentLimits::default(),
             record: None,
+            installs: None,
         }
     }
 }
@@ -408,6 +414,100 @@ impl<A: AppItem> Caf<A> {
         &self.shared.run
     }
 
+    /// Follows where every agent stands, installed or not and signed in or
+    /// not: the whole list at once, then again each time any of it
+    /// changes. CAF looks at what's installed as it starts.
+    #[must_use]
+    pub fn watch_agents(&self) -> AgentsWatch {
+        todo!()
+    }
+
+    /// Looks again at what's installed and what the machine has, such as
+    /// after the user installed Node. See [`Core::check_agents`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Gone`].
+    ///
+    /// [`Core::check_agents`]: caf_core::Core::check_agents
+    pub async fn check_agents(&self) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Installs an agent. See [`Core::install`]; progress shows in
+    /// [`Caf::watch_agents`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::install`]: caf_core::Core::install
+    pub async fn install(&self, agent: &AgentName) -> Result<(), Error> {
+        let _ = agent;
+        todo!()
+    }
+
+    /// Stops installing an agent. See [`Core::stop_install`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::stop_install`]: caf_core::Core::stop_install
+    pub async fn stop_install(&self, agent: &AgentName) -> Result<(), Error> {
+        let _ = agent;
+        todo!()
+    }
+
+    /// Starts signing in to an agent. See [`Core::sign_in`]; the link to
+    /// show shows in [`Caf::watch_agents`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::sign_in`]: caf_core::Core::sign_in
+    pub async fn sign_in(&self, agent: &AgentName) -> Result<(), Error> {
+        let _ = agent;
+        todo!()
+    }
+
+    /// Gives a sign-in what the user pasted. See [`Core::paste`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::paste`]: caf_core::Core::paste
+    pub async fn paste(&self, agent: &AgentName, text: String) -> Result<(), Error> {
+        let _ = (agent, text);
+        todo!()
+    }
+
+    /// Stops a sign-in. See [`Core::stop_sign_in`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::stop_sign_in`]: caf_core::Core::stop_sign_in
+    pub async fn stop_sign_in(&self, agent: &AgentName) -> Result<(), Error> {
+        let _ = agent;
+        todo!()
+    }
+
+    /// Signs out of an agent. See [`Core::sign_out`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::sign_out`]: caf_core::Core::sign_out
+    pub async fn sign_out(&self, agent: &AgentName) -> Result<(), Error> {
+        let _ = agent;
+        todo!()
+    }
+
     /// Follows which chats are open, with each one's agent and folder.
     #[must_use]
     pub fn watch_chats(&self) -> ChatsWatch {
@@ -591,6 +691,24 @@ impl<A: AppItem> Drop for Watch<A> {
                 last.watched.remove(&self.chat);
             }
         }
+    }
+}
+
+/// Follows where every agent stands. Like [`Watch`], it doesn't keep CAF
+/// running.
+pub struct AgentsWatch {
+    _todo: (),
+}
+
+impl AgentsWatch {
+    /// Every agent's status, in the order they were offered: at once the
+    /// first time, then each time any changes. If they change more than
+    /// once between calls, only the latest is given. `None` once CAF has
+    /// shut down.
+    ///
+    /// Cancel-safe: dropped before it resolves, it loses nothing.
+    pub async fn next(&mut self) -> Option<Vec<AgentStatus>> {
+        todo!()
     }
 }
 
@@ -1375,8 +1493,10 @@ impl Recorder {
         let agents = (agents.iter())
             .map(|agent| {
                 let mut agent = agent.clone();
-                agent.command.args.clear();
-                hide_values(&mut agent.command.env);
+                if let Launch::Command(command) = &mut agent.launch {
+                    command.args.clear();
+                    hide_values(&mut command.env);
+                }
                 agent
             })
             .collect();
@@ -1632,7 +1752,7 @@ mod tests {
         use caf_core::agent::SpawnCommand;
         use caf_core::directive::AgentDirective;
         use caf_core::profiles::ProfileChoice;
-        let agents = vec![AgentSpec::new(
+        let agents = vec![AgentSpec::command(
             "plain",
             SpawnCommand::new("/opt/plain"),
             ProfileChoice::Cautious,
