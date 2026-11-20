@@ -9,7 +9,8 @@
 //! `--2`, and so on.
 //!
 //! `CAF_BLESS=1 cargo test -p caf-core` writes them. Without
-//! `CAF_BLESS`, a test fails if any is stale, missing or extra.
+//! `CAF_BLESS`, a test fails if any is stale, missing or extra, and
+//! they're checked against `ChatCopy`.
 //! [`every_fixture_is_followed_by_a_chat_copy`] runs them through Rust's
 //! [`ChatCopy`].
 //!
@@ -194,12 +195,13 @@ fn names(folder: &Path) -> Vec<String> {
 )]
 fn test_exists(fixture: &str) -> bool {
     let test = fixture.split("--").next().unwrap_or_default();
-    let Some((module, function)) = test.rsplit_once('.') else {
-        return false;
+    let (file, function) = match test.rsplit_once('.') {
+        Some((module, function)) => (format!("{}.rs", module.replace('.', "/")), function),
+        None => ("mod.rs".to_owned(), test),
     };
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src/core/tests")
-        .join(format!("{}.rs", module.replace('.', "/")));
+        .join(file);
     std::fs::read_to_string(source).is_ok_and(|text| text.contains(&format!("fn {function}()")))
 }
 
@@ -225,6 +227,11 @@ fn every_fixture_is_followed_by_a_chat_copy() {
             }
             panic!("fixtures/apply/{name} is no test's: run `{BLESS}`");
         }
+        if blessing() {
+            // Other tests may be rewriting their fixtures as this reads:
+            // they're checked on the next run.
+            continue;
+        }
         let text = std::fs::read_to_string(folder.join(&name)).expect("a fixture reads");
         let fixture: Fixture = serde_json::from_str(&text).expect("a fixture parses");
         let Picture { chat, latest } = fixture.picture;
@@ -244,8 +251,8 @@ fn every_fixture_is_followed_by_a_chat_copy() {
         whole.take(&changes).expect("and again, as a repeat");
         assert_eq!(whole, copy, "{name}: all at once");
     }
-    assert_eq!(
-        kinds, [true; CHANGES],
-        "the fixtures hold every kind of change"
+    assert!(
+        blessing() || kinds == [true; CHANGES],
+        "the fixtures hold every kind of change: {kinds:?}"
     );
 }

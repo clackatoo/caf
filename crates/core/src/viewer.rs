@@ -297,10 +297,10 @@ impl<A: AppItem> ChatCopy<A> {
     ///
     /// # Errors
     ///
-    /// [`NeedPicture`] if a change is missing before the first new one,
-    /// or one doesn't fit the chat ([`Chat::apply`]). The copy keeps the
-    /// changes it applied before then, and is behind: ask for the chat
-    /// whole again.
+    /// [`NeedPicture`] if a change is missing, before the first new one
+    /// or between two, or one doesn't fit the chat ([`Chat::apply`]). The
+    /// copy keeps the changes it applied before then, and is behind: ask
+    /// for the chat whole again.
     pub fn take(&mut self, changes: &[Numbered<A>]) -> Result<(), NeedPicture> {
         for each in changes {
             if each.no <= self.latest {
