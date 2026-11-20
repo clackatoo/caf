@@ -101,6 +101,13 @@ impl Default for ViewerRules {
 /// already taken from it, if any, has been answered, so a host whose
 /// transport breaks should drop `to`'s receiver too.
 ///
+/// Right after the welcome comes [`ToViewer::Agents`], every agent's
+/// status, and again each time any of it changes: only the latest, if it
+/// changes faster than the viewer reads. A request to install an agent,
+/// or sign in or out of one ([`FromViewer::Agent`]), is done only if
+/// [`ViewerRules::agents`] allows it, and otherwise answered
+/// [`Outcome::NotAllowed`].
+///
 /// Every request gets exactly one [`ToViewer::Done`], unless the link
 /// ends first: one made while CAF shuts down is answered
 /// [`Outcome::Gone`].
