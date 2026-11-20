@@ -295,6 +295,8 @@ fn every_fixture_is_followed_by_a_chat_copy() {
         let mut copy = ChatCopy::new(chat.clone(), latest);
         let last = fixture.steps.len().saturating_sub(1);
         let mut misfits = false;
+        // The chat before this step: the picture's, then each step's.
+        let mut previous = chat.clone();
         for (at, step) in fixture.steps.iter().enumerate() {
             seen.change(&step.change.change);
             let take = copy.take(std::slice::from_ref(&step.change));
@@ -303,14 +305,19 @@ fn every_fixture_is_followed_by_a_chat_copy() {
                     assert_eq!(take, Ok(()), "{name}, step {at}");
                     assert_eq!(copy.latest(), step.change.no, "{name}, step {at}");
                     assert_eq!(copy.chat(), after, "{name}, step {at}");
+                    previous = after.clone();
                 }
                 (None, Some(mismatch)) => {
                     assert_eq!(at, last, "{name}: a mismatch is the last step");
                     assert_eq!(take, Err(NeedPicture), "{name}, step {at}");
-                    let before = copy.chat().clone();
-                    let mut bare = before.clone();
+                    assert_eq!(
+                        copy.chat(),
+                        &previous,
+                        "{name}, step {at}: the copy is as it was"
+                    );
+                    let mut bare = previous.clone();
                     assert_eq!(bare.apply(&step.change.change).as_ref(), Err(mismatch));
-                    assert_eq!(bare, before, "{name}, step {at}: the chat is as it was");
+                    assert_eq!(bare, previous, "{name}, step {at}: the chat is as it was");
                     assert_eq!(copy.latest().0 + 1, step.change.no.0, "{name}: not a gap");
                     seen.mark(mismatch);
                     misfits = true;

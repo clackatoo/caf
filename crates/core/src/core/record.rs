@@ -89,7 +89,7 @@ impl<A: AppItem> Core<A> {
                 "chat {}: {change:?} doesn't fit: {mismatch:?}",
                 chat.0
             );
-            self.misfits.push((chat, mismatch));
+            self.misfits.push((chat, change, mismatch));
             return;
         }
         log.push(change, self.host.limits.kept_changes);

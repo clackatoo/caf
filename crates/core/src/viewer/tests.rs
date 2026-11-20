@@ -93,3 +93,21 @@ fn a_new_picture_replaces_the_copy() {
     assert_eq!(copy.chat(), &fresh);
     assert_eq!(copy.take(&[bang(6), bang(40)]), Ok(()), "all had already");
 }
+
+/// A picture numbered lower than the copy, as after CAF restarts and
+/// numbers its changes again, replaces it too: the copy goes on from the
+/// picture's number, not its old one.
+#[test]
+fn a_lower_picture_starts_the_numbering_again() {
+    let mut copy = copy();
+    copy.take(&[bang(6), bang(7)]).expect("they follow");
+    let mut old = copy.clone();
+    assert_eq!(old.take(&[bang(4)]), Ok(()));
+    assert_eq!(old, copy, "change 4 is one the copy had");
+    copy = ChatCopy::new(chat(), ChangeNo(3));
+    assert_eq!(copy.latest(), ChangeNo(3));
+    assert_eq!(copy.take(&[bang(4)]), Ok(()), "change 4 is new now");
+    assert_eq!(copy.latest(), ChangeNo(4));
+    assert_eq!(copy.take(&[bang(3), bang(4)]), Ok(()), "both had already");
+    assert_eq!(words(&copy), &ItemKind::Words("On it.!".into()));
+}

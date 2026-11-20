@@ -23,9 +23,9 @@
 //!
 //! # Opening is the host's decision
 //!
-//! A viewer never sends an [`OpenChat`]: its MCP servers are programs to
-//! run, so a viewer that could send one could run programs on the
-//! machine. It sends an [`OpenRequest`] (an agent CAF offered, a folder,
+//! A viewer never sends an [`OpenChat`]: an MCP server may be a program
+//! to run on the machine, or a server reached with secret headers, so a
+//! viewer that could send one could run or reach anything. It sends an [`OpenRequest`] (an agent CAF offered, a folder,
 //! a new session or one to continue), and the host turns it into an
 //! `OpenChat` or refuses with [`Outcome::NotAllowed`].
 //!

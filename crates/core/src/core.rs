@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use self::record::Log;
 use self::state::{Ask, Conn, Ids, Pending, Proc, Run};
 use crate::agent::{AgentSpec, McpServer};
-use crate::change::{Mismatch, Read};
+use crate::change::{Change, Mismatch, Read};
 use crate::chat::{AppItem, Chat, NoAppItems, UserMessage};
 use crate::directive::{Directive, Level, Report};
 use crate::event::{Event, HostCommand};
@@ -37,6 +37,9 @@ use crate::ids::{
 use crate::profiles::ProfileReport;
 use crate::question::Answer;
 use crate::time::{Mono, Now};
+
+/// The most of a change that didn't fit that's reported, in bytes.
+const MOST_MISFIT: usize = 1024;
 
 /// CAF's core: every chat's state, and the rules that change it.
 ///
@@ -78,9 +81,9 @@ pub struct Core<A: AppItem = NoAppItems> {
     /// The host asked for everything to stop: nothing is started again
     /// until it asks for something new.
     shutting_down: bool,
-    /// Changes that didn't fit their chat's record since the call began:
-    /// bugs, reported when it ends.
-    misfits: Vec<(ChatId, Mismatch)>,
+    /// Changes that didn't fit their chat's record since the call began,
+    /// and why: bugs, reported when it ends with what they said.
+    misfits: Vec<(ChatId, Change<A>, Mismatch)>,
     /// What tests saw of each chat's record, change by change.
     #[cfg(test)]
     applied: BTreeMap<ChatId, record::Applied<A>>,
@@ -443,12 +446,14 @@ impl<A: AppItem> Core<A> {
     /// when to wake the core next.
     fn finish(&mut self, now: Now, out: &mut Vec<Directive>) {
         self.advance_all(now, out);
-        for (chat, mismatch) in std::mem::take(&mut self.misfits) {
+        for (chat, change, mismatch) in std::mem::take(&mut self.misfits) {
+            // What it said may be the agent's, and long.
+            let change = clean::agent_text(&format!("{change:?}"), MOST_MISFIT);
             report(
                 out,
                 Level::Warn,
                 format!(
-                    "a bug in CAF: a change to chat {} didn't fit its record, and was dropped: {mismatch:?}",
+                    "a bug in CAF: a change to chat {} didn't fit its record, and was dropped: {mismatch:?}: {change}",
                     chat.0
                 ),
             );
@@ -474,7 +479,9 @@ impl<A: AppItem> Core<A> {
 
     /// Everything the core keeps, as JSON: every chat and its numbered
     /// changes, connections, processes, requests waiting for answers,
-    /// questions, timers. For debugging tools, such as `caf-debugger`.
+    /// questions, timers, whether it's shutting down, and the host and
+    /// agents it was made with. For debugging tools, such as
+    /// `caf-debugger`.
     ///
     /// **No stability promise:** its shape changes without notice, in any
     /// release. Apps never use it; what they need is in [`Core::chat`],
@@ -483,6 +490,8 @@ impl<A: AppItem> Core<A> {
     /// Readings of the steady clock ([`Mono`](crate::time::Mono)) are
     /// nanoseconds, and pass 2^53 after about 104 days of the host running,
     /// so a JavaScript reader may round them.
+    ///
+    /// Needs the feature `inspect`.
     #[cfg(any(test, feature = "inspect"))]
     #[must_use]
     pub fn inspect(&self) -> serde_json::Value {
@@ -499,6 +508,10 @@ impl<A: AppItem> Core<A> {
             "asks": self.asks,
             "wake": self.wake,
             "next_id": self.ids.next,
+            "first_id": self.ids.first,
+            "shutting_down": self.shutting_down,
+            "host": self.host,
+            "agents": self.agents,
         })
     }
 }

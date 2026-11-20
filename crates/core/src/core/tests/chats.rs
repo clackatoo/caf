@@ -3,14 +3,14 @@
 
 use serde_json::json;
 
-use super::harness::{Script, agents, assert_has, host, includes, render, sent, with};
+use super::harness::{FIRST, Script, agents, assert_has, host, includes, render, sent, with};
 use super::{CHAT, PROC, SESSION, claude_init};
 use crate::agent::{EnvChange, McpServer, SpawnCommand};
 use crate::change::{Change, Read};
 use crate::chat::{Part, UserMessage};
 use crate::core::{Core, OpenChat, Refused};
 use crate::event::Event;
-use crate::ids::{ChangeNo, ChatId, QuestionId};
+use crate::ids::{ChangeNo, ChatId, ItemId};
 
 fn words(text: &str) -> serde_json::Value {
     json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": text } })
@@ -317,17 +317,25 @@ fn viewers_read_changes_or_the_whole_chat() {
 /// A change that doesn't fit its chat's record is a bug in the core, so
 /// nothing outside can cause one: this one is made by hand. It fails a
 /// debug assertion; in release, it's dropped, and reported when the call
-/// ends.
+/// ends, with what it said, capped. CI runs it in release too.
 #[test]
 #[cfg_attr(debug_assertions, should_panic(expected = "doesn't fit"))]
 fn a_change_that_doesnt_fit_is_dropped_and_reported() {
     // A bare core: a script's replay wouldn't have the change made by hand.
-    let mut core: Core = Core::new(host(), agents());
+    let mut core: Core = Core::starting_ids_at(host(), agents(), FIRST);
     let now = crate::shape::now();
     let mut out = Vec::new();
     let chat = (core.open_chat(now, OpenChat::new("claude", "/work"), &mut out)).expect("opened");
+    assert_eq!(chat, CHAT);
     let before = core.inspect();
-    core.record(chat, Change::QuestionGone(QuestionId(99)));
+    let said = format!("the agent's words{}", "!".repeat(10_000));
+    core.record(
+        chat,
+        Change::Appended {
+            item: ItemId(99),
+            text: said,
+        },
+    );
     assert_eq!(
         core.inspect(),
         before,
@@ -339,12 +347,12 @@ fn a_change_that_doesnt_fit_is_dropped_and_reported() {
         .filter(|each| includes(each, &json!({ "report": "Warn" })))
         .collect();
     assert_eq!(reports.len(), 1, "{out:#?}");
-    assert!(
-        reports[0]["message"]
-            .as_str()
-            .is_some_and(|message| message.starts_with("a bug in CAF")),
-        "{reports:#?}"
-    );
+    let message = reports[0]["message"].as_str().expect("a message");
+    assert!(message.starts_with("a bug in CAF"), "{message}");
+    assert!(message.contains("NoItem"), "{message}");
+    assert!(message.contains("Appended"), "{message}");
+    assert!(message.contains("the agent's words"), "{message}");
+    assert!(message.len() < 2000, "capped: {} bytes", message.len());
     assert!(with(&out.iter().map(render).collect::<Vec<_>>(), "changed").is_empty());
 }
 

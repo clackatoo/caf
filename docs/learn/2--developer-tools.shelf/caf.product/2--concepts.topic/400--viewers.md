@@ -29,7 +29,8 @@ MessagePack with field names; TypeScript sends them as JSON.
 4. It may act on them: send a message, stop a turn, answer a question, close
    a chat, or ask to open one. Each request carries a number the viewer
    chose, and CAF quotes it back with how it went: done, refused with the
-   core's reason, or not allowed by the host.
+   core's reason, not allowed by the host, or not done because CAF has
+   shut down.
 
 ## Pictures and changes
 
@@ -66,9 +67,11 @@ and asks for a picture when a change is missing or doesn't fit, keeping what
 it applied before then.
 
 Every SDK's `apply` must turn the same changes into the same chat. The
-**conformance fixtures** in `fixtures/apply/` check it: each is one chat from
-CAF's tests or recorded sessions, as the core saw it before its first change,
-then each change and the chat after it.
+**conformance fixtures** in `fixtures/apply/` check it. Each is one chat
+from CAF's tests or recorded sessions, as the core saw it before its first
+change, then each change and the chat after it. Some end in a change that
+doesn't fit, with how it doesn't, so every SDK refuses the same changes
+too.
 
 ## Versions
 
@@ -96,8 +99,9 @@ A viewer can't open a chat by itself. It asks, with an agent CAF offered, a
 folder, and a new session or one to continue, and the **host**, the program
 running CAF, decides.
 
-That's because opening a chat starts programs. The full request to open a
-chat includes the chat's MCP servers, the tools the agent is given, and each
-of those is a command to run on the machine. A viewer may be a web page, and
-a web page that could send one could run anything. So the host turns a
-viewer's request into a chat with the tools it chooses, or refuses it.
+That's because of what opening a chat can do. The full request to open a
+chat includes the chat's MCP servers, the tools the agent is given. An MCP
+server may be a program to run on the machine, or a server reached with
+secret headers. A viewer may be a web page, and a web page that could send
+one could run anything, or reach anything. So the host turns a viewer's
+request into a chat with the tools it chooses, or refuses it.
