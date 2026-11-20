@@ -1,6 +1,7 @@
 // `npm run dev`'s proxy to caf-debugger. The server only takes requests
-// from its own origin, so the dev server passes on its own page's as if
-// they came from there. Anything else goes as it came, for the server to
+// from its own origin and for its own Host, so the dev server passes on
+// its own page's as if they came from there, and always names the
+// server's Host (`changeOrigin`). Anything else goes as it came, for the server to
 // refuse: rewriting every Origin would let any website reach caf-debugger
 // through the dev server, with only the token to stop it.
 
@@ -28,6 +29,9 @@ export function route(server: string) {
   return {
     target: server,
     ws: true,
+    // The Host header becomes the server's; `pass` reads the dev page's
+    // own from the request as it came.
+    changeOrigin: true,
     configure: (proxy: { on(event: string, listener: (request: Request, incoming: Incoming) => void): void }) => {
       proxy.on('proxyReq', pass)
       proxy.on('proxyReqWs', pass)

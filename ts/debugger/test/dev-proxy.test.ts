@@ -2,7 +2,7 @@
 // caf-debugger's origin, and nothing else.
 
 import { describe, expect, it } from 'vitest'
-import { origin } from '../dev-proxy.ts'
+import { origin, route } from '../dev-proxy.ts'
 
 const server = 'http://127.0.0.1:7320'
 
@@ -20,5 +20,11 @@ describe("the dev proxy's Origin", () => {
 
   it('is left as it came for a name that only points here', () => {
     expect(origin('http://evil.example:5173', 'evil.example:5173', server)).toBe('http://evil.example:5173')
+  })
+})
+
+describe('the dev proxy', () => {
+  it("sends caf-debugger's own Host, which it checks", () => {
+    expect(route(server)).toMatchObject({ target: server, ws: true, changeOrigin: true })
   })
 })
