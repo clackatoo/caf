@@ -1077,6 +1077,12 @@ async fn viewers_that_stop_reading_dont_hold_caf_up() {
 async fn nothing_more_comes_for_an_unwatched_chat() {
     let dir = Dir::new();
     let (caf, running, chat) = started(&dir, &hello_there()).await;
+    // Open, so nothing is on its way for the chat when it's unwatched.
+    let mut watch = chat.watch();
+    until(&chat, &mut watch, "the session", |chat| {
+        matches!(chat.state, ChatState::Open { .. })
+    })
+    .await;
     let (mut viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
     viewer.watch(chat.id).await;
     viewer.send(FromViewer::Unwatch { chat: chat.id }).await;
