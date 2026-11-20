@@ -38,7 +38,7 @@ use caf_core::agent::{AgentSpec, EnvChange, McpServer};
 use caf_core::chat::{ChatState, UserMessage};
 use caf_core::directive::{Level, PolicyDirective, TimerDirective, ViewerDirective};
 use caf_core::event::{AgentEvent, HostCommand, PolicyAnswer};
-use caf_core::ids::ChangeNo;
+use caf_core::ids::{AgentName, ChangeNo};
 use caf_core::question::Answer;
 use caf_core::{
     AppItem, Chat, ChatId, Core, Directive, Event, Host, NoAppItems, Now, Numbered, OpenChat,
@@ -50,6 +50,7 @@ use tokio::task::{AbortHandle, JoinHandle, JoinSet};
 
 use crate::agent::{AgentDriver, AgentLimits};
 use crate::policy::{AlwaysAsk, Policy};
+use crate::steps::Steps;
 use crate::timer::TimerDriver;
 
 /// What to start CAF with.
@@ -258,6 +259,30 @@ impl<A: AppItem> Caf<A> {
         (caf, Running { task })
     }
 
+    /// Starts CAF as [`Caf::start`] does, with `steps` seeing every step
+    /// it takes: for debuggers and tests.
+    ///
+    /// # Panics
+    ///
+    /// As [`Caf::start`].
+    #[must_use]
+    pub fn start_watching(config: Config, steps: impl Steps<A>) -> (Self, Running) {
+        let _ = (config, steps);
+        todo!()
+    }
+
+    /// The names of the agents CAF was started with, in order.
+    #[must_use]
+    pub fn agents(&self) -> &[AgentName] {
+        todo!()
+    }
+
+    /// Follows which chats are open.
+    #[must_use]
+    pub fn watch_chats(&self) -> ChatsWatch {
+        todo!()
+    }
+
     /// Opens a chat. It's ready to take messages at once: they wait until
     /// its session is open.
     ///
@@ -407,6 +432,26 @@ pub struct Watch<A: AppItem = NoAppItems> {
     wake: Option<watch::Receiver<()>>,
     /// It has had its last update.
     ended: bool,
+}
+
+/// Follows which chats are open: opened by the host, by any viewer, or
+/// closed. Like [`Watch`], it doesn't keep CAF running.
+pub struct ChatsWatch {
+    _todo: (),
+}
+
+impl ChatsWatch {
+    /// The open chats, in the order they were opened: at once the first
+    /// time, then each time the list changes. `None` once CAF has shut
+    /// down.
+    ///
+    /// If the list changes more than once between calls, only the latest
+    /// is given.
+    ///
+    /// Cancel-safe: dropped before it resolves, it loses nothing.
+    pub async fn next(&mut self) -> Option<Vec<ChatId>> {
+        todo!()
+    }
 }
 
 /// What a watch gets.

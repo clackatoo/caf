@@ -107,3 +107,38 @@ pub enum Read<'a, A: AppItem = NoAppItems> {
         latest: ChangeNo,
     },
 }
+
+/// A change that doesn't fit a chat: it names something the chat doesn't
+/// have. A viewer that meets one has missed something, and needs the chat
+/// whole again; inside the core, it's a bug.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Mismatch {
+    /// No turn has this id.
+    NoTurn(TurnId),
+    /// No item has this id.
+    NoItem(ItemId),
+    /// Words were appended to an item that isn't words or thinking.
+    NotText(ItemId),
+    /// A tool changed that isn't a tool call.
+    NotTool(ItemId),
+    /// No question waiting has this id.
+    NoQuestion(QuestionId),
+}
+
+impl<A: AppItem> Chat<A> {
+    /// Applies one change to the chat.
+    ///
+    /// The core builds its own record of every chat through this, and every
+    /// viewer's copy is built through it or its equal in another language,
+    /// so they can't disagree.
+    ///
+    /// # Errors
+    ///
+    /// [`Mismatch`] if the change names something the chat doesn't have.
+    /// The chat is unchanged.
+    pub fn apply(&mut self, change: &Change<A>) -> Result<(), Mismatch> {
+        let _ = change;
+        todo!()
+    }
+}

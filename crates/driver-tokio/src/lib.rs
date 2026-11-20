@@ -32,9 +32,12 @@
 mod agent;
 mod caf;
 mod policy;
+mod steps;
 mod timer;
+pub mod viewer;
 
 pub use agent::{AgentDriver, AgentLimits};
-pub use caf::{Caf, ChatHandle, Config, Error, Running, Update, Watch};
+pub use caf::{Caf, ChatHandle, ChatsWatch, Config, Error, Running, Update, Watch};
 pub use policy::{AlwaysAsk, Policy, RefuseAll};
+pub use steps::{Step, Steps};
 pub use timer::TimerDriver;

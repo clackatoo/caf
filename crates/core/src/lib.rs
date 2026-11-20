@@ -97,9 +97,10 @@ pub mod ids;
 pub mod profiles;
 pub mod question;
 pub mod time;
+pub mod viewer;
 
 pub use crate::core::{Core, OpenChat, Refused, SessionChoice};
-pub use change::{Change, Numbered, Read};
+pub use change::{Change, Mismatch, Numbered, Read};
 pub use chat::{AppItem, Chat, Item, ItemKind, NoAppItems, Turn};
 pub use directive::{Directive, Report};
 pub use event::{Event, HostCommand};

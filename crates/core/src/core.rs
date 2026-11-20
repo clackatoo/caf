@@ -447,6 +447,23 @@ impl<A: AppItem> Core<A> {
         }
     }
 
+    /// Everything the core keeps, as JSON: every chat and its numbered
+    /// changes, connections, processes, requests waiting for answers,
+    /// questions, timers. For debugging tools, such as `caf-debugger`.
+    ///
+    /// **No stability promise:** its shape changes without notice, in any
+    /// release. Apps never use it; what they need is in [`Core::chat`],
+    /// [`Core::read`] and [`Core::connections`].
+    ///
+    /// Readings of the steady clock ([`Mono`](crate::time::Mono)) are
+    /// nanoseconds, and pass 2^53 after about 104 days of the host running,
+    /// so a JavaScript reader may round them.
+    #[cfg(feature = "inspect")]
+    #[must_use]
+    pub fn inspect(&self) -> serde_json::Value {
+        todo!()
+    }
+
     /// A snapshot of everything the core keeps, as JSON: what tests and
     /// recorded traces check.
     #[cfg(test)]
