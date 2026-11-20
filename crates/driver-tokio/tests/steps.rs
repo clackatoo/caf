@@ -41,6 +41,7 @@ impl Steps<caf_core::NoAppItems> for Notebook {
             Event::Host(HostCommand::Answer { .. }) => Some("answer"),
             Event::Host(HostCommand::CloseChat { .. }) => Some("close"),
             Event::Host(HostCommand::Shutdown) => Some("shutdown"),
+            Event::Host(HostCommand::CheckAgents) => Some("check agents"),
             Event::Host(_) => Some("other"),
             _ => None,
         };
@@ -143,8 +144,14 @@ async fn a_watcher_sees_one_step_per_recording_line_with_its_directives() {
         out.clear();
     }
     let hosts: Vec<_> = seen.iter().filter_map(|seen| seen.host).collect();
-    assert_eq!(hosts, ["open", "send", "answer", "shutdown"]);
-    let open = &seen[0];
+    assert_eq!(
+        hosts,
+        ["check agents", "open", "send", "answer", "shutdown"],
+        "CAF looks at its agents first, as it starts"
+    );
+    let open = (seen.iter())
+        .find(|seen| seen.host == Some("open"))
+        .expect("the chat was opened");
     assert_eq!(open.host, Some("open"));
     assert!(
         open.directives
@@ -184,7 +191,7 @@ async fn a_watcher_without_a_recording_sees_the_host_calls_the_core_took() {
 
     let seen = notebook.take();
     let hosts: Vec<_> = seen.iter().filter_map(|seen| seen.host).collect();
-    assert_eq!(hosts, ["open", "send", "close", "shutdown"]);
+    assert_eq!(hosts, ["check agents", "open", "send", "close", "shutdown"]);
     assert!(
         seen.iter().all(|seen| seen.line.is_none()),
         "no recording, no lines"

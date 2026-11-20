@@ -1349,7 +1349,7 @@ async fn asking_for_an_idle_chat_whole_gets_it_whatever_was_asked_before() {
             since: None,
         })
         .await;
-    let got = tokio::time::timeout(std::time::Duration::from_secs(5), viewer.from.recv()).await;
+    let got = tokio::time::timeout(std::time::Duration::from_secs(5), viewer.next()).await;
     match got {
         Ok(Some(ToViewer::Picture { chat: whole, .. })) => assert_eq!(whole.id, chat.id),
         other => panic!("the chat whole, not {other:?}"),
