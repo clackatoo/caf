@@ -1,6 +1,6 @@
 // One-line summaries of events and directives, for the Steps table.
 
-import type { AgentDirective, AgentEvent, Directive, Event, Frame, HostCommand, Message } from '@clackatoo/caf'
+import type { AgentDirective, AgentEvent, Directive, Event, Frame, HostCommand, Message, RequestId } from '@clackatoo/caf'
 import { stderrText } from './decode.ts'
 
 function tag(value: unknown): string {
@@ -85,13 +85,27 @@ export function frameSummary(frame: Frame): string {
 function messageSummary(message: Message): string {
   switch (message.type) {
     case 'Request':
-      return `→ ${message.value.method} #${message.value.id}`
+      return `→ ${message.value.method} ${requestId(message.value.id)}`
     case 'Notification':
       return `${message.value.method}${updateKind(message.value.params)}`
     case 'Response':
-      return `← #${message.value.id} ${'Ok' in message.value.outcome ? 'ok' : 'error'}`
+      return `← ${requestId(message.value.id)} ${'Ok' in message.value.outcome ? 'ok' : 'error'}`
     default:
       return tag(message)
+  }
+}
+
+/** A JSON-RPC request id: `#3`, `#"abc"` or `#null`. */
+export function requestId(id: RequestId): string {
+  switch (id.type) {
+    case 'Number':
+      return `#${id.value}`
+    case 'String':
+      return `#${JSON.stringify(id.value)}`
+    case 'Null':
+      return '#null'
+    default:
+      return `#${tag(id)}`
   }
 }
 

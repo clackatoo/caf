@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { Directive, Event } from '@clackatoo/caf'
 import { decodeWrite, stderrText, traffic } from '../../src/inspector/decode.ts'
 import { diff } from '../../src/inspector/diff.ts'
-import { directiveSummary, eventSummary, worstReport } from '../../src/inspector/summary.ts'
+import { directiveSummary, eventSummary, frameSummary, worstReport } from '../../src/inspector/summary.ts'
 
 const bytes = (text: string) => [...new TextEncoder().encode(text)]
 
@@ -89,6 +89,15 @@ describe('summaries', () => {
     ).toBe('Agent 1: session/update agent_message_chunk')
     expect(eventSummary({ type: 'Agent', value: { process: 1, event: { type: 'Stderr', value: bytes('bad\n') } } })).toBe('Agent 1: stderr: bad')
     expect(eventSummary({ type: 'Mystery' } as never)).toBe('Mystery')
+  })
+
+  it('names requests by their id, whatever its type', () => {
+    const request = (id: unknown) =>
+      frameSummary({ type: 'Message', value: { type: 'Request', value: { id: id as never, method: 'session/request_permission', params: null } } })
+    expect(request({ type: 'Number', value: 7 })).toBe('→ session/request_permission #7')
+    expect(request({ type: 'String', value: 'a' })).toBe('→ session/request_permission #"a"')
+    expect(request({ type: 'Null' })).toBe('→ session/request_permission #null')
+    expect(frameSummary({ type: 'Message', value: { type: 'Response', value: { id: { type: 'Number', value: 2 }, outcome: { Ok: {} } } } })).toBe('← #2 ok')
   })
 
   it('summarises directives, and finds the worst report', () => {

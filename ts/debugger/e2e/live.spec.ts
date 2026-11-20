@@ -28,7 +28,7 @@ test('sends a message, and the reply streams in', async ({ page, server }) => {
   await send(page, 'hello')
   const turn = page.locator('.caf-chat .turn').last()
   await expect(turn.locator('.message')).toHaveText('hello')
-  await expect(turn.locator('.markdown')).toContainText("CAF's fake agent")
+  await expect(turn.locator('.words .markdown')).toContainText("CAF's fake agent")
   await expect(turn.locator('.life')).toHaveText('Finished')
   await expect(turn.locator('details.thinking')).toBeVisible()
 })
@@ -41,10 +41,11 @@ test('answers a permission question, with none chosen beforehand', async ({ page
   await expect(question).toContainText('Run `echo hello`', { timeout: 15_000 })
   await expect(question.locator('button')).toHaveText(['Allow', 'Reject'])
   await expect(question.locator('button:focus')).toHaveCount(0)
+  const turn = page.locator('.caf-chat .turn').last()
+  await expect(turn.locator('.words .markdown')).toContainText("I'd like to run a command.")
+  await expect(turn.locator('.tool .title')).toHaveText('Run `echo hello`')
   await question.getByRole('button', { name: 'Allow' }).click()
   await expect(question).toHaveCount(0)
-  const turn = page.locator('.caf-chat .turn').last()
-  await expect(turn.locator('.markdown').last()).toContainText('Thanks for answering.')
   await expect(turn.locator('.life')).toHaveText('Finished')
 })
 
@@ -58,20 +59,37 @@ test('stops a running turn', async ({ page, server }) => {
   await expect(turn.locator('.life')).toHaveText('Stopped')
 })
 
-test('a message sent while a turn runs waits for it', async ({ page, server }) => {
+test('a message sent while a turn runs waits for it, then runs', async ({ page, server }) => {
   await page.goto(server.url)
   await openChat(page, process.cwd())
   await send(page, 'ask')
-  await expect(page.locator('.caf-chat .turn').last().locator('.life')).toHaveText('Running')
+  const turns = page.locator('.caf-chat .turn')
+  await expect(turns.last().locator('.life')).toHaveText('Running')
   await send(page, 'and then this')
-  await expect(page.locator('.caf-chat .turn').last().locator('.life')).toHaveText('Waiting')
-  await page.getByRole('button', { name: 'Stop' }).click()
-  await expect(page.locator('.caf-chat .turn').last().locator('.life')).toHaveText('Finished', { timeout: 15_000 })
+  await expect(turns).toHaveCount(2)
+  await expect(turns.last().locator('.life')).toHaveText('Waiting')
+  // The first turn waits on its question; answered, it ends, and the next goes.
+  await page.locator('.questions').getByRole('button', { name: 'Allow' }).click()
+  await expect(turns.first().locator('.life')).toHaveText('Finished')
+  await expect(turns.last().locator('.life')).toHaveText('Finished')
+  await expect(turns.last().locator('.words .markdown')).toContainText("CAF's fake agent")
 })
 
-// The fake agent has no way to fail a turn yet: this waits on a message
-// that makes it, from caf-debugger's fake script.
-test.fixme('a failed turn offers Send again, which sends it again', async ({ page, server }) => {
+test('Stop stops the running turn and the ones waiting', async ({ page, server }) => {
+  await page.goto(server.url)
+  await openChat(page, process.cwd())
+  await send(page, 'ask')
+  const turns = page.locator('.caf-chat .turn')
+  await expect(turns.last().locator('.life')).toHaveText('Running')
+  await send(page, 'and then this')
+  await expect(turns.last().locator('.life')).toHaveText('Waiting')
+  await page.getByRole('button', { name: 'Stop' }).click()
+  await expect(turns.locator('.life')).toHaveText(['Stopped', 'Stopped'])
+})
+
+// The fake fails `fail` the first time in each chat only, so sent again,
+// it goes through.
+test('a failed turn offers Send again, which sends it again', async ({ page, server }) => {
   await page.goto(server.url)
   await openChat(page, process.cwd())
   await send(page, 'fail')
@@ -80,7 +98,9 @@ test.fixme('a failed turn offers Send again, which sends it again', async ({ pag
   await expect(failed.locator('.failure .why')).toBeVisible()
   await failed.getByRole('button', { name: 'Send again' }).click()
   await expect(page.locator('.caf-chat .turn')).toHaveCount(2)
-  await expect(page.locator('.caf-chat .turn').last().locator('.message')).toHaveText('fail')
+  const again = page.locator('.caf-chat .turn').last()
+  await expect(again.locator('.message')).toHaveText('fail')
+  await expect(again.locator('.life')).toHaveText('Finished')
 })
 
 test('looks back at the chat as it was, read-only, then follows again', async ({ page, server }) => {
@@ -100,7 +120,7 @@ test('looks back at the chat as it was, read-only, then follows again', async ({
 
   await page.getByRole('button', { name: 'Back to live' }).click()
   await expect(page.locator('.timeline .live')).toBeVisible()
-  await expect(page.locator('.caf-chat .turn').last().locator('.markdown')).toContainText("CAF's fake agent")
+  await expect(page.locator('.caf-chat .turn').last().locator('.words .markdown')).toContainText("CAF's fake agent")
   await expect(page.getByRole('textbox', { name: 'Message' })).toBeEnabled()
 })
 

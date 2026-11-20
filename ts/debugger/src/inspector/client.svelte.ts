@@ -116,13 +116,8 @@ export class Inspector {
         break
       }
       case 'Position': {
-        const was = this.position
-        const now = message.value
-        if (!now.live) {
-          // Moving back, or the first move since following, every chat comes whole.
-          this.past.begin(was.live || now.at < was.at)
-        }
-        this.position = now
+        if (!message.value.live) this.past.begin()
+        this.position = message.value
         break
       }
       case 'State': {

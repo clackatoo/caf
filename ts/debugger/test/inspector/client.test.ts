@@ -159,7 +159,7 @@ describe('the chats as they were', () => {
     expect(inspector.past.problem).toContain(`Chat ${id}`)
   })
 
-  it('forgets chats that, moving back, did not exist yet', () => {
+  it('drops the copy of any chat the list of chats leaves out', () => {
     const { socket, inspector } = open()
     const other = { ...fixture.picture, chat: { ...fixture.picture.chat, id: id + 100 } }
     socket.say({ type: 'Position', value: { live: false, at: 8, end: 9 } })
@@ -184,6 +184,17 @@ describe('the chats as they were', () => {
     past(socket, 0, { type: 'Chats', value: [] })
     expect(inspector.past.chats.size).toBe(0)
     expect(inspector.past.summaries).toEqual([])
+  })
+
+  it('keeps a closed chat, which the list still names', () => {
+    const { socket, inspector } = open()
+    const closed = { ...fixture.picture, chat: { ...fixture.picture.chat, state: { type: 'Closed' as const } } }
+    socket.say({ type: 'Position', value: { live: false, at: 8, end: 9 } })
+    past(socket, 8, { type: 'Chats', value: [summary] })
+    past(socket, 8, { type: 'Picture', value: closed })
+    socket.say({ type: 'Position', value: { live: false, at: 9, end: 9 } })
+    past(socket, 9, { type: 'Chats', value: [summary] })
+    expect(inspector.past.chats.get(id)?.state).toEqual({ type: 'Closed' })
   })
 
   it('takes nothing as Past while following', () => {

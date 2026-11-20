@@ -121,3 +121,32 @@ jobs:
         working-directory: ts/debugger
       - run: npm run build
         working-directory: ts/debugger
+
+  # The debugger app end to end, in headless Chromium, against caf-debugger:
+  # replaying the live 0.98.0 recording, and live with the fake agent.
+  e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: e2e
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build -p caf-debugger -p caf-fake-agent --locked
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+      - run: npm ci
+        working-directory: ts
+      - run: npx playwright install --with-deps chromium
+        working-directory: ts/debugger
+      - run: npm run build
+        working-directory: ts/debugger
+      - run: npm run e2e
+        working-directory: ts/debugger
