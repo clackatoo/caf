@@ -72,6 +72,19 @@ jobs:
       # rather than each building it.
       - run: cargo build -p caf-fake-agent --locked
       - run: cargo test --workspace --locked
+      # A change that doesn't fit its chat's record fails a debug
+      # assertion, so only a release build reaches the code that drops and
+      # reports it.
+      - run: cargo test -p caf-core --release --locked a_change_that_doesnt_fit
+      # The apply fixtures, regenerated from nothing, are what's checked
+      # in: none stale, missing, or written by no test any more. The v1
+      # sample is never written here (that's CAF_BLESS_SAMPLE).
+      - name: Regenerate the apply fixtures
+        run: |
+          rm -rf fixtures/apply
+          CAF_BLESS=1 cargo test -p caf-core --locked
+          git status --porcelain -- fixtures samples
+          test -z "$(git status --porcelain -- fixtures samples)"
       # The TypeScript types and samples in ts/sdk are current, the types
       # are in the one shape, and every type is exported and sampled.
       - run: cargo test -p caf-core --features ts --locked typescript_types

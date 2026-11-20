@@ -4,7 +4,7 @@
 
 use serde_json::json;
 
-use super::harness::{Script, assert_has, host, sent, with, writes};
+use super::harness::{FIRST, Script, assert_has, host, sent, with, writes};
 use super::{CHAT, PROC, SESSION, claude_init};
 use crate::core::OpenChat;
 use crate::event::{AgentEvent, Exit};
@@ -313,6 +313,24 @@ fn closing_the_last_chat_stops_its_adapter_gently_then_lets_it_go() {
     assert!(script.core.connections().is_empty());
     assert!(script.core.is_idle());
     assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": null })]);
+}
+
+/// What the core shows a debugger includes whether it's shutting down,
+/// which changes what it does next, and what it was made with.
+#[test]
+fn the_cores_whole_state_says_it_is_shutting_down() {
+    let mut script = Script::with_claude();
+    assert_has(
+        &script.state(),
+        &json!({
+            "shutting_down": false,
+            "first_id": FIRST,
+            "host": { "name": "caf-test" },
+            "agents": { "claude": { "name": "claude" } }
+        }),
+    );
+    script.shutdown();
+    assert_eq!(script.state()["shutting_down"], json!(true));
 }
 
 #[test]

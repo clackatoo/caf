@@ -6,4 +6,4 @@ import type { TurnId } from "./TurnId.ts";
 /**
  * How a viewer's request went.
  */
-export type Outcome = { "type": "Opened", "value": ChatId } | { "type": "Sent", "value": TurnId } | { "type": "Done" } | { "type": "Refused", "value": Refused } | { "type": "NotAllowed" };
+export type Outcome = { "type": "Opened", "value": ChatId } | { "type": "Sent", "value": TurnId } | { "type": "Done" } | { "type": "Refused", "value": Refused } | { "type": "NotAllowed" } | { "type": "Gone" };

@@ -57,3 +57,6 @@ by id: a turn added, words appended to an item, a tool finished, a question
 asked. A view remembers the number it has read up to and asks for what
 follows. A view that's new, or has fallen too far behind, gets the whole chat
 first and then the changes after it.
+
+How a view outside the program follows a chat, and why every one ends with
+the same chat, is in [Viewers](~caf/concepts/viewers).

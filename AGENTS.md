@@ -23,3 +23,20 @@ caf-core and checked in. After changing a type CAF serialises,
 regenerate them with
 `CAF_BLESS=1 cargo test -p caf-core --features ts typescript_types`;
 CI fails while they're stale.
+
+The conformance fixtures in `fixtures/apply/` (each chat in the core's
+tests, change by change, and each change `apply` must refuse, which
+every SDK must follow) are written by caf-core's tests. After changing
+what the core records, regenerate them all with
+`rm -rf fixtures/apply && CAF_BLESS=1 cargo test -p caf-core`. The tests
+fail while one is stale or missing, or names a test that's gone; CI
+also regenerates them and fails if anything in the folder changed, which
+is what finds a fixture no test writes any more.
+
+`samples/viewer/v1.json` holds one of every message of version 1 of the
+viewer wire, and of every variant inside them. A test fails if it no
+longer reads and writes back as the same bytes. What a released version
+sends never changes: a change to it needs a new version with its own
+sample. `CAF_BLESS` never touches it; only while a version is
+unreleased may `CAF_BLESS_SAMPLE=1 cargo test -p caf-core version_1`
+rewrite its sample.

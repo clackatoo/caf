@@ -5,12 +5,15 @@
 //! for what follows. A viewer that's new, or has fallen behind the list's
 //! bounded length, gets the whole chat first and then changes from there.
 //!
-//! `Chat::apply` (in caf-sdk) takes a change and updates a viewer's own
-//! copy; every SDK must turn the same changes into the same chat.
+//! [`Chat::apply`] takes a change and updates a chat with it: the core's
+//! own record, and every viewer's copy. Every SDK must turn the same
+//! changes into the same chat.
 
 use serde::{Deserialize, Serialize};
 
-use crate::chat::{AppItem, Chat, ChatState, Item, NoAppItems, ToolCall, Turn, TurnLife, Usage};
+use crate::chat::{
+    AppItem, Chat, ChatState, Item, ItemKind, NoAppItems, ToolCall, Turn, TurnLife, Usage,
+};
 use crate::ids::{ChangeNo, ItemId, QuestionId, TurnId};
 use crate::question::Question;
 use crate::time::End;
@@ -117,7 +120,9 @@ pub enum Read<'a, A: AppItem = NoAppItems> {
 /// have. A viewer that meets one has missed something, and needs the chat
 /// whole again; inside the core, it's a bug.
 #[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum Mismatch {
     /// No turn has this id.
     NoTurn(TurnId),
@@ -143,7 +148,61 @@ impl<A: AppItem> Chat<A> {
     /// [`Mismatch`] if the change names something the chat doesn't have.
     /// The chat is unchanged.
     pub fn apply(&mut self, change: &Change<A>) -> Result<(), Mismatch> {
-        let _ = change;
-        todo!()
+        match change {
+            Change::State(state) => self.state = state.clone(),
+            Change::TurnAdded(turn) => self.turns.push(turn.clone()),
+            Change::TurnInserted { before, turn } => {
+                let at = (self.turns.iter().rposition(|each| each.id == *before))
+                    .ok_or(Mismatch::NoTurn(*before))?;
+                self.turns.insert(at, turn.clone());
+            }
+            Change::TurnLife { turn, life, end } => {
+                let each = self.turn_mut(*turn)?;
+                each.life = life.clone();
+                each.window.end = *end;
+            }
+            Change::ItemAdded { turn, item } => self.turn_mut(*turn)?.items.push(item.clone()),
+            Change::Appended { item, text } => match &mut self.item_mut(*item)?.kind {
+                ItemKind::Words(words) | ItemKind::Thinking(words) => words.push_str(text),
+                _ => return Err(Mismatch::NotText(*item)),
+            },
+            Change::ToolChanged { item, tool } => match &mut self.item_mut(*item)?.kind {
+                ItemKind::Tool(old) => old.clone_from(tool),
+                _ => return Err(Mismatch::NotTool(*item)),
+            },
+            Change::ItemEnded { item, end } => self.item_mut(*item)?.window.end = *end,
+            Change::Usage(usage) => self.usage = Some(usage.clone()),
+            Change::QuestionAsked(question) => self.questions.push(question.clone()),
+            Change::QuestionGone(question) => {
+                // Every question with the id goes, as the core's record
+                // always took them.
+                let before = self.questions.len();
+                self.questions.retain(|each| each.id != *question);
+                if self.questions.len() == before {
+                    return Err(Mismatch::NoQuestion(*question));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A turn, by id. Newest first, as changes are mostly to the last
+    /// turn.
+    fn turn_mut(&mut self, turn: TurnId) -> Result<&mut Turn<A>, Mismatch> {
+        (self.turns.iter_mut().rev())
+            .find(|each| each.id == turn)
+            .ok_or(Mismatch::NoTurn(turn))
+    }
+
+    /// An item, by id, in whichever turn it is. Newest first, so the words
+    /// streaming in are found at once.
+    fn item_mut(&mut self, item: ItemId) -> Result<&mut Item<A>, Mismatch> {
+        (self.turns.iter_mut().rev())
+            .flat_map(|turn| turn.items.iter_mut().rev())
+            .find(|each| each.id == item)
+            .ok_or(Mismatch::NoItem(item))
     }
 }
+
+#[cfg(test)]
+mod tests;

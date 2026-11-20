@@ -3,13 +3,14 @@
 
 use serde_json::json;
 
-use super::harness::{Script, assert_has, host, includes, sent, with};
+use super::harness::{FIRST, Script, agents, assert_has, host, includes, render, sent, with};
 use super::{CHAT, PROC, SESSION, claude_init};
 use crate::agent::{EnvChange, McpServer, SpawnCommand};
 use crate::change::{Change, Read};
 use crate::chat::{Part, UserMessage};
-use crate::core::{OpenChat, Refused};
-use crate::ids::{ChangeNo, ChatId};
+use crate::core::{Core, OpenChat, Refused};
+use crate::event::Event;
+use crate::ids::{ChangeNo, ChatId, ItemId};
 
 fn words(text: &str) -> serde_json::Value {
     json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": text } })
@@ -66,6 +67,59 @@ fn thinking_isnt_kept_for_a_host_that_doesnt_show_it() {
     script.send(CHAT, "go").0.expect("sent");
     script.update(PROC, SESSION, &json!({ "sessionUpdate": "agent_thought_chunk", "content": { "type": "text", "text": "hmm" } }));
     assert_eq!(script.chat(CHAT)["turns"][0]["items"], json!([]));
+}
+
+/// Thinking streams in pieces, as words do, into one item.
+#[test]
+fn thinking_streams_into_one_item_for_a_host_that_shows_it() {
+    let mut host = host();
+    host.shows.thinking = true;
+    let mut script = Script::new(host);
+    script.open_claude();
+    script.send(CHAT, "go").0.expect("sent");
+    for text in ["Let me", " look."] {
+        script.update(PROC, SESSION, &json!({ "sessionUpdate": "agent_thought_chunk", "content": { "type": "text", "text": text } }));
+    }
+    script.update(PROC, SESSION, &words("Done."));
+    assert_eq!(
+        script.chat(CHAT)["turns"][0]["items"]
+            .as_array()
+            .map(|items| items
+                .iter()
+                .map(|item| item["kind"].clone())
+                .collect::<Vec<_>>()),
+        Some(vec![
+            json!({ "type": "Thinking", "value": "Let me look." }),
+            json!({ "type": "Words", "value": "Done." }),
+        ])
+    );
+}
+
+/// While a message waits its turn, what the agent sends goes to the turn
+/// it's working on, not the last.
+#[test]
+fn words_and_tools_go_to_the_running_turn_while_a_message_waits() {
+    let mut script = Script::with_claude();
+    script.send(CHAT, "first").0.expect("sent");
+    script.send(CHAT, "second").0.expect("waiting");
+    script.update(PROC, SESSION, &words("a"));
+    script.update(PROC, SESSION, &words("b"));
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Read lib.rs", "kind": "read", "status": "pending" }));
+    script.update(
+        PROC,
+        SESSION,
+        &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed" }),
+    );
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "turns": [
+            { "life": { "type": "Running" }, "items": [
+                { "kind": { "type": "Words", "value": "ab" } },
+                { "kind": { "type": "Tool", "value": { "status": { "type": "Done" } } } }
+            ] },
+            { "life": { "type": "Waiting" }, "items": [] }
+        ] }),
+    );
 }
 
 #[test]
@@ -258,6 +312,48 @@ fn viewers_read_changes_or_the_whole_chat() {
         Some(Read::Picture { .. })
     ));
     assert!(script.core.read(ChatId(1), None).is_none());
+}
+
+/// A change that doesn't fit its chat's record is a bug in the core, so
+/// nothing outside can cause one: this one is made by hand. It fails a
+/// debug assertion; in release, it's dropped, and reported when the call
+/// ends, with what it said, capped. CI runs it in release too.
+#[test]
+#[cfg_attr(debug_assertions, should_panic(expected = "doesn't fit"))]
+fn a_change_that_doesnt_fit_is_dropped_and_reported() {
+    // A bare core: a script's replay wouldn't have the change made by hand.
+    let mut core: Core = Core::starting_ids_at(host(), agents(), FIRST);
+    let now = crate::shape::now();
+    let mut out = Vec::new();
+    let chat = (core.open_chat(now, OpenChat::new("claude", "/work"), &mut out)).expect("opened");
+    assert_eq!(chat, CHAT);
+    let before = core.inspect();
+    let said = format!("the agent's words{}", "!".repeat(10_000));
+    core.record(
+        chat,
+        Change::Appended {
+            item: ItemId(99),
+            text: said,
+        },
+    );
+    assert_eq!(
+        core.inspect(),
+        before,
+        "the record and its changes are as they were"
+    );
+    out.clear();
+    core.handle(now, Event::Woken, &mut out);
+    let reports: Vec<_> = (out.iter().map(render))
+        .filter(|each| includes(each, &json!({ "report": "Warn" })))
+        .collect();
+    assert_eq!(reports.len(), 1, "{out:#?}");
+    let message = reports[0]["message"].as_str().expect("a message");
+    assert!(message.starts_with("a bug in CAF"), "{message}");
+    assert!(message.contains("NoItem"), "{message}");
+    assert!(message.contains("Appended"), "{message}");
+    assert!(message.contains("the agent's words"), "{message}");
+    assert!(message.len() < 2000, "capped: {} bytes", message.len());
+    assert!(with(&out.iter().map(render).collect::<Vec<_>>(), "changed").is_empty());
 }
 
 #[test]

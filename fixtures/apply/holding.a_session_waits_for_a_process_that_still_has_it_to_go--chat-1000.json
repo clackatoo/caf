@@ -1,0 +1,4 @@
+{"picture":{"chat":{"id":1000,"agent":"claude","cwd":"/work","state":{"type":"Opening"},"turns":[],"usage":null,"questions":[]},"latest":999},"steps":[
+{"change":{"no":1000,"change":{"type":"State","value":{"type":"Open","value":{"session":"X"}}}},"chat":{"id":1000,"agent":"claude","cwd":"/work","state":{"type":"Open","value":{"session":"X"}},"turns":[],"usage":null,"questions":[]}},
+{"change":{"no":1001,"change":{"type":"State","value":{"type":"Closed"}}},"chat":{"id":1000,"agent":"claude","cwd":"/work","state":{"type":"Closed"},"turns":[],"usage":null,"questions":[]}}
+]}

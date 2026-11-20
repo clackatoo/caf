@@ -23,7 +23,13 @@ agents: Array<AgentName>,
 /**
  * The open chats, in the order they were opened.
  */
-chats: Array<ChatSummary>, } } | { "type": "NoCommonVersion", "value": { 
+chats: Array<ChatSummary>, 
+/**
+ * Different every time CAF starts, so a viewer can tell a
+ * restarted CAF from the one it was watching. A `since` holds
+ * only within one run.
+ */
+run: string, } } | { "type": "NoCommonVersion", "value": { 
 /**
  * The oldest CAF speaks.
  */

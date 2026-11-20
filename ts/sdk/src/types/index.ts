@@ -40,6 +40,7 @@ export type * from "./Limits.ts";
 export type * from "./Lost.ts";
 export type * from "./McpServer.ts";
 export type * from "./Message.ts";
+export type * from "./Mismatch.ts";
 export type * from "./Mono.ts";
 export type * from "./NoAppItems.ts";
 export type * from "./Note.ts";

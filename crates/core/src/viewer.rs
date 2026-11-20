@@ -13,8 +13,8 @@
 //! 1. The viewer sends [`FromViewer::Hello`] with the versions it speaks.
 //!    Anything else first ends the link.
 //! 2. CAF answers [`ToViewer::Welcome`] with the newest version both
-//!    speak, the agents on offer and the open chats; or
-//!    [`ToViewer::NoCommonVersion`], and ends the link.
+//!    speak, the agents on offer, the open chats, and which run of CAF
+//!    this is; or [`ToViewer::NoCommonVersion`], and ends the link.
 //! 3. The viewer watches chats ([`FromViewer::Watch`]): it gets each one
 //!    whole ([`ToViewer::Picture`]), then its changes
 //!    ([`ToViewer::Changes`]). It may act on them: send, stop, answer,
@@ -23,11 +23,21 @@
 //!
 //! # Opening is the host's decision
 //!
-//! A viewer never sends an [`OpenChat`]: its MCP servers are programs to
-//! run, so a viewer that could send one could run programs on the
-//! machine. It sends an [`OpenRequest`] (an agent CAF offered, a folder,
-//! a new session or one to continue), and the host turns it into an
-//! `OpenChat` or refuses with [`Outcome::NotAllowed`].
+//! A viewer never sends an [`OpenChat`]: an MCP server may be a program
+//! to run on the machine, or a server reached with secret headers, so a
+//! viewer that could send one could run or reach anything. It sends an
+//! [`OpenRequest`] (an agent CAF offered, a folder, a new session or one
+//! to continue), and the host turns it into an `OpenChat` or refuses
+//! with [`Outcome::NotAllowed`].
+//!
+//! # Resuming
+//!
+//! A viewer that reconnects may watch a chat again with `since`, the
+//! last change it has, and get only what followed. That holds only
+//! within one run of CAF: [`ToViewer::Welcome`]'s `run` is different
+//! every time CAF starts, and its changes are numbered again. A viewer
+//! whose `run` differs from the one it was watching drops its copies
+//! and watches with no `since`.
 //!
 //! # Compatibility
 //!
@@ -86,7 +96,8 @@ pub enum FromViewer {
         /// The chat.
         chat: ChatId,
         /// The last change the viewer has, if it has the chat already,
-        /// such as after reconnecting.
+        /// such as after reconnecting to the same run of CAF (see
+        /// [`ToViewer::Welcome`]'s `run`). After a restart it's `None`.
         since: Option<ChangeNo>,
     },
     /// Stop following a chat.
@@ -151,6 +162,10 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
         agents: Vec<AgentName>,
         /// The open chats, in the order they were opened.
         chats: Vec<ChatSummary>,
+        /// Different every time CAF starts, so a viewer can tell a
+        /// restarted CAF from the one it was watching. A `since` holds
+        /// only within one run.
+        run: String,
     },
     /// No version in common: CAF ends the link after sending this.
     NoCommonVersion {
@@ -254,6 +269,8 @@ pub enum Outcome {
     Refused(Refused),
     /// The host doesn't let viewers do this.
     NotAllowed,
+    /// CAF has shut down, or is shutting down: nothing was done.
+    Gone,
 }
 
 /// A viewer's copy of one chat, and how far it has read: what a viewer
@@ -277,20 +294,19 @@ impl<A: AppItem> ChatCopy<A> {
     /// A copy of a chat sent whole, as in [`ToViewer::Picture`].
     #[must_use]
     pub fn new(chat: Chat<A>, latest: ChangeNo) -> Self {
-        let _ = (chat, latest);
-        todo!()
+        Self { chat, latest }
     }
 
     /// The chat, as far as the copy has read.
     #[must_use]
     pub fn chat(&self) -> &Chat<A> {
-        todo!()
+        &self.chat
     }
 
     /// The last change the copy has.
     #[must_use]
     pub fn latest(&self) -> ChangeNo {
-        todo!()
+        self.latest
     }
 
     /// Applies changes, oldest first, as in [`ToViewer::Changes`].
@@ -298,12 +314,26 @@ impl<A: AppItem> ChatCopy<A> {
     ///
     /// # Errors
     ///
-    /// [`NeedPicture`] if a change is missing before the first new one,
-    /// or one doesn't fit the chat ([`Chat::apply`]). The copy keeps the
-    /// changes it applied before then, and is behind: ask for the chat
-    /// whole again.
+    /// [`NeedPicture`] if a change is missing, before the first new one
+    /// or between two, or one doesn't fit the chat ([`Chat::apply`]). The
+    /// copy keeps the changes it applied before then, and is behind: ask
+    /// for the chat whole again.
     pub fn take(&mut self, changes: &[Numbered<A>]) -> Result<(), NeedPicture> {
-        let _ = changes;
-        todo!()
+        for each in changes {
+            if each.no <= self.latest {
+                continue;
+            }
+            if each.no.0 != self.latest.0 + 1 {
+                return Err(NeedPicture);
+            }
+            self.chat.apply(&each.change).map_err(|_| NeedPicture)?;
+            self.latest = each.no;
+        }
+        Ok(())
     }
 }
+
+#[cfg(test)]
+mod sample;
+#[cfg(test)]
+mod tests;

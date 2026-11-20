@@ -1,12 +1,12 @@
 //! The scripted-event harness every core test runs on.
 //!
 //! A test is a script: events at times in, and the directives they give
-//! out, rendered as JSON, plus a JSON snapshot of the core's state. JSON,
-//! because recorded traces are JSON: every event a script gives the core
-//! is recorded as JSON, and [`Script::replay`] feeds the recording to a
-//! fresh core through [`Core::handle`], which must give the same
-//! directives and end in the same state. That's how a bug becomes a
-//! recorded trace.
+//! out, rendered as JSON, plus the core's whole state
+//! ([`Core::inspect`]). JSON, because recorded traces are JSON: every
+//! event a script gives the core is recorded as JSON, and
+//! [`Script::replay`] feeds the recording to a fresh core through
+//! [`Core::handle`], which must give the same directives and end in the
+//! same state. That's how a bug becomes a recorded trace.
 //!
 //! Ids start at 1000, and the clock is always given in: `at` sets it in
 //! milliseconds since the script started.
@@ -17,7 +17,8 @@
 //!   have the timer driver wake it over and over;
 //! - no request of the agent's is answered twice, and by the end each is
 //!   answered once, unless its process went before it could be;
-//! - its recording replays to the same directives and state.
+//! - its recording replays to the same directives and state;
+//! - its chats' conformance fixtures are current (see [`fixtures`]).
 
 use std::collections::BTreeMap;
 
@@ -32,6 +33,7 @@ use crate::directive::{
     AgentDirective, Directive, PolicyDirective, TimerDirective, ViewerDirective,
 };
 use crate::event::{AgentEvent, Event, HostCommand, PolicyAnswer};
+use crate::fixtures::{self, After};
 use crate::host::Host;
 use crate::ids::{ChatId, QuestionId, Ticket, TurnId};
 use crate::profiles::{Builtin, ProfileChoice};
@@ -59,6 +61,8 @@ pub(crate) struct Script {
     /// The agent's requests, by process and id, and how often each was
     /// answered.
     answers: BTreeMap<(u64, String), usize>,
+    /// Whether its chats' conformance fixtures are checked when it ends.
+    fixtures: bool,
 }
 
 /// The agents a test offers: Claude, as the Claude profile expects it.
@@ -94,7 +98,15 @@ impl Script {
             trace: Vec::new(),
             outs: Vec::new(),
             answers: BTreeMap::new(),
+            fixtures: true,
         }
+    }
+
+    /// Writes no conformance fixtures: for a script that only makes a
+    /// recording, of a scenario another script already runs.
+    pub(crate) fn without_fixtures(&mut self) -> &mut Self {
+        self.fixtures = false;
+        self
     }
 
     /// Sets the clock to `ms` milliseconds since the start.
@@ -321,7 +333,7 @@ impl Script {
 
     /// The core's state, as JSON.
     pub(crate) fn state(&self) -> Value {
-        self.core.snapshot()
+        self.core.inspect()
     }
 
     /// A chat's state, as JSON.
@@ -345,7 +357,7 @@ impl Script {
             assert_eq!(&got, expected, "step {step} of the replay, {json}");
         }
         assert_eq!(
-            core.snapshot(),
+            core.inspect(),
             self.state(),
             "the replay ends in the same state"
         );
@@ -399,8 +411,25 @@ impl Drop for Script {
         if !std::thread::panicking() {
             self.check_answers();
             self.replay();
+            if self.fixtures {
+                check_fixtures(&self.core);
+            }
         }
     }
+}
+
+/// Checks the conformance fixtures of `core`'s chats (see
+/// [`fixtures`]): each chat's record, change by change, as its tests saw
+/// it.
+pub(crate) fn check_fixtures(core: &Core) {
+    let chats = core.applied.iter().map(|(chat, applied)| {
+        let steps = (applied.steps.iter()).map(|(change, chat)| (change, After::Chat(chat)));
+        (
+            chat.0,
+            fixtures::text(&applied.picture, applied.latest, steps),
+        )
+    });
+    fixtures::check_script(&fixtures::next_script(), chats);
 }
 
 /// `message`, a JSON-RPC message, as the agent driver hands it over.
