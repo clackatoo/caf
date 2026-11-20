@@ -68,6 +68,7 @@ fn driver(dir: &Dir) -> SetupDriver {
             // Not the cache the package was made with, which holds it.
             npm_offline_cache: Some(dir.path("driver-npm-cache")),
             temp: Some(dir.path("temp")),
+            env: Some(std::collections::HashMap::new()),
         },
     )
 }
@@ -584,6 +585,157 @@ async fn an_install_stopped_partway_leaves_nothing() {
         &(SetupEvent::InstallFailed(InstallFailure::Stopped))
     );
     assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
+}
+
+/// A server on this machine that takes requests and never answers.
+async fn silent() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/fake-adapter", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    url
+}
+
+#[tokio::test]
+async fn a_download_goes_through_the_proxy_the_environment_names() {
+    let dir = Dir::new();
+    let body = tar_gz();
+    let (proxy_url, tunnels) = proxy(body.clone()).await;
+    // Nothing listens here: only the proxy can fetch it.
+    let url = "http://127.0.0.1:9/v1/fake-adapter";
+    for (n, (no_proxy, through)) in [("", true), ("127.0.0.1", false)].into_iter().enumerate() {
+        let env = [("HTTP_PROXY", proxy_url.as_str()), ("NO_PROXY", no_proxy)]
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect();
+        let mut driver = SetupDriver::with_options(
+            dir.root(),
+            Options {
+                http_to_this_machine: true,
+                env: Some(env),
+                ..Options::default()
+            },
+        );
+        let ticket = Ticket(1000 + n as u64);
+        driver.apply(SetupDirective::Install {
+            ticket,
+            folder: format!("fake-{n}"),
+            install: download(url, &body, Unpack::TarGz),
+            private: None,
+        });
+        let events = done(&mut driver, ticket).await;
+        let last = events.last().expect("a last report");
+        if through {
+            assert_eq!(last, &SetupEvent::Installed, "through the proxy");
+        } else {
+            assert_eq!(
+                last,
+                &SetupEvent::InstallFailed(InstallFailure::Offline),
+                "straight to a host that isn't there"
+            );
+        }
+    }
+    assert_eq!(
+        *tunnels.lock().unwrap(),
+        ["127.0.0.1:9"],
+        "one, to where the URL says"
+    );
+}
+
+/// What comes on `socket` up to the end of a request's head.
+async fn head(socket: &mut tokio::net::TcpStream) -> Option<String> {
+    let mut asked = Vec::new();
+    let mut byte = [0; 1];
+    while !asked.ends_with(b"\r\n\r\n") {
+        match socket.read(&mut byte).await {
+            Ok(1) => asked.push(byte[0]),
+            _ => return None,
+        }
+    }
+    Some(String::from_utf8_lossy(&asked).into_owned())
+}
+
+/// A proxy on this machine, giving `body` to whatever it's asked through
+/// a tunnel, noting where each tunnel was to.
+async fn proxy(body: Vec<u8>) -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let tunnels = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let noted = Arc::clone(&tunnels);
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let (noted, body) = (Arc::clone(&noted), body.clone());
+            tokio::spawn(async move {
+                let Some(connect) = head(&mut socket).await else {
+                    return;
+                };
+                let Some(target) = connect.strip_prefix("CONNECT ") else {
+                    return;
+                };
+                let target = target.split(' ').next().unwrap_or_default().to_owned();
+                noted.lock().unwrap().push(target);
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                    .await;
+                // Inside the tunnel, it plays the server.
+                if head(&mut socket).await.is_none() {
+                    return;
+                }
+                let answer = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = socket.write_all(answer.as_bytes()).await;
+                let _ = socket.write_all(&body).await;
+            });
+        }
+    });
+    (url, tunnels)
+}
+
+#[tokio::test]
+async fn a_download_that_stalls_stops_at_once() {
+    let dir = Dir::new();
+    let body = vec![7; 4 << 20];
+    // One that sends half and stalls for good, and one that never answers.
+    let stalled = serve(body.clone(), true).await.url;
+    let silent = silent().await;
+    let mut driver = driver(&dir);
+    for (n, url) in [stalled, silent].into_iter().enumerate() {
+        let ticket = Ticket(1000 + n as u64);
+        driver.apply(SetupDirective::Install {
+            ticket,
+            folder: "fake-1.0.0".into(),
+            install: download(&url, &body, Unpack::No),
+            private: None,
+        });
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        driver.apply(SetupDirective::Stop { ticket });
+        let events = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut events = Vec::new();
+            loop {
+                let (about, event) = driver.next().await;
+                assert_eq!(about, ticket);
+                let last = is_last(&event);
+                events.push(Ev(event));
+                if last {
+                    return events;
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{n}: stopped within a second or so"));
+        assert_eq!(
+            events.last().expect("a last report"),
+            &SetupEvent::InstallFailed(InstallFailure::Stopped),
+            "{n}"
+        );
+        assert!(installs(&dir).is_empty(), "{n}: {:?}", installs(&dir));
+    }
 }
 
 #[tokio::test]
@@ -1113,6 +1265,24 @@ async fn a_status_command_gives_only_the_fields_named() {
     assert_eq!(
         done(&mut driver, Ticket(1004)).await,
         [SetupEvent::Status(None)]
+    );
+
+    // One stopped ends, not ok.
+    let mut command = SpawnCommand::new("/bin/sh");
+    command.args = vec!["-c".into(), "exec sleep 30".into()];
+    driver.apply(SetupDirective::Status {
+        ticket: Ticket(1010),
+        command,
+        signed_in: "/loggedIn".into(),
+        how: None,
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    driver.apply(SetupDirective::Stop {
+        ticket: Ticket(1010),
+    });
+    assert_eq!(
+        done(&mut driver, Ticket(1010)).await,
+        [SetupEvent::Ended { ok: false }]
     );
 
     // An answer without the field: a failure, in CAF's words.

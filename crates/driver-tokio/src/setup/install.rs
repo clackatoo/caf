@@ -25,6 +25,10 @@ use crate::agent::absolute_only;
 /// `BROWSER` folder looked in.
 pub(crate) const POLL: Duration = Duration::from_millis(100);
 
+/// How long a stopped download is waited for before it's left to end by
+/// itself.
+const STOPPING: Duration = Duration::from_millis(500);
+
 /// How often an install's progress is told, at most.
 const PROGRESS: Duration = Duration::from_millis(500);
 
@@ -540,29 +544,48 @@ async fn download(
         return Err(other("a download must be https".into()));
     }
     let file = build.join(".download");
+    // Made here, so the fetch makes nothing in the build folder itself: it
+    // can be left to end by itself once stopped, while the folder goes.
+    let out = {
+        let file = file.clone();
+        blocking(move || {
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(file)
+        })
+        .await
+        .map_err(failure)?
+    };
     let done = Arc::new(AtomicU64::new(0));
     let stopped = Arc::new(AtomicBool::new(false));
     let fetching = {
-        let (url, file, done, stopped) = (
+        let (url, done, stopped) = (
             artifact.url.clone(),
-            file.clone(),
             Arc::clone(&done),
             Arc::clone(&stopped),
         );
+        let proxy = proxy_for(&artifact.url, |name| env_var(options, name));
         let https_only = !allowed_http(options);
-        tokio::task::spawn_blocking(move || fetch(&url, &file, https_only, &done, &stopped))
+        tokio::task::spawn_blocking(move || {
+            fetch(&url, out, proxy.as_deref(), https_only, &done, &stopped)
+        })
     };
     tokio::pin!(fetching);
     let mut ticks = tokio::time::interval(PROGRESS);
     let mut told = 0;
-    let mut was_stopped = false;
     let fetched = loop {
         tokio::select! {
             fetched = &mut fetching => break fetched,
-            _ = &mut *stop, if !was_stopped => {
-                // The fetch sees it between reads, and ends.
-                was_stopped = true;
+            _ = &mut *stop => {
+                // The fetch sees it between reads, and ends. One waiting on
+                // the network may not read again for a minute: it's left
+                // to end by itself, writing only to its file, which goes
+                // with the build folder.
                 stopped.store(true, Ordering::Relaxed);
+                let _ = tokio::time::timeout(STOPPING, &mut fetching).await;
+                return Err(InstallFailure::Stopped);
             }
             _ = ticks.tick() => {
                 let now = done.load(Ordering::Relaxed);
@@ -573,9 +596,6 @@ async fn download(
             }
         }
     };
-    if was_stopped {
-        return Err(InstallFailure::Stopped);
-    }
     let sha256 = fetched.unwrap_or_else(|_| Err(other("the download panicked".into())))?;
     if !sha256.eq_ignore_ascii_case(artifact.sha256.trim()) {
         return Err(InstallFailure::Corrupt);
@@ -584,6 +604,71 @@ async fn download(
     tokio::task::spawn_blocking(move || unpack_into(&build, &file, unpack, &url))
         .await
         .unwrap_or_else(|_| Err(other("unpacking panicked".into())))
+}
+
+/// The proxy a download of `url` goes through, if any, chosen as npm
+/// chooses it, from the variables `var` gives:
+/// - for `https`, `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY` or
+///   `http_proxy`, the first set; for `http`, `HTTP_PROXY` or `http_proxy`;
+/// - none if `NO_PROXY` (or `no_proxy`), a list split by commas, names the
+///   host or a domain it's in: `example.com` and `.example.com` both match
+///   `example.com` and `dl.example.com`.
+pub(crate) fn proxy_for(url: &str, var: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let first = |names: &[&str]| {
+        (names.iter()).find_map(|name| var(name).filter(|value| !value.trim().is_empty()))
+    };
+    let lower = url.to_ascii_lowercase();
+    let proxy = if lower.starts_with("https://") {
+        first(&["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"])
+    } else {
+        first(&["HTTP_PROXY", "http_proxy"])
+    }?;
+    let host = host_of(&lower)?;
+    let skipped = first(&["NO_PROXY", "no_proxy"]).is_some_and(|list| {
+        let host: Vec<&str> = host.split('.').rev().collect();
+        (list.split(',')).any(|entry| {
+            let entry = entry.trim().to_ascii_lowercase();
+            let entry: Vec<&str> = entry
+                .split('.')
+                .filter(|part| !part.is_empty())
+                .rev()
+                .collect();
+            !entry.is_empty()
+                && entry
+                    .iter()
+                    .enumerate()
+                    .all(|(at, part)| host.get(at) == Some(part))
+        })
+    });
+    (!skipped).then_some(proxy)
+}
+
+/// The host a URL names, without its port or user.
+fn host_of(url: &str) -> Option<String> {
+    let (_, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = if let Some(bracketed) = authority.strip_prefix('[') {
+        bracketed.split_once(']')?.0
+    } else {
+        authority
+            .split_once(':')
+            .map_or(authority, |(host, _)| host)
+    };
+    (!host.is_empty()).then(|| host.to_owned())
+}
+
+/// The environment variable `name`, as the tests set it, or as this
+/// program was given it.
+fn env_var(options: &Options, name: &str) -> Option<String> {
+    #[cfg(test)]
+    if let Some(env) = &options.env {
+        return env.get(name).cloned();
+    }
+    let _ = options;
+    std::env::var(name).ok()
 }
 
 /// Whether downloads may come over plain `http` from this machine.
@@ -614,12 +699,20 @@ fn allowed_url(url: &str, options: &Options) -> bool {
 /// `stopped`. Returns its SHA-256, in hex.
 fn fetch(
     url: &str,
-    file: &Path,
+    mut out: File,
+    proxy: Option<&str>,
     https_only: bool,
     done: &AtomicU64,
     stopped: &AtomicBool,
 ) -> Result<String, InstallFailure> {
+    let proxy = proxy
+        .map(|proxy| {
+            ureq::Proxy::new(proxy)
+                .map_err(|error| other(format!("the proxy {proxy:?} can't be used: {error}")))
+        })
+        .transpose()?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
+        .proxy(proxy)
         .https_only(https_only)
         .timeout_connect(Some(Duration::from_secs(30)))
         .timeout_recv_response(Some(Duration::from_secs(60)))
@@ -638,12 +731,6 @@ fn fetch(
     })?;
     let mut body = response.into_body();
     let mut reader = body.with_config().limit(u64::MAX).reader();
-    let mut out = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(file)
-        .map_err(|error| io_failure(&error, false))?;
     let mut hash = Sha256::new();
     let mut buffer = vec![0; 64 << 10];
     loop {
@@ -959,6 +1046,67 @@ mod tests {
         assert_eq!(program_name("https://example.com/"), "program");
         assert_eq!(program_name("https://example.com"), "program");
         assert_eq!(program_name("https://example.com/.hidden"), "program");
+    }
+
+    #[test]
+    fn a_download_goes_through_a_proxy_as_npms_would() {
+        let with = |vars: &[(&str, &str)], url: &str| {
+            proxy_for(url, |name| {
+                (vars.iter())
+                    .find(|(each, _)| *each == name)
+                    .map(|(_, value)| (*value).to_owned())
+            })
+        };
+        let https = "https://dl.example.com:443/agent.tar.gz";
+        assert_eq!(with(&[], https), None);
+        assert_eq!(
+            with(&[("HTTPS_PROXY", "http://proxy:3128")], https).as_deref(),
+            Some("http://proxy:3128")
+        );
+        // HTTPS_PROXY first, then its lower case, then HTTP_PROXY.
+        assert_eq!(
+            with(
+                &[
+                    ("https_proxy", "http://low"),
+                    ("HTTP_PROXY", "http://plain")
+                ],
+                https
+            )
+            .as_deref(),
+            Some("http://low")
+        );
+        assert_eq!(
+            with(&[("HTTP_PROXY", "http://plain")], https).as_deref(),
+            Some("http://plain")
+        );
+        // ALL_PROXY isn't npm's, and an http download uses HTTP_PROXY only.
+        assert_eq!(with(&[("ALL_PROXY", "http://all")], https), None);
+        assert_eq!(
+            with(&[("HTTPS_PROXY", "http://proxy")], "http://127.0.0.1:9/x"),
+            None
+        );
+        // NO_PROXY names the host, or a domain it's in.
+        let proxy = ("HTTPS_PROXY", "http://proxy");
+        for skip in [
+            "dl.example.com",
+            "example.com",
+            ".example.com",
+            "other.org, example.com",
+            "COM",
+        ] {
+            assert_eq!(with(&[proxy, ("NO_PROXY", skip)], https), None, "{skip}");
+        }
+        for keep in ["ample.com", "x.dl.example.com", "example.org", ",", ""] {
+            assert!(
+                with(&[proxy, ("no_proxy", keep)], https).is_some(),
+                "{keep}"
+            );
+        }
+        assert_eq!(
+            with(&[proxy, ("NO_PROXY", "user")], "https://me@user:8080/x"),
+            None,
+            "the host, not its user or port"
+        );
     }
 
     #[test]

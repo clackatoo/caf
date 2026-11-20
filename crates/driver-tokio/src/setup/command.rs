@@ -369,7 +369,7 @@ pub(super) async fn status(
         _ = &mut stop => {
             kill_group(&child);
             let _ = child.wait().await;
-            reporter.last(SetupEvent::Failed("stopped".into()));
+            reporter.last(SetupEvent::Ended { ok: false });
             return;
         }
         () = tokio::time::sleep(STATUS) => {

@@ -99,12 +99,10 @@ use tokio::sync::{mpsc, oneshot};
 /// - **It needs `/bin/sh`** for the `BROWSER` it gives sign-in commands,
 ///   and Node and npm on `PATH` for npm installs.
 /// - **Stopping** an install, sign-in or command kills what it runs and
-///   reports it stopped: an install with
-///   [`InstallFailure::Stopped`](caf_core::agent::InstallFailure::Stopped),
-///   once its half-built folder is gone; a
-///   sign-in or other command with [`SetupEvent::Ended`] `{ ok: false }`;
-///   a status command with [`SetupEvent::Failed`]. Stopping a survey or a
-///   removal does nothing: they're quick, and end by themselves.
+///   reports it stopped within about a second, as
+///   [`SetupDirective::Stop`] says. A download waiting on the network
+///   can't be woken: it's left to end by itself, within a minute, writing
+///   only to a file that went with the half-built folder.
 /// - **Dropping the driver** stops everything it's doing, as stopping
 ///   would, as far as the runtime lets it: a half-built install the runtime
 ///   shut down too soon to remove is removed by the next survey.
@@ -115,6 +113,13 @@ use tokio::sync::{mpsc, oneshot};
 ///   sign-in has none, as it waits for the user: the core stops it.
 ///   Downloads give up when connecting takes over 30 seconds, or the
 ///   answer doesn't start within a minute.
+/// - **Proxies:** a download goes through the proxy npm would use:
+///   `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY` or `http_proxy`, the first
+///   that's set, unless `NO_PROXY` (or `no_proxy`), a list split by commas,
+///   names its host or a domain the host is in (`example.com` and
+///   `.example.com` both cover `dl.example.com`). npm installs are npm's
+///   own, and read the same. A download asks the proxy for a tunnel
+///   (`CONNECT`), and its `https` is checked end to end through it.
 /// - **A download unpacked as `Unpack::No`** is saved under the last part
 ///   of its URL's path, such as `agent` for `https://example.com/v1/agent`,
 ///   and made runnable.
@@ -181,6 +186,10 @@ pub(crate) struct Options {
     /// system's temporary folder.
     #[cfg(test)]
     pub(crate) temp: Option<PathBuf>,
+    /// The environment variables a download reads, such as `HTTPS_PROXY`,
+    /// instead of this program's.
+    #[cfg(test)]
+    pub(crate) env: Option<std::collections::HashMap<String, String>>,
 }
 
 impl Options {
