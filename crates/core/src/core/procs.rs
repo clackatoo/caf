@@ -17,7 +17,7 @@ use super::frames::Reply;
 use super::state::{Caps, Conn, Ending, Gone, Group, Init, Open, Proc, Purpose, Step};
 use super::{Core, report};
 use crate::agent::Launch;
-use crate::chat::{AppItem, Incompatible, Lost};
+use crate::chat::{AppItem, ChatState, Incompatible, Lost};
 use crate::directive::{AgentDirective, Directive, Level, Signal};
 use crate::event::AgentEvent;
 use crate::ids::{ChatId, ConnectionId, Ticket};
@@ -131,7 +131,24 @@ impl<A: AppItem> Core<A> {
             }
             // A process of its own that's still around goes first.
             None if !self.shutting_down && !self.procs.values().any(|each| each.conn == conn) => {
-                self.start_process(now, conn, out);
+                // An agent not installed yet, or being signed in to, is
+                // waited for.
+                let ready = self.agent_ready(&each.agent);
+                let state = if ready {
+                    ChatState::Opening
+                } else {
+                    ChatState::WaitingForAgent
+                };
+                for &chat in &wanted {
+                    if self.chats.get(&chat).is_some_and(|whole| {
+                        matches!(whole.state, ChatState::Opening | ChatState::WaitingForAgent)
+                    }) {
+                        self.set_state(chat, state.clone());
+                    }
+                }
+                if ready {
+                    self.start_process(now, conn, out);
+                }
             }
             None => {}
         }
@@ -169,27 +186,38 @@ impl<A: AppItem> Core<A> {
 
     /// Starts a process for `conn`, and introduces CAF to it.
     fn start_process(&mut self, now: Now, conn: ConnectionId, out: &mut Vec<Directive>) {
-        let Some(each) = self.conns.get_mut(&conn) else {
+        let Some(each) = self.conns.get(&conn) else {
             return;
         };
         let Some(spec) = self.agents.get(&each.agent) else {
             return;
         };
-        let proc = Ticket(self.ids.take());
-        each.current = Some(proc);
-        out.push(Directive::Agent(AgentDirective::Start {
-            process: proc,
-            command: match &spec.launch {
-                Launch::Command(command) => command.clone(),
-                Launch::Installed => todo!("feature 3: start from CAF's install"),
+        let (command, hold) = match &spec.launch {
+            Launch::Command(command) => (command.clone(), None),
+            Launch::Installed => match self.installed_launch(&each.agent) {
+                Some((command, folder)) => (command, Some(folder)),
+                // Never: it's started only once it's installed.
+                None => return,
             },
-            hold: None,
-        }));
+        };
+        let folder = (hold.as_ref())
+            .and_then(|hold| hold.file_name())
+            .and_then(|name| name.to_str())
+            .map(str::to_owned);
         let params = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "clientCapabilities": spec.profile.declarations(),
             "clientInfo": { "name": self.host.name, "version": self.host.version },
         });
+        let proc = Ticket(self.ids.take());
+        if let Some(each) = self.conns.get_mut(&conn) {
+            each.current = Some(proc);
+        }
+        out.push(Directive::Agent(AgentDirective::Start {
+            process: proc,
+            command,
+            hold,
+        }));
         self.procs.insert(
             proc,
             Proc {
@@ -207,6 +235,7 @@ impl<A: AppItem> Core<A> {
                 ending: None,
                 group: Group::Unwatched,
                 sessions: std::collections::BTreeSet::new(),
+                folder,
                 given_up: std::collections::BTreeMap::new(),
             },
         );
@@ -316,7 +345,9 @@ impl<A: AppItem> Core<A> {
                 each.agent.0, checked.adapter, checked.checked
             ),
         );
+        let (agent, how) = (each.agent.clone(), checked.checked);
         each.profile = Some(checked);
+        self.agent_answered(proc, &agent, how, out);
         if let Some(each) = self.procs.get_mut(&proc) {
             each.init = Init::Ready(caps(&result));
         }
@@ -637,7 +668,7 @@ impl<A: AppItem> Core<A> {
 
 /// The profile a connection reads its adapter with: as checked, once the
 /// adapter said who it is, or as chosen until then.
-fn profile_of(
+pub(super) fn profile_of(
     conn: &Conn,
     agents: &std::collections::BTreeMap<crate::ids::AgentName, crate::agent::AgentSpec>,
 ) -> ProfileChoice {

@@ -14,6 +14,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::agent::{
+    AgentStatus, CannotInstall, InstallFailure, InstallState, SignInLink, SignInState,
+};
 use crate::change::{Change, Numbered};
 use crate::chat::{
     Chat, ChatState, Compacted, Cost, Failure, FailureReason, Incompatible, Item, ItemKind, Lost,
@@ -22,13 +25,16 @@ use crate::chat::{
 };
 use crate::core::{Refused, SessionChoice};
 use crate::ids::{AgentName, AgentSessionId, ChangeNo, ChatId, ItemId, QuestionId, TurnId};
+use crate::install::SignedInAs;
 use crate::kinds::Seen;
 use crate::question::{
     Answer, OptionId, OptionKind, Permission, PermissionOption, Question, QuestionKind, SlowChoice,
     SlowToOpen,
 };
 use crate::time::{End, Wall, Window};
-use crate::viewer::{ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, ToViewer};
+use crate::viewer::{
+    AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, ToViewer,
+};
 
 /// What the sample holds.
 #[derive(Debug, Serialize, Deserialize)]
@@ -146,8 +152,16 @@ fn chat() -> Chat {
             raw: json!({ "sessionUpdate": "plan", "entries": [] }),
         }),
     ));
-    let notes = [Note::SessionGone, Note::CannotContinue, Note::SessionStuck];
-    let notes = (notes.into_iter().zip(21..))
+    let notes = [
+        Note::SessionGone,
+        Note::CannotContinue,
+        Note::SessionStuck,
+        Note::NotInstalled,
+        Note::InstallFailed,
+        Note::SignedIn,
+    ];
+    // 24 to 34 are taken, so the newer notes follow.
+    let notes = (notes.into_iter().zip([21, 22, 23, 41, 42, 43]))
         .map(|(note, id)| item(id, ended(300, 300), ItemKind::Note(note)))
         .collect();
     let mut imported = turn(
@@ -277,6 +291,7 @@ fn changes() -> Vec<Change> {
     ];
     states.extend(lost.into_iter().map(|reason| ChatState::Lost { reason }));
     states.push(ChatState::Closed);
+    states.push(ChatState::WaitingForAgent);
     let reasons = [
         FailureReason::TooLong,
         FailureReason::TooManySteps,
@@ -388,6 +403,67 @@ fn changes() -> Vec<Change> {
     changes
 }
 
+/// One of every install and sign-in state, as agents' statuses.
+fn agents() -> Vec<AgentStatus> {
+    let installs = [
+        InstallState::Host,
+        InstallState::Unknown,
+        InstallState::Missing { size: 626_797_331 },
+        InstallState::Installing {
+            done: 1_000_000,
+            size: 626_797_331,
+        },
+        InstallState::Installed {
+            version: "0.98.0".into(),
+        },
+        InstallState::Cannot(CannotInstall::Node {
+            needs: 22,
+            has: Some(20),
+        }),
+        InstallState::Cannot(CannotInstall::Node {
+            needs: 22,
+            has: None,
+        }),
+        InstallState::Cannot(CannotInstall::Npm),
+        InstallState::Cannot(CannotInstall::Platform),
+        InstallState::Cannot(CannotInstall::Failed(InstallFailure::Offline)),
+        InstallState::Cannot(CannotInstall::Failed(InstallFailure::Corrupt)),
+        InstallState::Cannot(CannotInstall::Failed(InstallFailure::NoSpace)),
+        InstallState::Cannot(CannotInstall::Failed(InstallFailure::Stopped)),
+        InstallState::Cannot(CannotInstall::Failed(InstallFailure::Other(
+            "npm ERR! code EACCES".into(),
+        ))),
+    ];
+    let sign_ins = [
+        SignInState::Unknown,
+        SignInState::SignedOut,
+        SignInState::SigningIn(SignInLink {
+            url: None,
+            code: None,
+            paste: false,
+        }),
+        SignInState::SigningIn(SignInLink {
+            url: Some("https://claude.com/cai/oauth/authorize".into()),
+            code: Some("ABCD-1234".into()),
+            paste: true,
+        }),
+        SignInState::SignedIn(SignedInAs::Account),
+        SignInState::SignedIn(SignedInAs::ApiKey),
+        SignInState::SignedIn(SignedInAs::Gateway),
+        SignInState::SignedIn(SignedInAs::Unknown),
+    ];
+    (installs
+        .into_iter()
+        .zip(sign_ins.into_iter().cycle())
+        .enumerate())
+    .map(|(at, (install, sign_in))| AgentStatus {
+        name: AgentName(format!("agent-{at}")),
+        install,
+        sign_in,
+    })
+    .collect()
+}
+
 /// Version 1: one of every message each way, and of everything in them.
 fn version_1() -> Sample {
     let summary = ChatSummary {
@@ -408,7 +484,7 @@ fn version_1() -> Sample {
         question: QuestionId(question),
         answer,
     };
-    let from_viewer = vec![
+    let mut from_viewer = vec![
         FromViewer::Hello { min: 1, max: 1 },
         FromViewer::Watch {
             chat: ChatId(1),
@@ -439,6 +515,21 @@ fn version_1() -> Sample {
             chat: ChatId(1),
         },
     ];
+    let actions = [
+        AgentAction::Install,
+        AgentAction::StopInstall,
+        AgentAction::SignIn,
+        AgentAction::Paste("code#state".into()),
+        AgentAction::StopSignIn,
+        AgentAction::SignOut,
+    ];
+    from_viewer.extend((actions.into_iter().zip(10..)).map(|(action, request)| {
+        FromViewer::Agent {
+            request: RequestNo(request),
+            agent: AgentName("claude".into()),
+            action,
+        }
+    }));
     let refused = [
         Refused::NoSuchChat,
         Refused::Closed,
@@ -451,6 +542,10 @@ fn version_1() -> Sample {
         Refused::NoSuchQuestion,
         Refused::WrongAnswer,
         Refused::NothingToStop,
+        Refused::NotInstallable,
+        Refused::AlreadyInstalled,
+        Refused::CannotSignIn,
+        Refused::NotSigningIn,
     ];
     let outcomes = [
         Outcome::Opened(ChatId(1)),
@@ -484,6 +579,7 @@ fn version_1() -> Sample {
                 .collect(),
         },
         ToViewer::Ended { chat: ChatId(1) },
+        ToViewer::Agents(agents()),
     ];
     to_viewer.extend(
         (outcomes.zip(1..)).map(|(outcome, request)| ToViewer::Done {

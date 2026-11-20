@@ -100,6 +100,11 @@ impl<A: AppItem> Core<A> {
                 resent: None,
             },
         );
+        // Its first picture shows it waiting for its agent, if it must.
+        let state = self.wanting(chat);
+        if let Some(whole) = self.chats.get_mut(&chat) {
+            whole.state = state;
+        }
         self.advance(now, conn, out);
         Ok(())
     }
@@ -141,7 +146,8 @@ impl<A: AppItem> Core<A> {
         };
         run.open = Open::Wanted;
         let conn = run.conn;
-        self.set_state(chat, ChatState::Opening);
+        let state = self.wanting(chat);
+        self.set_state(chat, state);
         self.advance(now, conn, out);
     }
 
@@ -472,7 +478,8 @@ impl<A: AppItem> Core<A> {
         if let Some(question) = slow {
             self.unask_slow(chat, question);
         }
-        let failure = failure_for(&lost);
+        let mut failure = failure_for(&lost);
+        self.sign_in_failure(chat, &mut failure);
         if let Some(running) = running {
             // A turn being stopped ends as the user asked.
             let life = if running.stop_by.is_some() {
@@ -774,6 +781,7 @@ impl<A: AppItem> Core<A> {
     /// Stops everything.
     pub(super) fn shut_down(&mut self, now: Now, out: &mut Vec<Directive>) {
         self.shutting_down = true;
+        self.stop_setup(out);
         let chats: Vec<ChatId> = (self.chats.iter())
             .filter(|(_, whole)| whole.state != ChatState::Closed)
             .map(|(&chat, _)| chat)

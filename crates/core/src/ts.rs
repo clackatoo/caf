@@ -57,7 +57,10 @@ mod tests {
     use ts_rs::{Config, TS};
 
     use crate::acp::{Frame, Message, RequestId, RpcError, Shape};
-    use crate::agent::{AgentSpec, EnvChange, McpServer, SpawnCommand};
+    use crate::agent::{
+        AgentSpec, AgentStatus, CannotInstall, EnvChange, InstallFailure, InstallState, Launch,
+        McpServer, SignInLink, SignInState, SpawnCommand,
+    };
     use crate::change::{Change, Mismatch, Numbered};
     use crate::chat::{
         Chat, ChatState, Compacted, Cost, Failure, FailureReason, Incompatible, Item, ItemKind,
@@ -66,14 +69,20 @@ mod tests {
     };
     use crate::core::{ConnectionInfo, OpenChat, Refused, SessionChoice};
     use crate::directive::{
-        AgentDirective, Directive, Level, PermissionRequest, PolicyDirective, Report, Signal,
-        StorageDirective, TimerDirective, ViewerDirective,
+        AgentDirective, Directive, Level, PermissionRequest, PolicyDirective, Report,
+        SetupDirective, Signal, StorageDirective, TimerDirective, ViewerDirective,
     };
-    use crate::event::{AgentEvent, Event, Exit, HostCommand, PolicyAnswer, StorageEvent};
+    use crate::event::{
+        AgentEvent, Event, Exit, HostCommand, PolicyAnswer, SetupEvent, StorageEvent,
+    };
     use crate::host::{Grouping, Host, Limits, Shows, Timers};
     use crate::ids::{
         AgentName, AgentSessionId, ChangeNo, ChatId, ConnectionId, ItemId, QuestionId, Ticket,
         TurnId,
+    };
+    use crate::install::{
+        Artifact, Bundled, EnvValue, Install, LinkFrom, Needs, NpmPackage, Platform, Program,
+        Recipe, SignIn, SignedInAs, Status, StatusCommand, Unpack,
     };
     use crate::profiles::{AdapterInfo, Builtin, Checked, ProfileChoice, ProfileReport};
     use crate::question::{
@@ -82,7 +91,9 @@ mod tests {
     };
     use crate::shape::{Samples, every_type, traces};
     use crate::time::{End, Mono, Now, Wall, Window};
-    use crate::viewer::{ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, ToViewer};
+    use crate::viewer::{
+        AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, ToViewer,
+    };
 
     /// The TypeScript caf-sdk, which keeps the generated files.
     fn sdk() -> PathBuf {
@@ -116,8 +127,15 @@ mod tests {
             Shape,
             // agent
             AgentSpec,
+            AgentStatus,
+            CannotInstall,
             EnvChange,
+            InstallFailure,
+            InstallState,
+            Launch,
             McpServer,
+            SignInLink,
+            SignInState,
             SpawnCommand,
             // change
             Change,
@@ -159,6 +177,7 @@ mod tests {
             PermissionRequest,
             PolicyDirective,
             Report,
+            SetupDirective,
             Signal,
             StorageDirective,
             TimerDirective,
@@ -169,6 +188,7 @@ mod tests {
             Exit,
             HostCommand,
             PolicyAnswer,
+            SetupEvent,
             StorageEvent,
             // host
             Grouping,
@@ -176,6 +196,22 @@ mod tests {
             Limits,
             Shows,
             Timers,
+            // install
+            Artifact,
+            Bundled,
+            EnvValue,
+            Install,
+            LinkFrom,
+            Needs,
+            NpmPackage,
+            Platform,
+            Program,
+            Recipe,
+            SignIn,
+            SignedInAs,
+            Status,
+            StatusCommand,
+            Unpack,
             // ids
             AgentName,
             AgentSessionId,
@@ -209,6 +245,7 @@ mod tests {
             Wall,
             Window,
             // viewer
+            AgentAction,
             ChatSummary,
             FromViewer,
             OpenRequest,

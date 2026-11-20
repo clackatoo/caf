@@ -11,7 +11,10 @@ use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
 use crate::acp::{Frame, Message, RequestId, RpcError, Shape};
-use crate::agent::{AgentSpec, EnvChange, McpServer, SpawnCommand};
+use crate::agent::{
+    AgentSpec, AgentStatus, CannotInstall, EnvChange, InstallFailure, InstallState, Launch,
+    McpServer, SignInLink, SignInState, SpawnCommand,
+};
 use crate::change::{Change, Mismatch, Numbered};
 use crate::chat::{
     Chat, ChatState, Compacted, Cost, Failure, FailureReason, Incompatible, Item, ItemKind, Lost,
@@ -20,13 +23,17 @@ use crate::chat::{
 };
 use crate::core::{ConnectionInfo, OpenChat, Refused, SessionChoice};
 use crate::directive::{
-    AgentDirective, Directive, Level, PermissionRequest, PolicyDirective, Report, Signal,
-    TimerDirective, ViewerDirective,
+    AgentDirective, Directive, Level, PermissionRequest, PolicyDirective, Report, SetupDirective,
+    Signal, TimerDirective, ViewerDirective,
 };
-use crate::event::{AgentEvent, Event, Exit, HostCommand, PolicyAnswer};
+use crate::event::{AgentEvent, Event, Exit, HostCommand, PolicyAnswer, SetupEvent};
 use crate::host::{Grouping, Host, Limits, Shows, Timers};
 use crate::ids::{
     AgentName, AgentSessionId, ChangeNo, ChatId, ConnectionId, ItemId, QuestionId, Ticket, TurnId,
+};
+use crate::install::{
+    Artifact, Bundled, EnvValue, Install, LinkFrom, Needs, NpmPackage, Platform, Program, Recipe,
+    SignIn, SignedInAs, Status, StatusCommand, Unpack,
 };
 use crate::profiles::{AdapterInfo, Builtin, Checked, ProfileChoice, ProfileReport};
 use crate::question::{
@@ -34,7 +41,9 @@ use crate::question::{
     SlowToOpen,
 };
 use crate::time::{End, Mono, Now, Wall, Window};
-use crate::viewer::{ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, ToViewer};
+use crate::viewer::{
+    AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, ToViewer,
+};
 
 /// Values as CAF writes them, each with its TypeScript type: one of
 /// every type, and everything from replaying the recorded traces. The
@@ -246,6 +255,74 @@ fn command() -> SpawnCommand {
     command
 }
 
+/// A program that comes with an agent: its adapter, with `args`.
+fn adapter(args: &[&str]) -> Bundled {
+    Bundled {
+        program: Program::Adapter,
+        args: args.iter().map(|&arg| arg.to_owned()).collect(),
+        env: Vec::new(),
+    }
+}
+
+/// A recipe with one of everything: an npm install, a sign-in, a sign-out
+/// and a status command.
+fn recipe() -> Recipe {
+    Recipe {
+        version: "1.2.3".into(),
+        install: Install::Npm(NpmPackage {
+            manifest: r#"{"dependencies":{"some-acp":"1.2.3"}}"#.into(),
+            lockfile: r#"{"lockfileVersion":3}"#.into(),
+        }),
+        size: 1_000_000,
+        needs: Needs {
+            node: Some(22),
+            npm: true,
+        },
+        adapter: Bundled {
+            program: Program::InInstall("node_modules/.bin/some-acp".into()),
+            args: vec!["--acp".into()],
+            env: vec![
+                ("MODE".into(), EnvValue::Text("quiet".into())),
+                ("SOME_HOME".into(), EnvValue::PrivateFolder),
+            ],
+        },
+        sign_in: Some(SignIn {
+            command: adapter(&["login"]),
+            link: LinkFrom::Browser,
+            code_after: Some("Your code: ".into()),
+            paste: true,
+            sites: vec!["example.com".into()],
+        }),
+        sign_out: Some(adapter(&["logout"])),
+        status: Status {
+            pushed: true,
+            command: Some(StatusCommand {
+                command: adapter(&["status", "--json"]),
+                signed_in: "/loggedIn".into(),
+                how: Some((
+                    "/authMethod".into(),
+                    vec![("key".into(), SignedInAs::ApiKey)],
+                )),
+            }),
+        },
+    }
+}
+
+/// An agent's status: installed, and signing in.
+fn agent_status() -> AgentStatus {
+    AgentStatus {
+        name: AgentName("claude".into()),
+        install: InstallState::Installed {
+            version: "0.98.0".into(),
+        },
+        sign_in: SignInState::SigningIn(SignInLink {
+            url: Some("https://claude.com/cai/oauth/authorize".into()),
+            code: None,
+            paste: true,
+        }),
+    }
+}
+
 fn profile() -> ProfileReport {
     ProfileReport {
         profile: ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
@@ -378,6 +455,72 @@ pub(crate) fn every_type(s: &mut Samples) {
     s.both(&agent);
     s.both(&command());
     s.both(&EnvChange::Remove("HOME".into()));
+    s.both(&AgentSpec::installed("claude", Builtin::ClaudeAgentAcp));
+    s.both(&Launch::Installed);
+    s.both(&agent_status());
+    s.both(&InstallState::Installing {
+        done: 10,
+        size: 100,
+    });
+    s.both(&CannotInstall::Node {
+        needs: 22,
+        has: Some(20),
+    });
+    s.both(&InstallFailure::Other("EACCES".into()));
+    s.both(&SignInState::SignedIn(SignedInAs::Account));
+    s.both(&SignInLink {
+        url: None,
+        code: Some("ABCD-1234".into()),
+        paste: false,
+    });
+    // install
+    s.both(&recipe());
+    s.both(&Install::Download(vec![Artifact {
+        platform: Platform {
+            os: "linux".into(),
+            arch: "x86_64".into(),
+        },
+        url: "https://example.com/agent.zip".into(),
+        sha256: "00".repeat(32),
+        unpack: Unpack::Zip,
+    }]));
+    s.both(&NpmPackage {
+        manifest: "{}".into(),
+        lockfile: "{}".into(),
+    });
+    s.both(&Artifact {
+        platform: Platform {
+            os: "macos".into(),
+            arch: "aarch64".into(),
+        },
+        url: "https://example.com/agent".into(),
+        sha256: "ff".repeat(32),
+        unpack: Unpack::No,
+    });
+    s.both(&Platform {
+        os: "linux".into(),
+        arch: "aarch64".into(),
+    });
+    s.both(&Unpack::TarGz);
+    s.both(&Needs::default());
+    s.both(&adapter(&["--cli"]));
+    s.both(&Program::InInstall("bin/agent".into()));
+    s.both(&EnvValue::PrivateFolder);
+    s.both(&SignIn {
+        command: adapter(&["login"]),
+        link: LinkFrom::Output("Open: ".into()),
+        code_after: None,
+        paste: false,
+        sites: vec!["example.com".into()],
+    });
+    s.both(&LinkFrom::Browser);
+    s.both(&Status::default());
+    s.both(&StatusCommand {
+        command: adapter(&["status"]),
+        signed_in: "/ok".into(),
+        how: None,
+    });
+    s.both(&SignedInAs::Gateway);
     s.both(&McpServer::Http {
         name: "map".into(),
         url: "http://localhost:9/mcp".into(),
@@ -441,11 +584,21 @@ pub(crate) fn every_type(s: &mut Samples) {
         session: SessionChoice::New,
     });
     s.both(&Outcome::Refused(Refused::NoSuchChat));
+    s.both(&FromViewer::Agent {
+        request: RequestNo(2),
+        agent: AgentName("claude".into()),
+        action: AgentAction::Paste("code#state".into()),
+    });
+    s.both(&AgentAction::SignIn);
+    s.both(&ToViewer::<crate::chat::NoAppItems>::Agents(vec![
+        agent_status(),
+    ]));
     // directive
     s.written(
         &Directive::Agent(AgentDirective::Start {
             process: Ticket(3),
             command: command(),
+            hold: Some("/home/me/.local/share/caf/agents/claude-0.98.0".into()),
         }),
         true,
     );
@@ -485,6 +638,46 @@ pub(crate) fn every_type(s: &mut Samples) {
         message: "odd".into(),
     });
     s.both(&Level::Debug);
+    let setup = [
+        SetupDirective::Survey { ticket: Ticket(6) },
+        SetupDirective::Install {
+            ticket: Ticket(7),
+            folder: "claude-0.98.0".into(),
+            install: recipe().install,
+        },
+        SetupDirective::Remove {
+            ticket: Ticket(8),
+            folder: "claude-0.97.0".into(),
+        },
+        SetupDirective::SignIn {
+            ticket: Ticket(9),
+            command: command(),
+            link: LinkFrom::Browser,
+            code_after: None,
+        },
+        SetupDirective::Paste {
+            ticket: Ticket(9),
+            text: "code#state".into(),
+        },
+        SetupDirective::Run {
+            ticket: Ticket(10),
+            command: command(),
+        },
+        SetupDirective::Status {
+            ticket: Ticket(11),
+            command: command(),
+            signed_in: "/loggedIn".into(),
+            how: Some((
+                "/authMethod".into(),
+                vec![("claude.ai".into(), SignedInAs::Account)],
+            )),
+        },
+        SetupDirective::Stop { ticket: Ticket(9) },
+    ];
+    for directive in setup {
+        s.written(&directive, true);
+        s.written(&Directive::Setup(directive), true);
+    }
     // event
     s.written(
         &Event::<crate::chat::NoAppItems>::Host(HostCommand::OpenChat {
@@ -502,6 +695,54 @@ pub(crate) fn every_type(s: &mut Samples) {
         true,
     );
     s.written(&AgentEvent::Stderr(b"hi\n".to_vec()), true);
+    let agent = AgentName("claude".into());
+    let commands = [
+        HostCommand::CheckAgents,
+        HostCommand::Install(agent.clone()),
+        HostCommand::StopInstall(agent.clone()),
+        HostCommand::SignIn(agent.clone()),
+        HostCommand::Paste {
+            agent: agent.clone(),
+            text: "code#state".into(),
+        },
+        HostCommand::StopSignIn(agent.clone()),
+        HostCommand::SignOut(agent),
+    ];
+    for command in commands {
+        s.written(&Event::<crate::chat::NoAppItems>::Host(command), true);
+    }
+    let reports = [
+        SetupEvent::Surveyed {
+            root: "/home/me/.local/share/caf/agents".into(),
+            installed: vec!["claude-0.98.0".into()],
+            node: Some(22),
+            npm: true,
+            platform: Platform {
+                os: "linux".into(),
+                arch: "x86_64".into(),
+            },
+        },
+        SetupEvent::Progress { done: 1000 },
+        SetupEvent::Installed,
+        SetupEvent::InstallFailed(InstallFailure::Offline),
+        SetupEvent::Removed { removed: false },
+        SetupEvent::Link("https://claude.com/cai/oauth/authorize".into()),
+        SetupEvent::Code("ABCD-1234".into()),
+        SetupEvent::Status(Some(SignedInAs::ApiKey)),
+        SetupEvent::Status(None),
+        SetupEvent::Ended { ok: true },
+        SetupEvent::Failed("npm: not found".into()),
+    ];
+    for event in reports {
+        s.written(&event, true);
+        s.written(
+            &Event::<crate::chat::NoAppItems>::Setup {
+                ticket: Ticket(7),
+                event,
+            },
+            true,
+        );
+    }
     s.both(&Exit::Signal(9));
     s.both(&PolicyAnswer::AskUser);
     // Raw ACP payloads are read back only from JSON: they only ever travel

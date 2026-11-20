@@ -111,7 +111,9 @@ pub enum HostCommand<A: AppItem = NoAppItems> {
     Paste {
         /// The agent.
         agent: AgentName,
-        /// What they pasted.
+        /// What they pasted. It's a one-time code, so recordings write it
+        /// as `null`, which reads back as empty.
+        #[serde(deserialize_with = "null_as_empty")]
         text: String,
     },
     /// Stop a sign-in.
@@ -215,6 +217,11 @@ fn bytes_or_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, 
         Either::Text(text) => text.into_bytes(),
         Either::Bytes(bytes) => bytes,
     })
+}
+
+/// Text, read as empty from `null`.
+fn null_as_empty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// What the setup driver reports.

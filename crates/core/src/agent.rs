@@ -34,8 +34,11 @@ impl AgentSpec {
     /// profile says, and signs in to.
     #[must_use]
     pub fn installed(name: impl Into<String>, builtin: Builtin) -> Self {
-        let _ = (name, builtin);
-        todo!()
+        Self {
+            name: AgentName(name.into()),
+            launch: Launch::Installed,
+            profile: ProfileChoice::Builtin(builtin),
+        }
     }
 
     /// An agent called `name`, started by the host's own `command`, with

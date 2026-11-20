@@ -2,6 +2,7 @@
 import type { AgentDirective } from "./AgentDirective.ts";
 import type { PolicyDirective } from "./PolicyDirective.ts";
 import type { Report } from "./Report.ts";
+import type { SetupDirective } from "./SetupDirective.ts";
 import type { StorageDirective } from "./StorageDirective.ts";
 import type { TimerDirective } from "./TimerDirective.ts";
 import type { ViewerDirective } from "./ViewerDirective.ts";
@@ -9,4 +10,4 @@ import type { ViewerDirective } from "./ViewerDirective.ts";
 /**
  * Work for a driver.
  */
-export type Directive = { "type": "Agent", "value": AgentDirective } | { "type": "Timer", "value": TimerDirective } | { "type": "Policy", "value": PolicyDirective } | { "type": "Viewer", "value": ViewerDirective } | { "type": "Storage", "value": StorageDirective } | { "type": "Report", "value": Report };
+export type Directive = { "type": "Agent", "value": AgentDirective } | { "type": "Timer", "value": TimerDirective } | { "type": "Policy", "value": PolicyDirective } | { "type": "Viewer", "value": ViewerDirective } | { "type": "Storage", "value": StorageDirective } | { "type": "Setup", "value": SetupDirective } | { "type": "Report", "value": Report };

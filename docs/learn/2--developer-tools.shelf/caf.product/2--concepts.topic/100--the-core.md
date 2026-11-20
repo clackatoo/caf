@@ -41,6 +41,7 @@ Drivers are small, and each does one kind of job:
 | Policy | Answers "may the agent do this?" |
 | Viewer | Tells the program's views that a chat changed |
 | Storage | Saves and loads chats (a later feature) |
+| Setup | Installs agents and runs their sign-in commands, as each one's [recipe](~caf/concepts/agents-and-profiles#installing) says |
 
 Drivers never hear each other: only the core listens to them, and only the
 core gives them work. A directive whose result the core waits for has a
