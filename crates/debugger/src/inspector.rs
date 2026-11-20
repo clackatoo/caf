@@ -117,11 +117,12 @@ pub enum ToInspector {
     /// same messages from `/viewer`. They come after a
     /// [`ToInspector::Position`] when looking back, and in replay:
     ///
-    /// 1. first a [`ToViewer::Chats`]: the chats open at `at`. A chat not
-    ///    in it wasn't opened yet, or was closed;
-    /// 2. then, for each chat the core had at `at`, closed ones too, a
-    ///    [`ToViewer::Picture`] or a [`ToViewer::Changes`], oldest chat
-    ///    first.
+    /// 1. first a [`ToViewer::Chats`]: every chat the core had at `at`,
+    ///    oldest first. Unlike on `/viewer`, it lists closed chats too, so
+    ///    the app can show how they ended. A chat not in it wasn't opened
+    ///    yet: the app drops its copy;
+    /// 2. then, for each of those chats, a [`ToViewer::Picture`] or a
+    ///    [`ToViewer::Changes`], in the same order.
     ///
     /// Moving back gives every chat a Picture. Moving forward gives the
     /// changes since the last position, in Changes, or a Picture for a

@@ -29,8 +29,9 @@ serde.workspace = true
 serde_json.workspace = true
 # The token, compared in constant time.
 subtle = "2.6"
-# signal: Ctrl-C shuts CAF down, so the recording is complete.
-tokio = { workspace = true, features = ["net", "rt-multi-thread", "signal"] }
+# fs: the app's files and the recording. signal: Ctrl-C shuts CAF down,
+# so the recording is complete.
+tokio = { workspace = true, features = ["fs", "net", "rt-multi-thread", "signal"] }
 # agents.toml.
 toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }
 # The inspector channel's TypeScript types, behind the feature `ts`.
