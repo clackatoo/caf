@@ -226,8 +226,11 @@ impl ChatSummary {
     /// A chat's summary.
     #[must_use]
     pub fn of<A: AppItem>(chat: &Chat<A>) -> Self {
-        let _ = chat;
-        todo!()
+        Self {
+            id: chat.id,
+            agent: chat.agent.clone(),
+            cwd: chat.cwd.clone(),
+        }
     }
 }
 
@@ -250,6 +253,18 @@ pub struct OpenRequest {
     pub cwd: PathBuf,
     /// A new session, or one to continue.
     pub session: SessionChoice,
+}
+
+impl OpenRequest {
+    /// A new session with `agent` in `cwd`.
+    #[must_use]
+    pub fn new(agent: impl Into<String>, cwd: impl Into<PathBuf>) -> Self {
+        Self {
+            agent: AgentName(agent.into()),
+            cwd: cwd.into(),
+            session: SessionChoice::New,
+        }
+    }
 }
 
 /// How a viewer's request went.

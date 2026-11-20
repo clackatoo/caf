@@ -24,6 +24,45 @@
 //! running.await;
 //! ```
 //!
+//! # Serving viewers
+//!
+//! A viewer is anything that shows chats from outside the host's own
+//! code: a web page through the TypeScript caf-sdk, another process, a
+//! debugger. [`viewer::serve`] runs CAF's side of the viewer wire
+//! ([`caf_core::viewer`]) for one of them, over two channels the host
+//! fills from its own transport, such as a WebSocket:
+//!
+//! ```ignore
+//! let rules = Arc::new(ViewerRules::default());
+//! // for each viewer that connects:
+//! let (to_caf, from) = mpsc::channel(16);
+//! let (to, mut to_viewer) = mpsc::channel(64);
+//! tokio::spawn(serve(caf.clone(), Arc::clone(&rules), from, to));
+//! // decode what the viewer sends onto `to_caf`; encode and send it
+//! // what comes out of `to_viewer`, until either ends.
+//! ```
+//!
+//! - Viewers see every chat in this [`Caf`]. A host whose users mustn't
+//!   see each other's chats starts a Caf for each.
+//! - [`ViewerRules`](viewer::ViewerRules) say what they may do. Opening
+//!   is the host's decision: by default viewers can't open chats, only
+//!   watch and act on the host's. `act: false` makes them watch only.
+//! - A slow viewer costs nothing to keep: while its channel is full, its
+//!   chats' changes wait in the core's bounded list, and once it falls
+//!   further behind than that it gets each chat whole again.
+//! - A viewer doesn't keep CAF running, and `serve` ends when CAF does,
+//!   after telling the viewer each watched chat has ended.
+//!
+//! [`Caf::agents`] and [`Caf::watch_chats`] give what a host needs to
+//! serve viewers some other way, and [`ChatHandle::watch_from`] resumes a
+//! viewer's watch from the last change it has.
+//!
+//! # Watching every step
+//!
+//! [`Caf::start_watching`] gives a [`Steps`] every event the core takes
+//! and every directive it gives out, as a recording holds them: for
+//! debuggers, and for tests that check CAF against a replay.
+//!
 //! The drivers inside are separate pieces, each usable on its own by a
 //! host that wires the core up itself: [`AgentDriver`] runs adapter
 //! processes, [`TimerDriver`] wakes the core, and a [`Policy`] answers

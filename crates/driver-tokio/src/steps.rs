@@ -6,6 +6,13 @@
 //! as the [`Event::Host`] they're recorded as, and only if the core took
 //! them.
 //!
+//! The event is the recording's line read back, so it's what a replay
+//! gives the core, with what a recording hides hidden here too, such as
+//! the account's email in Claude's sign-in status and the values of MCP
+//! servers' variables. None of it changes what the core does: a fresh
+//! core given the same events gives out the same directives. Without a
+//! watcher, watching costs nothing more than a check each step.
+//!
 //! [`Config::record`]: crate::Config::record
 //! [`ChatHandle::send`]: crate::ChatHandle::send
 //! [`Event::Host`]: caf_core::Event::Host

@@ -19,6 +19,9 @@
 //! | `Viewer(Changed)` | Wakes the chat's watches, which read with [`Core::read`] |
 //! | `Report` | The [`log`] facade, target `caf` |
 //!
+//! A [`Steps`] given to [`Caf::start_watching`] sees each event once the
+//! core has it, with its directives, before they go to their drivers.
+//!
 //! Watches pull rather than being pushed to: a watch asks for what
 //! changed since it last read, so the only changes held for it are the
 //! core's own list, which is bounded
@@ -45,13 +48,13 @@ use caf_core::{
     AppItem, Chat, ChatId, Core, Directive, Event, Host, NoAppItems, Now, Numbered, OpenChat,
     QuestionId, Read, Refused, Report, Ticket, TurnId,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{AbortHandle, JoinHandle, JoinSet};
 
 use crate::agent::{AgentDriver, AgentLimits};
 use crate::policy::{AlwaysAsk, Policy};
-use crate::steps::Steps;
+use crate::steps::{Step, Steps};
 use crate::timer::TimerDriver;
 
 /// What to start CAF with.
@@ -133,18 +136,89 @@ impl Config {
 /// keep it running.
 pub struct Caf<A: AppItem = NoAppItems> {
     commands: mpsc::Sender<Command<A>>,
-    last: LastWords<A>,
-    /// Closed once the task has ended and `last` is filled in.
-    ended: watch::Receiver<()>,
+    shared: Common<A>,
 }
 
 impl<A: AppItem> Clone for Caf<A> {
     fn clone(&self) -> Self {
         Self {
             commands: self.commands.clone(),
+            shared: self.shared.clone(),
+        }
+    }
+}
+
+/// What every handle shares, strong or weak.
+struct Common<A: AppItem> {
+    last: LastWords<A>,
+    /// Closed once the task has ended and `last` is filled in.
+    ended: watch::Receiver<()>,
+    /// The agents' names, in order.
+    agents: Arc<[AgentName]>,
+    /// The open chats, in the order they were opened.
+    chats: watch::Receiver<Vec<ChatSummary>>,
+}
+
+impl<A: AppItem> Clone for Common<A> {
+    fn clone(&self) -> Self {
+        Self {
             last: Arc::clone(&self.last),
             ended: self.ended.clone(),
+            agents: Arc::clone(&self.agents),
+            chats: self.chats.clone(),
         }
+    }
+}
+
+/// A handle on CAF that doesn't keep it running, as a [`Watch`] holds.
+pub(crate) struct WeakCaf<A: AppItem> {
+    commands: mpsc::WeakSender<Command<A>>,
+    shared: Common<A>,
+}
+
+impl<A: AppItem> WeakCaf<A> {
+    /// A handle that keeps CAF running while it's held, unless CAF has
+    /// shut down.
+    pub(crate) fn upgrade(&self) -> Option<Caf<A>> {
+        Some(Caf {
+            commands: self.commands.upgrade()?,
+            shared: self.shared.clone(),
+        })
+    }
+
+    /// See [`Caf::agents`].
+    pub(crate) fn agents(&self) -> &[AgentName] {
+        &self.shared.agents
+    }
+
+    /// See [`Caf::watch_chats`].
+    pub(crate) fn watch_chats(&self) -> ChatsWatch {
+        ChatsWatch {
+            list: self.shared.chats.clone(),
+            first: true,
+        }
+    }
+
+    /// A watch on `chat`, from `since` if the watcher has that already.
+    pub(crate) fn watch(&self, chat: ChatId, since: Option<ChangeNo>) -> Watch<A> {
+        let mut last = (self.shared.last.lock()).unwrap_or_else(PoisonError::into_inner);
+        last.watched.insert(chat);
+        drop(last);
+        Watch {
+            commands: self.commands.clone(),
+            last: Arc::clone(&self.shared.last),
+            caf_ended: self.shared.ended.clone(),
+            chat,
+            since,
+            wake: None,
+            ended: false,
+        }
+    }
+
+    /// Resolves once CAF's task has ended.
+    pub(crate) async fn ended(&self) {
+        let mut ended = self.shared.ended.clone();
+        while ended.changed().await.is_ok() {}
     }
 }
 
@@ -227,6 +301,22 @@ impl<A: AppItem> Caf<A> {
     /// must have its I/O and time drivers enabled.
     #[must_use]
     pub fn start(config: Config) -> (Self, Running) {
+        Self::start_with(config, None)
+    }
+
+    /// Starts CAF as [`Caf::start`] does, with `steps` seeing every step
+    /// it takes: for debuggers and tests.
+    ///
+    /// # Panics
+    ///
+    /// As [`Caf::start`].
+    #[must_use]
+    pub fn start_watching(config: Config, steps: impl Steps<A>) -> (Self, Running) {
+        Self::start_with(config, Some(Box::new(steps)))
+    }
+
+    /// Starts CAF, with `steps` seeing every step if there are any.
+    fn start_with(config: Config, steps: Option<Box<dyn Steps<A>>>) -> (Self, Running) {
         assert_eq!(
             config.agent_limits.biggest_line, config.host.limits.biggest_message,
             "the agent driver's biggest line must be the host's biggest message"
@@ -236,6 +326,10 @@ impl<A: AppItem> Caf<A> {
         let (commands, inbox) = mpsc::channel(COMMANDS);
         let last = LastWords::default();
         let (ending, ended) = watch::channel(());
+        let agents = (config.agents.iter())
+            .map(|agent| agent.name.clone())
+            .collect();
+        let (open, chats) = watch::channel(Vec::new());
         let task = Task {
             core: Core::new(config.host, config.agents),
             agents: AgentDriver::new(config.agent_limits),
@@ -248,6 +342,8 @@ impl<A: AppItem> Caf<A> {
             last: Arc::clone(&last),
             ending: Some(ending),
             recorder,
+            steps,
+            open,
             inbox,
             listening: true,
             shutting_down: false,
@@ -257,34 +353,45 @@ impl<A: AppItem> Caf<A> {
         let task = tokio::spawn(task.run());
         let caf = Self {
             commands,
-            last,
-            ended,
+            shared: Common {
+                last,
+                ended,
+                agents,
+                chats,
+            },
         };
         (caf, Running { task })
-    }
-
-    /// Starts CAF as [`Caf::start`] does, with `steps` seeing every step
-    /// it takes: for debuggers and tests.
-    ///
-    /// # Panics
-    ///
-    /// As [`Caf::start`].
-    #[must_use]
-    pub fn start_watching(config: Config, steps: impl Steps<A>) -> (Self, Running) {
-        let _ = (config, steps);
-        todo!()
     }
 
     /// The names of the agents CAF was started with, in order.
     #[must_use]
     pub fn agents(&self) -> &[AgentName] {
-        todo!()
+        &self.shared.agents
     }
 
     /// Follows which chats are open, with each one's agent and folder.
     #[must_use]
     pub fn watch_chats(&self) -> ChatsWatch {
-        todo!()
+        self.downgrade().watch_chats()
+    }
+
+    /// Answers a question, whichever chat it's in. See
+    /// [`ChatHandle::answer`].
+    pub(crate) async fn answer(&self, question: QuestionId, answer: Answer) -> Result<(), Error> {
+        let answering = |reply| Command::Answer {
+            question,
+            answer,
+            reply,
+        };
+        self.ask(answering).await
+    }
+
+    /// A handle that doesn't keep CAF running.
+    pub(crate) fn downgrade(&self) -> WeakCaf<A> {
+        WeakCaf {
+            commands: self.commands.downgrade(),
+            shared: self.shared.clone(),
+        }
     }
 
     /// Opens a chat. It's ready to take messages at once: they wait until
@@ -377,12 +484,7 @@ impl<A: AppItem> ChatHandle<A> {
     ///
     /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
     pub async fn answer(&self, question: QuestionId, answer: Answer) -> Result<(), Error> {
-        let answering = |reply| Command::Answer {
-            question,
-            answer,
-            reply,
-        };
-        self.caf.ask(answering).await
+        self.caf.answer(question, answer).await
     }
 
     /// Closes the chat for good.
@@ -400,18 +502,7 @@ impl<A: AppItem> ChatHandle<A> {
     /// rather than holding changes without end.
     #[must_use]
     pub fn watch(&self) -> Watch<A> {
-        let mut last = (self.caf.last.lock()).unwrap_or_else(PoisonError::into_inner);
-        last.watched.insert(self.id);
-        drop(last);
-        Watch {
-            commands: self.caf.commands.downgrade(),
-            last: Arc::clone(&self.caf.last),
-            caf_ended: self.caf.ended.clone(),
-            chat: self.id,
-            since: None,
-            wake: None,
-            ended: false,
-        }
+        self.caf.downgrade().watch(self.id, None)
     }
 
     /// Watches the chat from a change the watcher already has, such as a
@@ -419,8 +510,7 @@ impl<A: AppItem> ChatHandle<A> {
     /// first, or the whole chat if CAF no longer has them all.
     #[must_use]
     pub fn watch_from(&self, since: ChangeNo) -> Watch<A> {
-        let _ = since;
-        todo!()
+        self.caf.downgrade().watch(self.id, Some(since))
     }
 }
 
@@ -450,7 +540,9 @@ pub struct Watch<A: AppItem = NoAppItems> {
 /// Follows which chats are open: opened by the host, by any viewer, or
 /// closed. Like [`Watch`], it doesn't keep CAF running.
 pub struct ChatsWatch {
-    _todo: (),
+    list: watch::Receiver<Vec<ChatSummary>>,
+    /// It hasn't given the list yet.
+    first: bool,
 }
 
 impl ChatsWatch {
@@ -463,7 +555,14 @@ impl ChatsWatch {
     ///
     /// Cancel-safe: dropped before it resolves, it loses nothing.
     pub async fn next(&mut self) -> Option<Vec<ChatSummary>> {
-        todo!()
+        if self.first {
+            // The task drops the list's sender as it ends.
+            self.list.has_changed().ok()?;
+            self.first = false;
+        } else {
+            self.list.changed().await.ok()?;
+        }
+        Some(self.list.borrow_and_update().clone())
     }
 }
 
@@ -559,8 +658,16 @@ impl<A: AppItem> Watch<A> {
         self.ended = true;
         let last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
         let (chat, latest) = last.chats.get(&self.chat)?;
-        let behind = self.since.is_none_or(|since| since < *latest);
-        behind.then(|| Update::Picture(chat.clone()))
+        if self.since.is_some_and(|since| since >= *latest) {
+            return None;
+        }
+        self.since = Some(*latest);
+        Some(Update::Picture(chat.clone()))
+    }
+
+    /// The last change it has had, if any.
+    pub(crate) fn latest(&self) -> Option<ChangeNo> {
+        self.since
     }
 }
 
@@ -660,6 +767,10 @@ struct Task<A: AppItem> {
     /// Dropped once `last` is filled in, to tell the watches.
     ending: Option<watch::Sender<()>>,
     recorder: Option<Recorder>,
+    /// Who sees every step, if anyone.
+    steps: Option<Box<dyn Steps<A>>>,
+    /// The open chats, for [`ChatsWatch`]es. Dropped as the task ends.
+    open: watch::Sender<Vec<ChatSummary>>,
     inbox: mpsc::Receiver<Command<A>>,
     /// Whether any handle is left to send commands.
     listening: bool,
@@ -729,11 +840,16 @@ impl<A: AppItem> Task<A> {
             }
             _ if self.shutting_down => {}
             Command::Open { open, reply } => {
-                let recorded = self.recorder.is_some().then(|| hide_mcp_secrets(&open));
+                let recorded = self.keeping().then(|| hide_mcp_secrets(&open));
                 let result = self.host(
                     |core, now, out| core.open_chat(now, open, out),
                     |&chat| recorded.map(|open| HostCommand::OpenChat { chat, open }),
                 );
+                // Before the reply, so the list has the chat by the time
+                // the host hears its id.
+                if result.is_ok() {
+                    self.tell_chats();
+                }
                 let _ = reply.send(result);
             }
             Command::Send {
@@ -741,7 +857,7 @@ impl<A: AppItem> Task<A> {
                 message,
                 reply,
             } => {
-                let recorded = self.recorder.is_some().then(|| message.clone());
+                let recorded = self.keeping().then(|| message.clone());
                 let result = self.host(
                     |core, now, out| core.send(now, chat, message, out),
                     |&turn| {
@@ -766,7 +882,7 @@ impl<A: AppItem> Task<A> {
                 answer,
                 reply,
             } => {
-                let recorded = self.recorder.is_some().then(|| answer.clone());
+                let recorded = self.keeping().then(|| answer.clone());
                 let result = self.host(
                     |core, now, out| core.answer(now, question, answer, out),
                     |()| recorded.map(|answer| HostCommand::Answer { question, answer }),
@@ -778,6 +894,9 @@ impl<A: AppItem> Task<A> {
                     |core, now, out| core.close_chat(now, chat, out),
                     |()| Some(HostCommand::CloseChat { chat }),
                 );
+                if result.is_ok() {
+                    self.tell_chats();
+                }
                 let _ = reply.send(result);
             }
         }
@@ -792,11 +911,10 @@ impl<A: AppItem> Task<A> {
     ) -> Result<T, Refused> {
         let now = self.timers.now();
         let result = call(&mut self.core, now, &mut self.out);
-        if let (Ok(done), Some(recorder)) = (&result, &mut self.recorder)
-            && let Some(command) = recorded(done)
-        {
-            recorder.record(now, &Event::Host(command));
-        }
+        let line = (result.as_ref().ok())
+            .and_then(recorded)
+            .and_then(|command| self.keep(now, &Event::Host(command)));
+        self.kept(line);
         self.route();
         result
     }
@@ -808,21 +926,82 @@ impl<A: AppItem> Task<A> {
         }
         self.shutting_down = true;
         let now = self.timers.now();
-        if let Some(recorder) = &mut self.recorder {
-            recorder.record(now, &Event::Host(HostCommand::<A>::Shutdown));
-        }
+        let line = self.keep(now, &Event::Host(HostCommand::<A>::Shutdown));
         self.core.shutdown(now, &mut self.out);
+        self.kept(line);
         self.route();
     }
 
     /// Gives the core what a driver reported.
     fn give(&mut self, event: Event<A>) {
         let now = self.timers.now();
-        if let Some(recorder) = &mut self.recorder {
-            recorder.record(now, &event);
-        }
+        let line = self.keep(now, &event);
         self.core.handle(now, event, &mut self.out);
+        self.kept(line);
         self.route();
+    }
+
+    /// Whether anyone keeps the steps: a recording or a watcher.
+    fn keeping(&self) -> bool {
+        self.steps.is_some() || (self.recorder.as_ref()).is_some_and(|recorder| !recorder.stopped)
+    }
+
+    /// `event`, about to be given to the core at `now`, as a recording's
+    /// line, if anyone keeps the steps.
+    fn keep(&mut self, now: Now, event: &Event<A>) -> Option<String> {
+        if !self.keeping() {
+            return None;
+        }
+        match line(now, event) {
+            Ok(line) => Some(line),
+            Err(error) => {
+                if let Some(recorder) = &mut self.recorder {
+                    recorder.stop(&format!("an event can't be written: {error}"));
+                }
+                if self.steps.is_some() {
+                    log::warn!(target: "caf", "a step can't be watched: its event can't be written: {error}");
+                }
+                None
+            }
+        }
+    }
+
+    /// Hands the line [`Task::keep`] made to whoever keeps the steps, once
+    /// the core has been given its event and before its directives are
+    /// carried out: the watcher sees the event read back from the line,
+    /// exactly as a replay would.
+    fn kept(&mut self, line: Option<String>) {
+        let Some(line) = line else { return };
+        if let Some(steps) = &mut self.steps {
+            match serde_json::from_str::<Recorded<A>>(&line) {
+                Ok(Recorded { now, event }) => steps.step(Step {
+                    now,
+                    event: &event,
+                    directives: &self.out,
+                }),
+                Err(error) => {
+                    log::warn!(target: "caf", "a step can't be watched: its event doesn't read back: {error}");
+                }
+            }
+        }
+        if let Some(recorder) = &mut self.recorder {
+            recorder.write(line);
+        }
+    }
+
+    /// Tells the [`ChatsWatch`]es which chats are open, if that changed.
+    fn tell_chats(&self) {
+        let open: Vec<ChatSummary> = (self.core.chats())
+            .filter(|chat| chat.state != ChatState::Closed)
+            .map(ChatSummary::of)
+            .collect();
+        self.open.send_if_modified(|was| {
+            let changed = *was != open;
+            if changed {
+                *was = open;
+            }
+            changed
+        });
     }
 
     /// The policy decided, or its decision panicked, which counts as a
@@ -915,7 +1094,16 @@ impl<A: AppItem> Task<A> {
     /// What a watch that has seen up to `since` hasn't seen of `chat`.
     fn read(&mut self, chat: ChatId, since: Option<ChangeNo>, subscribe: bool) -> Option<Seen<A>> {
         let closed = self.closed(chat);
-        let (update, latest) = match self.core.read(chat, since)? {
+        let Some(read) = self.core.read(chat, since) else {
+            // Its watch ends, so it has no last words to keep: forgotten,
+            // or a viewer watching ids that aren't chats would make the
+            // list grow without end. Another watch made for the same id
+            // before the chat opened misses its last words too.
+            let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+            last.watched.remove(&chat);
+            return None;
+        };
+        let (update, latest) = match read {
             Read::Changes([]) => (None, since),
             Read::Changes(changes) => (
                 Some(Update::Changes(changes.to_vec())),
@@ -1020,9 +1208,17 @@ struct Header<'a> {
 /// One of a recording's events.
 #[derive(Serialize)]
 #[serde(bound = "A: AppItem")]
-struct Step<'a, A: AppItem> {
+struct Line<'a, A: AppItem> {
     now: Now,
     event: &'a Event<A>,
+}
+
+/// One of a recording's events, read back.
+#[derive(Deserialize)]
+#[serde(bound = "A: AppItem")]
+struct Recorded<A: AppItem> {
+    now: Now,
+    event: Event<A>,
 }
 
 impl Recorder {
@@ -1093,14 +1289,10 @@ impl Recorder {
         recorder
     }
 
-    /// Writes one event.
-    fn record<A: AppItem>(&mut self, now: Now, event: &Event<A>) {
-        if self.stopped {
-            return;
-        }
-        match line(now, event) {
-            Ok(line) => self.send(line),
-            Err(error) => self.stop(&format!("an event can't be written: {error}")),
+    /// Writes one event's line, made by [`line`].
+    fn write(&mut self, line: String) {
+        if !self.stopped {
+            self.send(line);
         }
     }
 
@@ -1146,7 +1338,7 @@ fn line<A: AppItem>(now: Now, event: &Event<A>) -> serde_json::Result<String> {
         event: agent,
     } = event
     else {
-        return serde_json::to_string(&Step { now, event });
+        return serde_json::to_string(&Line { now, event });
     };
     let hidden = match agent {
         // As text where it's UTF-8, so a person can read it. A chunk can
@@ -1154,7 +1346,7 @@ fn line<A: AppItem>(now: Now, event: &Event<A>) -> serde_json::Result<String> {
         // so the core is given exactly what it was given before.
         AgentEvent::Stderr(bytes) => {
             let Ok(text) = std::str::from_utf8(bytes) else {
-                return serde_json::to_string(&Step { now, event });
+                return serde_json::to_string(&Line { now, event });
             };
             let event = serde_json::json!({
                 "type": "Agent",
@@ -1179,13 +1371,13 @@ fn line<A: AppItem>(now: Now, event: &Event<A>) -> serde_json::Result<String> {
                 params: None,
             }
         }
-        _ => return serde_json::to_string(&Step { now, event }),
+        _ => return serde_json::to_string(&Line { now, event }),
     };
     let event = Event::<A>::Agent {
         process: *process,
         event: AgentEvent::Frame(Frame::Message(hidden)),
     };
-    serde_json::to_string(&Step { now, event: &event })
+    serde_json::to_string(&Line { now, event: &event })
 }
 
 /// Writes lines as they come until there are no more, flushing whenever
@@ -1263,7 +1455,7 @@ mod tests {
             mono: Mono(0),
         };
         for _ in 0..20 {
-            recorder.record(now, &Event::<NoAppItems>::Woken);
+            recorder.write(line(now, &Event::<NoAppItems>::Woken).unwrap());
         }
         assert!(recorder.stopped, "it stops rather than holding more");
         drop(go);
@@ -1309,7 +1501,7 @@ mod tests {
             panic!("an adapter started: {out:?}")
         };
         let mut lines = vec![
-            serde_json::to_string(&Step {
+            serde_json::to_string(&Line {
                 now,
                 event: &Event::<NoAppItems>::Host(HostCommand::OpenChat {
                     chat,
@@ -1349,5 +1541,19 @@ mod tests {
                 .unwrap()
                 .contains(r#"{"type":"Stderr","value":"café\n"}"#)
         );
+    }
+
+    #[tokio::test]
+    async fn watching_a_chat_that_isnt_there_leaves_nothing_behind() {
+        let (caf, running) =
+            Caf::<NoAppItems>::start(Config::new(Host::new("test", "1.0.0"), vec![]));
+        for chat in 1000..1100 {
+            let mut watch = caf.chat(ChatId(chat)).watch();
+            assert!(watch.next().await.is_none());
+        }
+        let watched = caf.shared.last.lock().unwrap().watched.len();
+        assert_eq!(watched, 0, "a watch for no chat is forgotten once it ends");
+        caf.shutdown().await;
+        running.await;
     }
 }
