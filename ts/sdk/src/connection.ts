@@ -72,12 +72,14 @@ export function webSocket(url: string): Promise<Transport> {
 export class CafError extends Error {
   constructor(
     readonly why:
-      /** The core refused it, and nothing changed. */
+      /** The core refused it, and nothing changed. A reason this SDK doesn't know comes by its `type`. */
       | { type: "Refused"; value: Refused }
       /** The host doesn't let viewers do this. */
       | { type: "NotAllowed" }
       /** CAF has shut down, or is shutting down: nothing was done. */
       | { type: "Gone" }
+      /** It went in a way this SDK doesn't know, from a later version of CAF: `outcome` is its name. */
+      | { type: "Unknown"; value: { outcome: string } }
       /** The link ended before the answer came. */
       | { type: "Disconnected" }
       /** No version of the wire in common with CAF. */
@@ -113,6 +115,8 @@ export type WatchEvent =
  *   is ignored.
  * - A change it can't apply, of a type it doesn't know or one that doesn't
  *   fit its copy, makes it ask for the chat whole again.
+ * - A request answered with an outcome it doesn't know rejects with
+ *   `Unknown`, carrying the outcome's name, and the link goes on.
  * - Anything else that isn't what CAF sends ends the link, as if it had
  *   dropped: text that isn't JSON, a message with no `type`, a message it
  *   knows without the fields it needs, a `Welcome` after the first, or an
@@ -356,13 +360,16 @@ export class Connection {
         return;
       }
       case "Done": {
-        if (!isRecord(value) || !isNumber(value.request) || !isRecord(value.outcome)) return this.#end();
+        const outcome = isRecord(value) ? value.outcome : undefined;
+        if (!isRecord(value) || !isNumber(value.request) || !isRecord(outcome) || !isString(outcome.type)) {
+          return this.#end();
+        }
         const pending = this.#pending.get(value.request);
         // An answer to nothing asked: CAF never sends one, but it harms
         // nothing.
         if (pending === undefined) return;
         this.#pending.delete(value.request);
-        return this.#answer(pending, value.outcome);
+        return this.#answer(pending, outcome.type, outcome.value);
       }
       case "Welcome":
       case "NoCommonVersion":
@@ -374,17 +381,18 @@ export class Connection {
   }
 
   /**
-   * Settles a request with its outcome. One that doesn't fit what was
-   * asked, or is a later version's, ends the link: neither resolving nor
-   * rejecting would be the truth, so it rejects as the link does.
+   * Settles a request with its outcome. One of a later version's rejects
+   * it as `Unknown`, as the wire says an unknown reason is shown. One that
+   * doesn't fit what was asked, or lacks what it holds, ends the link:
+   * neither resolving nor rejecting would be the truth, so it rejects as
+   * the link does.
    */
-  #answer(pending: Pending, outcome: Record<string, unknown>): void {
-    const value = outcome.value;
+  #answer(pending: Pending, type: string, value: unknown): void {
     const broken = () => {
       pending.reject(new CafError({ type: "Disconnected" }));
       this.#end();
     };
-    switch (outcome.type) {
+    switch (type) {
       case "Refused":
         if (!isRecord(value) || !isString(value.type)) return broken();
         return pending.reject(new CafError({ type: "Refused", value: value as Refused }));
@@ -397,7 +405,8 @@ export class Connection {
         if (!isNumber(value)) return broken();
         return pending.resolve(value);
       default:
-        return broken();
+        if (OUTCOMES.has(type)) return broken();
+        return pending.reject(new CafError({ type: "Unknown", value: { outcome: type } }));
     }
   }
 
@@ -517,6 +526,9 @@ class Watch implements Watching {
     call(this.#listener, { type: "Ended" });
   }
 }
+
+/** The outcomes this SDK knows. */
+const OUTCOMES = new Set(["Opened", "Sent", "Done", "Refused", "NotAllowed", "Gone"]);
 
 /** The message types of version 1 of the wire, from CAF. */
 const KNOWN = new Set(["Welcome", "NoCommonVersion", "Chats", "Picture", "Changes", "Ended", "Done"]);

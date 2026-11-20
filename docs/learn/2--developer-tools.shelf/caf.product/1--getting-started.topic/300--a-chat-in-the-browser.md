@@ -173,6 +173,7 @@ rejects with a `CafError`, whose `why` says why:
 | `Refused` | The core refused it, and nothing changed. `why.value` says why, such as `QueueFull`. |
 | `NotAllowed` | The host doesn't let viewers do this. |
 | `Gone` | CAF has shut down, or is shutting down: nothing was done. |
+| `Unknown` | It went in a way this version of the SDK doesn't know, from a later CAF. `why.value.outcome` is its name. |
 | `Disconnected` | The link ended before the answer came. |
 
 A reason added in a later version of CAF still comes through, with its
@@ -202,6 +203,8 @@ Nothing CAF sends makes the SDK throw:
 - a message of a type it doesn't know, from a later version of the wire, is
   ignored;
 - a change it can't apply asks for the chat whole again, as above;
+- an answer of a kind it doesn't know rejects that request with `Unknown`,
+  as above;
 - anything else that can't be CAF's ends the link, as if it had dropped:
   text that isn't JSON, a message missing what it needs, or an answer that
   doesn't fit what was asked. Ignoring it could leave a request waiting

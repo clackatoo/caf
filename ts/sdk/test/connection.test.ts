@@ -470,9 +470,21 @@ describe("requests", () => {
     expect(link.closed).toBe(false);
   });
 
+  test("an outcome of a later version rejects as Unknown, and the link goes on", async () => {
+    const { caf, link } = await connected();
+    const stopping = held(caf.stop(1000));
+    const sending = caf.send(1000, message);
+    link.deliver({ type: "Done", value: { request: 1, outcome: { type: "Postponed", value: { until: 5 } } } });
+    expect(await rejection(stopping)).toStrictEqual({ type: "Unknown", value: { outcome: "Postponed" } });
+    expect(link.closed).toBe(false);
+    link.deliver({ type: "Done", value: { request: 2, outcome: { type: "Sent", value: 1200 } } });
+    await expect(sending).resolves.toBe(1200);
+  });
+
   test.each([
     ["an outcome that doesn't fit what was asked", { type: "Sent", value: 1200 }],
-    ["an outcome of a later version", { type: "Postponed" }],
+    ["an outcome with no type", { value: 1100 }],
+    ["an outcome whose type isn't text", { type: 7 }],
     ["Opened without its chat", { type: "Opened" }],
     ["a Refused without its reason", { type: "Refused", value: "QueueFull" }],
   ])("%s ends the link", async (_, bad) => {
