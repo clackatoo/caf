@@ -34,6 +34,9 @@ fn stopped_by(signal: &str) -> (std::process::ExitStatus, serde_json::Value) {
         }
     }
     let recording = recording.expect("it records");
+    // Nothing reads what it prints any more, as when its terminal closes:
+    // printing then fails, and must not stop it shutting down cleanly.
+    drop(lines);
     let killed = Command::new("kill")
         .args([signal, &child.id().to_string()])
         .status()

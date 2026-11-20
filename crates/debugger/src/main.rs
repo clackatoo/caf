@@ -9,6 +9,24 @@ use std::time::SystemTime;
 use caf_debugger::server::{self, App};
 use caf_debugger::{agents, fake, files, live, replay};
 
+/// Prints a line, as `println!` does, but one that can't be printed, as
+/// when its terminal has closed, is left out: `println!` would panic, and
+/// CAF wouldn't be shut down.
+macro_rules! say {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), $($arg)*);
+    }};
+}
+
+/// [`say!`], to stderr.
+macro_rules! tell {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
 /// The port, unless `--port` says otherwise.
 const PORT: u16 = 7320;
 
@@ -59,17 +77,17 @@ async fn main() -> ExitCode {
         Ok(args) => args,
         Err(why) => {
             if why.is_empty() {
-                println!("{USAGE}");
+                say!("{USAGE}");
                 return ExitCode::SUCCESS;
             }
-            eprintln!("caf-debugger: {why}\n\n{USAGE}");
+            tell!("caf-debugger: {why}\n\n{USAGE}");
             return ExitCode::from(2);
         }
     };
     match run(args).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(why) => {
-            eprintln!("caf-debugger: {why}");
+            tell!("caf-debugger: {why}");
             ExitCode::FAILURE
         }
     }
@@ -87,7 +105,7 @@ async fn run(args: Args) -> Result<(), String> {
     let (app, live) = match &args.replay {
         Some(path) => {
             let book = replay::load(path).map_err(|why| format!("{}: {why}", path.display()))?;
-            println!("Replaying {} ({} steps).", path.display(), book.end());
+            say!("Replaying {} ({} steps).", path.display(), book.end());
             (App::new(book, port, token.clone()), None)
         }
         None => {
@@ -113,10 +131,10 @@ async fn run(args: Args) -> Result<(), String> {
                 .iter()
                 .map(|name| name.0.as_str())
                 .collect();
-            println!("Running CAF with {}.", names.join(", "));
+            say!("Running CAF with {}.", names.join(", "));
             match &live.recording {
-                Some(path) => println!("Recording to {}.", path.display()),
-                None => println!("Not recording: CAF couldn't make the file, as it says above."),
+                Some(path) => say!("Recording to {}.", path.display()),
+                None => say!("Not recording: CAF couldn't make the file, as it says above."),
             }
             let mut app = App::new(Arc::clone(&live.book), port, token.clone());
             app.live = Some((live.caf.clone(), Arc::clone(&live.rules)));
@@ -130,23 +148,23 @@ async fn run(args: Args) -> Result<(), String> {
             app.dist.display()
         );
     }
-    println!("Open {}", server::url(port, &token));
+    say!("Open {}", server::url(port, &token));
     let serving = axum::serve(listener, server::router(Arc::new(app)));
     tokio::select! {
         served = serving => served.map_err(|error| error.to_string())?,
-        signal = stop() => println!("{signal}: shutting down. Again to stop at once."),
+        signal = stop() => say!("{signal}: shutting down. Again to stop at once."),
     }
     // A second signal doesn't wait for CAF.
     tokio::spawn(async {
         let signal = stop().await;
-        eprintln!("caf-debugger: {signal} again: stopping at once");
+        tell!("caf-debugger: {signal} again: stopping at once");
         std::process::exit(1);
     });
     if let Some(live) = live {
         live.caf.shutdown().await;
         live.running.await;
         if let Some(path) = &live.recording {
-            println!("The run is recorded in {}.", path.display());
+            say!("The run is recorded in {}.", path.display());
         }
     }
     Ok(())
@@ -201,7 +219,7 @@ impl log::Log for Logger {
 
     fn log(&self, record: &log::Record<'_>) {
         if self.enabled(record.metadata()) {
-            eprintln!("{} {}: {}", record.level(), record.target(), record.args());
+            tell!("{} {}: {}", record.level(), record.target(), record.args());
         }
     }
 
