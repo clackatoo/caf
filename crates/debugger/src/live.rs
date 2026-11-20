@@ -76,7 +76,8 @@ pub fn start(agents: Vec<AgentSpec>, record: Option<PathBuf>) -> Live {
     let (tap, steps) = mpsc::unbounded_channel();
     let (caf, running) = Caf::start_watching(config, Tap(tap));
     let file = record.map(|path| path.display().to_string());
-    let book = Arc::new(Book::new(Mode::Live, file, None, base));
+    let run = Some(caf.run().to_owned());
+    let book = Arc::new(Book::new(Mode::Live, file, run, base));
     tokio::spawn(check(Arc::clone(&book), steps));
     Live {
         caf,
