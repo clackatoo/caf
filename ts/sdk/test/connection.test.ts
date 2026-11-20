@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { CafError, ChatCopy, Connection, type Change, type Chat, type WatchEvent } from "../src/index.ts";
-import { busy, numbered } from "./chats.ts";
+import { busy, chat, numbered, turn } from "./chats.ts";
 import { connected, FakeTransport, welcome } from "./transport.ts";
 
 /** Waits for promises and microtasks to settle. */
@@ -44,6 +44,15 @@ function heard() {
   return { events, listener: (event: WatchEvent) => void events.push(event) };
 }
 
+/** A copy of chat 1000 at `latest`, as a connection to `run` made it. */
+async function copyFrom(run: string, latest: number): Promise<ChatCopy> {
+  const { caf, link } = await connected(run);
+  const watch = caf.watch(1000, () => {});
+  link.deliver(picture(busy(), latest));
+  caf.disconnect();
+  return watch.copy!;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -57,6 +66,7 @@ describe("the handshake", () => {
     const caf = await opening;
     expect(caf.agents).toStrictEqual(["claude", "fake"]);
     expect(caf.chats).toStrictEqual([{ id: 1000, agent: "claude", cwd: "/home/me/project" }]);
+    expect(caf.run).toBe("run-1");
     expect(link.closed).toBe(false);
   });
 
@@ -94,6 +104,7 @@ describe("the handshake", () => {
     ["text that isn't JSON", "{nope"],
     ["JSON that isn't a message", "[1, 2]"],
     ["a message with no type", JSON.stringify({ value: 1 })],
+    ["a Welcome without its run", JSON.stringify({ type: "Welcome", value: { version: 1, agents: [], chats: [] } })],
     ["a Welcome without its agents", JSON.stringify({ type: "Welcome", value: { version: 1, chats: [] } })],
     [
       "a Welcome of a version it doesn't speak",
@@ -327,8 +338,8 @@ describe("watching a chat", () => {
   });
 
   test("resumes from a copy, leaving that copy as it was", async () => {
+    const from = await copyFrom("run-1", 10);
     const { caf, link } = await connected();
-    const from = new ChatCopy(busy(), 10);
     const { events, listener } = heard();
     const watch = caf.watch(1000, listener, from);
     expect(link.take()).toStrictEqual([{ type: "Watch", value: { chat: 1000, since: 10 } }]);
@@ -348,7 +359,7 @@ describe("watching a chat", () => {
   test("resuming may get a picture instead", async () => {
     const { caf, link } = await connected();
     const { events, listener } = heard();
-    const watch = caf.watch(1000, listener, new ChatCopy(busy(), 10));
+    const watch = caf.watch(1000, listener, await copyFrom("run-1", 10));
     link.deliver(picture(busy(), 5000));
     expect(events).toHaveLength(1);
     expect(watch.copy?.latest).toBe(5000);
@@ -359,6 +370,78 @@ describe("watching a chat", () => {
     const watch = caf.watch(1000, () => {}, new ChatCopy({ ...busy(), id: 2000 }, 10));
     expect(link.take()).toStrictEqual([{ type: "Watch", value: { chat: 1000, since: null } }]);
     expect(watch.copy).toBeNull();
+  });
+
+  test("a copy from another run of CAF isn't resumed from", async () => {
+    // A restarted CAF numbers its chats and changes from the start again,
+    // so chat 1000's change 10 there is another chat's.
+    const from = await copyFrom("run-1", 10);
+    const { caf, link } = await connected("run-2");
+    const { events, listener } = heard();
+    const watch = caf.watch(1000, listener, from);
+    expect(link.take()).toStrictEqual([{ type: "Watch", value: { chat: 1000, since: null } }]);
+    expect(watch.copy).toBeNull();
+    // Changes before the picture don't graft onto the old copy.
+    link.deliver(changes(numbered(11, append(" a"))));
+    expect(events).toStrictEqual([]);
+    link.deliver(picture(busy(), 3));
+    expect(watch.copy?.latest).toBe(3);
+  });
+
+  test("a copy the app made itself isn't resumed from", async () => {
+    const { caf, link } = await connected();
+    caf.watch(1000, () => {}, new ChatCopy(busy(), 10));
+    expect(link.take()).toStrictEqual([{ type: "Watch", value: { chat: 1000, since: null } }]);
+  });
+
+  test("a copy resumed from can be resumed from again, on a third connection", async () => {
+    const from = await copyFrom("run-1", 10);
+    const second = await connected();
+    const watch = second.caf.watch(1000, () => {}, from);
+    second.link.deliver(changes(numbered(11, append(" a"))));
+    second.caf.disconnect();
+    const third = await connected();
+    third.caf.watch(1000, () => {}, watch.copy!);
+    expect(third.link.take()).toStrictEqual([{ type: "Watch", value: { chat: 1000, since: 11 } }]);
+  });
+
+  test("a chat that has Ended is watched afresh after", async () => {
+    const from = await copyFrom("run-1", 10);
+    const { caf, link } = await connected();
+    caf.watch(1000, () => {});
+    link.deliver({ type: "Ended", value: { chat: 1000 } });
+    link.take();
+    // No watch of it is left, so this one may resume, and is the last.
+    const again = caf.watch(1000, () => {}, from);
+    expect(link.take()).toStrictEqual([{ type: "Watch", value: { chat: 1000, since: 10 } }]);
+    again.stop();
+    expect(link.take()).toStrictEqual([{ type: "Unwatch", value: { chat: 1000 } }]);
+  });
+
+  test("a transport that answers inside send never draws an old chat after a new one", async () => {
+    // Nothing says a transport can't deliver CAF's answer before send
+    // returns: this one sends the picture as soon as it's asked for.
+    class Eager extends FakeTransport {
+      override send(text: string): void {
+        super.send(text);
+        const message = JSON.parse(text) as { type: string; value: { since?: unknown } };
+        if (message.type === "Watch" && message.value.since === null && this.armed) {
+          this.deliver(picture(chat([]), 30));
+        }
+      }
+      armed = false;
+    }
+    const link = new Eager();
+    const { caf } = await connected("run-1", link);
+    const drawn: number[] = [];
+    const watch = caf.watch(1000, (event) => {
+      if (event.type === "Chat") drawn.push(event.chat.turns.length);
+    });
+    link.deliver(picture(busy(), 10));
+    link.armed = true;
+    link.deliver(changes(numbered(11, { type: "TurnAdded", value: turn(1100) }), numbered(13, append(" c"))));
+    expect(drawn).toStrictEqual([2, 3, 0]);
+    expect(watch.copy?.chat.turns).toHaveLength(0);
   });
 
   test("a listener that throws is reported, and the link goes on", async () => {
@@ -531,12 +614,28 @@ describe("the link ending", () => {
     expect(await rejection(stopping)).toStrictEqual({ type: "Disconnected" });
     // Nothing goes out after it, and nothing comes in.
     expect(await rejection(caf.send(1000, { parts: [] }))).toStrictEqual({ type: "Disconnected" });
-    const { events, listener } = heard();
-    const watch = caf.watch(1000, listener, new ChatCopy(busy(), 10));
-    expect(watch.copy?.latest).toBe(10);
-    watch.stop();
+    expect(() => caf.watch(1000, () => {})).toThrow(CafError);
+    try {
+      caf.watch(1000, () => {});
+    } catch (error) {
+      expect((error as CafError).why).toStrictEqual({ type: "Disconnected" });
+    }
     expect(link.take()).toStrictEqual([]);
-    expect(events).toStrictEqual([]);
+  });
+
+  test("onClose gives a function that stops it", async () => {
+    const { caf, link } = await connected();
+    let closes = 0;
+    const stop = caf.onClose(() => void closes++);
+    caf.onClose(() => void closes++);
+    stop();
+    link.drop();
+    expect(closes).toBe(1);
+    // Stopped before it's called soon, it isn't.
+    const late = caf.onClose(() => void closes++);
+    late();
+    await settle();
+    expect(closes).toBe(1);
   });
 
   test("a watch isn't ended by it: onClose says so", async () => {
@@ -623,5 +722,50 @@ describe("what CAF sends", () => {
       { type: "Unwatch", value: { chat: 1000 } },
       { type: "Watch", value: { chat: 1000, since: null } },
     ]);
+  });
+});
+
+describe("CafError", () => {
+  test("names itself, and says why in its message", () => {
+    const refused = new CafError({ type: "Refused", value: { type: "QueueFull" } });
+    expect(refused.name).toBe("CafError");
+    expect(refused.message).toBe("Refused: QueueFull");
+    expect(String(refused)).toBe("CafError: Refused: QueueFull");
+    expect(new CafError({ type: "Unknown", value: { outcome: "Postponed" } }).message).toBe("Unknown: Postponed");
+    expect(new CafError({ type: "NoCommonVersion", value: { min: 2, max: 3 } }).message).toBe(
+      "NoCommonVersion: CAF speaks versions 2 to 3",
+    );
+    expect(new CafError({ type: "Disconnected" }).message).toBe("Disconnected");
+  });
+});
+
+describe("opening with a signal", () => {
+  test("aborting before the Welcome rejects with the signal's reason, and closes the transport", async () => {
+    const link = new FakeTransport();
+    const abort = new AbortController();
+    const opening = held(Connection.open(link, { signal: abort.signal }));
+    abort.abort(new Error("gave up"));
+    const result = await outcome(opening);
+    expect(result !== "pending" && "error" in result && (result.error as Error).message).toBe("gave up");
+    expect(link.closed).toBe(true);
+  });
+
+  test("a signal aborted already doesn't say Hello", async () => {
+    const link = new FakeTransport();
+    const opening = held(Connection.open(link, { signal: AbortSignal.abort() }));
+    expect(await outcome(opening)).not.toBe("pending");
+    expect(link.take()).toStrictEqual([]);
+    expect(link.closed).toBe(true);
+  });
+
+  test("aborting after the Welcome does nothing", async () => {
+    const link = new FakeTransport();
+    const abort = new AbortController();
+    const opening = Connection.open(link, { signal: abort.signal });
+    link.deliver(welcome);
+    const caf = await opening;
+    abort.abort();
+    expect(link.closed).toBe(false);
+    expect(caf.run).toBe("run-1");
   });
 });

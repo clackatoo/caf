@@ -56,16 +56,28 @@ export class FakeTransport implements Transport {
   }
 }
 
-export const welcome: ToViewer = {
+export const welcome = {
   type: "Welcome",
-  value: { version: 1, agents: ["claude", "fake"], chats: [{ id: 1000, agent: "claude", cwd: "/home/me/project" }] },
-};
+  value: {
+    version: 1,
+    agents: ["claude", "fake"],
+    chats: [{ id: 1000, agent: "claude", cwd: "/home/me/project" }],
+    run: "run-1",
+  },
+} satisfies ToViewer;
+
+/** A Welcome from a run of CAF. */
+export function welcomeFrom(run: string): ToViewer {
+  return { type: "Welcome", value: { ...welcome.value, run } };
+}
 
 /** A connection that has been welcomed, with the Hello already taken. */
-export async function connected(): Promise<{ caf: Connection; link: FakeTransport }> {
-  const link = new FakeTransport();
+export async function connected(
+  run = "run-1",
+  link = new FakeTransport(),
+): Promise<{ caf: Connection; link: FakeTransport }> {
   const opening = Connection.open(link);
-  link.deliver(welcome);
+  link.deliver(welcomeFrom(run));
   const caf = await opening;
   link.take();
   return { caf, link };

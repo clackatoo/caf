@@ -104,6 +104,36 @@ describe("ChatCopy", () => {
     }
   });
 
+  test.each([
+    ["State with no value", { type: "State" }],
+    ["State that isn't a state", { type: "State", value: "Open" }],
+    ["TurnAdded with no value", { type: "TurnAdded" }],
+    ["TurnAdded whose turn has no items", { type: "TurnAdded", value: { id: 1100 } }],
+    ["TurnAdded whose item has no kind", { type: "TurnAdded", value: { id: 1100, items: [{ id: 1101 }] } }],
+    ["TurnInserted with no turn", { type: "TurnInserted", value: { before: 1003 } }],
+    ["TurnInserted before no number", { type: "TurnInserted", value: { before: "1003", turn: { id: 1, items: [] } } }],
+    ["TurnLife with no life", { type: "TurnLife", value: { turn: 1003, end: { type: "Open" } } }],
+    ["TurnLife with no end", { type: "TurnLife", value: { turn: 1003, life: { type: "Finished" } } }],
+    ["ItemAdded whose item is only an id", { type: "ItemAdded", value: { turn: 1003, item: { id: 1100 } } }],
+    [
+      "ItemAdded to no number",
+      { type: "ItemAdded", value: { item: { id: 1100, kind: { type: "Words", value: "" } } } },
+    ],
+    ["Appended with text that isn't text", { type: "Appended", value: { item: 1004, text: 7 } }],
+    ["ToolChanged with no tool", { type: "ToolChanged", value: { item: 1006, tool: null } }],
+    ["ItemEnded with no end", { type: "ItemEnded", value: { item: 1006 } }],
+    ["Usage that isn't usage", { type: "Usage", value: "x" }],
+    ["QuestionAsked with no value", { type: "QuestionAsked" }],
+    ["QuestionAsked with no id", { type: "QuestionAsked", value: { kind: {} } }],
+    ["QuestionGone with no id", { type: "QuestionGone" }],
+  ])("%s needs a picture", (_, change) => {
+    const copy = new ChatCopy(busy(), 10);
+    const before = copy.chat;
+    expect(copy.take([numbered(11, change as unknown as Change)])).toBe("need-picture");
+    expect(copy.chat).toBe(before);
+    expect(copy.latest).toBe(10);
+  });
+
   test("a new copy from a later picture, mid-stream, carries on from it", () => {
     let copy = new ChatCopy(busy(), 10);
     expect(copy.take([numbered(11, append(" a"))])).toBe("ok");

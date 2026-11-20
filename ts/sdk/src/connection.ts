@@ -15,9 +15,13 @@ import type {
   UserMessage,
 } from "./types.ts";
 import { ChatCopy } from "./copy.ts";
+import { isArrayOf, isChat, isNumber, isRecord, isString, isSummary, isTagged } from "./shape.ts";
 
 /** The versions of the viewer wire this SDK speaks. */
 const VERSIONS = { min: 1, max: 1 } as const;
+
+/** The run of CAF each copy a connection made came from: see `Connection.run`. */
+const runs = new WeakMap<ChatCopy, string>();
 
 /** How messages travel: one JSON text per message, both ways. */
 export interface Transport {
@@ -68,8 +72,17 @@ export function webSocket(url: string): Promise<Transport> {
   });
 }
 
-/** Why something asked of CAF wasn't done. */
+/**
+ * Why something asked of CAF wasn't done. Its message says it in short,
+ * such as `Refused: QueueFull`.
+ *
+ * A later CAF may send a reason this SDK doesn't know, here in `Refused`
+ * and in a chat's `Lost` and `FailureReason`. Give every `switch` on a
+ * reason a `default`, and show one it doesn't know by its `type`.
+ */
 export class CafError extends Error {
+  override readonly name = "CafError";
+
   constructor(
     readonly why:
       /** The core refused it, and nothing changed. A reason this SDK doesn't know comes by its `type`. */
@@ -85,13 +98,30 @@ export class CafError extends Error {
       /** No version of the wire in common with CAF. */
       | { type: "NoCommonVersion"; value: { min: number; max: number } },
   ) {
-    super(why.type);
+    super(describe(why));
+  }
+}
+
+/** A `CafError`'s message. */
+function describe(why: CafError["why"]): string {
+  switch (why.type) {
+    case "Refused":
+      return `Refused: ${why.value.type}`;
+    case "Unknown":
+      return `Unknown: ${why.value.outcome}`;
+    case "NoCommonVersion":
+      return `NoCommonVersion: CAF speaks versions ${why.value.min} to ${why.value.max}`;
+    default:
+      return why.type;
   }
 }
 
 /** Following one chat: see `Connection.watch`. */
 export interface Watching {
-  /** The copy so far: null until the chat first comes. Pass it to `watch` on a new connection to pick up where this left off. */
+  /**
+   * The copy so far: null until the chat first comes. Pass it to `watch` on a new connection to the same run of CAF to
+   * pick up where this left off.
+   */
   readonly copy: ChatCopy | null;
   /** Stops following it. */
   stop(): void;
@@ -99,15 +129,16 @@ export interface Watching {
 
 /** What `watch` was told, if anything, as it follows a chat. */
 export type WatchEvent =
-  /** The chat changed, or came whole: draw this. */
-  | { type: "Chat"; chat: Chat }
+  /** The chat changed, or came whole: draw this. It's read-only: it shares its turns and items with the watch's copy. */
+  | { type: "Chat"; chat: Readonly<Chat> }
   /** The chat was closed, or CAF shut down: nothing more comes. */
   | { type: "Ended" };
 
 /**
  * A link to CAF: the viewer wire, version 1. Pending requests reject with
  * `Disconnected` when the link ends. Reconnecting is the app's choice: open
- * a new connection, and watch each chat again `from` its last copy.
+ * a new connection, and watch each chat again `from` its last copy, if CAF
+ * hasn't restarted meanwhile (see `run`).
  *
  * Nothing CAF sends makes it throw:
  *
@@ -128,13 +159,18 @@ export type WatchEvent =
  * A listener of the app's that throws doesn't end the link: the error is
  * reported as uncaught (with `reportError`, where there is one), and the
  * other listeners are still called.
+ *
+ * A later CAF may also send reasons this SDK doesn't know, inside messages
+ * it does: a `Refused`, or a chat's `Lost` or `FailureReason`. Give every
+ * `switch` on a reason a `default`. See `CafError`.
  */
 export class Connection {
   readonly #transport: Transport;
   readonly #agents: readonly AgentName[];
-  #chats: readonly ChatSummary[];
-  readonly #chatListeners = new Set<(chats: readonly ChatSummary[]) => void>();
-  readonly #closeListeners: (() => void)[] = [];
+  readonly #run: string;
+  #chats: readonly Readonly<ChatSummary>[];
+  readonly #chatListeners = new Set<(chats: readonly Readonly<ChatSummary>[]) => void>();
+  readonly #closeListeners = new Set<() => void>();
   #closed = false;
   #nextRequest = 1;
   readonly #pending = new Map<number, Pending>();
@@ -142,10 +178,11 @@ export class Connection {
   /** Chats CAF has been asked for whole, and hasn't sent yet. */
   readonly #asked = new Set<ChatId>();
 
-  private constructor(transport: Transport, agents: readonly AgentName[], chats: readonly ChatSummary[]) {
+  private constructor(transport: Transport, agents: readonly AgentName[], chats: readonly ChatSummary[], run: string) {
     this.#transport = transport;
     this.#agents = agents;
     this.#chats = chats;
+    this.#run = run;
   }
 
   /**
@@ -153,17 +190,38 @@ export class Connection {
    * with `NoCommonVersion` if CAF speaks no version this SDK does, and with
    * `Disconnected` if the link ends first, or CAF answers with anything
    * else.
+   *
+   * It waits as long as CAF takes to answer. Given a `signal`, aborting it
+   * before the Welcome comes rejects with the signal's reason and closes
+   * the transport; aborting it after does nothing.
    */
-  static open(transport: Transport): Promise<Connection> {
+  static open(transport: Transport, options?: { signal?: AbortSignal }): Promise<Connection> {
     return new Promise((resolve, reject) => {
+      const signal = options?.signal;
+      if (signal?.aborted) {
+        reject(signal.reason);
+        transport.close();
+        return;
+      }
       let connection: Connection | null = null;
       let settled = false;
+      const settle = () => {
+        settled = true;
+        signal?.removeEventListener("abort", abort);
+      };
       const fail = (why: CafError["why"]) => {
         if (settled) return;
-        settled = true;
+        settle();
         reject(new CafError(why));
         transport.close();
       };
+      const abort = () => {
+        if (settled) return;
+        settle();
+        reject(signal?.reason);
+        transport.close();
+      };
+      signal?.addEventListener("abort", abort);
       const welcome = (text: string) => {
         const message = parse(text);
         if (message === null) return fail({ type: "Disconnected" });
@@ -171,13 +229,15 @@ export class Connection {
         switch (message.type) {
           case "Welcome": {
             if (!isRecord(value)) return fail({ type: "Disconnected" });
-            const { version, agents, chats } = value;
+            const { version, agents, chats, run } = value;
             // CAF chooses one both speak, or it's broken.
             if (!isNumber(version) || version < VERSIONS.min || version > VERSIONS.max)
               return fail({ type: "Disconnected" });
-            if (!isArrayOf(agents, isString) || !isArrayOf(chats, isSummary)) return fail({ type: "Disconnected" });
-            settled = true;
-            connection = new Connection(transport, agents, chats);
+            if (!isArrayOf(agents, isString) || !isArrayOf(chats, isSummary) || !isString(run)) {
+              return fail({ type: "Disconnected" });
+            }
+            settle();
+            connection = new Connection(transport, agents, chats, run);
             return resolve(connection);
           }
           case "NoCommonVersion": {
@@ -219,23 +279,43 @@ export class Connection {
     return this.#agents;
   }
 
-  /** The open chats, in the order they were opened. */
-  get chats(): readonly ChatSummary[] {
+  /** The open chats, in the order they were opened. Read-only. */
+  get chats(): readonly Readonly<ChatSummary>[] {
     return this.#chats;
   }
 
+  /**
+   * This run of CAF: different every time CAF starts. A restarted CAF
+   * numbers its chats and their changes from the start again, so a copy
+   * is only resumed from on a connection to the run it came from.
+   */
+  get run(): string {
+    return this.#run;
+  }
+
   /** Calls `listener` with the open chats each time the list changes. Returns a function that stops it. */
-  onChats(listener: (chats: readonly ChatSummary[]) => void): () => void {
+  onChats(listener: (chats: readonly Readonly<ChatSummary>[]) => void): () => void {
     // Each call is its own subscription, even of the same function.
-    const each = (chats: readonly ChatSummary[]) => listener(chats);
+    const each = (chats: readonly Readonly<ChatSummary>[]) => listener(chats);
     this.#chatListeners.add(each);
     return () => void this.#chatListeners.delete(each);
   }
 
-  /** Calls `listener` once, when the link ends: soon, if it has already. */
-  onClose(listener: () => void): void {
-    if (this.#closed) queueMicrotask(() => call(listener, undefined));
-    else this.#closeListeners.push(listener);
+  /**
+   * Calls `listener` once, when the link ends: soon, if it has already.
+   * Returns a function that stops it.
+   */
+  onClose(listener: () => void): () => void {
+    let stopped = false;
+    const each = () => {
+      if (!stopped) listener();
+    };
+    if (this.#closed) queueMicrotask(() => call(each, undefined));
+    else this.#closeListeners.add(each);
+    return () => {
+      stopped = true;
+      this.#closeListeners.delete(each);
+    };
   }
 
   /**
@@ -246,22 +326,26 @@ export class Connection {
    * still can.
    *
    * Given `from`, the listener first hears of the chat once something
-   * changes; until then `from.chat` is current. A `from` of another chat is
-   * ignored. A chat that doesn't exist is `Ended` at once. Watching a chat
-   * this connection already watches gets every watch of it the chat whole
-   * again. The link ending doesn't end a watch: `onClose` says so.
+   * changes; until then `from.chat` is current. `from` is only resumed
+   * from if it's a watch's copy of this chat, from a connection to this
+   * run of CAF (see `run`); otherwise CAF sends the chat whole. A chat that
+   * doesn't exist is `Ended` at once. Watching a chat this connection
+   * already watches gets every watch of it the chat whole again. The link
+   * ending doesn't end a watch: `onClose` says so.
+   *
+   * Throws `Disconnected` if the link has ended.
    */
   watch(chat: ChatId, listener: (event: WatchEvent) => void, from?: ChatCopy): Watching {
-    const copy = from !== undefined && from.chat.id === chat ? new ChatCopy(from.chat, from.latest) : null;
+    if (this.#closed) throw new CafError({ type: "Disconnected" });
+    const run = this.#run;
+    const resumable = from !== undefined && from.chat.id === chat && runs.get(from) === run;
+    const copy = resumable ? made(new ChatCopy(from.chat, from.latest), run) : null;
     const link: Link = {
+      run,
       forget: (watch) => this.#forget(watch),
       rewatch: (chat) => this.#rewatch(chat),
     };
     const watch = new Watch(chat, listener, copy, link);
-    if (this.#closed) {
-      watch.stop();
-      return watch;
-    }
     let watches = this.#watches.get(chat);
     // CAF keeps one watch of a chat per link, and a second Watch starts
     // it again: ask for a picture, so the watches already waiting for one
@@ -394,7 +478,7 @@ export class Connection {
     };
     switch (type) {
       case "Refused":
-        if (!isRecord(value) || !isString(value.type)) return broken();
+        if (!isTagged(value)) return broken();
         return pending.reject(new CafError({ type: "Refused", value: value as Refused }));
       case "NotAllowed":
         return pending.reject(new CafError({ type: "NotAllowed" }));
@@ -441,7 +525,9 @@ export class Connection {
     const pending = [...this.#pending.values()];
     this.#pending.clear();
     for (const each of pending) each.reject(new CafError({ type: "Disconnected" }));
-    for (const listener of this.#closeListeners.splice(0)) call(listener, undefined);
+    const closes = [...this.#closeListeners];
+    this.#closeListeners.clear();
+    for (const listener of closes) call(listener, undefined);
     this.#chatListeners.clear();
     try {
       this.#transport.close();
@@ -468,6 +554,8 @@ interface Pending {
 
 /** What a watch needs of its connection. */
 interface Link {
+  /** The run of CAF the connection is to. */
+  readonly run: string;
   forget(watch: Watch): void;
   rewatch(chat: ChatId): void;
 }
@@ -502,7 +590,7 @@ class Watch implements Watching {
 
   picture(chat: Chat, latest: ChangeNo): void {
     if (this.#stopped) return;
-    this.#copy = new ChatCopy(chat, latest);
+    this.#copy = made(new ChatCopy(chat, latest), this.#link.run);
     this.#waiting = false;
     call(this.#listener, { type: "Chat", chat });
   }
@@ -512,12 +600,15 @@ class Watch implements Watching {
     if (this.#stopped || this.#waiting || copy === null) return;
     const before = copy.chat;
     const taken = copy.take(changes);
-    if (taken === "need-picture") {
+    // What it took before it couldn't is still the chat as it was then.
+    // It's drawn before asking again, since a transport may hand over the
+    // new picture before the ask returns.
+    if (copy.chat !== before) call(this.#listener, { type: "Chat", chat: copy.chat });
+    // Unless the listener stopped the watch, or a picture came meanwhile.
+    if (taken === "need-picture" && !this.#stopped && this.#copy === copy) {
       this.#waiting = true;
       this.#link.rewatch(this.chat);
     }
-    // What it took before it couldn't is still the chat as it was then.
-    if (copy.chat !== before && !this.#stopped) call(this.#listener, { type: "Chat", chat: copy.chat });
   }
 
   ended(): void {
@@ -546,43 +637,10 @@ function parse(text: unknown): { type: string; value: unknown } | null {
   return { type: message.type, value: message.value };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isNumber(value: unknown): value is number {
-  return typeof value === "number";
-}
-
-function isString(value: unknown): value is string {
-  return typeof value === "string";
-}
-
-function isArrayOf<T>(value: unknown, each: (value: unknown) => value is T): value is T[] {
-  return Array.isArray(value) && value.every(each);
-}
-
-function isSummary(value: unknown): value is ChatSummary {
-  return isRecord(value) && isNumber(value.id) && isString(value.agent) && isString(value.cwd);
-}
-
-function hasId(value: unknown): value is Record<string, unknown> & { id: number } {
-  return isRecord(value) && isNumber(value.id);
-}
-
-/**
- * Whether a chat has the shape `apply` relies on: ids where it looks for
- * them, and lists where it adds to them. What it never reads is the app's
- * to draw.
- */
-function isChat(value: unknown): value is Chat {
-  if (!hasId(value) || !isArrayOf(value.questions, hasId) || !Array.isArray(value.turns)) return false;
-  return value.turns.every(
-    (turn) =>
-      hasId(turn) &&
-      isArrayOf(turn.items, hasId) &&
-      turn.items.every((item) => isRecord(item.kind) && isString(item.kind.type)),
-  );
+/** Remembers that `copy` came from `run`. */
+function made(copy: ChatCopy, run: string): ChatCopy {
+  runs.set(copy, run);
+  return copy;
 }
 
 /** Calls an app's listener, reporting what it throws rather than letting it end the link. */

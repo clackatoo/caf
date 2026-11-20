@@ -1,4 +1,5 @@
 import { apply } from "./apply.ts";
+import { isChange } from "./shape.ts";
 import type { Chat, ChangeNo, Numbered } from "./types.ts";
 
 /**
@@ -16,8 +17,12 @@ export class ChatCopy {
     this.#latest = latest;
   }
 
-  /** The chat, as far as the copy has read. A new object after every change. */
-  get chat(): Chat {
+  /**
+   * The chat, as far as the copy has read. A new object after every
+   * change. It's read-only: it shares its turns and items with the copy,
+   * so changing it would change the copy.
+   */
+  get chat(): Readonly<Chat> {
     return this.#chat;
   }
 
@@ -33,7 +38,8 @@ export class ChatCopy {
    * the chat whole again.
    *
    * A change that isn't shaped as CAF sends one, such as one missing its
-   * number, needs a picture too: it never throws.
+   * number, or a known type without what `apply` reads, needs a picture
+   * too: it never throws.
    */
   take(changes: readonly Numbered[]): "ok" | "need-picture" {
     for (const numbered of changes) {
@@ -41,11 +47,13 @@ export class ChatCopy {
       if (typeof no !== "number") return "need-picture";
       if (no <= this.#latest) continue;
       if (no !== this.#latest + 1) return "need-picture";
+      // Its type is one this SDK knows, but not what it holds.
+      if (!isChange(numbered.change)) return "need-picture";
       let applied: ReturnType<typeof apply>;
       try {
         applied = apply(this.#chat, numbered.change);
       } catch {
-        // Its type is one this SDK knows, but not what it holds.
+        // Only a bug of this SDK's gets here.
         return "need-picture";
       }
       if (!("chat" in applied)) return "need-picture";

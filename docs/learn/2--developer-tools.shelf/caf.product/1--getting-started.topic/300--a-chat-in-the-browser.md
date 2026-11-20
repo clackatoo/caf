@@ -50,6 +50,8 @@ async fn link(socket: WebSocket, caf: Caf<NoAppItems>) {
                 break;
             }
         }
+        // serve has ended: close the socket, so the browser hears it.
+        let _ = sink.close().await;
     });
     while let Some(Ok(message)) = stream.next().await {
         let Message::Text(text) = message else { continue };
@@ -63,9 +65,11 @@ async fn link(socket: WebSocket, caf: Caf<NoAppItems>) {
 }
 ```
 
-`serve` runs until either side closes or CAF shuts down. A viewer doesn't
-keep CAF running: once the host drops its own `Caf`, CAF shuts down, and
-each viewer sees its chats end.
+`serve` runs until either side closes or CAF shuts down. When it ends, the
+writer closes the socket, so the browser hears the link end; without that,
+the page would wait on a socket nothing writes to. A viewer doesn't keep
+CAF running: once the host drops its own `Caf`, CAF shuts down, and each
+viewer sees its chats end.
 
 Keep the channel to the viewer bounded. While it's full, `serve` stops
 taking that viewer's changes. A viewer that falls far behind gets the chat
@@ -126,7 +130,9 @@ caf.onChats((chats) => drawList(chats));
 `Connection.open` takes any `Transport`, an object that sends and hears one
 JSON text per message. `webSocket` is the one the SDK ships. If CAF speaks
 no version of the wire the SDK does, `open` rejects with a `CafError` whose
-`why` is `NoCommonVersion`.
+`why` is `NoCommonVersion`. It waits as long as CAF takes to say hello
+back: to give up sooner, pass a signal, as in
+`Connection.open(transport, { signal: AbortSignal.timeout(5000) })`.
 
 ### Watch a chat
 
@@ -146,7 +152,8 @@ apart.
 
 Each new chat shares every turn and item that didn't change with the one
 before it, so Svelte, React or plain DOM code can tell what changed by
-comparing objects, and redraw only that.
+comparing objects, and redraw only that. So treat it as read-only: it also
+shares them with the SDK's own copy, and changing it would change the copy.
 
 CAF first sends a watched chat whole, then its numbered changes. The SDK
 applies them itself. If one is missing, doesn't fit, or is of a kind this
@@ -164,8 +171,10 @@ await caf.answer(question.id, { type: "Permission", value: option.id });
 await caf.close(chat);
 ```
 
-Each resolves once CAF has done it. Questions waiting for an answer are on
-the chat, in `chat.questions`. When something isn't done, the promise
+`open` resolves once the chat is open, and `send` once the core has taken
+the message, with the turn it will be: not once the turn has run, which
+the watch shows. `stop`, `answer` and `close` resolve once they're done.
+Questions waiting for an answer are on the chat, in `chat.questions`. When something isn't done, the promise
 rejects with a `CafError`, whose `why` says why:
 
 | `why.type` | What it means |
@@ -176,23 +185,57 @@ rejects with a `CafError`, whose `why` says why:
 | `Unknown` | It went in a way this version of the SDK doesn't know, from a later CAF. `why.value.outcome` is its name. |
 | `Disconnected` | The link ended before the answer came. |
 
-A reason added in a later version of CAF still comes through, with its
-name: show it as unknown, with that name.
+A later CAF may add reasons: to `Refused` here, and to a chat's `Lost` and
+a failed turn's `FailureReason`. The types list only the reasons this
+version of the SDK knows, but a new one still comes through, by its name.
+So give every `switch` on a reason a `default` that shows it by its `type`:
+
+```ts
+function refusal(reason: Refused): string {
+  switch (reason.type) {
+    case "QueueFull":
+      return "Too many messages are waiting.";
+    // …
+    default:
+      return `Refused (${reason.type})`;
+  }
+}
+```
 
 ### When the link drops
 
 When the link ends, for any reason, every request still waiting rejects with
-`Disconnected`, and `onClose` is called. Reconnecting is the page's choice.
-To pick up where it left off, connect again and watch each chat `from` the
-copy its last watch had: CAF then sends only what changed since, if it still
-can, and the chat whole if not.
+`Disconnected`, and `onClose` is called. A watch isn't ended: `onClose` is
+how the page hears. `watch` on a connection that has ended throws
+`Disconnected`.
+
+Reconnecting is the page's choice. To pick up where it left off, connect
+again and watch each chat `from` the copy its last watch had: CAF then sends
+only what changed since, if it still can, and the chat whole if not.
 
 ```ts
-caf.onClose(async () => {
-  const again = await Connection.open(await webSocket(url));
-  again.watch(chatId, listener, watching.copy ?? undefined);
+const stopReconnecting = caf.onClose(() => {
+  reconnect().catch((error) => showOffline(error));
 });
+
+async function reconnect() {
+  const again = await Connection.open(await webSocket(url));
+  if (again.run !== caf.run) return startOver(again); // CAF restarted
+  again.watch(chatId, listener, watching.copy ?? undefined);
+}
 ```
+
+`onClose` returns a function that stops it, such as when the page is done
+with the connection.
+
+A restarted CAF numbers its chats, and each chat's changes, from the start
+again, so after a restart chat 3 may be another chat, or none. Each
+connection's `run` names the run of CAF it reached, and is different every
+time CAF starts. So compare it with the old connection's: if it changed, the
+page's chat ids mean nothing now, and it starts again from the new `chats`.
+`watch` checks too: it only resumes from a copy one of its watches made on
+a connection to the same run, and otherwise asks for the chat whole. A
+`ChatCopy` the page made itself, such as from storage, isn't resumed from.
 
 `disconnect` ends the link from the page's side.
 

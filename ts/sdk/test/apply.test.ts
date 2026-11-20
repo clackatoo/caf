@@ -208,6 +208,14 @@ describe("apply", () => {
     expect(after.questions[0]).toBe(before.questions[1]);
   });
 
+  test("QuestionGone takes away the one it names, not the first", () => {
+    const before = chat([], [question(1007), question(1008), question(1009)]);
+    const after = applied(before, { type: "QuestionGone", value: 1008 });
+    expect(after.questions.map((each) => each.id)).toStrictEqual([1007, 1009]);
+    expect(after.questions[0]).toBe(before.questions[0]);
+    expect(after.questions[1]).toBe(before.questions[2]);
+  });
+
   test("QuestionGone of a question the chat doesn't have", () => {
     expect(mismatch(busy(), { type: "QuestionGone", value: 9 })).toStrictEqual({ type: "NoQuestion", value: 9 });
   });
