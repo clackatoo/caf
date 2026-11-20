@@ -55,3 +55,25 @@ test.describe('replaying the live 0.98.0 recording', () => {
     await expect(page.locator('.changes h4').first()).toContainText('Chat')
   })
 })
+
+test.describe('a page from another build', () => {
+  test.use({ serve: ['--replay', resolve(traces, 'claude-0.98.0-live.jsonl')] })
+
+  test('says to rebuild, and goes no further, when the server speaks another protocol', async ({ page, server }) => {
+    // The server's Hello, as from a later build.
+    await page.routeWebSocket(/\/inspect/, (socket) => {
+      const real = socket.connectToServer()
+      real.onMessage((message) => {
+        const parsed = JSON.parse(String(message)) as { type: string; value: { protocol?: number } }
+        if (parsed.type === 'Hello') parsed.value.protocol = 999
+        socket.send(JSON.stringify(parsed))
+      })
+    })
+    await page.goto(server.url)
+    const alert = page.getByRole('alert')
+    await expect(alert).toContainText('This page is from a different build of caf-debugger')
+    await expect(alert).toContainText('npm run build')
+    await expect(page.locator('.caf-chat')).toHaveCount(0)
+    await expect(page.getByRole('slider', { name: 'Position' })).toHaveCount(0)
+  })
+})

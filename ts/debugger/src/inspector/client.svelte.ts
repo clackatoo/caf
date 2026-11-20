@@ -4,7 +4,7 @@
 
 import type { JsonValue } from '@clackatoo/caf'
 import type { LinkState } from '../link.ts'
-import type { FromInspector, Mode, Step, ToInspector } from './channel.ts'
+import { PROTOCOL, type Check, type FromInspector, type Mode, type Step, type ToInspector } from './channel.ts'
 import { PastChats } from './past.svelte.ts'
 
 /** A WebSocket, or anything that behaves like one for this. */
@@ -17,6 +17,8 @@ export interface Socket {
 
 /** How many positions' states are kept: the one shown, the one before, and a few around. */
 const KEPT_STATES = 16
+/** How many states can wait to be asked for: while dragging, the oldest go. */
+const WANTED = 4
 
 export class Inspector {
   link = $state<LinkState>('connecting')
@@ -32,7 +34,13 @@ export class Inspector {
   /** Where the app is looking. Steps are numbered from 1; position `at` is just after step `at`, and 0 is before any. */
   position = $state.raw({ live: true, at: 0, end: 0 })
   /** The first step where the replay check failed, if one has. */
-  diverged = $state.raw<{ at: number; expected: unknown[]; got: unknown[] | null } | null>(null)
+  diverged = $state.raw<{ check: Check; at: number; expected: unknown[]; got: unknown[] | null } | null>(null)
+  /**
+   * The server speaks another version of the channel than this app was
+   * built for: the page is from another build of caf-debugger. The link is
+   * closed, and nothing more is taken from it or sent.
+   */
+  mismatch = $state.raw<{ server: unknown } | null>(null)
   /** The chats as they were at the position, while looking back. */
   readonly past = new PastChats()
   /** What the server sent that this app couldn't read. */
@@ -43,7 +51,14 @@ export class Inspector {
   count = $state(0)
   /** The core's state at positions asked for, newest last. */
   #states = $state.raw<ReadonlyMap<number, JsonValue>>(new Map())
-  #asked = new Set<number>()
+  /**
+   * The state asked for and not yet come. Only one is asked at a time:
+   * the server answers only the last StateAt waiting when it gets to
+   * them, so a second sent at once would leave the first unanswered.
+   */
+  #asking: number | null = null
+  /** States wanted next, oldest first, at most `WANTED`. */
+  #wanted: number[] = []
   #socket: Socket
 
   constructor(socket: Socket) {
@@ -51,6 +66,7 @@ export class Inspector {
     socket.addEventListener('open', () => {
       this.#opened = true
       this.link = 'open'
+      this.#ask()
     })
     socket.addEventListener('close', () => {
       this.refused = !this.#opened
@@ -107,10 +123,28 @@ export class Inspector {
 
   /** Asks for the core's state at a position, unless it has it or has asked. */
   stateAt(step: number): void {
-    if (step < 0 || this.#states.has(step) || this.#asked.has(step)) return
-    // Not sent until the link is open: whoever asks, asks again then.
-    if (this.#send({ type: 'StateAt', value: { step } })) this.#asked.add(step)
+    if (step < 0 || this.#states.has(step) || this.#asking === step) return
+    if (!this.#wanted.includes(step)) this.#wanted.push(step)
+    if (this.#wanted.length > WANTED) this.#wanted.shift()
+    this.#ask()
   }
+
+  /** Asks for the next state wanted, if none is on its way. */
+  #ask(): void {
+    while (this.#asking === null && this.#wanted.length > 0) {
+      const step = this.#wanted[0]!
+      if (this.#states.has(step)) {
+        this.#wanted.shift()
+        continue
+      }
+      // Not sent until the link is open: it stays wanted, and whoever
+      // asked asks again then.
+      if (!this.#send({ type: 'StateAt', value: { step } })) return
+      this.#wanted.shift()
+      this.#asking = step
+    }
+  }
+
 
   close(): void {
     this.#socket.close()
@@ -118,16 +152,25 @@ export class Inspector {
 
   /** Sends a message, if the link is open: whether it was sent. */
   #send(message: FromInspector): boolean {
-    if (this.link !== 'open') return false
+    if (this.link !== 'open' || this.mismatch !== null) return false
     this.#socket.send(JSON.stringify(message))
     return true
   }
 
   #hear(message: ToInspector): void {
+    if (this.mismatch !== null) return
     switch (message.type) {
-      case 'Hello':
+      case 'Hello': {
+        const protocol: unknown = (message.value as { protocol?: unknown }).protocol
+        if (protocol !== PROTOCOL) {
+          this.mismatch = { server: protocol ?? null }
+          this.#socket.close()
+          this.link = 'closed'
+          return
+        }
         this.hello = message.value
         break
+      }
       case 'Steps': {
         const { from, steps } = message.value
         if (from !== this.#steps.length + 1) {
@@ -151,7 +194,8 @@ export class Inspector {
         states.set(message.value.at, message.value.core)
         while (states.size > KEPT_STATES) states.delete(states.keys().next().value!)
         this.#states = states
-        this.#asked.delete(message.value.at)
+        if (this.#asking === message.value.at) this.#asking = null
+        this.#ask()
         break
       }
       case 'Past':

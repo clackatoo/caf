@@ -124,3 +124,12 @@ describe('step times', () => {
     expect(sinceFirst(5, 125_000_005 + 60_000_000_000)).toBe('+60.125 s')
   })
 })
+
+describe('what diverged', () => {
+  it('names the check that failed', async () => {
+    const { divergedText } = await import('../../src/inspector/summary.ts')
+    expect(divergedText({ type: 'Steps' }, 7)).toBe('The live replay diverged at step 7.')
+    expect(divergedText({ type: 'Recording' }, 3)).toBe('The replay of the recording diverged at step 3.')
+    expect(divergedText({ type: 'Telepathy' } as never, 2)).toBe('A replay check this app doesn’t know (Telepathy) diverged at step 2.')
+  })
+})

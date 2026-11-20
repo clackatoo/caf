@@ -7,6 +7,7 @@
   // were, from the inspector channel's `Past` messages, read-only.
   import type { AgentName, Answer, ChatId, DeepReadonly, QuestionId, UserMessage } from '@clackatoo/caf'
   import { ChatList, ChatView, type ChatActions, type ListActions } from './chat/index.ts'
+  import { PROTOCOL } from './inspector/channel.ts'
   import { Inspector } from './inspector/client.svelte.ts'
   import InspectorView from './inspector/Inspector.svelte'
   import Timeline from './inspector/Timeline.svelte'
@@ -30,7 +31,7 @@
   const mode = $derived(inspector.hello?.mode.type ?? null)
   // Live, once the server says so: `/viewer`.
   $effect(() => {
-    if (mode !== 'Live' || live !== null) return
+    if (mode !== 'Live' || live !== null || inspector.mismatch !== null) return
     const made = new Live()
     live = made
     void made.connect(() => webSocket(socketUrl('/viewer')))
@@ -153,7 +154,9 @@
     <span class="link" data-link={link}>
       {link === 'open' ? 'Connected' : link === 'connecting' ? 'Connecting…' : 'Disconnected'}
     </span>
-    {#if locked}
+    {#if inspector.mismatch !== null}
+      <!-- Shown below instead of the app. -->
+    {:else if locked}
       <span class="problem">This page can't reach caf-debugger: open the address it printed, with its <code>#token=</code>, again.</span>
     {:else if link === 'closed'}<button type="button" onclick={reconnect}>Reconnect</button>{/if}
     {#if live?.problem}<span class="problem">{live.problem}</span>{/if}
@@ -166,6 +169,15 @@
     </button>
   </header>
 
+  {#if inspector.mismatch !== null}
+    <div class="mismatch" role="alert">
+      <h2>This page is from a different build of caf-debugger</h2>
+      <p>
+        The server speaks version {String(inspector.mismatch.server ?? 'none')} of the inspector channel, and this page was built for
+        version {PROTOCOL}. Rebuild the app (<code>npm run build</code> in <code>ts/debugger</code>) and reload.
+      </p>
+    </div>
+  {:else}
   <main bind:this={main} style:grid-template-columns={showInspector ? `${split}fr 6px ${1 - split}fr` : '1fr'}>
     <div class="left">
       <div class="list">
@@ -204,6 +216,7 @@
   </main>
 
   <Timeline {inspector} />
+  {/if}
 </div>
 
 <dialog bind:this={saving} class="save" aria-labelledby="save-title">
@@ -345,6 +358,22 @@
   .right {
     min-width: 0;
     min-height: 0;
+  }
+  .mismatch {
+    max-width: 40em;
+    margin: 4em auto;
+    padding: 1.2em 1.4em;
+    border: 1px solid var(--caf-error);
+    border-radius: 10px;
+    background: var(--caf-error-bg);
+  }
+  .mismatch h2 {
+    margin: 0 0 0.5em;
+    font-size: 1.15em;
+  }
+  .mismatch p {
+    line-height: 1.5;
+    margin: 0;
   }
   .save {
     max-width: 34em;

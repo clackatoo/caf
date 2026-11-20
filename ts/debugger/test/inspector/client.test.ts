@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { Directive, Event, ToViewer } from '@clackatoo/caf'
-import type { Step, ToInspector } from '../../src/inspector/channel.ts'
+import { PROTOCOL, type Step, type ToInspector } from '../../src/inspector/channel.ts'
 import { Inspector, type Socket } from '../../src/inspector/client.svelte.ts'
 import { fixtures } from '../fixtures.ts'
 
@@ -37,7 +37,7 @@ function open(): { socket: FakeSocket; inspector: Inspector } {
   const socket = new FakeSocket()
   const inspector = new Inspector(socket)
   socket.emit('open')
-  socket.say({ type: 'Hello', value: { mode: { type: 'Live' }, file: '/rec.jsonl', run: 'r1' } })
+  socket.say({ type: 'Hello', value: { protocol: PROTOCOL, mode: { type: 'Live' }, file: '/rec.jsonl', run: 'r1' } })
   return { socket, inspector }
 }
 
@@ -84,7 +84,7 @@ describe('steps and the position', () => {
     const socket = new FakeSocket()
     const inspector = new Inspector(socket)
     socket.emit('open')
-    socket.say({ type: 'Hello', value: { mode: { type: 'Replay' }, file: 'x.jsonl', run: null } })
+    socket.say({ type: 'Hello', value: { protocol: PROTOCOL, mode: { type: 'Replay' }, file: 'x.jsonl', run: null } })
     socket.say({ type: 'Steps', value: { from: 1, steps: [step(1), step(2)] } })
     inspector.look(2)
     expect(socket.sent).toEqual([{ type: 'Seek', value: { step: 2 } }])
@@ -112,8 +112,8 @@ describe('steps and the position', () => {
 
   it('records where the replay diverged', () => {
     const { socket, inspector } = open()
-    socket.say({ type: 'Diverged', value: { at: 4, expected: [], got: null } })
-    expect(inspector.diverged).toEqual({ at: 4, expected: [], got: null })
+    socket.say({ type: 'Diverged', value: { check: { type: 'Recording' }, at: 4, expected: [], got: null } })
+    expect(inspector.diverged).toEqual({ check: { type: 'Recording' }, at: 4, expected: [], got: null })
   })
 
   it("says when a message is one it doesn't know", () => {
@@ -121,6 +121,37 @@ describe('steps and the position', () => {
     socket.say({ type: 'Telegram' } as never)
     expect(inspector.problem).toContain('Telegram')
   })
+})
+
+describe('the protocol', () => {
+  function hello(protocol: unknown) {
+    const socket = new FakeSocket()
+    const inspector = new Inspector(socket)
+    socket.emit('open')
+    socket.say({ type: 'Hello', value: { protocol, mode: { type: 'Live' }, file: null, run: 'r' } } as never)
+    return { socket, inspector }
+  }
+
+  it('goes on when the server speaks the one this app was built for', () => {
+    const { inspector } = hello(PROTOCOL)
+    expect(inspector.mismatch).toBeNull()
+    expect(inspector.hello?.mode.type).toBe('Live')
+  })
+
+  for (const protocol of [PROTOCOL + 1, PROTOCOL - 1, undefined, '1']) {
+    it(`stops at once, closed, on ${JSON.stringify(protocol) ?? 'none'}`, () => {
+      const { socket, inspector } = hello(protocol)
+      expect(inspector.mismatch).toEqual({ server: protocol ?? null })
+      expect(inspector.hello).toBeNull()
+      expect(inspector.link).toBe('closed')
+      // Nothing more is taken, or asked.
+      socket.say({ type: 'Steps', value: { from: 1, steps: [step(1)] } })
+      expect(inspector.count).toBe(0)
+      inspector.seek(0)
+      inspector.stateAt(0)
+      expect(socket.sent).toEqual([])
+    })
+  }
 })
 
 describe('states', () => {
@@ -143,6 +174,28 @@ describe('states', () => {
     socket.emit('open')
     inspector.stateAt(2)
     expect(socket.sent).toEqual([{ type: 'StateAt', value: { step: 2 } }])
+  })
+
+  it('asks for one at a time: the server answers only the last StateAt waiting', () => {
+    const { socket, inspector } = open()
+    inspector.stateAt(3)
+    inspector.stateAt(2)
+    expect(socket.sent).toEqual([{ type: 'StateAt', value: { step: 3 } }])
+    socket.say({ type: 'State', value: { at: 3, core: 3 } })
+    expect(socket.sent).toEqual([
+      { type: 'StateAt', value: { step: 3 } },
+      { type: 'StateAt', value: { step: 2 } },
+    ])
+    socket.say({ type: 'State', value: { at: 2, core: 2 } })
+    expect([inspector.state(3), inspector.state(2)]).toEqual([3, 2])
+  })
+
+  it('drops the oldest of many waiting, while dragging', () => {
+    const { socket, inspector } = open()
+    for (let at = 1; at <= 10; at++) inspector.stateAt(at)
+    socket.say({ type: 'State', value: { at: 1, core: 1 } })
+    for (let at = 7; at <= 10; at++) socket.say({ type: 'State', value: { at, core: at } })
+    expect(socket.sent.map((message) => (message as { value: { step: number } }).value.step)).toEqual([1, 7, 8, 9, 10])
   })
 
   it('keeps only the latest few', () => {

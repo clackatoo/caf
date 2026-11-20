@@ -1,5 +1,6 @@
 // One-line summaries of events and directives, for the Steps table.
 
+import type { Check } from './channel.ts'
 import type { AgentDirective, AgentEvent, Directive, Event, Frame, HostCommand, Message, RequestId } from '@clackatoo/caf'
 import { stderrText } from './decode.ts'
 
@@ -164,4 +165,16 @@ export function worstReport(directives: readonly Directive[]): 'Warn' | 'Info' |
     if (directive.value.level.type === 'Info') worst = 'Info'
   }
   return worst
+}
+
+/** The banner's words for a failed check: which replay diverged, and where. */
+export function divergedText(check: Check, at: number): string {
+  switch (check.type) {
+    case 'Steps':
+      return `The live replay diverged at step ${at}.`
+    case 'Recording':
+      return `The replay of the recording diverged at step ${at}.`
+    default:
+      return `A replay check this app doesn’t know (${tag(check)}) diverged at step ${at}.`
+  }
 }

@@ -6,6 +6,7 @@
   import JsonTree from './JsonTree.svelte'
   import StateTab from './StateTab.svelte'
   import StepsTab from './StepsTab.svelte'
+  import { divergedText } from './summary.ts'
 
   let { inspector }: { inspector: Inspector } = $props()
 
@@ -29,8 +30,8 @@
     {@const diverged = inspector.diverged}
     <div class="diverged" role="alert">
       <div class="line">
-        <strong>Replay diverged at step {diverged.at}.</strong>
-        Replaying the recording didn't give what CAF did: that's a bug in CAF. What's shown after it may be wrong.
+        <strong>{divergedText(diverged.check, diverged.at)}</strong>
+        Replaying it didn't give what CAF did: that's a bug in CAF. What's shown after it may be wrong.
         <button type="button" onclick={() => inspector.seek(diverged.at)}>Go to it</button>
         <button type="button" onclick={() => (showDivergence = !showDivergence)}>{showDivergence ? 'Hide' : 'Show'} the difference</button>
       </div>
