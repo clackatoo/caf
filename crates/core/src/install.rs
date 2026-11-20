@@ -74,6 +74,18 @@ pub struct NpmPackage {
     pub lockfile: String,
 }
 
+impl NpmPackage {
+    /// A package installed from this `package.json` and
+    /// `package-lock.json`.
+    #[must_use]
+    pub fn new(manifest: impl Into<String>, lockfile: impl Into<String>) -> Self {
+        Self {
+            manifest: manifest.into(),
+            lockfile: lockfile.into(),
+        }
+    }
+}
+
 /// A file to download for one platform.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +101,25 @@ pub struct Artifact {
     pub unpack: Unpack,
 }
 
+impl Artifact {
+    /// A file for `platform`, downloaded from `url`, checked against
+    /// `sha256` (in hex), and unpacked as `unpack` says.
+    #[must_use]
+    pub fn new(
+        platform: Platform,
+        url: impl Into<String>,
+        sha256: impl Into<String>,
+        unpack: Unpack,
+    ) -> Self {
+        Self {
+            platform,
+            url: url.into(),
+            sha256: sha256.into(),
+            unpack,
+        }
+    }
+}
+
 /// An operating system and processor.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -98,6 +129,23 @@ pub struct Platform {
     pub os: String,
     /// As Rust names it, such as `x86_64` or `aarch64`.
     pub arch: String,
+}
+
+impl Platform {
+    /// The platform `os` and `arch`, as Rust names them.
+    #[must_use]
+    pub fn new(os: impl Into<String>, arch: impl Into<String>) -> Self {
+        Self {
+            os: os.into(),
+            arch: arch.into(),
+        }
+    }
+
+    /// The platform this program was built for.
+    #[must_use]
+    pub fn current() -> Self {
+        Self::new(std::env::consts::OS, std::env::consts::ARCH)
+    }
 }
 
 /// How to unpack a downloaded file.
