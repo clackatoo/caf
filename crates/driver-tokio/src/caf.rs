@@ -52,6 +52,7 @@ use caf_core::{
     QuestionId, Read, Refused, Report, Ticket, TurnId,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{AbortHandle, JoinHandle, JoinSet};
 
@@ -88,7 +89,13 @@ pub struct Config {
     ///
     /// **What's hidden.** None of it changes what the core does:
     /// - Claude's sign-in status (`_auth/status_update`) holds the
-    ///   account's email: its params are written as `null`.
+    ///   account's email: its params are written as the kind of sign-in
+    ///   alone, `{"authStatus": {"kind": "account"}}`, which is all the
+    ///   core reads, or `{}` if they have none.
+    /// - What the user pastes into a sign-in ([`Caf::paste`]) is a
+    ///   one-time code: it's written as `{"agent": …, "text": null}`. A
+    ///   reader replaying the file takes that `null` as text it doesn't
+    ///   have, such as an empty string.
     /// - Each agent's arguments are left out, and its environment
     ///   variables are written with their names but not their values.
     /// - Each MCP server's environment variables and HTTP headers are
@@ -98,8 +105,10 @@ pub struct Config {
     /// folder and profile; what the user sent; everything the agent said;
     /// its error output, exactly, as text where a piece of it is UTF-8 and
     /// as bytes where it isn't, such as one that ends partway through a
-    /// character; folders; and each MCP server's name, program, arguments
-    /// and URL. So don't put secrets in MCP arguments or URLs, and treat a
+    /// character; folders; each MCP server's name, program, arguments and
+    /// URL; and what the setup driver reported, with the folder installs
+    /// live in, and a sign-in's link and code (each good for one sign-in
+    /// only, and of no use without the command that asked for it). So don't put secrets in MCP arguments or URLs, and treat a
     /// recording as private: read it through before sharing it. Names of
     /// variables and arguments are written as arrays of bytes, as Rust
     /// writes them.
@@ -1433,6 +1442,28 @@ const RECORDING_BEHIND: usize = 256 << 20;
 /// Claude's sign-in status, which holds the account's email.
 const SIGN_IN_STATUS: &str = "_auth/status_update";
 
+/// Where the kind of sign-in is in [`SIGN_IN_STATUS`]'s params, as Claude's
+/// adapter sends them: `{"authStatus": {"kind": "account", …}}`.
+const SIGN_IN_KIND: &str = "/authStatus/kind";
+
+/// [`SIGN_IN_STATUS`]'s params, as recorded: the kind of sign-in alone,
+/// where the adapter put it, or nothing. Never the email, or anything else
+/// beside it.
+fn sign_in_status_params(params: Option<&RawValue>) -> Option<Box<RawValue>> {
+    let kind = params
+        .and_then(|params| serde_json::from_str::<serde_json::Value>(params.get()).ok())
+        .and_then(|params| {
+            params
+                .pointer(SIGN_IN_KIND)
+                .and_then(|kind| kind.as_str().map(str::to_owned))
+        });
+    let kept = match kind {
+        Some(kind) => serde_json::json!({ "authStatus": { "kind": kind } }),
+        None => serde_json::json!({}),
+    };
+    serde_json::value::to_raw_value(&kept).ok()
+}
+
 /// Writes a recording, on a thread of its own.
 struct Recorder {
     lines: std::sync::mpsc::Sender<String>,
@@ -1598,9 +1629,9 @@ impl Recorder {
     }
 }
 
-/// `event` at `now`, as a recording's line: with MCP servers' secrets
-/// and Claude's sign-in status hidden, and error output as text where
-/// it's UTF-8.
+/// `event` at `now`, as a recording's line: with MCP servers' secrets,
+/// pasted codes and all of Claude's sign-in status but its kind hidden,
+/// and error output as text where it's UTF-8.
 fn line<A: AppItem>(now: Now, event: &Event<A>) -> serde_json::Result<String> {
     let (process, agent) = match event {
         Event::Agent { process, event } => (process, event),
@@ -1610,6 +1641,14 @@ fn line<A: AppItem>(now: Now, event: &Event<A>) -> serde_json::Result<String> {
                 open: hide_mcp_secrets(open),
             });
             return serde_json::to_string(&Line { now, event: &event });
+        }
+        // A one-time code: it's never written, so a replay can't use it.
+        Event::Host(HostCommand::Paste { agent, .. }) => {
+            let event = serde_json::json!({
+                "type": "Host",
+                "value": { "type": "Paste", "value": { "agent": agent, "text": null } },
+            });
+            return serde_json::to_string(&serde_json::json!({ "now": now, "event": event }));
         }
         _ => return serde_json::to_string(&Line { now, event }),
     };
@@ -1627,21 +1666,21 @@ fn line<A: AppItem>(now: Now, event: &Event<A>) -> serde_json::Result<String> {
             });
             return serde_json::to_string(&serde_json::json!({ "now": now, "event": event }));
         }
-        AgentEvent::Frame(Frame::Message(Message::Notification { method, .. }))
+        AgentEvent::Frame(Frame::Message(Message::Notification { method, params }))
             if method == SIGN_IN_STATUS =>
         {
             Message::Notification {
                 method: method.clone(),
-                params: None,
+                params: sign_in_status_params(params.as_deref()),
             }
         }
-        AgentEvent::Frame(Frame::Message(Message::Request { id, method, .. }))
+        AgentEvent::Frame(Frame::Message(Message::Request { id, method, params }))
             if method == SIGN_IN_STATUS =>
         {
             Message::Request {
                 id: id.clone(),
                 method: method.clone(),
-                params: None,
+                params: sign_in_status_params(params.as_deref()),
             }
         }
         _ => return serde_json::to_string(&Line { now, event }),
@@ -1814,6 +1853,97 @@ mod tests {
                 .unwrap()
                 .contains(r#"{"type":"Stderr","value":"café\n"}"#)
         );
+    }
+
+    /// The event `line` writes, read back as JSON.
+    fn written(event: &Event<NoAppItems>) -> serde_json::Value {
+        let now = Now {
+            wall: Wall(0),
+            mono: Mono(0),
+        };
+        let line = line(now, event).unwrap();
+        let read: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(read["now"], serde_json::json!({ "wall": 0, "mono": 0 }));
+        read["event"].clone()
+    }
+
+    #[test]
+    fn a_pasted_code_is_never_recorded() {
+        let event = Event::<NoAppItems>::Host(HostCommand::Paste {
+            agent: AgentName("claude".into()),
+            text: "one-time-code-1234".into(),
+        });
+        assert_eq!(
+            written(&event),
+            serde_json::json!({
+                "type": "Host",
+                "value": { "type": "Paste", "value": { "agent": "claude", "text": null } },
+            })
+        );
+    }
+
+    #[test]
+    fn only_the_kind_of_a_sign_in_status_is_recorded() {
+        use caf_core::acp::RequestId;
+        let raw = |json: &str| Some(serde_json::value::RawValue::from_string(json.into()).unwrap());
+        let notification = |params| Event::<NoAppItems>::Agent {
+            process: Ticket(1000),
+            event: AgentEvent::Frame(Frame::Message(Message::Notification {
+                method: SIGN_IN_STATUS.into(),
+                params,
+            })),
+        };
+        let params = |event: serde_json::Value| {
+            event["value"]["event"]["value"]["value"]["value"]["params"].clone()
+        };
+        let claude = r#"{"authStatus": {"kind": "account", "label": "Claude Max", "email": "me@example.com", "organization": "Me"}}"#;
+        assert_eq!(
+            params(written(&notification(raw(claude)))),
+            serde_json::json!({ "authStatus": { "kind": "account" } })
+        );
+        // Anything without a kind where Claude's adapter puts it keeps
+        // nothing.
+        for other in [
+            r#"{"email": "me@example.com"}"#,
+            r#"{"authStatus": {"kind": 7}}"#,
+            "[1]",
+            "null",
+        ] {
+            assert_eq!(
+                params(written(&notification(raw(other)))),
+                serde_json::json!({}),
+                "{other}"
+            );
+        }
+        assert_eq!(params(written(&notification(None))), serde_json::json!({}));
+        let request = Event::<NoAppItems>::Agent {
+            process: Ticket(1000),
+            event: AgentEvent::Frame(Frame::Message(Message::Request {
+                id: RequestId::Number(5),
+                method: SIGN_IN_STATUS.into(),
+                params: raw(claude),
+            })),
+        };
+        assert_eq!(
+            params(written(&request)),
+            serde_json::json!({ "authStatus": { "kind": "account" } })
+        );
+    }
+
+    #[test]
+    fn a_sign_ins_link_and_code_are_recorded_as_they_came() {
+        use caf_core::event::SetupEvent;
+        for event in [
+            SetupEvent::Link("https://claude.ai/oauth?state=abc".into()),
+            SetupEvent::Code("ABCD-1234".into()),
+        ] {
+            let expected = serde_json::to_value(&event).unwrap();
+            let event = Event::<NoAppItems>::Setup {
+                ticket: Ticket(1000),
+                event,
+            };
+            assert_eq!(written(&event)["value"]["event"], expected);
+        }
     }
 
     #[tokio::test]

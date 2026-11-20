@@ -566,7 +566,7 @@ async fn the_recording_check_passes_with_secrets_the_recording_hides() {
         json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"mcpCapabilities": {"http": true}}, "agentInfo": {"name": "fake", "version": "1.0.0"}}}}),
         json!({"wait": {"method": "session/new"}}),
         json!({"respond": {"result": {"sessionId": "s1"}}}),
-        json!({"notify": {"method": "_auth/status_update", "params": {"email": "me@example.com"}}}),
+        json!({"notify": {"method": "_auth/status_update", "params": {"authStatus": {"kind": "account", "email": "me@example.com"}}}}),
         json!({"wait": {"method": "session/prompt"}}),
         json!({"say": {"session": "s1", "text": "Hi."}}),
         json!({"respond": {"result": {"stopReason": "end_turn"}}}),

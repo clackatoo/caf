@@ -201,7 +201,7 @@ async fn a_watcher_without_a_recording_sees_the_host_calls_the_core_took() {
 async fn a_watcher_sees_secrets_as_they_are_and_its_steps_replay_exactly() {
     let dir = Dir::new();
     let mut script = after_handshake(&[
-        json!({"notify": {"method": "_auth/status_update", "params": {"email": "me@example.com"}}}),
+        json!({"notify": {"method": "_auth/status_update", "params": {"authStatus": {"kind": "account", "email": "me@example.com"}}}}),
         prompt(),
         say("s1", "Hi."),
         end_turn(),

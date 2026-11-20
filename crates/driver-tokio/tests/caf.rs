@@ -713,7 +713,7 @@ async fn a_recorded_run_replays_to_the_same_state() {
         "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}]
     }}});
     let script = dir.script("script.jsonl", &after_handshake(&[
-        json!({"notify": {"method": "_auth/status_update", "params": {"email": "someone@example.com"}}}),
+        json!({"notify": {"method": "_auth/status_update", "params": {"authStatus": {"kind": "account", "label": "Claude Max", "email": "someone@example.com"}}}}),
         json!({"stderr": "warming up"}),
         prompt(),
         say("s1", "Looking."),
@@ -778,9 +778,9 @@ async fn a_recorded_run_replays_to_the_same_state() {
     );
     assert!(
         text.contains(
-            r#"{"type":"Notification","value":{"method":"_auth/status_update","params":null}}"#
+            r#"{"type":"Notification","value":{"method":"_auth/status_update","params":{"authStatus":{"kind":"account"}}}}"#
         ),
-        "the sign-in status is recorded, without its params"
+        "the sign-in status is recorded with its kind alone"
     );
     assert!(
         !holds(&text, "sk-do-not-record"),
