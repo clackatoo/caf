@@ -88,6 +88,8 @@ jobs:
       # The TypeScript types and samples in ts/sdk are current, the types
       # are in the one shape, and every type is exported and sampled.
       - run: cargo test -p caf-core --features ts --locked typescript_types
+      # The debugger app's inspector types are current.
+      - run: cargo test -p caf-debugger --features ts --locked inspector_types
 
   ts:
     runs-on: ubuntu-24.04
