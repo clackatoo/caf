@@ -1,7 +1,7 @@
 //! Where the debugger keeps its files: recordings of every live run, and
 //! the fake agent's script.
 
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -20,24 +20,26 @@ pub fn state_dir() -> Option<PathBuf> {
 }
 
 /// Makes the folder, readable only by its owner, as recordings are
-/// private.
+/// private: one made before is made so too.
 ///
 /// # Errors
 ///
-/// If it can't be made.
+/// If it can't be made, or made private.
 pub fn make(dir: &Path) -> std::io::Result<()> {
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
-        .create(dir)
+        .create(dir)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
 }
 
-/// A new recording's path in `dir`, named for `now` in UTC, such as
-/// `2026-11-20T14-03-22Z.jsonl`, with `-2` and so on added if that's
-/// taken.
+/// A new recording's path in `dir`, named for `now` in UTC and this
+/// process, such as `2026-11-20T14-03-22Z-4182.jsonl`, with `-2` and so
+/// on added if that's taken. The process's id keeps two debuggers that
+/// start in the same second from choosing the same name.
 #[must_use]
 pub fn new_recording(dir: &Path, now: SystemTime) -> PathBuf {
-    let stamp = stamp(now);
+    let stamp = format!("{}-{}", stamp(now), std::process::id());
     (1..)
         .map(|n| {
             let name = if n == 1 {
@@ -83,46 +85,46 @@ fn civil(days: i64) -> (i64, i64, i64) {
     (year, month, day)
 }
 
-/// What's in a recording, up to its last whole line: CAF writes it as
-/// it runs, so its end may be half a line.
-#[must_use]
-pub fn whole_lines(mut bytes: Vec<u8>) -> Vec<u8> {
-    let end = bytes
-        .iter()
-        .rposition(|&b| b == b'\n')
-        .map_or(0, |at| at + 1);
-    bytes.truncate(end);
-    bytes
-}
-
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
     use std::time::{Duration, SystemTime};
 
-    use super::{new_recording, stamp, whole_lines};
+    use super::{make, new_recording, stamp};
 
     #[test]
-    fn recordings_are_named_for_when_they_start() {
+    fn recordings_are_named_for_when_they_start_and_the_process() {
         let at = |secs| SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
         assert_eq!(stamp(at(0)), "1970-01-01T00-00-00Z");
         assert_eq!(stamp(at(951_782_400)), "2000-02-29T00-00-00Z");
         assert_eq!(stamp(at(1_795_100_602)), "2026-11-19T15-03-22Z");
         let dir = std::env::temp_dir().join(format!("caf-debugger-names-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        let pid = std::process::id();
         let first = new_recording(&dir, at(0));
-        assert_eq!(first, dir.join("1970-01-01T00-00-00Z.jsonl"));
+        assert_eq!(first, dir.join(format!("1970-01-01T00-00-00Z-{pid}.jsonl")));
         std::fs::write(&first, "").unwrap();
         assert_eq!(
             new_recording(&dir, at(0)),
-            dir.join("1970-01-01T00-00-00Z-2.jsonl")
+            dir.join(format!("1970-01-01T00-00-00Z-{pid}-2.jsonl"))
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn a_download_ends_at_a_whole_line() {
-        assert_eq!(whole_lines(b"{}\n{\"a\"".to_vec()), b"{}\n");
-        assert_eq!(whole_lines(b"{}\n".to_vec()), b"{}\n");
-        assert_eq!(whole_lines(b"{".to_vec()), b"");
+    fn the_folder_is_made_private_even_if_it_was_there() {
+        let dir = std::env::temp_dir().join(format!("caf-debugger-private-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        make(&dir).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        let inner = dir.join("a/b");
+        make(&inner).unwrap();
+        assert_eq!(
+            std::fs::metadata(&inner).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

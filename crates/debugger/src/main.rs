@@ -106,7 +106,7 @@ async fn run(args: Args) -> Result<(), String> {
                 return Err("no agents to offer: give some with --agents".into());
             }
             let recording = files::new_recording(&dir, SystemTime::now());
-            let live = live::start(agents, Some(recording.clone()));
+            let live = live::start(agents, Some(recording));
             let names: Vec<_> = live
                 .caf
                 .agents()
@@ -114,11 +114,14 @@ async fn run(args: Args) -> Result<(), String> {
                 .map(|name| name.0.as_str())
                 .collect();
             println!("Running CAF with {}.", names.join(", "));
-            println!("Recording to {}.", recording.display());
+            match &live.recording {
+                Some(path) => println!("Recording to {}.", path.display()),
+                None => println!("Not recording: CAF couldn't make the file, as it says above."),
+            }
             let mut app = App::new(Arc::clone(&live.book), port, token.clone());
             app.live = Some((live.caf.clone(), Arc::clone(&live.rules)));
-            app.recording = Some(recording.clone());
-            (app, Some((live, recording)))
+            app.recording.clone_from(&live.recording);
+            (app, Some(live))
         }
     };
     if !app.dist.join("index.html").is_file() {
@@ -131,15 +134,40 @@ async fn run(args: Args) -> Result<(), String> {
     let serving = axum::serve(listener, server::router(Arc::new(app)));
     tokio::select! {
         served = serving => served.map_err(|error| error.to_string())?,
-        _ = tokio::signal::ctrl_c() => {}
+        signal = stop() => println!("{signal}: shutting down. Again to stop at once."),
     }
-    if let Some((live, recording)) = live {
-        println!("Shutting CAF down.");
+    // A second signal doesn't wait for CAF.
+    tokio::spawn(async {
+        let signal = stop().await;
+        eprintln!("caf-debugger: {signal} again: stopping at once");
+        std::process::exit(1);
+    });
+    if let Some(live) = live {
         live.caf.shutdown().await;
         live.running.await;
-        println!("The run is recorded in {}.", recording.display());
+        if let Some(path) = &live.recording {
+            println!("The run is recorded in {}.", path.display());
+        }
     }
     Ok(())
+}
+
+/// The next signal to stop: Ctrl-C, `SIGTERM`, or `SIGHUP` as the
+/// terminal closes. Named for saying so.
+async fn stop() -> &'static str {
+    use tokio::signal::unix::{SignalKind, signal};
+    let (Ok(mut term), Ok(mut hup)) = (
+        signal(SignalKind::terminate()),
+        signal(SignalKind::hangup()),
+    ) else {
+        let _ = tokio::signal::ctrl_c().await;
+        return "Ctrl-C";
+    };
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => "Ctrl-C",
+        _ = term.recv() => "SIGTERM",
+        _ = hup.recv() => "SIGHUP",
+    }
 }
 
 /// The fake agent's program, if it can be found or built: see

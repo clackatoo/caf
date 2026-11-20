@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use caf_debugger::inspector::{FromInspector, Mode, ToInspector};
+use caf_debugger::inspector::{FromInspector, Mode, PROTOCOL, ToInspector};
 use caf_debugger::replay;
 use caf_debugger::server::{self, App, INSPECTOR_MESSAGE};
 use futures_util::{SinkExt, StreamExt};
@@ -69,10 +69,24 @@ impl Server {
 
     /// Opens a WebSocket at `path`, with this query and Origin.
     async fn socket(&self, path: &str, query: &str, origin: Option<&str>) -> Result<Socket, Error> {
+        self.socket_as(path, query, origin, None).await
+    }
+
+    /// Opens a WebSocket, naming `host` as the server if given.
+    async fn socket_as(
+        &self,
+        path: &str,
+        query: &str,
+        origin: Option<&str>,
+        host: Option<&str>,
+    ) -> Result<Socket, Error> {
         let url = format!("ws://127.0.0.1:{}{path}{query}", self.port);
         let mut request = url.into_client_request().unwrap();
         if let Some(origin) = origin {
             (request.headers_mut()).insert("Origin", HeaderValue::from_str(origin).unwrap());
+        }
+        if let Some(host) = host {
+            (request.headers_mut()).insert("Host", HeaderValue::from_str(host).unwrap());
         }
         tokio_tungstenite::connect_async(request)
             .await
@@ -89,12 +103,21 @@ impl Server {
 
     /// A plain GET: its status, headers and body.
     async fn get(&self, target: &str, origin: Option<&str>) -> (u16, String, Vec<u8>) {
+        self.get_as(target, origin, &format!("127.0.0.1:{}", self.port))
+            .await
+    }
+
+    /// A plain GET, naming `host` as the server.
+    async fn get_as(
+        &self,
+        target: &str,
+        origin: Option<&str>,
+        host: &str,
+    ) -> (u16, String, Vec<u8>) {
         let mut stream = TcpStream::connect(("127.0.0.1", self.port)).await.unwrap();
         let origin = origin.map_or(String::new(), |origin| format!("Origin: {origin}\r\n"));
-        let request = format!(
-            "GET {target} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{origin}Connection: close\r\n\r\n",
-            self.port
-        );
+        let request =
+            format!("GET {target} HTTP/1.1\r\nHost: {host}\r\n{origin}Connection: close\r\n\r\n");
         stream.write_all(request.as_bytes()).await.unwrap();
         let mut response = Vec::new();
         stream.read_to_end(&mut response).await.unwrap();
@@ -183,6 +206,16 @@ async fn the_inspector_needs_the_token_and_the_servers_own_origin() {
     assert_eq!(refused(open(token.clone(), evil).await), 403);
     let other_port = Some(format!("http://127.0.0.1:{}", server.port.wrapping_add(1)));
     assert_eq!(refused(open(token.clone(), other_port).await), 403);
+    let null = Some("null".to_owned());
+    assert_eq!(refused(open(token.clone(), null).await), 403);
+    let longer = Some(format!("http://127.0.0.1:{}.evil.com", server.port));
+    assert_eq!(refused(open(token.clone(), longer).await), 403);
+    // Its own Origin, but another name for the server: DNS rebinding.
+    let rebound = format!("evil.example:{}", server.port);
+    let rebound = server
+        .socket_as("/inspect", &token, Some(&own), Some(&rebound))
+        .await;
+    assert_eq!(refused(rebound), 403);
     let localhost = Some(format!("http://localhost:{}", server.port));
     let mut socket = open(token.clone(), localhost)
         .await
@@ -202,9 +235,16 @@ async fn the_inspector_needs_the_token_and_the_servers_own_origin() {
 async fn the_inspector_sends_the_replay_and_answers_what_the_app_asks() {
     let server = Server::start(|_| {}).await;
     let mut socket = server.inspector().await;
-    let ToInspector::Hello { mode, file, run } = next(&mut socket).await else {
+    let ToInspector::Hello {
+        protocol,
+        mode,
+        file,
+        run,
+    } = next(&mut socket).await
+    else {
         panic!("Hello first");
     };
+    assert_eq!(protocol, PROTOCOL);
     assert_eq!(mode, Mode::Replay);
     assert_eq!(file, Some(claude_live().display().to_string()));
     assert_eq!(run, None);
@@ -348,6 +388,12 @@ async fn the_recording_downloads_in_whole_lines_with_the_token() {
     assert_eq!(server.get("/recording", None).await.0, 403);
     let wrong = format!("/recording?token={}", server::new_token());
     assert_eq!(server.get(&wrong, None).await.0, 403);
+    let rebound = format!("evil.example:{}", server.port);
+    assert_eq!(
+        server.get_as(&target, None, &rebound).await.0,
+        403,
+        "another name"
+    );
 
     let replaying = Server::start(|_| {}).await;
     let target = format!("/recording?token={}", replaying.token);
@@ -385,6 +431,19 @@ async fn the_app_is_served_from_its_folder_or_says_how_to_build_it() {
     );
     assert!(head.contains("content-type: text/html"));
     assert!(head.contains("x-content-type-options: nosniff"));
+    let localhost = format!("localhost:{}", server.port);
+    assert_eq!(server.get_as("/", None, &localhost).await.0, 200);
+    let rebound = format!("evil.example:{}", server.port);
+    assert_eq!(
+        server.get_as("/", None, &rebound).await.0,
+        403,
+        "DNS rebinding"
+    );
+    assert_eq!(
+        server.get_as("/", None, "127.0.0.1").await.0,
+        403,
+        "no port"
+    );
     let csp = format!("content-security-policy: {}", server::CSP.to_lowercase());
     assert!(head.contains(&csp), "{head}");
     assert!(
@@ -408,4 +467,75 @@ async fn the_app_is_served_from_its_folder_or_says_how_to_build_it() {
         404
     );
     let _ = std::fs::remove_file(dir.0.parent().unwrap().join("caf-debugger-secret"));
+}
+
+#[tokio::test]
+async fn a_big_recording_downloads_whole_as_it_is_read() {
+    let dir = Dir::new("big-recording");
+    let path = dir.0.join("big.jsonl");
+    // Lines of many lengths around the size read at once, then half a
+    // line.
+    let mut text = String::new();
+    let mut n = 0;
+    while text.len() < 3 << 20 {
+        text += &format!(
+            "{{\"line\":{n},\"pad\":\"{}\"}}\n",
+            "x".repeat(n * 7919 % 70_000)
+        );
+        n += 1;
+    }
+    let whole = text.clone();
+    text += "{\"half\":";
+    std::fs::write(&path, &text).unwrap();
+    let recording = path.clone();
+    let server = Server::start(move |app| app.recording = Some(recording)).await;
+    let target = format!("/recording?token={}", server.token);
+    let (status, head, got) = server.get(&target, None).await;
+    assert_eq!(status, 200);
+    assert!(
+        head.contains(&format!("content-length: {}", whole.len())),
+        "{head}"
+    );
+    assert_eq!(got.len(), whole.len());
+    assert!(got == whole.as_bytes(), "the file up to its last newline");
+
+    // No newline at all: nothing.
+    std::fs::write(&path, "{\"half\":").unwrap();
+    let (status, _, body) = server.get(&target, None).await;
+    assert_eq!(status, 200);
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn seeks_waiting_together_are_answered_once_for_the_last() {
+    let server = Server::start(|_| {}).await;
+    let mut socket = server.inspector().await;
+    // Hello, Steps, Position, and the Past at the end, the Picture last.
+    loop {
+        if let ToInspector::Past { message, .. } = next(&mut socket).await
+            && serde_json::to_value(&message).unwrap()["type"] == "Picture"
+        {
+            break;
+        }
+    }
+    // A drag across the timeline, with the state asked for at each step.
+    for step in 1..=60 {
+        let seek = serde_json::to_string(&FromInspector::Seek { step }).unwrap();
+        let state = serde_json::to_string(&FromInspector::StateAt { step }).unwrap();
+        socket.feed(Message::text(seek)).await.unwrap();
+        socket.feed(Message::text(state)).await.unwrap();
+    }
+    socket.flush().await.unwrap();
+    let mut positions = Vec::new();
+    let mut states = Vec::new();
+    while states.last() != Some(&60) {
+        match next(&mut socket).await {
+            ToInspector::Position { at, .. } => positions.push(at),
+            ToInspector::State { at, .. } => states.push(at),
+            _ => {}
+        }
+    }
+    assert_eq!(positions.last(), Some(&60), "the last seek is answered");
+    assert!(positions.len() < 20, "not every seek: {positions:?}");
+    assert!(states.len() < 20, "not every state: {states:?}");
 }

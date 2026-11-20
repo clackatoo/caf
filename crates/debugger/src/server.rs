@@ -15,6 +15,9 @@
 //!   (`#token=…`), which browsers never send, so it stays out of logs and
 //!   `Referer`s. The app passes it on as `?token=`, which is checked in
 //!   constant time.
+//! - **The Host** must be the server's own, `127.0.0.1:PORT` or
+//!   `localhost:PORT`, on every path, the app's too: a page whose name
+//!   was pointed at 127.0.0.1 reaches the port, but under its own name.
 //! - **The Origin** must be the server's own, `http://127.0.0.1:PORT` or
 //!   `http://localhost:PORT`: always on a WebSocket, which a browser
 //!   always sends it with. `/recording` may also have none, as a
@@ -31,19 +34,23 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
+use axum::body::{Body, Bytes};
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
-use axum::extract::{Query, State};
+use axum::extract::{Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use caf_core::viewer::FromViewer;
 use caf_driver_tokio::Caf;
 use caf_driver_tokio::viewer::{ViewerRules, serve};
+use futures_util::FutureExt;
 use serde::Deserialize;
 use subtle::ConstantTimeEq;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::mpsc;
 
-use crate::inspector::{FromInspector, Mode, Step, ToInspector};
+use crate::inspector::{Check, FromInspector, Mode, PROTOCOL, Step, ToInspector};
 use crate::replay::Player;
 use crate::steps::Book;
 
@@ -57,6 +64,10 @@ pub const INSPECTOR_MESSAGE: usize = 4 << 10;
 
 /// How many steps go in one [`ToInspector::Steps`] at most.
 const STEPS_AT_ONCE: usize = 500;
+
+/// How big one [`ToInspector::Steps`] may get, in bytes of JSON, unless
+/// one step alone is bigger.
+const STEPS_BYTES: usize = 8 << 20;
 
 /// How long to wait for the app's side of a closing handshake.
 const CLOSING: Duration = Duration::from_secs(1);
@@ -73,6 +84,9 @@ pub struct App {
     pub token: String,
     /// The origins that count as the server's own.
     pub origins: [String; 2],
+    /// The hosts that count as the server's own, as a `Host` header names
+    /// them.
+    pub hosts: [String; 2],
     /// The built app.
     pub dist: PathBuf,
 }
@@ -90,6 +104,7 @@ impl App {
                 format!("http://127.0.0.1:{port}"),
                 format!("http://localhost:{port}"),
             ],
+            hosts: [format!("127.0.0.1:{port}"), format!("localhost:{port}")],
             dist: dist(),
         }
     }
@@ -129,6 +144,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/inspect", get(inspect))
         .route("/recording", get(recording))
         .fallback(get(static_file))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&app),
+            own_host,
+        ))
         .layer(axum::middleware::map_response(headers))
         .with_state(app)
 }
@@ -146,6 +165,26 @@ async fn headers(mut response: Response) -> Response {
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+/// Refuses a request not addressed to the server by its own name, on
+/// every path: a page whose own name was pointed at 127.0.0.1 (DNS
+/// rebinding) reaches the port, but its requests name its own host.
+async fn own_host(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
+    let host = request.headers().get(header::HOST);
+    let own = host.is_some_and(|host| {
+        app.hosts
+            .iter()
+            .any(|own| host.as_bytes() == own.as_bytes())
+    });
+    if !own {
+        return (
+            StatusCode::FORBIDDEN,
+            "not addressed to the debugger by its own name\n",
+        )
+            .into_response();
+    }
+    next.run(request).await
 }
 
 /// The token, as the app passes it on.
@@ -315,6 +354,13 @@ async fn inspect(
 }
 
 /// One app's inspector channel.
+///
+/// What the app asks for is answered in turn, but a move or a state the
+/// app has already asked again for isn't: of the messages waiting when
+/// it gets to them, only the last move (a Seek or Follow) and the last
+/// StateAt are answered, the move first. So dragging the timeline costs
+/// one replay per answer, not one per step dragged over. Replaying runs
+/// on a thread for blocking work, never on the threads CAF runs on.
 struct Inspector {
     socket: WebSocket,
     book: Arc<Book>,
@@ -322,12 +368,13 @@ struct Inspector {
     sent: u64,
     /// Following live.
     following: bool,
-    /// It has been told where the replay check failed.
-    told_diverged: bool,
-    /// The core at the position the app looks at.
-    player: Player,
-    /// The core whose state it last asked for.
-    state: Player,
+    /// The checks whose divergence it has been told of.
+    told: Vec<Check>,
+    /// The core at the position the app looks at: away on a blocking
+    /// thread only while it moves.
+    player: Option<Player>,
+    /// The core whose state it last asked for, likewise.
+    state: Option<Player>,
 }
 
 /// The socket has gone.
@@ -337,12 +384,12 @@ impl Inspector {
     fn new(socket: WebSocket, book: Arc<Book>) -> Self {
         Self {
             socket,
-            player: Player::new(Arc::clone(&book.base)),
-            state: Player::new(Arc::clone(&book.base)),
+            player: Some(Player::new(Arc::clone(&book))),
+            state: Some(Player::new(Arc::clone(&book))),
             following: book.mode == Mode::Live,
             book,
             sent: 0,
-            told_diverged: false,
+            told: Vec::new(),
         }
     }
 
@@ -359,19 +406,38 @@ impl Inspector {
                         return;
                     }
                 }
-                incoming = self.socket.recv() => match read::<FromInspector>(incoming) {
-                    Read::Message(message) => {
-                        if self.answer(message).await.is_err() {
-                            return;
+                incoming = self.socket.recv() => {
+                    let mut asked = Vec::new();
+                    let mut ended = None;
+                    let mut next = Some(incoming);
+                    // This message, and those waiting behind it.
+                    while let Some(incoming) = next {
+                        match read::<FromInspector>(incoming) {
+                            Read::Message(message) => asked.push(message),
+                            Read::Skip => {}
+                            Read::Closed => {
+                                ended = Some(None);
+                                break;
+                            }
+                            Read::Bad(code, why) => {
+                                ended = Some(Some((code, why)));
+                                break;
+                            }
                         }
+                        next = self.socket.recv().now_or_never();
                     }
-                    Read::Skip => {}
-                    Read::Closed => return,
-                    Read::Bad(code, why) => {
-                        close(self.socket, code, why).await;
+                    if self.answer(asked).await.is_err() {
                         return;
                     }
-                },
+                    match ended {
+                        Some(Some((code, why))) => {
+                            close(self.socket, code, why).await;
+                            return;
+                        }
+                        Some(None) => return,
+                        None => {}
+                    }
+                }
             }
         }
     }
@@ -379,6 +445,7 @@ impl Inspector {
     /// What the app is sent as the link starts.
     async fn start(&mut self) -> Result<(), Gone> {
         let hello = ToInspector::Hello {
+            protocol: PROTOCOL,
             mode: self.book.mode,
             file: self.book.file.clone(),
             run: self.book.run.clone(),
@@ -394,8 +461,8 @@ impl Inspector {
         Ok(())
     }
 
-    /// Sends the steps the app hasn't had yet, and the divergence if it's
-    /// new.
+    /// Sends the steps the app hasn't had yet, and any divergence it
+    /// hasn't been told of.
     async fn news(&mut self) -> Result<(), Gone> {
         self.steps().await?;
         self.diverged().await
@@ -404,7 +471,7 @@ impl Inspector {
     /// Sends the steps the app hasn't had yet.
     async fn steps(&mut self) -> Result<(), Gone> {
         let new = self.book.after(self.sent);
-        for steps in new.chunks(STEPS_AT_ONCE) {
+        for steps in batches(&new, STEPS_AT_ONCE, STEPS_BYTES) {
             let Some(first) = steps.first() else { break };
             let message = Steps::Steps {
                 from: first.no,
@@ -416,56 +483,67 @@ impl Inspector {
         Ok(())
     }
 
-    /// Sends the divergence, if there is one and the app hasn't had it.
+    /// Sends each divergence the app hasn't been told of.
     async fn diverged(&mut self) -> Result<(), Gone> {
-        if self.told_diverged {
-            return Ok(());
-        }
-        if let Some(diverged) = self.book.diverged() {
-            self.told_diverged = true;
-            self.send(&diverged.message()).await?;
+        for diverged in self.book.diverged() {
+            if !self.told.contains(&diverged.check) {
+                self.told.push(diverged.check);
+                self.send(&diverged.message()).await?;
+            }
         }
         Ok(())
     }
 
-    /// Answers one of the app's messages.
-    async fn answer(&mut self, message: FromInspector) -> Result<(), Gone> {
+    /// Answers what the app asked for: the last move and the last state.
+    async fn answer(&mut self, asked: Vec<FromInspector>) -> Result<(), Gone> {
+        if asked.is_empty() {
+            return Ok(());
+        }
         // Steps the app hasn't had yet go first, so a position never
         // names a step it doesn't know.
         self.steps().await?;
         let end = self.sent;
-        match message {
-            FromInspector::Seek { step } => {
+        let moved =
+            (asked.iter()).rfind(|message| !matches!(message, FromInspector::StateAt { .. }));
+        let state = (asked.iter()).rev().find_map(|message| match message {
+            FromInspector::StateAt { step } => Some(*step),
+            _ => None,
+        });
+        match moved {
+            Some(FromInspector::Seek { step }) => {
                 self.following = false;
-                let at = step.min(end);
+                let at = (*step).min(end);
                 self.position(at).await?;
-                self.past(at).await
+                self.past(at).await?;
             }
-            FromInspector::Follow => {
+            Some(FromInspector::Follow) => {
                 if self.book.mode == Mode::Live {
                     self.following = true;
                     // The app's copies are `/viewer`'s now: the next seek
                     // sends each chat whole.
-                    self.player.forget();
+                    if let Some(player) = &mut self.player {
+                        player.forget();
+                    }
                 }
                 let at = if self.following {
                     end
                 } else {
-                    self.player.at()
+                    self.player.as_ref().map_or(0, Player::at)
                 };
-                self.position(at).await
+                self.position(at).await?;
             }
-            FromInspector::StateAt { step } => {
-                let at = step.min(end);
-                let steps = self.book.after(0);
-                self.state.go(at, &steps);
-                let state = ToInspector::State {
-                    at,
-                    core: self.state.state(),
-                };
-                self.send(&state).await
-            }
+            _ => {}
         }
+        if let Some(step) = state {
+            let at = step.min(end);
+            let core = blocking(&mut self.state, move |player| {
+                player.go(at);
+                player.state()
+            })
+            .await?;
+            self.send(&ToInspector::State { at, core }).await?;
+        }
+        Ok(())
     }
 
     /// Tells the app where it's looking.
@@ -480,9 +558,12 @@ impl Inspector {
 
     /// Moves the player to `at`, and sends the chats as they were there.
     async fn past(&mut self, at: u64) -> Result<(), Gone> {
-        let steps = self.book.after(0);
-        self.player.go(at, &steps);
-        for message in self.player.past() {
+        let past = blocking(&mut self.player, move |player| {
+            player.go(at);
+            player.past()
+        })
+        .await?;
+        for message in past {
             self.send(&ToInspector::Past { at, message }).await?;
         }
         Ok(())
@@ -497,6 +578,46 @@ impl Inspector {
     }
 }
 
+/// Does `work` with a player on a thread for blocking work, and puts it
+/// back.
+async fn blocking<T: Send + 'static>(
+    player: &mut Option<Player>,
+    work: impl FnOnce(&mut Player) -> T + Send + 'static,
+) -> Result<T, Gone> {
+    let Some(mut taken) = player.take() else {
+        return Err(Gone);
+    };
+    let (taken, out) = tokio::task::spawn_blocking(move || {
+        let out = work(&mut taken);
+        (taken, out)
+    })
+    .await
+    .map_err(|_| Gone)?;
+    *player = Some(taken);
+    Ok(out)
+}
+
+/// Steps cut into messages of at most `count` steps and, but for a single
+/// step bigger than that, `bytes` of JSON.
+fn batches(steps: &[Arc<Step>], count: usize, bytes: usize) -> Vec<&[Arc<Step>]> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut size = 0;
+    for (i, step) in steps.iter().enumerate() {
+        let this = step.event.get().len() + step.directives.get().len();
+        if i > start && (i - start == count || size + this > bytes) {
+            out.push(&steps[start..i]);
+            start = i;
+            size = 0;
+        }
+        size += this;
+    }
+    if start < steps.len() {
+        out.push(&steps[start..]);
+    }
+    out
+}
+
 /// [`ToInspector::Steps`], borrowing the book's steps: the same JSON.
 #[derive(serde::Serialize)]
 #[serde(tag = "type", content = "value")]
@@ -504,7 +625,8 @@ enum Steps<'a> {
     Steps { from: u64, steps: &'a [Arc<Step>] },
 }
 
-/// `/recording`: the live run's recording, as far as it's written.
+/// `/recording`: the live run's recording, as far as it's written, up to
+/// its last whole line, read from the file as it's sent.
 async fn recording(
     State(app): State<Arc<App>>,
     Query(token): Query<Token>,
@@ -516,15 +638,14 @@ async fn recording(
     let Some(path) = app.recording.clone() else {
         return (StatusCode::NOT_FOUND, "nothing is being recorded\n").into_response();
     };
-    let bytes = match tokio::fs::read(&path).await {
-        Ok(bytes) => crate::files::whole_lines(bytes),
+    let (body, length) = match whole_lines(&path).await {
+        Ok(whole) => whole,
         Err(error) => {
             log::warn!("couldn't read the recording {}: {error}", path.display());
             return (StatusCode::NOT_FOUND, "the recording couldn't be read\n").into_response();
         }
     };
-    let name = path
-        .file_name()
+    let name = (path.file_name())
         .and_then(|name| name.to_str())
         .unwrap_or("recording.jsonl");
     let disposition = format!("attachment; filename=\"caf-{name}\"");
@@ -532,10 +653,51 @@ async fn recording(
         [
             (header::CONTENT_TYPE, "application/jsonl".to_owned()),
             (header::CONTENT_DISPOSITION, disposition),
+            (header::CONTENT_LENGTH, length.to_string()),
         ],
-        bytes,
+        body,
     )
         .into_response()
+}
+
+/// How much is read at once.
+const CHUNK: usize = 64 << 10;
+
+/// A file up to its last newline, as a body read as it's sent, and its
+/// length: CAF writes a recording as it runs, so its end may be half a
+/// line.
+async fn whole_lines(path: &Path) -> std::io::Result<(Body, u64)> {
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut end = file.metadata().await?.len();
+    // Back from the end, a chunk at a time, to the last newline.
+    let mut chunk = vec![0; CHUNK];
+    let whole = loop {
+        if end == 0 {
+            break 0;
+        }
+        let start = end.saturating_sub(CHUNK as u64);
+        let len = usize::try_from(end - start).unwrap_or(CHUNK);
+        file.seek(std::io::SeekFrom::Start(start)).await?;
+        file.read_exact(&mut chunk[..len]).await?;
+        if let Some(at) = chunk[..len].iter().rposition(|&byte| byte == b'\n') {
+            break start + at as u64 + 1;
+        }
+        end = start;
+    };
+    file.seek(std::io::SeekFrom::Start(0)).await?;
+    let stream = futures_util::stream::try_unfold((file, whole), |(mut file, left)| async move {
+        if left == 0 {
+            return Ok(None);
+        }
+        let mut chunk = vec![0; usize::try_from(left).unwrap_or(CHUNK).min(CHUNK)];
+        let read = file.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok::<_, std::io::Error>(None);
+        }
+        chunk.truncate(read);
+        Ok(Some((Bytes::from(chunk), (file, left - read as u64))))
+    });
+    Ok((Body::from_stream(stream), whole))
 }
 
 /// What the app's page may load and do: only its own scripts, styles,
@@ -623,7 +785,44 @@ npm run build --workspace debugger</pre>
 mod tests {
     use std::path::Path;
 
-    use super::inside;
+    use std::sync::Arc;
+
+    use caf_core::time::{Mono, Now, Wall};
+
+    use super::{batches, inside};
+    use crate::inspector::Step;
+
+    /// A step whose event is `size` bytes of JSON.
+    fn step(no: u64, size: usize) -> Arc<Step> {
+        let text = format!("\"{}\"", "x".repeat(size - 2));
+        Arc::new(Step {
+            no,
+            now: Now {
+                wall: Wall(0),
+                mono: Mono(0),
+            },
+            event: serde_json::value::RawValue::from_string(text).unwrap(),
+            directives: serde_json::value::RawValue::from_string("[]".into()).unwrap(),
+        })
+    }
+
+    #[test]
+    fn steps_are_sent_in_messages_of_a_most_count_and_size() {
+        let lens = |steps: &[Arc<Step>], count, bytes| -> Vec<usize> {
+            batches(steps, count, bytes)
+                .iter()
+                .map(|batch| batch.len())
+                .collect()
+        };
+        let small: Vec<_> = (1..=7).map(|no| step(no, 10)).collect();
+        assert_eq!(lens(&small, 3, 1000), [3, 3, 1]);
+        // 12 bytes each, with the directives: three fit in 36.
+        assert_eq!(lens(&small, 100, 36), [3, 3, 1]);
+        // A step bigger than the most goes alone.
+        let mixed = [step(1, 10), step(2, 100), step(3, 10)];
+        assert_eq!(lens(&mixed, 100, 50), [1, 1, 1]);
+        assert!(batches(&[], 100, 50).is_empty());
+    }
 
     #[test]
     fn only_plain_paths_name_files_of_the_app() {
