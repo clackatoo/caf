@@ -72,7 +72,8 @@ jobs:
       # rather than each building it.
       - run: cargo build -p caf-fake-agent --locked
       - run: cargo test --workspace --locked
-      # The TypeScript types in ts/sdk/src/types are current.
+      # The TypeScript types and samples in ts/sdk are current, the types
+      # are in the one shape, and every type is exported and sampled.
       - run: cargo test -p caf-core --features ts --locked typescript_types
 
   ts:

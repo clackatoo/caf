@@ -35,37 +35,99 @@ use crate::question::{
 use crate::time::{End, Mono, Now, Wall, Window};
 use crate::viewer::{ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, ToViewer};
 
+/// Values as CAF writes them, each with its TypeScript type: one of
+/// every type, and everything from replaying the recorded traces. The
+/// shape tests check each reads back, and `ts.rs` writes them all to
+/// `ts/sdk/test/shapes.gen.ts`, where TypeScript checks its generated
+/// types take them.
+///
+/// To add values, such as the viewer wire's sample messages, call
+/// [`Samples::both`] or [`Samples::written`] with them (or
+/// [`Samples::raw`] with text written by something else), from
+/// [`every_type`] or a function like it that `ts.rs` also calls.
+#[derive(Default)]
+pub(crate) struct Samples {
+    /// Each value's TypeScript type, naming the generated types as `T.…`,
+    /// and its JSON.
+    pub(crate) values: Vec<(String, String)>,
+}
+
+impl Samples {
+    /// Adds `value`, as JSON, once it has read back equal from JSON and
+    /// from MessagePack in named mode.
+    #[track_caller]
+    pub(crate) fn both<T: Serialize + DeserializeOwned + PartialEq + Debug>(
+        &mut self,
+        value: &T,
+    ) -> Value {
+        let text = serde_json::to_string(value).expect("it writes as JSON");
+        let back: T = serde_json::from_str(&text).expect("it reads back from JSON");
+        assert_eq!(&back, value, "through JSON: {text}");
+        let packed = rmp_serde::to_vec_named(value).expect("it writes as MessagePack");
+        let back: T = rmp_serde::from_slice(&packed).expect("it reads back from MessagePack");
+        assert_eq!(&back, value, "through MessagePack: {text}");
+        self.keep::<T>(text)
+    }
+
+    /// Adds `value`, as JSON, once what it reads back from JSON, and from
+    /// MessagePack in named mode if `packed`, writes the same: for types
+    /// without `PartialEq`.
+    #[track_caller]
+    pub(crate) fn written<T: Serialize + DeserializeOwned>(
+        &mut self,
+        value: &T,
+        packed: bool,
+    ) -> Value {
+        let text = serde_json::to_string(value).expect("it writes as JSON");
+        let back: T = serde_json::from_str(&text).expect("it reads back from JSON");
+        assert_eq!(serde_json::to_string(&back).expect("JSON"), text);
+        if packed {
+            let bytes = rmp_serde::to_vec_named(value).expect("it writes as MessagePack");
+            let back: T = rmp_serde::from_slice(&bytes).expect("it reads back from MessagePack");
+            assert_eq!(serde_json::to_string(&back).expect("JSON"), text);
+        }
+        self.keep::<T>(text)
+    }
+
+    /// Adds JSON `text` written by something else, such as a recording's
+    /// line, as TypeScript type `ty` (naming the generated types as
+    /// `T.…`).
+    pub(crate) fn raw(&mut self, ty: &str, text: &str) {
+        self.values.push((ty.to_owned(), text.to_owned()));
+    }
+
+    /// Keeps `text`, written from a `T`, once its shape is checked.
+    #[track_caller]
+    fn keep<T>(&mut self, text: String) -> Value {
+        let value = tagged(&text);
+        // `caf_core::chat::Chat<caf_core::chat::NoAppItems>` is `Chat`.
+        let name = std::any::type_name::<T>();
+        let name = name.split('<').next().unwrap_or(name);
+        let name = name.rsplit("::").next().unwrap_or(name);
+        self.values.push((format!("T.{name}"), text));
+        value
+    }
+}
+
 /// `value` as JSON, once it has read back equal from JSON and from
 /// MessagePack in named mode.
 #[track_caller]
 fn both<T: Serialize + DeserializeOwned + PartialEq + Debug>(value: &T) -> Value {
-    let text = serde_json::to_string(value).expect("it writes as JSON");
-    let back: T = serde_json::from_str(&text).expect("it reads back from JSON");
-    assert_eq!(&back, value, "through JSON: {text}");
-    let packed = rmp_serde::to_vec_named(value).expect("it writes as MessagePack");
-    let back: T = rmp_serde::from_slice(&packed).expect("it reads back from MessagePack");
-    assert_eq!(&back, value, "through MessagePack: {text}");
-    tagged(&text)
+    Samples::default().both(value)
 }
 
-/// `value` as JSON, once what it reads back from JSON, and from
-/// MessagePack in named mode if `packed`, writes the same: for types
-/// without `PartialEq`.
+/// `value` as JSON, once it reads back from JSON, and from MessagePack in
+/// named mode if `packed` (see [`Samples::written`]).
 #[track_caller]
 fn written<T: Serialize + DeserializeOwned>(value: &T, packed: bool) -> Value {
-    let text = serde_json::to_string(value).expect("it writes as JSON");
-    let back: T = serde_json::from_str(&text).expect("it reads back from JSON");
-    assert_eq!(serde_json::to_string(&back).expect("JSON"), text);
-    if packed {
-        let bytes = rmp_serde::to_vec_named(value).expect("it writes as MessagePack");
-        let back: T = rmp_serde::from_slice(&bytes).expect("it reads back from MessagePack");
-        assert_eq!(serde_json::to_string(&back).expect("JSON"), text);
-    }
-    tagged(&text)
+    Samples::default().written(value, packed)
 }
 
-/// `text` as JSON, once it's checked to hold no enum in serde's default
-/// shape, `{"Variant": …}`. The std types' are allowed.
+/// `text` as JSON, once it's checked to hold no enum with something in it
+/// in serde's default shape, `{"Variant": …}` (the std types' are
+/// allowed). An enum of only unit variants in serde's default shape is a
+/// bare string, which can't be told from any other here: the check of the
+/// generated TypeScript in `ts.rs` finds those.
 #[track_caller]
 fn tagged(text: &str) -> Value {
     fn check(value: &Value, text: &str) {
@@ -209,62 +271,63 @@ fn answered() -> Message {
     }
 }
 
-#[test]
-fn every_type_reads_back_from_json_and_messagepack() {
+/// Adds one of every type CAF writes to `s`, but for those that have no
+/// values (`NoAppItems`, `StorageEvent`, `StorageDirective`).
+pub(crate) fn every_type(s: &mut Samples) {
     // time
-    both(&now());
-    both(&Wall(1));
-    both(&Mono(1));
-    both(&Window::unknown());
-    both(&End::At(Wall(1)));
+    s.both(&now());
+    s.both(&Wall(1));
+    s.both(&Mono(1));
+    s.both(&Window::unknown());
+    s.both(&End::At(Wall(1)));
     // ids
-    both(&ChatId(1));
-    both(&TurnId(1));
-    both(&ItemId(1));
-    both(&QuestionId(1));
-    both(&ConnectionId(1));
-    both(&Ticket(1));
-    both(&ChangeNo(1));
-    both(&AgentName("claude".into()));
-    both(&AgentSessionId("s1".into()));
+    s.both(&ChatId(1));
+    s.both(&TurnId(1));
+    s.both(&ItemId(1));
+    s.both(&QuestionId(1));
+    s.both(&ConnectionId(1));
+    s.both(&Ticket(1));
+    s.both(&ChangeNo(1));
+    s.both(&AgentName("claude".into()));
+    s.both(&AgentSessionId("s1".into()));
     // chat
-    both(&chat());
-    both(&usage());
-    both(&Cost {
+    s.both(&chat());
+    s.both(&usage());
+    s.both(&Cost {
         amount: 1.5,
         currency: "EUR".into(),
     });
-    both(&ChatState::Lost {
+    s.both(&ChatState::Lost {
         reason: Lost::Incompatible(Incompatible::Protocol { version: Some(2) }),
     });
-    both(&Lost::AgentStopped {
+    s.both(&Lost::AgentStopped {
         stderr: vec!["out of memory".into()],
     });
-    both(&Incompatible::HttpMcp);
-    both(&turn());
-    both(&Starter::OtherChat {
+    s.both(&Incompatible::HttpMcp);
+    s.both(&turn());
+    s.both(&Starter::OtherChat {
         from: ChatId(9),
         message: message(),
     });
-    both(&message());
-    both(&Part::Text("hi".into()));
+    s.both(&message());
+    s.both(&Part::Text("hi".into()));
     let failure = Failure {
         reason: FailureReason::UsageLimit,
         agent_said: Some("Rate limited".into()),
         remedy: Some(Remedy::SendAgain),
     };
-    both(&TurnLife::Failed(failure.clone()));
-    both(&failure);
-    both(&FailureReason::DidNotStop);
-    both(&Remedy::SignIn);
-    both(&item());
-    both(&ItemKind::<crate::chat::NoAppItems>::Tool(tool()));
-    both(&tool());
-    both(&ToolKind::Execute);
-    both(&ToolStatus::Pending);
-    both(&Compacted {});
-    both(&Note::SessionGone);
-    both(&Unknown {
+    s.both(&TurnLife::Failed(failure.clone()));
+    s.both(&failure);
+    s.both(&FailureReason::DidNotStop);
+    s.both(&Remedy::SignIn);
+    s.both(&item());
+    s.both(&ItemKind::<crate::chat::NoAppItems>::Tool(tool()));
+    s.both(&tool());
+    s.both(&ToolKind::Execute);
+    s.both(&ToolStatus::Pending);
+    s.both(&Compacted {});
+    s.both(&Note::SessionGone);
+    s.both(&Unknown {
         what: "hologram".into(),
         raw: json!({ "sessionUpdate": "hologram" }),
     });
@@ -274,59 +337,59 @@ fn every_type_reads_back_from_json_and_messagepack() {
         life: TurnLife::Stopped,
         end: End::At(Wall(9)),
     };
-    both(&Numbered {
+    s.both(&Numbered {
         no: ChangeNo(5),
         change: change.clone(),
     });
-    both(&change);
+    s.both(&change);
     // question
-    both(&question());
-    both(&QuestionKind::SlowToOpen(SlowToOpen {
+    s.both(&question());
+    s.both(&QuestionKind::SlowToOpen(SlowToOpen {
         adapter_answered: false,
     }));
-    both(&Permission {
+    s.both(&Permission {
         tool: None,
         title: "Edit".into(),
         options: Vec::new(),
     });
-    both(&PermissionOption {
+    s.both(&PermissionOption {
         id: OptionId("no".into()),
         label: "No".into(),
         kind: OptionKind::Other,
     });
-    both(&OptionId("allow".into()));
-    both(&OptionKind::RejectAlways);
-    both(&SlowToOpen {
+    s.both(&OptionId("allow".into()));
+    s.both(&OptionKind::RejectAlways);
+    s.both(&SlowToOpen {
         adapter_answered: true,
     });
-    both(&Answer::SlowToOpen(SlowChoice::Retry));
-    both(&SlowChoice::KeepWaiting);
+    s.both(&Answer::SlowToOpen(SlowChoice::Retry));
+    s.both(&SlowChoice::KeepWaiting);
     // host
     let host = Host::new("caf", "1.0.0");
-    both(&host);
-    both(&Shows::default());
-    both(&Grouping::PerChat);
-    both(&Limits::default());
-    both(&Timers::default());
+    s.both(&host);
+    s.both(&Shows::default());
+    s.both(&Grouping::PerChat);
+    s.both(&Limits::default());
+    s.both(&Timers::default());
     // agent
     let agent = AgentSpec::new("claude", command(), ProfileChoice::Cautious);
-    both(&agent);
-    both(&command());
-    both(&EnvChange::Remove("HOME".into()));
-    both(&McpServer::Http {
+    s.both(&agent);
+    s.both(&command());
+    s.both(&EnvChange::Remove("HOME".into()));
+    s.both(&McpServer::Http {
         name: "map".into(),
         url: "http://localhost:9/mcp".into(),
         headers: vec![("Auth".into(), "x".into())],
     });
     // profiles
-    both(&profile());
-    both(&ProfileChoice::Builtin(Builtin::ClaudeAgentAcp));
-    both(&Builtin::ClaudeAgentAcp);
-    both(&AdapterInfo {
+    s.both(&profile());
+    s.both(&ProfileChoice::Builtin(Builtin::ClaudeAgentAcp));
+    s.both(&Builtin::ClaudeAgentAcp);
+    s.both(&AdapterInfo {
         name: "a".into(),
         version: "1".into(),
     });
-    both(&Checked::Newer);
+    s.both(&Checked::Newer);
     // core
     let mut open = OpenChat::new("claude", "/work");
     open.session = SessionChoice::Continue(AgentSessionId("s1".into()));
@@ -334,10 +397,10 @@ fn every_type_reads_back_from_json_and_messagepack() {
         name: "tools".into(),
         command: command(),
     }];
-    both(&open);
-    both(&SessionChoice::New);
-    both(&Refused::QueueFull);
-    both(&ConnectionInfo {
+    s.both(&open);
+    s.both(&SessionChoice::New);
+    s.both(&Refused::QueueFull);
+    s.both(&ConnectionInfo {
         id: ConnectionId(2),
         agent: AgentName("claude".into()),
         profile: Some(profile()),
@@ -345,16 +408,16 @@ fn every_type_reads_back_from_json_and_messagepack() {
         stderr: vec!["warming up".into()],
     });
     // viewer
-    both(&FromViewer::Answer {
+    s.both(&FromViewer::Answer {
         request: RequestNo(1),
         question: QuestionId(4),
         answer: Answer::Permission(OptionId("allow".into())),
     });
-    both(&ToViewer::Picture {
+    s.both(&ToViewer::Picture {
         chat: chat(),
         latest: ChangeNo(5),
     });
-    both(&ToViewer::Changes {
+    s.both(&ToViewer::Changes {
         chat: ChatId(1),
         changes: vec![Numbered {
             no: ChangeNo(6),
@@ -364,36 +427,36 @@ fn every_type_reads_back_from_json_and_messagepack() {
             },
         }],
     });
-    both(&ChatSummary {
+    s.both(&ChatSummary {
         id: ChatId(1),
         agent: AgentName("claude".into()),
         cwd: "/work".into(),
     });
-    both(&RequestNo(1));
-    both(&OpenRequest {
+    s.both(&RequestNo(1));
+    s.both(&OpenRequest {
         agent: AgentName("claude".into()),
         cwd: "/work".into(),
         session: SessionChoice::New,
     });
-    both(&Outcome::Refused(Refused::NoSuchChat));
+    s.both(&Outcome::Refused(Refused::NoSuchChat));
     // directive
-    written(
+    s.written(
         &Directive::Agent(AgentDirective::Start {
             process: Ticket(3),
             command: command(),
         }),
         true,
     );
-    written(
+    s.written(
         &AgentDirective::Signal {
             process: Ticket(3),
             signal: Signal::Term,
         },
         true,
     );
-    both(&Signal::Kill);
-    written(&TimerDirective::WakeAt(None), true);
-    written(
+    s.both(&Signal::Kill);
+    s.written(&TimerDirective::WakeAt(None), true);
+    s.written(
         &PolicyDirective::Decide {
             ticket: Ticket(5),
             chat: ChatId(1),
@@ -404,31 +467,31 @@ fn every_type_reads_back_from_json_and_messagepack() {
         },
         true,
     );
-    both(&PermissionRequest {
+    s.both(&PermissionRequest {
         title: "Run ls".into(),
         input: None,
     });
-    written(
+    s.written(
         &ViewerDirective::Changed {
             chat: ChatId(1),
             latest: ChangeNo(5),
         },
         true,
     );
-    both(&Report {
+    s.both(&Report {
         level: Level::Warn,
         message: "odd".into(),
     });
-    both(&Level::Debug);
+    s.both(&Level::Debug);
     // event
-    written(
+    s.written(
         &Event::<crate::chat::NoAppItems>::Host(HostCommand::OpenChat {
             chat: ChatId(1),
             open,
         }),
         true,
     );
-    written(
+    s.written(
         &HostCommand::<crate::chat::NoAppItems>::Send {
             chat: ChatId(1),
             turn: TurnId(2),
@@ -436,20 +499,20 @@ fn every_type_reads_back_from_json_and_messagepack() {
         },
         true,
     );
-    written(&AgentEvent::Stderr(b"hi\n".to_vec()), true);
-    both(&Exit::Signal(9));
-    both(&PolicyAnswer::AskUser);
+    s.written(&AgentEvent::Stderr(b"hi\n".to_vec()), true);
+    s.both(&Exit::Signal(9));
+    s.both(&PolicyAnswer::AskUser);
     // Raw ACP payloads are read back only from JSON: they only ever travel
     // as JSON (recordings, the debugger's inspector), never on the viewer
     // wire or in saved state.
-    written(
+    s.written(
         &Event::<crate::chat::NoAppItems>::Agent {
             process: Ticket(3),
             event: AgentEvent::Frame(Frame::Message(answered())),
         },
         false,
     );
-    written(
+    s.written(
         &Frame::TooBig {
             id: Some(RequestId::Null),
             method: Some("session/update".into()),
@@ -458,7 +521,7 @@ fn every_type_reads_back_from_json_and_messagepack() {
         },
         true,
     );
-    written(
+    s.written(
         &Message::Request {
             id: RequestId::String("a".into()),
             method: "session/request_permission".into(),
@@ -466,9 +529,14 @@ fn every_type_reads_back_from_json_and_messagepack() {
         },
         false,
     );
-    written(&rpc_error(), false);
-    both(&RequestId::Number(-1));
-    both(&Shape::Answer);
+    s.written(&rpc_error(), false);
+    s.both(&RequestId::Number(-1));
+    s.both(&Shape::Answer);
+}
+
+#[test]
+fn every_type_reads_back_from_json_and_messagepack() {
+    every_type(&mut Samples::default());
 }
 
 #[test]
@@ -586,4 +654,120 @@ fn messagepack_is_written_with_names() {
     for name in ["turns", "starter", "type", "value", "Finished"] {
         assert!(has(name), "{name} is written");
     }
+}
+
+/// Adds both recorded traces to `s`, as written and as CAF writes what
+/// they hold: every event, every directive replaying them gives out, and
+/// each chat, its changes and its connections as they end.
+pub(crate) fn traces(s: &mut Samples) {
+    use crate::Core;
+    use crate::change::Read;
+    use crate::chat::NoAppItems;
+
+    #[derive(serde::Deserialize)]
+    struct Header {
+        host: Host,
+        agents: Vec<AgentSpec>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Line<'a> {
+        #[serde(borrow)]
+        now: &'a RawValue,
+        #[serde(borrow)]
+        event: &'a RawValue,
+    }
+    #[derive(serde::Deserialize)]
+    struct Step<'a> {
+        at: u64,
+        #[serde(borrow)]
+        event: &'a RawValue,
+    }
+
+    /// Gives `core` `event` at `now`, adding the event and what it gives out.
+    fn feed(s: &mut Samples, core: &mut Core, now: Now, event: &RawValue) {
+        s.raw("T.Event", event.get());
+        let event: Event = serde_json::from_str(event.get()).expect("a recorded event");
+        s.written(&event, false);
+        let mut out = Vec::new();
+        core.handle(now, event, &mut out);
+        for directive in &out {
+            s.written(directive, true);
+        }
+    }
+
+    /// Adds how `core`'s chats and connections end.
+    fn ending(s: &mut Samples, core: &Core, first: u64) {
+        for chat in core.chats() {
+            s.both(chat);
+            if let Some(Read::Picture { latest, .. }) = core.read(chat.id, None) {
+                s.both(&ToViewer::<NoAppItems>::Picture {
+                    chat: chat.clone(),
+                    latest,
+                });
+            }
+            if let Some(Read::Changes(changes)) = core.read(chat.id, Some(ChangeNo(first - 1))) {
+                for change in changes {
+                    s.both(change);
+                }
+                s.both(&ToViewer::Changes {
+                    chat: chat.id,
+                    changes: changes.to_vec(),
+                });
+            }
+        }
+        for connection in core.connections() {
+            s.both(&connection);
+        }
+    }
+
+    // The tokio kit's recording of a live run: a header, then a line for
+    // each event.
+    let mut lines = include_str!("core/tests/traces/claude-0.98.0-live.jsonl").lines();
+    let header = lines.next().expect("a header");
+    s.raw(
+        "{ caf_recording: 2, host: T.Host, agents: Array<T.AgentSpec> }",
+        header,
+    );
+    let header: Header = serde_json::from_str(header).expect("the header reads");
+    let mut core = Core::new(header.host, header.agents);
+    for line in lines {
+        s.raw("{ now: T.Now, event: T.Event }", line);
+        let line: Line = serde_json::from_str(line).expect("a line reads");
+        let now: Now = serde_json::from_str(line.now.get()).expect("a time");
+        feed(s, &mut core, now, line.event);
+    }
+    ending(s, &core, 1);
+
+    // The core tests' own recording, as the harness gives it: its ids
+    // start at 1000.
+    let agents = vec![AgentSpec::new(
+        "claude",
+        SpawnCommand::new("/opt/caf/claude-agent-acp"),
+        ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
+    )];
+    let mut core = Core::starting_ids_at(Host::new("caf-test", "1.2.3"), agents, 1000);
+    let steps: Vec<Step> = serde_json::from_str(include_str!("core/tests/traces/claude-turn.json"))
+        .expect("a recording");
+    for step in steps {
+        let ms = i64::try_from(step.at).expect("a time");
+        let now = Now {
+            wall: Wall(1_800_000_000_000 + ms),
+            mono: Mono(step.at * 1_000_000),
+        };
+        feed(s, &mut core, now, step.event);
+    }
+    ending(s, &core, 1000);
+}
+
+#[test]
+fn what_the_traces_hold_reads_back() {
+    let mut s = Samples::default();
+    traces(&mut s);
+    // Both chats, with their changes.
+    let chats = (s.values.iter()).filter(|(ty, _)| ty == "T.Chat").count();
+    let changes = (s.values.iter())
+        .filter(|(ty, _)| ty == "T.Numbered")
+        .count();
+    assert_eq!(chats, 2);
+    assert!(changes > 10, "{changes} changes");
 }
