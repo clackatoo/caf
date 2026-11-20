@@ -1,18 +1,27 @@
 // Checks the chat view can be lifted out whole, and stays safe:
 //
-// - **Imports:** every file in src/chat/ is built with Vite, as the app
-//   builds it, and each import a file there makes, once resolved, must be
-//   a file in src/chat/ or in one of the packages it may use:
+// - **Imports, as built:** every file in src/chat/ is built with Vite, as
+//   the app builds it, and each import a file there makes, once resolved,
+//   must be a file in src/chat/ or in one of the packages it may use:
 //   @clackatoo/caf, Svelte and markdown-it. So the check follows what the
 //   bundler does (template literals, `import.meta.glob`, odd paths such as
-//   `svelte/../../x`), not the text of the imports. It never imports
-//   anything dynamically, so any `import()` of its own fails too.
-// - **CSS** in src/chat/ (files and `<style>`) may not `@import` or
-//   `url()` anything: Vite resolves those itself, out of a plugin's sight.
-// - **`{@html}`**, the one way to put HTML in the page unescaped, appears
-//   only in Markdown.svelte, which renders Markdown with HTML off. Each
-//   component is parsed with Svelte's own parser, so any spelling it
-//   accepts is found.
+//   `svelte/../../x`). It never imports anything dynamically, so any
+//   `import()` of its own fails too.
+// - **Imports, as written:** the bundler never sees what TypeScript drops
+//   (`import type`, `export type … from`, `import('x').T` in a type), so
+//   each file is also parsed, with TypeScript's parser or Svelte's, and
+//   every import in it held to the same rule. `import.meta.url` is
+//   refused, since `new URL(…, import.meta.url)` reaches files without
+//   importing them.
+// - **CSS** in src/chat/ (every .css file, imported or not, and `<style>`)
+//   may not `@import` or `url()` anything: Vite resolves those itself, out
+//   of a plugin's sight.
+// - **HTML put in the page as it is** happens only in Markdown.svelte,
+//   which renders Markdown with HTML off, with `{@html}`. Anywhere else,
+//   `{@html}`, `bind:innerHTML`/`outerHTML`, `srcdoc`, and the DOM's
+//   `innerHTML`, `outerHTML`, `insertAdjacentHTML`,
+//   `createContextualFragment` and `document.write`, by name or by string,
+//   fail the check.
 //
 // Run in CI: `npm run check:imports`. It exits non-zero on any breach. It
 // takes another folder to check instead of this app's, which its tests use.
@@ -22,6 +31,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { parse } from 'svelte/compiler'
+import ts from 'typescript'
 import { build } from 'vite'
 
 const root = realpathSync(resolve(process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..')))
@@ -125,25 +135,113 @@ try {
   breaches.push(`src/chat/ doesn't build: ${error instanceof Error ? error.message.trim().split('\n').slice(0, 6).join(' ') : String(error)}`)
 }
 
-/** Every `{@html}` in a component's tree. */
-function htmlTags(node, found = []) {
-  if (Array.isArray(node)) for (const child of node) htmlTags(child, found)
-  else if (node !== null && typeof node === 'object') {
-    if (node.type === 'HtmlTag') found.push(node)
-    for (const [key, child] of Object.entries(node)) if (key !== 'parent') htmlTags(child, found)
+/** DOM names that put HTML in the page as it is. */
+const sinks = new Set(['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'createContextualFragment', 'srcdoc'])
+
+/** An import as written in `file`, held to the same rule as a resolved one. */
+function written(file, specifier) {
+  const from = name(file)
+  if (specifier.startsWith('.') || specifier.startsWith('/')) {
+    if (!inside(chat, resolve(dirname(file), bare(specifier)))) breaches.push(`${from}: imports ${specifier}, outside src/chat/`)
+  } else if (!allowed.has(packageOf(specifier))) {
+    breaches.push(`${from}: imports ${specifier}, which isn't @clackatoo/caf, Svelte or markdown-it`)
+  } else if (specifier.split('/').includes('..')) {
+    breaches.push(`${from}: imports ${specifier}, which climbs out of its package`)
   }
-  return found
 }
 
-for (const path of files.filter((file) => file.endsWith('.svelte'))) {
+function css(file, source) {
+  const plain = source.replace(/\/\*[\s\S]*?\*\//g, '')
+  if (/@import\b/i.test(plain)) breaches.push(`${name(file)}: CSS @import, which Vite resolves out of this check's sight`)
+  if (/\burl\s*\(/i.test(plain)) breaches.push(`${name(file)}: CSS url(), which may load anything`)
+}
+
+/** A script, with TypeScript's parser. */
+function script(file, source) {
+  const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, /\.[cm]?jsx?$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS)
+  const visit = (node) => {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
+      written(file, node.moduleSpecifier.text)
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteralLike(node.argument.literal)) {
+      written(file, node.argument.literal.text)
+    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const [first] = node.arguments
+      if (first && ts.isStringLiteralLike(first)) written(file, first.text)
+    } else if (ts.isPropertyAccessExpression(node) && ts.isMetaProperty(node.expression) && node.name.text === 'url') {
+      breaches.push(`${name(file)}: uses import.meta.url, which reaches files without importing them`)
+    } else if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'document' && /^write(ln)?$/.test(node.name.text)) {
+      breaches.push(`${name(file)}: uses document.write, which puts HTML in the page as it is`)
+    } else if ((ts.isIdentifier(node) || ts.isPrivateIdentifier(node) || ts.isStringLiteralLike(node)) && sinks.has(node.text)) {
+      breaches.push(`${name(file)}: uses ${node.text}, which puts HTML in the page as it is`)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(tree)
+}
+
+/** A component, with Svelte's parser: its scripts, its markup and its style. */
+function component(file, source) {
   let tree
   try {
-    tree = parse(readFileSync(path, 'utf8'), { modern: true })
+    tree = parse(source, { modern: true })
   } catch (error) {
-    breaches.push(`${name(path)}: doesn't parse: ${error instanceof Error ? error.message : String(error)}`)
-    continue
+    breaches.push(`${name(file)}: doesn't parse: ${error instanceof Error ? error.message : String(error)}`)
+    return
   }
-  if (path !== html && htmlTags(tree.fragment).length > 0) breaches.push(`${name(path)}: uses {@html}, which only Markdown.svelte may`)
+  const from = name(file)
+  const literal = (node) => (node?.type === 'Literal' && typeof node.value === 'string' ? node.value : null)
+  const visit = (node) => {
+    if (Array.isArray(node)) return node.forEach(visit)
+    if (node === null || typeof node !== 'object') return
+    switch (node.type) {
+      case 'HtmlTag':
+        if (file !== html) breaches.push(`${from}: uses {@html}, which only Markdown.svelte may`)
+        break
+      case 'BindDirective':
+        if (/^(inner|outer)HTML$/.test(node.name)) breaches.push(`${from}: uses bind:${node.name}, which puts HTML in the page as it is`)
+        break
+      case 'Attribute':
+        if (sinks.has(node.name)) breaches.push(`${from}: uses ${node.name}, which puts HTML in the page as it is`)
+        break
+      case 'ImportDeclaration':
+      case 'ExportNamedDeclaration':
+      case 'ExportAllDeclaration':
+      case 'ImportExpression':
+        if (literal(node.source) !== null) written(file, literal(node.source))
+        break
+      case 'TSImportType': {
+        const argument = node.argument?.literal ?? node.argument
+        if (literal(argument) !== null) written(file, literal(argument))
+        break
+      }
+      case 'MemberExpression':
+        if (node.object?.type === 'MetaProperty' && node.property?.name === 'url') {
+          breaches.push(`${from}: uses import.meta.url, which reaches files without importing them`)
+        }
+        if (node.object?.type === 'Identifier' && node.object.name === 'document' && /^write(ln)?$/.test(node.property?.name ?? '')) {
+          breaches.push(`${from}: uses document.write, which puts HTML in the page as it is`)
+        }
+        break
+      case 'Identifier':
+        if (sinks.has(node.name)) breaches.push(`${from}: uses ${node.name}, which puts HTML in the page as it is`)
+        break
+      case 'Literal':
+        if (sinks.has(node.value)) breaches.push(`${from}: uses ${node.value}, which puts HTML in the page as it is`)
+        break
+      case 'StyleSheet':
+        if (typeof node.content?.styles === 'string') css(file, node.content.styles)
+        break
+    }
+    for (const [key, child] of Object.entries(node)) if (key !== 'parent' && key !== 'metadata') visit(child)
+  }
+  visit(tree)
+}
+
+for (const file of files) {
+  const source = readFileSync(file, 'utf8')
+  if (file.endsWith('.svelte')) component(file, source)
+  else if (file.endsWith('.css')) css(file, source)
+  else if (/\.[cm]?[jt]sx?$/.test(file)) script(file, source)
 }
 
 if (breaches.length > 0) {

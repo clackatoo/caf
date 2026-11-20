@@ -153,3 +153,10 @@ jobs:
         env:
           CAF_DEBUGGER: ${{ github.workspace }}/target/debug/caf-debugger
           CAF_FAKE_AGENT_BIN: ${{ github.workspace }}/target/debug/caf-fake-agent
+      # Playwright keeps a failed test's trace: keep it past the run.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: playwright-traces
+          path: ts/debugger/test-results/
+          retention-days: 14

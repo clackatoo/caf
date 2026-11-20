@@ -21,7 +21,6 @@
     answer: (question: QuestionId, answer: Answer) => Promise<unknown> | void
   } = $props()
 
-  /** Questions being answered now, and why an answer failed. */
   /**
    * Each question with its key: its id, and how many questions before it
    * share that id (a chat may hold two with one id). Keyed so, an answered
@@ -38,6 +37,7 @@
   })
 
   let section = $state<HTMLElement>()
+  /** Questions being answered now, and why an answer failed. */
   let busy = $state<ReadonlySet<QuestionId>>(new Set())
   let problems = $state<ReadonlyMap<QuestionId, string>>(new Map())
 

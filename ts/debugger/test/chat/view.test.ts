@@ -557,6 +557,18 @@ describe('a different chat in the same view', () => {
   })
 })
 
+describe('a different chat in the same view, again', () => {
+  it("doesn't carry why closing failed from one chat to the next", async () => {
+    const given = actions()
+    given.close.mockRejectedValue(new CafError({ type: 'Disconnected' }))
+    const view = draw(chat({ id: 1 }), { actions: given })
+    await fireEvent.click(button('Close'))
+    await waitFor(() => expect(text(view.container)).toContain('The link to CAF dropped'))
+    await view.rerender({ chat: chat({ id: 2 }) })
+    expect(text(view.container)).not.toContain('The link to CAF dropped')
+  })
+})
+
 describe('two chat views on one page', () => {
   it('Escape in one keeps only its own question waiting', async () => {
     const slow = () => question({ type: 'SlowToOpen', value: { adapter_answered: true } })

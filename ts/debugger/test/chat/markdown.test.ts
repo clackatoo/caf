@@ -17,7 +17,7 @@ describe('streaming Markdown', () => {
     vi.useFakeTimers()
     const renders = vi.spyOn(markdown, 'render')
     const view = render(Markdown, { text: 'Hello' })
-    expect(view.container.textContent).toBe('Hello\n')
+    expect(view.container.querySelector('.markdown')?.textContent).toBe('Hello\n')
     let text = 'Hello'
     for (let i = 0; i < 40; i++) {
       text += ' more'
@@ -26,7 +26,7 @@ describe('streaming Markdown', () => {
     expect(renders).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(60)
     expect(renders).toHaveBeenCalledTimes(2)
-    expect(view.container.textContent).toBe(`${text}\n`)
+    expect(view.container.querySelector('.markdown')?.textContent).toBe(`${text}\n`)
   })
 
   it('waits while text in it is selected, then catches up', async () => {
@@ -42,10 +42,13 @@ describe('streaming Markdown', () => {
     await vi.advanceTimersByTimeAsync(200)
     // The selected paragraph is still the one drawn: nothing replaced it.
     expect(view.container.querySelector('p')).toBe(paragraph)
+    // But it says more has come.
+    expect(view.container.querySelector('.stale')?.textContent).toContain('More has come')
 
     document.getSelection()!.removeAllRanges()
     document.dispatchEvent(new Event('selectionchange'))
     await vi.advanceTimersByTimeAsync(10)
-    expect(view.container.textContent).toBe('First words, and more\n')
+    expect(view.container.querySelector('.markdown')?.textContent).toBe('First words, and more\n')
+    expect(view.container.querySelector('.stale')).toBeNull()
   })
 })

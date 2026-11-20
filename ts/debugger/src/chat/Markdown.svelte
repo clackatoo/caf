@@ -16,6 +16,8 @@
   let html = $state(untrack(() => render(text)))
   let shown = untrack(() => text)
   let timer: ReturnType<typeof setTimeout> | null = null
+  /** Newer words are waiting for the user's selection to go. */
+  let stale = $state(false)
 
   $effect(() => {
     if (text !== shown && timer === null) timer = setTimeout(flush, EVERY)
@@ -29,9 +31,11 @@
   function flush() {
     timer = null
     if (selectedInside()) {
+      stale = true
       document.addEventListener('selectionchange', onselection)
       return
     }
+    stale = false
     shown = text
     html = render(text)
   }
@@ -50,8 +54,15 @@
 </script>
 
 <div class="markdown" bind:this={element}>{@html html}</div>
+{#if stale}<div class="stale" role="status">More has come: clear the selection to see it.</div>{/if}
 
 <style>
+  .stale {
+    margin-top: 0.3em;
+    font-size: 0.85em;
+    color: var(--caf-muted);
+    font-style: italic;
+  }
   .markdown {
     line-height: 1.55;
     overflow-wrap: anywhere;

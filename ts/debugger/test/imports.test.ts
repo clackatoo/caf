@@ -59,6 +59,24 @@ describe('the import check', () => {
     ['CSS url() in a style block', { 'Bad.svelte': `<p>x</p><style>p { background: url(https://example.com/x.png) }</style>` }, 'CSS url()'],
     ['{@html}', { 'Bad.svelte': `<p>{@html '<b>x</b>'}</p>` }, 'uses {@html}'],
     ['{ @html } with spaces', { 'Bad.svelte': `<p>{ @html "<b>x</b>"}</p>` }, 'uses {@html}'],
+    ['a type-only import', { 'bad.ts': `import type { Inspector } from '../inspector/client.svelte.ts'\nexport type X = Inspector` }, 'outside src/chat/'],
+    ['a type-only export', { 'bad.ts': `export type { LinkState } from '../link.ts'` }, 'outside src/chat/'],
+    [
+      "a type-only import in a component's script",
+      { 'Bad.svelte': `<script lang="ts">import type { Inspector } from '../inspector/client.svelte.ts'; let { i }: { i: Inspector } = $props()</script><p>{String(i)}</p>` },
+      'outside src/chat/',
+    ],
+    ['a type-only import of a package it may not use', { 'bad.ts': `import type { UserConfig } from 'vite'\nexport type X = UserConfig` }, "isn't @clackatoo/caf"],
+    ['new URL(…, import.meta.url)', { 'bad.ts': `export const u = new URL('../inspector/client.svelte.ts', import.meta.url).href` }, 'import.meta.url'],
+    ['a CSS file nobody imports', { 'stray.css': `@import url(https://evil.example/x.css);` }, 'CSS @import'],
+    ['bind:innerHTML', { 'Bad.svelte': `<script>let s = $state('')</script><div contenteditable="true" bind:innerHTML={s}></div>` }, 'innerHTML'],
+    ['innerHTML in a script', { 'Bad.svelte': `<script>let el; $effect(() => { el.innerHTML = '<b>x</b>' })</script><div bind:this={el}></div>` }, 'innerHTML'],
+    ["innerHTML by its name in brackets", { 'bad.ts': `export function put(el: Element, s: string) { el['innerHTML'] = s }` }, 'innerHTML'],
+    ['insertAdjacentHTML', { 'bad.ts': `export function put(el: Element, s: string) { el.insertAdjacentHTML('beforeend', s) }` }, 'insertAdjacentHTML'],
+    ['outerHTML in a handler', { 'Bad.svelte': `<button onclick={(e) => (e.currentTarget.outerHTML = 'x')}>x</button>` }, 'outerHTML'],
+    ['document.write', { 'bad.ts': `export function put(s: string) { document.write(s) }` }, 'document.write'],
+    ['createContextualFragment', { 'bad.ts': `export const f = (s: string) => document.createRange().createContextualFragment(s)` }, 'createContextualFragment'],
+    ['srcdoc', { 'Bad.svelte': `<iframe title="x" srcdoc="<b>x</b>"></iframe>` }, 'srcdoc'],
   ]
   for (const [what, files, says] of breaches) {
     it(`fails ${what}`, () => {

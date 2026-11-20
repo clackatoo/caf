@@ -8,6 +8,7 @@
   // recording. With `readOnly` (such as while looking back in time), it
   // draws the chat as it was, and nothing can be done in it.
   import type { Chat, DeepReadonly } from '@clackatoo/caf'
+  import { untrack } from 'svelte'
   import { attempt, type ChatActions } from './actions.ts'
   import Composer from './Composer.svelte'
   import Questions from './Questions.svelte'
@@ -36,10 +37,20 @@
   const running = $derived(chat.turns.find((turn) => turn.life.type === 'Running' || turn.life.type === 'Stopping'))
   const closed = $derived(chat.state.type === 'Closed')
   let problem = $state<string | null>(null)
-
   // Follow the end of the chat as it grows, unless the user has scrolled up.
   let scroller = $state<HTMLElement>()
   let following = true
+
+  // Another chat: what this view said and where it was scrolled were the
+  // last chat's. (The rest is inside the {#key} below, drawn afresh.)
+  let shownId = untrack(() => chat.id)
+  $effect.pre(() => {
+    if (chat.id === shownId) return
+    shownId = chat.id
+    problem = null
+    following = true
+  })
+
   function onscroll() {
     if (scroller === undefined) return
     following = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48
