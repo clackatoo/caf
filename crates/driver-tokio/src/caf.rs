@@ -911,10 +911,10 @@ impl<A: AppItem> Task<A> {
     ) -> Result<T, Refused> {
         let now = self.timers.now();
         let result = call(&mut self.core, now, &mut self.out);
-        let line = (result.as_ref().ok())
+        let step = (result.as_ref().ok())
             .and_then(recorded)
             .and_then(|command| self.keep(now, &Event::Host(command)));
-        self.kept(line);
+        self.kept(step);
         self.route();
         result
     }
@@ -926,18 +926,18 @@ impl<A: AppItem> Task<A> {
         }
         self.shutting_down = true;
         let now = self.timers.now();
-        let line = self.keep(now, &Event::Host(HostCommand::<A>::Shutdown));
+        let step = self.keep(now, &Event::Host(HostCommand::<A>::Shutdown));
         self.core.shutdown(now, &mut self.out);
-        self.kept(line);
+        self.kept(step);
         self.route();
     }
 
     /// Gives the core what a driver reported.
     fn give(&mut self, event: Event<A>) {
         let now = self.timers.now();
-        let line = self.keep(now, &event);
+        let step = self.keep(now, &event);
         self.core.handle(now, event, &mut self.out);
-        self.kept(line);
+        self.kept(step);
         self.route();
     }
 
@@ -946,14 +946,16 @@ impl<A: AppItem> Task<A> {
         self.steps.is_some() || (self.recorder.as_ref()).is_some_and(|recorder| !recorder.stopped)
     }
 
-    /// `event`, about to be given to the core at `now`, as a recording's
-    /// line, if anyone keeps the steps.
-    fn keep(&mut self, now: Now, event: &Event<A>) -> Option<String> {
+    /// Writes `event`, about to be given to the core at `now`, to the
+    /// recording, and reads it back for the watcher, if there are either.
+    /// It's written first, so an event the core panics on is in the
+    /// recording.
+    fn keep(&mut self, now: Now, event: &Event<A>) -> Option<Recorded<A>> {
         if !self.keeping() {
             return None;
         }
-        match line(now, event) {
-            Ok(line) => Some(line),
+        let line = match line(now, event) {
+            Ok(line) => line,
             Err(error) => {
                 if let Some(recorder) = &mut self.recorder {
                     recorder.stop(&format!("an event can't be written: {error}"));
@@ -961,31 +963,33 @@ impl<A: AppItem> Task<A> {
                 if self.steps.is_some() {
                     log::warn!(target: "caf", "a step can't be watched: its event can't be written: {error}");
                 }
+                return None;
+            }
+        };
+        // What the watcher sees is what a replay would read.
+        let recorded = self.steps.is_some().then(|| serde_json::from_str(&line));
+        if let Some(recorder) = &mut self.recorder {
+            recorder.write(line);
+        }
+        match recorded? {
+            Ok(recorded) => Some(recorded),
+            Err(error) => {
+                log::warn!(target: "caf", "a step can't be watched: its event doesn't read back: {error}");
                 None
             }
         }
     }
 
-    /// Hands the line [`Task::keep`] made to whoever keeps the steps, once
-    /// the core has been given its event and before its directives are
-    /// carried out: the watcher sees the event read back from the line,
-    /// exactly as a replay would.
-    fn kept(&mut self, line: Option<String>) {
-        let Some(line) = line else { return };
-        if let Some(steps) = &mut self.steps {
-            match serde_json::from_str::<Recorded<A>>(&line) {
-                Ok(Recorded { now, event }) => steps.step(Step {
-                    now,
-                    event: &event,
-                    directives: &self.out,
-                }),
-                Err(error) => {
-                    log::warn!(target: "caf", "a step can't be watched: its event doesn't read back: {error}");
-                }
-            }
-        }
-        if let Some(recorder) = &mut self.recorder {
-            recorder.write(line);
+    /// Shows the watcher the step [`Task::keep`] read back, once the core
+    /// has been given its event and before its directives are carried
+    /// out.
+    fn kept(&mut self, recorded: Option<Recorded<A>>) {
+        if let (Some(steps), Some(Recorded { now, event })) = (&mut self.steps, recorded) {
+            steps.step(Step {
+                now,
+                event: &event,
+                directives: &self.out,
+            });
         }
     }
 
