@@ -17,3 +17,6 @@
 *~
 /ts/**/node_modules/
 /ts/**/dist/
+
+# Builders' scratch: TMPDIR for tests and tools
+/tmp/

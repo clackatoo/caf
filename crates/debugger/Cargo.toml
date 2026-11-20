@@ -1,0 +1,51 @@
+[package]
+name = "caf-debugger"
+description = "CAF's debugger: a chat beside an inspector of CAF's every step, live or replayed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "caf-debugger"
+path = "src/main.rs"
+# The library has the docs; the program is a thin wrapper around it.
+doc = false
+
+[dependencies]
+# The HTTP server and its WebSockets, on 127.0.0.1 only.
+axum = { version = "0.8.9", default-features = false, features = ["http1", "query", "tokio", "ws"] }
+caf-core = { workspace = true, features = ["inspect"] }
+caf-driver-tokio = { path = "../driver-tokio" }
+# The fake agent, offered as `fake` so the debugger works with no real
+# agent.
+caf-fake-agent = { path = "../fake-agent" }
+# The token's randomness.
+getrandom = "0.3"
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# The token, compared in constant time.
+subtle = "2.6"
+# fs: the app's files and the recording. signal: Ctrl-C shuts CAF down,
+# so the recording is complete.
+tokio = { workspace = true, features = ["fs", "net", "rt-multi-thread", "signal"] }
+# axum's WebSocket errors, told apart: one too big, or breaking the
+# protocol, is closed with its code. The version axum uses.
+tungstenite = { version = "0.29", default-features = false }
+# agents.toml.
+toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }
+# The inspector channel's TypeScript types, behind the feature `ts`.
+ts-rs = { workspace = true, optional = true }
+
+[dev-dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+# A real WebSocket client, for the HTTP-level tests.
+tokio-tungstenite = "0.29"
+
+[features]
+# TypeScript types for the inspector channel, written to
+# `ts/debugger/src/inspector/types/`: see `inspector.rs`.
+ts = ["dep:ts-rs", "caf-core/ts"]
