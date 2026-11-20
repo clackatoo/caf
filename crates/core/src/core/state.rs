@@ -20,6 +20,7 @@ use crate::time::Mono;
 /// Gives out ids, in order, from one counter, so no two things of any
 /// kind share a number.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) struct Ids {
     /// The next id to give out.
     pub(super) next: u64,
@@ -45,6 +46,7 @@ impl Ids {
 
 /// A connection: an agent's adapter, run as one process at a time.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) struct Conn {
     /// The agent it runs.
     pub(super) agent: AgentName,
@@ -65,6 +67,7 @@ pub(super) struct Conn {
 
 /// One adapter process.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) struct Proc {
     /// The connection it runs for.
     pub(super) conn: ConnectionId,
@@ -122,6 +125,7 @@ impl Proc {
 /// Where a process is with `initialize`.
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", content = "value")]
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) enum Init {
     /// Asked; past `deadline`, the chats waiting on it are told it's
     /// slow, and the deadline is cleared until they choose to wait more.
@@ -152,6 +156,7 @@ pub(super) struct Caps {
 
 /// A process that's gone, waited on for its last words.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) struct Gone {
     /// When it went.
     pub(super) since: Mono,
@@ -161,6 +166,7 @@ pub(super) struct Gone {
 
 /// How a process is being stopped.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) struct Ending {
     /// Firmly (signals at once), rather than gently (closing its input
     /// first).
@@ -182,6 +188,7 @@ pub(super) enum Step {
 /// Whether a process's group is watched for emptiness.
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", content = "value")]
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) enum Group {
     /// Not yet.
     Unwatched,
@@ -193,6 +200,7 @@ pub(super) enum Group {
 
 /// A request CAF sent, waiting for its answer.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) struct Pending {
     /// What it's for, and who asked.
     pub(super) purpose: Purpose,
@@ -205,6 +213,7 @@ pub(super) struct Pending {
 /// What a request is for, and who asked.
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", content = "value")]
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) enum Purpose {
     /// `initialize`, for the process's connection.
     Initialize,
@@ -261,6 +270,7 @@ impl How {
 /// request, asked of the policy driver or the user. Kept under the
 /// ticket of the policy's [`Decide`](crate::directive::PolicyDirective::Decide).
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) struct Ask {
     /// The process that asked.
     pub(super) proc: Ticket,
@@ -281,6 +291,7 @@ pub(super) struct Ask {
 /// A chat's place in it all.
 #[derive(Debug, Serialize)]
 #[serde(bound = "A: AppItem")]
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) struct Run<A: AppItem> {
     /// Its connection.
     pub(super) conn: ConnectionId,
@@ -350,6 +361,7 @@ pub(super) enum Open {
 
 /// The turn the agent is working on.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) struct Running {
     /// The turn.
     pub(super) turn: TurnId,

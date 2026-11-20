@@ -24,6 +24,8 @@ struct Seen {
     directives: Value,
     /// What the host asked for, if it's a host call.
     host: Option<&'static str>,
+    /// Its line in the recording, if there's one.
+    line: Option<String>,
 }
 
 /// A watcher that writes every step down.
@@ -47,6 +49,7 @@ impl Steps<caf_core::NoAppItems> for Notebook {
             event: serde_json::to_value(step.event).unwrap(),
             directives: serde_json::to_value(step.directives).unwrap(),
             host,
+            line: step.line.map(str::to_owned),
         });
     }
 }
@@ -111,6 +114,10 @@ async fn a_watcher_sees_one_step_per_recording_line_with_its_directives() {
     let text = std::fs::read_to_string(&recording).unwrap();
     let mut lines = text.lines();
     let header: Header = serde_json::from_str(lines.next().unwrap()).unwrap();
+    // Each step has its line of the recording, exactly.
+    let texts: Vec<Option<&str>> = lines.clone().map(Some).collect();
+    let given: Vec<Option<&str>> = seen.iter().map(|seen| seen.line.as_deref()).collect();
+    assert_eq!(given, texts);
     let lines: Vec<Line> = lines
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
@@ -178,6 +185,10 @@ async fn a_watcher_without_a_recording_sees_the_host_calls_the_core_took() {
     let seen = notebook.take();
     let hosts: Vec<_> = seen.iter().filter_map(|seen| seen.host).collect();
     assert_eq!(hosts, ["open", "send", "close", "shutdown"]);
+    assert!(
+        seen.iter().all(|seen| seen.line.is_none()),
+        "no recording, no lines"
+    );
     // Every step after the first is later than or as late as the one
     // before.
     assert!(
@@ -233,9 +244,16 @@ async fn a_watcher_sees_secrets_as_they_are_and_its_steps_replay_exactly() {
         let bytes = serde_json::to_string(secret.as_bytes()).unwrap();
         text.contains(secret) || text.contains(bytes.trim_matches(['[', ']']))
     };
+    let lines: Vec<&str> = seen
+        .iter()
+        .filter_map(|seen| seen.line.as_deref())
+        .collect();
+    assert_eq!(lines.len(), seen.len(), "every step has its line");
+    let lines = lines.join("\n");
     for secret in ["s3cret-env", "s3cret-header", "me@example.com"] {
         assert!(holds(&events, secret), "the watcher sees {secret}");
         assert!(!holds(&text, secret), "the recording hides {secret}");
+        assert!(!holds(&lines, secret), "so do the steps' lines: {secret}");
     }
     // A fresh core given the steps' events gives out what the live one
     // did, step by step.

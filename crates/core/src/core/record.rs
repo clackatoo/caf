@@ -14,6 +14,7 @@ use crate::time::{End, Now, Window};
 /// A chat's numbered changes: the last few, for viewers.
 #[derive(Debug, Serialize)]
 #[serde(bound = "A: AppItem")]
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) struct Log<A: AppItem> {
     /// The changes kept, oldest first, numbered without gaps.
     changes: Vec<Numbered<A>>,
@@ -256,6 +257,7 @@ impl<A: AppItem> Core<A> {
 /// fixtures in `fixtures/apply/` are written from.
 #[cfg(test)]
 #[derive(Debug)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) struct Applied<A: AppItem> {
     /// The chat before its first change.
     pub(super) picture: Chat<A>,

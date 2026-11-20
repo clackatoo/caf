@@ -88,6 +88,7 @@ pub(crate) fn without_emails(line: &str) -> String {
 /// The last few lines an adapter wrote to its error output, cleaned:
 /// what CAF shows when explaining why an adapter stopped.
 #[derive(Debug, Default, Serialize)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub(crate) struct Tail {
     /// The kept lines, oldest first.
     pub(crate) lines: VecDeque<String>,
