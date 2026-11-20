@@ -440,18 +440,21 @@ describe("requests", () => {
     await expect(Promise.all([stopping, answering, closing])).resolves.toStrictEqual([undefined, undefined, undefined]);
   });
 
-  test("Refused and NotAllowed reject with CafError", async () => {
+  test("Refused, NotAllowed and Gone reject with CafError", async () => {
     const { caf, link } = await connected();
     const refused = held(caf.send(1000, message));
     const later = held(caf.stop(1000));
     const notAllowed = held(caf.open({ agent: "claude", cwd: "/", session: { type: "New" } }));
+    const gone = held(caf.close(1000));
     link.deliver({ type: "Done", value: { request: 1, outcome: { type: "Refused", value: { type: "QueueFull" } } } });
     // A reason of a later CAF's comes through, for the app to show by name.
     link.deliver({ type: "Done", value: { request: 2, outcome: { type: "Refused", value: { type: "Busy" } } } });
     link.deliver({ type: "Done", value: { request: 3, outcome: { type: "NotAllowed" } } });
+    link.deliver({ type: "Done", value: { request: 4, outcome: { type: "Gone" } } });
     expect(await rejection(refused)).toStrictEqual({ type: "Refused", value: { type: "QueueFull" } });
     expect(await rejection(later)).toStrictEqual({ type: "Refused", value: { type: "Busy" } });
     expect(await rejection(notAllowed)).toStrictEqual({ type: "NotAllowed" });
+    expect(await rejection(gone)).toStrictEqual({ type: "Gone" });
     expect(link.closed).toBe(false);
   });
 
@@ -469,7 +472,7 @@ describe("requests", () => {
 
   test.each([
     ["an outcome that doesn't fit what was asked", { type: "Sent", value: 1200 }],
-    ["an outcome of a later version", { type: "Gone" }],
+    ["an outcome of a later version", { type: "Postponed" }],
     ["Opened without its chat", { type: "Opened" }],
     ["a Refused without its reason", { type: "Refused", value: "QueueFull" }],
   ])("%s ends the link", async (_, bad) => {

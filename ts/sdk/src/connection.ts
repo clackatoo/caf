@@ -76,6 +76,8 @@ export class CafError extends Error {
       | { type: "Refused"; value: Refused }
       /** The host doesn't let viewers do this. */
       | { type: "NotAllowed" }
+      /** CAF has shut down, or is shutting down: nothing was done. */
+      | { type: "Gone" }
       /** The link ended before the answer came. */
       | { type: "Disconnected" }
       /** No version of the wire in common with CAF. */
@@ -388,6 +390,8 @@ export class Connection {
         return pending.reject(new CafError({ type: "Refused", value: value as Refused }));
       case "NotAllowed":
         return pending.reject(new CafError({ type: "NotAllowed" }));
+      case "Gone":
+        return pending.reject(new CafError({ type: "Gone" }));
       case pending.expect:
         if (pending.expect === "Done") return pending.resolve(undefined);
         if (!isNumber(value)) return broken();

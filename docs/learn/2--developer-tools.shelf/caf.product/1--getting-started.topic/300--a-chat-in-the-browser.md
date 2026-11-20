@@ -172,6 +172,7 @@ rejects with a `CafError`, whose `why` says why:
 |---|---|
 | `Refused` | The core refused it, and nothing changed. `why.value` says why, such as `QueueFull`. |
 | `NotAllowed` | The host doesn't let viewers do this. |
+| `Gone` | CAF has shut down, or is shutting down: nothing was done. |
 | `Disconnected` | The link ended before the answer came. |
 
 A reason added in a later version of CAF still comes through, with its
