@@ -169,8 +169,7 @@ async fn a_survey_says_what_is_installed_and_cleans_up_what_was_cut_off() {
     assert_eq!(root, &dir.root());
     assert!(installed.is_empty());
     assert_eq!(*platform, Platform::current());
-    let mode = std::fs::metadata(dir.root()).unwrap().permissions().mode();
-    assert_eq!(mode & 0o777, 0o700, "the root is the user's alone");
+    assert!(!dir.root().exists(), "a survey makes nothing");
     // This machine's Node and npm, as the tests need them.
     assert!(node.is_some_and(|node| node >= 18), "{node:?}");
     assert!(npm);
@@ -182,12 +181,12 @@ async fn a_survey_says_what_is_installed_and_cleans_up_what_was_cut_off() {
         ".build-claude-0.99.0-1-1",
         ".trash-claude-0.97.0-1-1",
     ] {
-        std::fs::create_dir(dir.root().join(folder)).unwrap();
+        std::fs::create_dir_all(dir.root().join(folder)).unwrap();
         std::fs::write(dir.root().join(folder).join("file"), "x").unwrap();
     }
     std::fs::write(dir.root().join("stray-file"), "").unwrap();
     // While something holds the lock, the hidden folders may be in use.
-    let held = std::fs::File::open(dir.root().join(".lock")).unwrap();
+    let held = std::fs::File::create(dir.root().join(".lock")).unwrap();
     rustix::fs::flock(&held, rustix::fs::FlockOperation::LockExclusive).unwrap();
     driver.apply(SetupDirective::Survey {
         ticket: Ticket(1001),
@@ -279,6 +278,8 @@ async fn npm_installs_from_the_lockfile_into_place() {
         ["fake-1.0.0"],
         "built in a hidden folder, then renamed"
     );
+    let mode = std::fs::metadata(dir.root()).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o700, "the root is the user's alone");
     let program = dir.root().join("fake-1.0.0/node_modules/.bin/fake-adapter");
     assert!(program.exists(), "the package's program is linked");
     assert!(

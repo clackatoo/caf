@@ -206,8 +206,10 @@ pub(crate) fn hidden_name(kind: &str, folder: &str) -> String {
 }
 
 impl SetupDriver {
-    /// A driver keeping installs under `root`, which it makes if it isn't
-    /// there, readable only by the user.
+    /// A driver keeping installs under `root`, which it makes, readable
+    /// only by the user, when it first installs something. Until then it
+    /// makes nothing: a survey of a root that isn't there finds nothing
+    /// installed.
     #[must_use]
     pub fn new(root: PathBuf) -> Self {
         Self::with_options(root, Options::default())

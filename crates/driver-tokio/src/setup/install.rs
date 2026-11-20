@@ -42,12 +42,15 @@ const TRASH: &str = "trash";
 const PRIVATE: &str = "-private";
 
 /// Says what's installed, and what the machine has. Half-built installs
-/// are removed, if nothing is installing.
+/// are removed, if nothing is installing. It makes nothing: with no root,
+/// nothing is installed.
 pub(super) async fn survey(root: PathBuf, reporter: Reporter) {
     let installed = {
         let root = root.clone();
         blocking(move || {
-            make_root(&root)?;
+            if !root.is_dir() {
+                return Ok(Vec::new());
+            }
             if let Some(lock) = try_lock(&root.join(LOCK), Lock::Exclusive)? {
                 clean(&root);
                 drop(lock);
