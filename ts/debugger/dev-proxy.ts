@@ -1,11 +1,14 @@
 // `npm run dev`'s proxy to caf-debugger. The server only takes requests
 // from its own origin and for its own Host, so the dev server passes on
 // its own page's as if they came from there, and always names the
-// server's Host (`changeOrigin`). Anything else goes as it came, for the server to
-// refuse: rewriting every Origin would let any website reach caf-debugger
-// through the dev server, with only the token to stop it.
+// server's Host (`changeOrigin`). Anything else goes as it came, for the
+// server to refuse: rewriting every Origin would let any website reach
+// caf-debugger through the dev server, with only the token to stop it.
 
-/** The Origin to send on: the server's, for the dev page's own, else the one given. */
+/**
+ * The Origin to send on: the server's, for the dev page's own, else the
+ * one given.
+ */
 export function origin(given: string | undefined, host: string | undefined, server: string): string | undefined {
   // The dev page's own origin is its Host, on this machine. A name that
   // isn't loopback, such as a page whose name points here (DNS
