@@ -28,8 +28,8 @@
 //! ([`Limits::kept_changes`](caf_core::host::Limits::kept_changes)). A
 //! watch further behind than that gets the whole chat again.
 
+use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
-use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hasher};
 use std::io::{BufWriter, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -220,8 +220,9 @@ impl<A: AppItem> WeakCaf<A> {
         let mut last = (self.shared.last.lock()).unwrap_or_else(PoisonError::into_inner);
         // Once the task has ended, the last words are written: there's
         // nothing to keep for a new watch.
-        if !last.ended {
-            last.watched.insert(chat);
+        let counted = !last.ended;
+        if counted {
+            *last.watched.entry(chat).or_default() += 1;
         }
         drop(last);
         Watch {
@@ -232,6 +233,7 @@ impl<A: AppItem> WeakCaf<A> {
             since,
             wake: None,
             ended: false,
+            counted,
         }
     }
 
@@ -573,6 +575,23 @@ pub struct Watch<A: AppItem = NoAppItems> {
     wake: Option<watch::Receiver<()>>,
     /// It has had its last update.
     ended: bool,
+    /// It's counted in [`Last::watched`].
+    counted: bool,
+}
+
+impl<A: AppItem> Drop for Watch<A> {
+    fn drop(&mut self) {
+        if !self.counted {
+            return;
+        }
+        let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(count) = last.watched.get_mut(&self.chat) {
+            *count -= 1;
+            if *count == 0 {
+                last.watched.remove(&self.chat);
+            }
+        }
+    }
 }
 
 /// Follows which chats are open: opened by the host, by any viewer, or
@@ -782,14 +801,16 @@ struct Seen<A: AppItem> {
     wake: Option<watch::Receiver<()>>,
 }
 
-/// The chats some watch was made for, and each as CAF left it when its
+/// The chats some watch is following, and each as CAF left it when its
 /// task ended, with its last change's number.
 type LastWords<A> = Arc<Mutex<Last<A>>>;
 
 /// See [`LastWords`].
 struct Last<A: AppItem> {
-    /// The chats some watch was made for.
-    watched: HashSet<ChatId>,
+    /// The chats some watch is following, each with how many: a watch
+    /// counts from when it's made until it's dropped, so this never holds
+    /// more than the watches there are.
+    watched: HashMap<ChatId, usize>,
     /// Each of them as CAF left it. Empty until the task ends.
     chats: HashMap<ChatId, (Chat<A>, ChangeNo)>,
     /// The task has ended, and `chats` is filled in.
@@ -799,7 +820,7 @@ struct Last<A: AppItem> {
 impl<A: AppItem> Default for Last<A> {
     fn default() -> Self {
         Self {
-            watched: HashSet::new(),
+            watched: HashMap::new(),
             chats: HashMap::new(),
             ended: false,
         }
@@ -875,7 +896,7 @@ impl<A: AppItem> Task<A> {
                 ended,
             } = &mut *last;
             *ended = true;
-            for &chat in &*watched {
+            for &chat in watched.keys() {
                 if let Some(Read::Picture {
                     chat: whole,
                     latest,
@@ -1197,15 +1218,7 @@ impl<A: AppItem> Task<A> {
     /// What a watch that has seen up to `since` hasn't seen of `chat`.
     fn read(&mut self, chat: ChatId, since: Option<ChangeNo>, subscribe: bool) -> Option<Seen<A>> {
         let closed = self.closed(chat);
-        let Some(read) = self.core.read(chat, since) else {
-            // Its watch ends, so it has no last words to keep: forgotten,
-            // or a viewer watching ids that aren't chats would make the
-            // list grow without end. Another watch made for the same id
-            // before the chat opened misses its last words too.
-            let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
-            last.watched.remove(&chat);
-            return None;
-        };
+        let read = self.core.read(chat, since)?;
         let (update, latest) = match read {
             Read::Changes([]) => (None, since),
             Read::Changes(changes) => (
@@ -1700,10 +1713,24 @@ mod tests {
             since: None,
             wake: None,
             ended: false,
+            counted: false,
         };
         drop(ending);
         let next = tokio::time::timeout(Duration::from_secs(5), watch.next()).await;
         assert!(matches!(next, Ok(None)), "the watch ends with CAF");
         drop((reads, inbox));
+    }
+
+    #[tokio::test]
+    async fn watches_dropped_unread_leave_nothing_behind() {
+        let (caf, running) =
+            Caf::<NoAppItems>::start(Config::new(Host::new("test", "1.0.0"), vec![]));
+        for chat in 1000..2000 {
+            drop(caf.chat(ChatId(chat)).watch());
+        }
+        let kept = caf.shared.last.lock().unwrap().watched.len();
+        assert_eq!(kept, 0, "nothing is kept for a watch once it's dropped");
+        caf.shutdown().await;
+        running.await;
     }
 }

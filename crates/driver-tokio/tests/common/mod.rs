@@ -4,8 +4,8 @@
 #![allow(dead_code)] // each test file uses some of it
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use caf_core::Chat;
@@ -180,38 +180,55 @@ pub async fn shut_down(caf: &Caf, running: Running) {
     assert!(done.is_ok(), "shutting down took too long");
 }
 
-/// A step watcher that holds CAF's task up for a second, once, when
-/// asked: so whatever is sent to CAF meanwhile waits for it.
+/// A step watcher that holds CAF's task up when asked, on its next step,
+/// until the test lets it go: so whatever is sent to CAF meanwhile
+/// waits for it.
 #[derive(Clone, Default)]
-pub struct Hold(Arc<AtomicU8>);
+pub struct Hold(Arc<(Mutex<Holding>, Condvar)>);
 
 /// What a [`Hold`] is doing.
-const IDLE: u8 = 0;
-const ASKED: u8 = 1;
-const HOLDING: u8 = 2;
+#[derive(Default, PartialEq)]
+pub enum Holding {
+    #[default]
+    No,
+    Asked,
+    Yes,
+}
 
 impl Hold {
     /// Holds CAF up on its next step.
     pub fn next_step(&self) {
-        self.0.store(ASKED, Ordering::SeqCst);
+        *self.0.0.lock().unwrap() = Holding::Asked;
     }
 
     /// Waits until CAF is held up.
     pub async fn held(&self) {
-        while self.0.load(Ordering::SeqCst) != HOLDING {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        let waited = tokio::time::timeout(PATIENCE, async {
+            while *self.0.0.lock().unwrap() != Holding::Yes {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(waited.is_ok(), "CAF took no step to be held up on");
+    }
+
+    /// Lets CAF go on.
+    pub fn release(&self) {
+        let (holding, released) = &*self.0;
+        *holding.lock().unwrap() = Holding::No;
+        released.notify_all();
     }
 }
 
 impl<A: AppItem> Steps<A> for Hold {
     fn step(&mut self, _: Step<'_, A>) {
-        if (self.0)
-            .compare_exchange(ASKED, HOLDING, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-        {
-            std::thread::sleep(Duration::from_secs(1));
-            self.0.store(IDLE, Ordering::SeqCst);
+        let (holding, released) = &*self.0;
+        let mut holding = holding.lock().unwrap();
+        if *holding != Holding::Asked {
+            return;
         }
+        *holding = Holding::Yes;
+        // Not for ever, so a test that fails while CAF is held up ends.
+        let _ = released.wait_timeout_while(holding, PATIENCE, |holding| *holding == Holding::Yes);
     }
 }

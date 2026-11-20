@@ -218,7 +218,7 @@ impl<A: AppItem> Link<A> {
                     Some(chats) => room.send(ToViewer::Chats(chats)),
                     None => self.gone = true,
                 },
-                message = self.watches.next(&self.caf) => room.send(message),
+                message = self.watches.next() => room.send(message),
             }
         }
     }
@@ -362,9 +362,6 @@ struct Watched<A: AppItem> {
     since: Option<ChangeNo>,
     /// Something has been sent for it since the viewer asked.
     sent: bool,
-    /// The viewer asked to start from here instead, before anything was
-    /// sent.
-    instead: Option<Option<ChangeNo>>,
 }
 
 impl<A: AppItem> Watched<A> {
@@ -374,7 +371,6 @@ impl<A: AppItem> Watched<A> {
             next: next_of(caf.watch(chat, since)),
             since,
             sent: false,
-            instead: None,
         }
     }
 }
@@ -403,16 +399,14 @@ impl<A: AppItem> Watches<A> {
 
     /// Watches `chat` from `since`, in place of any watch it had.
     ///
-    /// A watch that hasn't sent anything yet may be reading the whole
-    /// chat, so it's kept rather than started over: a viewer asking again
-    /// and again costs no more than asking once. If it asked from
-    /// somewhere else, a picture still answers it, and changes from the
-    /// old place are dropped for a read from the new one.
+    /// A watch from the same place that hasn't sent anything yet may be
+    /// reading the whole chat, so it's kept rather than started over: a
+    /// viewer asking again and again costs no more than asking once. One
+    /// from somewhere else is started over; CAF doesn't answer a read the
+    /// old watch was waiting for.
     fn watch(&mut self, caf: &WeakCaf<A>, chat: ChatId, since: Option<ChangeNo>) {
         match self.each.iter_mut().find(|each| each.chat == chat) {
-            Some(each) if !each.sent => {
-                each.instead = (since != each.since).then_some(since);
-            }
+            Some(each) if !each.sent && each.since == since => {}
             Some(each) => *each = Watched::new(caf, chat, since),
             None => self.each.push(Watched::new(caf, chat, since)),
         }
@@ -424,26 +418,14 @@ impl<A: AppItem> Watches<A> {
 
     /// The next message from any watched chat: an update, or that it has
     /// ended. Never resolves while nothing is watched. Cancel-safe.
-    async fn next(&mut self, caf: &WeakCaf<A>) -> ToViewer<A> {
+    async fn next(&mut self) -> ToViewer<A> {
         std::future::poll_fn(|cx| {
             let count = self.each.len();
             for look in 0..count {
                 let at = (self.turn + look) % count;
                 let each = &mut self.each[at];
                 let chat = each.chat;
-                let polled = loop {
-                    let Poll::Ready((watch, update)) = each.next.as_mut().poll(cx) else {
-                        break None;
-                    };
-                    if let (Some(Update::Changes(_)), Some(since)) = (&update, each.instead) {
-                        // From where the viewer no longer is: read again
-                        // from where it is.
-                        *each = Watched::new(caf, chat, since);
-                        continue;
-                    }
-                    break Some((watch, update));
-                };
-                let Some((watch, update)) = polled else {
+                let Poll::Ready((watch, update)) = each.next.as_mut().poll(cx) else {
                     continue;
                 };
                 self.turn = at + 1;
@@ -459,7 +441,6 @@ impl<A: AppItem> Watches<A> {
                     Update::Changes(changes) => ToViewer::Changes { chat, changes },
                 };
                 each.sent = true;
-                each.instead = None;
                 each.next = next_of(watch);
                 return Poll::Ready(message);
             }

@@ -252,3 +252,25 @@ async fn a_watcher_sees_secrets_as_they_are_and_its_steps_replay_exactly() {
         out.clear();
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hold_lasts_however_late_the_test_looks() {
+    let dir = Dir::new();
+    let script = dir.script("script.jsonl", &handshake("s1"));
+    let hold = Hold::default();
+    let (caf, running) =
+        Caf::start_watching(Config::new(host(), vec![fake(&dir, &script)]), hold.clone());
+    hold.next_step();
+    let opening = tokio::spawn({
+        let caf = caf.clone();
+        let folder = dir.0.clone();
+        async move { caf.open_chat(OpenChat::new("fake", folder)).await }
+    });
+    // The test is slow to look.
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    let held = tokio::time::timeout(std::time::Duration::from_secs(5), hold.held()).await;
+    assert!(held.is_ok(), "CAF is still held up");
+    hold.release();
+    assert!(opening.await.unwrap().is_ok());
+    shut_down(&caf, running).await;
+}

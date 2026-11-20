@@ -68,6 +68,17 @@ impl Viewer {
         self.to.send(message).await.expect("serve is still running");
     }
 
+    /// Waits until `serve` has taken everything sent to it.
+    async fn taken(&self) {
+        let taken = tokio::time::timeout(PATIENCE, async {
+            while self.to.capacity() < self.to.max_capacity() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(taken.is_ok(), "serve takes what it's sent");
+    }
+
     /// The next message, or `None` once the link has ended.
     async fn next(&mut self) -> Option<ToViewer> {
         if let Some(skipped) = self.skipped.pop_front() {
@@ -1011,8 +1022,11 @@ async fn viewers_that_stop_reading_dont_hold_caf_up() {
         async move { chat.send(UserMessage::text("Hello")).await }
     });
     hold.held().await;
+    let mut sent = Vec::new();
     for viewer in &viewers {
         let to = viewer.to.clone();
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        sent.push(Arc::clone(&count));
         tokio::spawn(async move {
             for id in 5000..8000 {
                 let watch = FromViewer::Watch {
@@ -1022,9 +1036,20 @@ async fn viewers_that_stop_reading_dont_hold_caf_up() {
                 if to.send(watch).await.is_err() {
                     return;
                 }
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
         });
     }
+    // Let CAF go once each viewer's serve has taken a couple of hundred,
+    // each a watch whose read waits for CAF.
+    let taken = tokio::time::timeout(PATIENCE, async {
+        while (sent.iter()).any(|count| count.load(std::sync::atomic::Ordering::SeqCst) < 200) {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(taken.is_ok(), "each serve takes its viewer's watches");
+    hold.release();
     let patience = std::time::Duration::from_secs(10);
     let sent = tokio::time::timeout(patience, sending).await;
     assert!(matches!(sent, Ok(Ok(Ok(_)))), "the host is heard: {sent:?}");
@@ -1142,7 +1167,7 @@ async fn watching_a_chat_again_before_anything_comes_starts_it_once() {
     chat.send(UserMessage::text("Say hello")).await.unwrap();
     until(&chat, &mut watch, "the turn", finished).await;
     // While CAF is held up, so nothing can come for the chat, the viewer
-    // asks for it over and over, then asks something CAF must answer.
+    // asks for it over and over.
     let held = || {
         let caf = caf.clone();
         let hold = hold.clone();
@@ -1162,6 +1187,8 @@ async fn watching_a_chat_again_before_anything_comes_starts_it_once() {
     for _ in 0..5 {
         viewer.send(asks(None)).await;
     }
+    viewer.taken().await;
+    hold.release();
     loop {
         match viewer.next().await {
             Some(ToViewer::Picture { chat: whole, .. }) if whole.id == chat.id => break,
@@ -1180,12 +1207,14 @@ async fn watching_a_chat_again_before_anything_comes_starts_it_once() {
         (viewer.skipped.drain(..)).find(|message| matches!(message, ToViewer::Picture { .. }));
     assert_eq!(again, None, "one picture, however often it was asked for");
 
-    // Asked from a change it's missed things since, then from nothing:
-    // the changes since are dropped, and it gets the picture asked for.
+    // Asked from a change it's missed things since, then from nothing: it
+    // gets the picture asked for last, and not the changes.
     viewer.send(FromViewer::Unwatch { chat: chat.id }).await;
     held().await;
     viewer.send(asks(Some(before))).await;
     viewer.send(asks(None)).await;
+    viewer.taken().await;
+    hold.release();
     loop {
         match viewer.next().await {
             Some(ToViewer::Chats(_)) => {}
@@ -1259,4 +1288,39 @@ async fn every_viewer_hears_its_cafs_run_and_each_caf_has_its_own() {
         viewer.ends().await;
     }
     watching.ends().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn asking_for_an_idle_chat_whole_gets_it_whatever_was_asked_before() {
+    let dir = Dir::new();
+    let (caf, running, chat) = started(&dir, &[]).await;
+    let mut watch = chat.watch();
+    until(&chat, &mut watch, "the session", |chat| {
+        matches!(chat.state, ChatState::Open { .. })
+    })
+    .await;
+    let (mut viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
+    let (_, latest) = viewer.watch(chat.id).await;
+    // Resumed from where it is, as after reconnecting: there's nothing
+    // to send while the chat is idle. Then asked for whole.
+    viewer.send(FromViewer::Unwatch { chat: chat.id }).await;
+    viewer
+        .send(FromViewer::Watch {
+            chat: chat.id,
+            since: Some(latest),
+        })
+        .await;
+    viewer
+        .send(FromViewer::Watch {
+            chat: chat.id,
+            since: None,
+        })
+        .await;
+    let got = tokio::time::timeout(std::time::Duration::from_secs(5), viewer.from.recv()).await;
+    match got {
+        Ok(Some(ToViewer::Picture { chat: whole, .. })) => assert_eq!(whole.id, chat.id),
+        other => panic!("the chat whole, not {other:?}"),
+    }
+    shut_down(&caf, running).await;
+    viewer.ends().await;
 }

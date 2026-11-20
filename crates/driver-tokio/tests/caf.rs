@@ -1233,6 +1233,7 @@ async fn watches_left_partway_through_a_read_dont_hold_caf_up() {
         .await;
         left.push(next);
     }
+    hold.release();
     let patience = Duration::from_secs(10);
     let sent = tokio::time::timeout(patience, sending).await;
     assert!(matches!(sent, Ok(Ok(Ok(_)))), "the host is heard: {sent:?}");
@@ -1244,4 +1245,52 @@ async fn watches_left_partway_through_a_read_dont_hold_caf_up() {
         "CAF stops though watches were left partway through a read"
     );
     drop(left);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_read_sent_before_a_command_is_answered_first() {
+    let dir = Dir::new();
+    let script = dir.script("script.jsonl", &handshake("s1"));
+    let hold = common::Hold::default();
+    let (caf, running) =
+        Caf::start_watching(Config::new(host(), vec![fake(&dir, &script)]), hold.clone());
+    let mut chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
+    for round in 0..40 {
+        // Held up opening the next round's chat.
+        hold.next_step();
+        let opening = tokio::spawn({
+            let caf = caf.clone();
+            let folder = dir.0.clone();
+            async move { caf.open_chat(OpenChat::new("fake", folder)).await }
+        });
+        hold.held().await;
+        // Meanwhile, a watch sends its read, then the chat is closed.
+        let mut watch = chat.watch();
+        let mut next = Box::pin(async move { watch.next().await });
+        std::future::poll_fn(|cx| {
+            let _ = next.as_mut().poll(cx);
+            Poll::Ready(())
+        })
+        .await;
+        let closing = tokio::spawn({
+            let chat = caf.chat(chat.id);
+            async move { chat.close().await }
+        });
+        // Time for the close to be sent. If it isn't sent by then, the
+        // round tests less, but never fails wrongly.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        hold.release();
+        let first = tokio::time::timeout(PATIENCE, next).await.unwrap();
+        let Some(Update::Picture(first)) = first else {
+            panic!("round {round}: a picture first, not {first:?}")
+        };
+        assert_ne!(
+            first.state,
+            ChatState::Closed,
+            "round {round}: the read is answered before the close"
+        );
+        closing.await.unwrap().unwrap();
+        chat = opening.await.unwrap().unwrap();
+    }
+    shut_down(&caf, running).await;
 }
