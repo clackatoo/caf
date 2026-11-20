@@ -317,7 +317,16 @@ impl ProfileChoice {
     /// Whether an adapter with this profile says by itself whether it's
     /// signed in (`_auth/status_update`).
     pub(crate) fn pushes_status(&self) -> bool {
-        self.recipe().is_some_and(|recipe| recipe.status.pushed)
+        // Not from the recipe, which holds a whole lockfile: it's asked on
+        // every report.
+        match self {
+            Self::Builtin(Builtin::ClaudeAgentAcp) => true,
+            #[cfg(test)]
+            Self::Builtin(Builtin::TestNpm) => true,
+            #[cfg(test)]
+            Self::Builtin(Builtin::TestDownload) => false,
+            Self::Cautious => false,
+        }
     }
 
     /// Why a request failed, as this profile reads `error`: what went
@@ -592,6 +601,19 @@ pub(crate) mod tests {
                 .checked,
             Checked::Cautious
         );
+    }
+
+    #[test]
+    fn whether_a_profile_pushes_its_status_is_as_its_recipe_says() {
+        for builtin in [
+            Builtin::ClaudeAgentAcp,
+            Builtin::TestNpm,
+            Builtin::TestDownload,
+        ] {
+            let profile = ProfileChoice::Builtin(builtin);
+            assert_eq!(profile.pushes_status(), builtin.recipe().status.pushed);
+        }
+        assert!(!ProfileChoice::Cautious.pushes_status());
     }
 
     #[test]
