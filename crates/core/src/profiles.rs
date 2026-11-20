@@ -53,6 +53,7 @@ use crate::chat::{FailureReason, Remedy};
 /// Which profile an agent should have.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum ProfileChoice {
     /// One CAF knows.
@@ -69,6 +70,7 @@ pub enum ProfileChoice {
 /// lets CAF add more without breaking anyone's `match`.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum Builtin {
     /// Claude Code, through `@agentclientprotocol/claude-agent-acp`.
@@ -80,6 +82,7 @@ pub enum Builtin {
 /// is.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ProfileReport {
     /// The profile in use.
     pub profile: ProfileChoice,
@@ -92,6 +95,7 @@ pub struct ProfileReport {
 /// An adapter's name and version, as it gave them.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AdapterInfo {
     /// Its name, such as `@agentclientprotocol/claude-agent-acp`.
     pub name: String,
@@ -102,6 +106,7 @@ pub struct AdapterInfo {
 /// How far CAF has checked the adapter it's talking to.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum Checked {
     /// This exact version is checked: every feature its profile lists is

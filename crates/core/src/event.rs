@@ -14,6 +14,8 @@ use crate::question::Answer;
 /// Something that happened.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(concrete(A = NoAppItems), bound = "A: ts_rs::TS"))]
 #[serde(tag = "type", content = "value")]
 #[serde(bound = "A: AppItem")]
 pub enum Event<A: AppItem = NoAppItems> {
@@ -46,6 +48,8 @@ pub enum Event<A: AppItem = NoAppItems> {
 /// What the host asked for.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(concrete(A = NoAppItems), bound = "A: ts_rs::TS"))]
 #[serde(tag = "type", content = "value")]
 #[serde(bound = "A: AppItem")]
 pub enum HostCommand<A: AppItem = NoAppItems> {
@@ -91,6 +95,7 @@ pub enum HostCommand<A: AppItem = NoAppItems> {
 /// What happened to an adapter process, in the order it happened.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum AgentEvent {
     /// It started.
@@ -133,6 +138,7 @@ pub enum AgentEvent {
 /// How a process exited.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum Exit {
     /// With this code.
@@ -144,6 +150,7 @@ pub enum Exit {
 /// The policy's answer to "is this allowed?".
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum PolicyAnswer {
     /// Allowed, once.
@@ -158,6 +165,7 @@ pub enum PolicyAnswer {
 /// The storage driver's report. *Later.*
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum StorageEvent {}
 

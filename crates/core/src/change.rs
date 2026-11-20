@@ -18,6 +18,8 @@ use crate::time::End;
 /// A change, with its number.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(concrete(A = NoAppItems), bound = "A: ts_rs::TS"))]
 #[serde(bound = "A: AppItem")]
 pub struct Numbered<A: AppItem = NoAppItems> {
     /// Its number in the chat's list.
@@ -29,6 +31,8 @@ pub struct Numbered<A: AppItem = NoAppItems> {
 /// One change to a chat.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(concrete(A = NoAppItems), bound = "A: ts_rs::TS"))]
 #[serde(tag = "type", content = "value")]
 #[serde(bound = "A: AppItem")]
 pub enum Change<A: AppItem = NoAppItems> {

@@ -390,6 +390,7 @@ impl<'de> Visitor<'de> for &mut Head {
 /// driver hands the core.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum Frame {
     /// A JSON-RPC message.
@@ -423,6 +424,7 @@ pub enum Frame {
 /// keys found there, whatever their values.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum Shape {
     /// It had `result` or `error`, and neither `method` nor `params`: an
@@ -439,6 +441,7 @@ pub enum Shape {
 /// raw JSON until the core knows what they are.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum Message {
     /// A request: a method with an id. The agent wants an answer.
@@ -448,6 +451,7 @@ pub enum Message {
         /// What it asks for, such as `session/request_permission`.
         method: String,
         /// Its params.
+        #[cfg_attr(feature = "ts", ts(as = "Option<serde_json::Value>"))]
         params: Option<Box<RawValue>>,
     },
     /// A notification: a method with no id, such as `session/update`.
@@ -455,6 +459,7 @@ pub enum Message {
         /// What it says.
         method: String,
         /// Its params.
+        #[cfg_attr(feature = "ts", ts(as = "Option<serde_json::Value>"))]
         params: Option<Box<RawValue>>,
     },
     /// An answer to one of CAF's requests: an id with no method.
@@ -465,6 +470,7 @@ pub enum Message {
         /// both. An answer with neither, or with an error that isn't a
         /// JSON-RPC error, is read as error -32603 (internal error), the
         /// broken error kept whole in its `data`.
+        #[cfg_attr(feature = "ts", ts(as = "Result<serde_json::Value, RpcError>"))]
         outcome: Result<Box<RawValue>, RpcError>,
     },
 }
@@ -473,6 +479,7 @@ pub enum Message {
 /// anything JSON-RPC allows.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum RequestId {
     /// A number.
@@ -485,12 +492,14 @@ pub enum RequestId {
 
 /// A JSON-RPC error.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RpcError {
     /// Its code, such as -32000 (sign-in needed) or -32800 (cancelled).
     pub code: i64,
     /// What it says.
     pub message: String,
     /// Anything else it carries, such as Claude's `errorKind`.
+    #[cfg_attr(feature = "ts", ts(as = "Option<serde_json::Value>"))]
     pub data: Option<Box<RawValue>>,
 }
 

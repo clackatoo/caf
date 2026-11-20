@@ -97,6 +97,8 @@ pub mod ids;
 pub mod profiles;
 pub mod question;
 pub mod time;
+#[cfg(feature = "ts")]
+mod ts;
 pub mod viewer;
 
 pub use crate::core::{Core, OpenChat, Refused, SessionChoice};

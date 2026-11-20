@@ -1,5 +1,6 @@
 # Checks every push and pull request: formatting, clippy (including
-# caf-core's no-I/O rule), the docs, and the tests.
+# caf-core's no-I/O rule), the docs, the tests, and the TypeScript caf-sdk
+# against the types generated from caf-core's.
 name: CI
 
 on:
@@ -48,8 +49,8 @@ jobs:
         with:
           shared-key: clippy
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo doc --workspace --no-deps --locked
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo doc --workspace --all-features --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -71,3 +72,21 @@ jobs:
       # rather than each building it.
       - run: cargo build -p caf-fake-agent --locked
       - run: cargo test --workspace --locked
+      # The TypeScript types in ts/sdk/src/types are current.
+      - run: cargo test -p caf-core --features ts --locked typescript_types
+
+  ts:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+      - run: npm ci
+      - run: npx tsc --noEmit
+        working-directory: ts/sdk

@@ -70,6 +70,7 @@ pub const VERSIONS: RangeInclusive<u32> = 1..=1;
 /// A message from a viewer to CAF.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum FromViewer {
     /// The first message: the versions the viewer speaks.
@@ -137,6 +138,8 @@ pub enum FromViewer {
 /// A message from CAF to a viewer.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(concrete(A = NoAppItems), bound = "A: ts_rs::TS"))]
 #[serde(tag = "type", content = "value")]
 #[serde(bound = "A: AppItem")]
 pub enum ToViewer<A: AppItem = NoAppItems> {
@@ -194,6 +197,7 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
 /// without watching every chat. Names and the like are the app's own.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ChatSummary {
     /// Its id.
     pub id: ChatId,
@@ -215,6 +219,7 @@ impl ChatSummary {
 /// A viewer's number for one of its requests, quoted back in
 /// [`ToViewer::Done`]. The viewer chooses them; CAF never reads them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestNo(pub u64);
 
 /// What a viewer asks for when it asks to open a chat. The host turns it
@@ -222,6 +227,7 @@ pub struct RequestNo(pub u64);
 /// its tools, or refuses.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct OpenRequest {
     /// One of the agents [`ToViewer::Welcome`] offered.
     pub agent: AgentName,
@@ -234,6 +240,7 @@ pub struct OpenRequest {
 /// How a viewer's request went.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum Outcome {
     /// The chat was opened, with this id. It's in the next
