@@ -3,6 +3,7 @@ import type {
   Answer,
   Chat,
   ChatId,
+  ChatSummary,
   OpenRequest,
   QuestionId,
   Refused,
@@ -78,12 +79,12 @@ export class Connection {
   }
 
   /** The open chats, in the order they were opened. */
-  get chats(): readonly ChatId[] {
+  get chats(): readonly ChatSummary[] {
     throw new Error("todo");
   }
 
   /** Calls `listener` with the open chats each time the list changes. Returns a function that stops it. */
-  onChats(listener: (chats: readonly ChatId[]) => void): () => void {
+  onChats(listener: (chats: readonly ChatSummary[]) => void): () => void {
     void listener;
     throw new Error("todo");
   }

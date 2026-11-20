@@ -40,6 +40,7 @@ use caf_core::directive::{Level, PolicyDirective, TimerDirective, ViewerDirectiv
 use caf_core::event::{AgentEvent, HostCommand, PolicyAnswer};
 use caf_core::ids::{AgentName, ChangeNo};
 use caf_core::question::Answer;
+use caf_core::viewer::ChatSummary;
 use caf_core::{
     AppItem, Chat, ChatId, Core, Directive, Event, Host, NoAppItems, Now, Numbered, OpenChat,
     QuestionId, Read, Refused, Report, Ticket, TurnId,
@@ -277,7 +278,7 @@ impl<A: AppItem> Caf<A> {
         todo!()
     }
 
-    /// Follows which chats are open.
+    /// Follows which chats are open, with each one's agent and folder.
     #[must_use]
     pub fn watch_chats(&self) -> ChatsWatch {
         todo!()
@@ -409,6 +410,15 @@ impl<A: AppItem> ChatHandle<A> {
             ended: false,
         }
     }
+
+    /// Watches the chat from a change the watcher already has, such as a
+    /// viewer reconnecting with its copy: the changes after `since` come
+    /// first, or the whole chat if CAF no longer has them all.
+    #[must_use]
+    pub fn watch_from(&self, since: ChangeNo) -> Watch<A> {
+        let _ = since;
+        todo!()
+    }
 }
 
 /// A watch on a chat.
@@ -449,7 +459,7 @@ impl ChatsWatch {
     /// is given.
     ///
     /// Cancel-safe: dropped before it resolves, it loses nothing.
-    pub async fn next(&mut self) -> Option<Vec<ChatId>> {
+    pub async fn next(&mut self) -> Option<Vec<ChatSummary>> {
         todo!()
     }
 }

@@ -40,6 +40,10 @@ pub struct ViewerRules {
     /// default refuses every request, so viewers can only watch chats the
     /// host opened.
     ///
+    /// It's called on the viewer's task, and should be quick: a host that
+    /// needs I/O to decide, such as asking its user, decides beforehand
+    /// (an allowed list of folders, say) or refuses.
+    ///
     /// [`Outcome::NotAllowed`]: caf_core::viewer::Outcome::NotAllowed
     pub open: Box<Opener>,
     /// Whether viewers may send, stop, answer and close. `true` by

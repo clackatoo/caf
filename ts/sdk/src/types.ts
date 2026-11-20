@@ -1,7 +1,9 @@
 // A hand-written stand-in for the types ts-rs will generate from caf-core,
 // for reviewing the API draft. Once built, `src/types/` is generated and
 // checked in, and CI fails if it's stale. It shows the shape the generated
-// types will have: every CAF enum is `{ type, value }`.
+// types will have: every CAF enum is `{ type, value }`. ts-rs emits the
+// generic ones (`Chat<A>`, `ToViewer<A>`…) as generics; the SDK exports
+// them with `A = never` until app items reach TypeScript.
 
 export type ChatId = number;
 export type TurnId = number;
@@ -146,10 +148,12 @@ export type FromViewer =
   | { type: "Answer"; value: { request: RequestNo; question: QuestionId; answer: Answer } }
   | { type: "Close"; value: { request: RequestNo; chat: ChatId } };
 
+export type ChatSummary = { id: ChatId; agent: AgentName; cwd: string };
+
 export type ToViewer =
-  | { type: "Welcome"; value: { version: number; agents: AgentName[]; chats: ChatId[] } }
+  | { type: "Welcome"; value: { version: number; agents: AgentName[]; chats: ChatSummary[] } }
   | { type: "NoCommonVersion"; value: { min: number; max: number } }
-  | { type: "Chats"; value: ChatId[] }
+  | { type: "Chats"; value: ChatSummary[] }
   | { type: "Picture"; value: { chat: Chat; latest: ChangeNo } }
   | { type: "Changes"; value: { chat: ChatId; changes: Numbered[] } }
   | { type: "Ended"; value: { chat: ChatId } }

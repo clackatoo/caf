@@ -144,8 +144,8 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
         version: u32,
         /// The agents a viewer may ask to open a chat with.
         agents: Vec<AgentName>,
-        /// The open chats.
-        chats: Vec<ChatId>,
+        /// The open chats, in the order they were opened.
+        chats: Vec<ChatSummary>,
     },
     /// No version in common: CAF ends the link after sending this.
     NoCommonVersion {
@@ -156,7 +156,7 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
     },
     /// The open chats changed, because a chat was opened or closed by any
     /// viewer or by the host. The whole list, each time.
-    Chats(Vec<ChatId>),
+    Chats(Vec<ChatSummary>),
     /// A watched chat, whole: the first answer to [`FromViewer::Watch`],
     /// and again whenever the viewer has fallen behind. It may come at any
     /// time, with any number: it replaces what the viewer had.
@@ -186,6 +186,28 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
         /// How it went.
         outcome: Outcome,
     },
+}
+
+/// An open chat, as the list of chats shows it: enough to draw the list
+/// without watching every chat. Names and the like are the app's own.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatSummary {
+    /// Its id.
+    pub id: ChatId,
+    /// The agent it's with.
+    pub agent: AgentName,
+    /// The folder the agent works in.
+    pub cwd: PathBuf,
+}
+
+impl ChatSummary {
+    /// A chat's summary.
+    #[must_use]
+    pub fn of<A: AppItem>(chat: &Chat<A>) -> Self {
+        let _ = chat;
+        todo!()
+    }
 }
 
 /// A viewer's number for one of its requests, quoted back in
