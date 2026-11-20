@@ -1,0 +1,9 @@
+{
+  // The tests: the app's settings, with Node's types, which only tests use.
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "types": ["svelte", "vite/client", "node"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.svelte", "test/**/*.ts"]
+}

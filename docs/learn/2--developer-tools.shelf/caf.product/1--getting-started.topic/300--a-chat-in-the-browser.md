@@ -258,3 +258,41 @@ Nothing CAF sends makes the SDK throw:
 
 A listener of the page's own that throws doesn't end the link. Its error is
 reported as uncaught, and the other listeners are still called.
+
+## A chat view to copy
+
+CAF's debugger draws its chats with a reference chat view, in Svelte, in
+`ts/debugger/src/chat/` of CAF's repository. It draws everything a chat
+holds: its state and why a session was lost, each turn with what started
+it and how it ended, words, thinking, tools, CAF's notes, items CAF
+couldn't read, the questions waiting, and how full the agent's memory is.
+It says each of CAF's reasons in CAF's words, and names one it doesn't know
+by its `type`.
+
+It's a pure renderer: give it a chat and the functions to call when the
+user acts, and it calls them. It never talks to CAF itself, so it doesn't
+care where the chat came from:
+
+```svelte
+<ChatView
+  {chat}
+  actions={{
+    send: (message) => caf.send(chat.id, message),
+    stop: () => caf.stop(chat.id),
+    answer: (question, answer) => caf.answer(question, answer),
+    sendAgain: (message) => caf.send(chat.id, structuredClone(message)),
+    close: () => caf.close(chat.id),
+  }}
+/>
+```
+
+It imports only the caf-sdk, Svelte and markdown-it, which a check in CI
+holds it to, so the folder can be lifted out whole. Copy it, or read it for
+what a good chat on CAF shows.
+
+The agent's words are untrusted: an agent may repeat a web page or a file,
+and HTML in it could script the page. So the view renders Markdown with
+HTML off, links only `http` and `https` addresses, opening each in a new tab
+with `rel="noopener noreferrer"`, and links to images rather than loading
+them. Whatever a page built on CAF draws the agent's words with, it should
+do the same.

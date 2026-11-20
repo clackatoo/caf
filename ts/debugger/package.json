@@ -1,0 +1,33 @@
+{
+  "name": "caf-debugger-app",
+  "version": "0.0.0",
+  "description": "CAF's debugger: the reference chat view, and an inspector of CAF's core.",
+  "license": "MIT OR Apache-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && svelte-check --tsconfig ./tsconfig.test.json && tsc -p tsconfig.node.json",
+    "check:imports": "node scripts/check-imports.mjs",
+    "test": "vitest run",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@clackatoo/caf": "*",
+    "markdown-it": "^15.0.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "@testing-library/svelte": "^5.4.2",
+    "@tsconfig/svelte": "^5.0.8",
+    "@types/node": "^24.19.2",
+    "jsdom": "^27.4.0",
+    "svelte": "^5.57.2",
+    "svelte-check": "^4.7.7",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.4",
+    "vitest": "^5.1.1"
+  }
+}

@@ -1,6 +1,7 @@
 # Checks every push and pull request: formatting, clippy (including
 # caf-core's no-I/O rule), the docs, the tests, and the TypeScript caf-sdk
-# against the types generated from caf-core's, with its own tests.
+# against the types generated from caf-core's, with its own tests, and
+# the debugger app.
 name: CI
 
 on:
@@ -113,3 +114,52 @@ jobs:
       # fixtures/apply.
       - run: npx vitest run
         working-directory: ts/sdk
+      # The debugger app: its types, the chat view's tests, the build, and
+      # the check that src/chat/ imports nothing of the app's.
+      - run: npm run check
+        working-directory: ts/debugger
+      - run: npm run check:imports
+        working-directory: ts/debugger
+      - run: npx vitest run
+        working-directory: ts/debugger
+      - run: npm run build
+        working-directory: ts/debugger
+
+  # The debugger app end to end, in headless Chromium, against caf-debugger:
+  # replaying the live 0.98.0 recording, and live with the fake agent.
+  e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: e2e
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build -p caf-debugger -p caf-fake-agent --locked
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+      - run: npm ci
+        working-directory: ts
+      - run: npx playwright install --with-deps chromium
+        working-directory: ts/debugger
+      - run: npm run build
+        working-directory: ts/debugger
+      - run: npm run e2e
+        working-directory: ts/debugger
+        env:
+          CAF_DEBUGGER: ${{ github.workspace }}/target/debug/caf-debugger
+          CAF_FAKE_AGENT_BIN: ${{ github.workspace }}/target/debug/caf-fake-agent
+      # Playwright keeps a failed test's trace: keep it past the run.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: playwright-traces
+          path: ts/debugger/test-results/
+          retention-days: 14
