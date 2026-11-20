@@ -1050,26 +1050,41 @@ impl<A: AppItem> Task<A> {
 
     /// Writes `event`, about to be given to the core at `now`, to the
     /// recording with its secrets hidden, and reads it back as it is for
-    /// the watcher, if there are either.
+    /// the watcher, if there are either. The watcher is also given the
+    /// line, if it went into the recording.
     ///
     /// A driver's event is written before the core takes it, so one the
     /// core panics on is in the recording. A host's call is written after,
     /// since the core gives it its id, such as a new chat's, and isn't
     /// written if the core panics on it.
-    fn keep(&mut self, now: Now, event: &Event<A>) -> Option<Recorded<A>> {
+    fn keep(&mut self, now: Now, event: &Event<A>) -> Option<Kept<A>> {
+        let watching = self.steps.is_some();
+        let mut written = None;
         if let Some(recorder) = (self.recorder.as_mut()).filter(|recorder| !recorder.stopped) {
             match line(now, event) {
-                Ok(line) => recorder.write(line),
+                Ok(line) => {
+                    let copy = watching.then(|| line.clone());
+                    recorder.write(line);
+                    // Not if that write stopped the recording.
+                    if !recorder.stopped {
+                        written = copy;
+                    }
+                }
                 Err(error) => recorder.stop(&format!("an event can't be written: {error}")),
             }
         }
-        self.steps.as_ref()?;
+        if !watching {
+            return None;
+        }
         // Read back, since an event can't be copied: so it's exactly what
         // the core was given, and a fresh core given it does the same.
         let watched = serde_json::to_string(&Line { now, event })
             .and_then(|line| serde_json::from_str(&line));
         match watched {
-            Ok(watched) => Some(watched),
+            Ok(recorded) => Some(Kept {
+                recorded,
+                line: written,
+            }),
             Err(error) => {
                 log::warn!(target: "caf", "a step can't be watched: its event doesn't read back: {error}");
                 None
@@ -1080,12 +1095,13 @@ impl<A: AppItem> Task<A> {
     /// Shows the watcher the step [`Task::keep`] read back, once the core
     /// has been given its event and before its directives are carried
     /// out.
-    fn kept(&mut self, recorded: Option<Recorded<A>>) {
-        if let (Some(steps), Some(Recorded { now, event })) = (&mut self.steps, recorded) {
+    fn kept(&mut self, kept: Option<Kept<A>>) {
+        if let (Some(steps), Some(Kept { recorded, line })) = (&mut self.steps, kept) {
             steps.step(Step {
-                now,
-                event: &event,
+                now: recorded.now,
+                event: &recorded.event,
                 directives: &self.out,
+                line: line.as_deref(),
             });
         }
     }
@@ -1335,6 +1351,13 @@ struct Header<'a> {
 struct Line<'a, A: AppItem> {
     now: Now,
     event: &'a Event<A>,
+}
+
+/// A step kept for the watcher: its event read back, and its line of the
+/// recording, if it went into one.
+struct Kept<A: AppItem> {
+    recorded: Recorded<A>,
+    line: Option<String>,
 }
 
 /// An event at the time it was given, read back from its JSON: a
