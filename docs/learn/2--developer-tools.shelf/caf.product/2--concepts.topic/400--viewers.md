@@ -23,8 +23,7 @@ MessagePack with field names; TypeScript sends them as JSON.
    wire it speaks. Anything else first ends the link.
 2. CAF answers **Welcome**, with the version both will speak, the agents a
    viewer may open chats with, the open chats, and which run of CAF this
-   is. If there's no version in
-   common, it says so and ends the link.
+   is. If there's no version in common, it says so and ends the link.
 3. The viewer **watches** chats. For each, it gets the chat whole, then its
    changes as they happen.
 4. It may act on them: send a message, stop a turn, answer a question, close

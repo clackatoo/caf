@@ -487,6 +487,10 @@ impl<A: AppItem> Core<A> {
     /// release. Apps never use it; what they need is in [`Core::chat`],
     /// [`Core::read`] and [`Core::connections`].
     ///
+    /// It holds secrets, such as the values of MCP servers' variables and
+    /// headers, and of agents' environment variables: treat it as private,
+    /// and never write it out as it is.
+    ///
     /// Readings of the steady clock ([`Mono`](crate::time::Mono)) are
     /// nanoseconds, and pass 2^53 after about 104 days of the host running,
     /// so a JavaScript reader may round them.
