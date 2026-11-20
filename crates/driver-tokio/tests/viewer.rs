@@ -5,6 +5,7 @@ mod common;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use caf_core::agent::AgentStatus;
 use caf_core::change::{Change, Numbered};
 use caf_core::chat::{ChatState, ItemKind, Lost, TurnLife, UserMessage};
 use caf_core::ids::{AgentName, ChangeNo, ChatId, QuestionId};
@@ -26,6 +27,9 @@ struct Viewer {
     served: JoinHandle<()>,
     /// What [`Viewer::done`] read past, for [`Viewer::next`] to give.
     skipped: VecDeque<ToViewer>,
+    /// Agents' statuses heard after the welcome's: the readers pass over
+    /// them, as they come whenever a status changes.
+    statuses: VecDeque<Vec<AgentStatus>>,
 }
 
 impl Viewer {
@@ -39,6 +43,7 @@ impl Viewer {
             from,
             served,
             skipped: VecDeque::new(),
+            statuses: VecDeque::new(),
         }
     }
 
@@ -58,6 +63,16 @@ impl Viewer {
                 run,
             }) => {
                 assert_eq!(run, caf.run(), "the viewer hears CAF's run");
+                // Every agent's status comes next, at once.
+                match viewer.from.recv().await {
+                    Some(ToViewer::Agents(statuses)) => {
+                        let names: Vec<AgentName> =
+                            statuses.iter().map(|status| status.name.clone()).collect();
+                        assert_eq!(names, agents, "every agent's status, in order");
+                        viewer.statuses.push_back(statuses);
+                    }
+                    other => panic!("the agents' statuses after the welcome, not {other:?}"),
+                }
                 (viewer, agents, chats)
             }
             other => panic!("a welcome, not {other:?}"),
@@ -79,11 +94,22 @@ impl Viewer {
         assert!(taken.is_ok(), "serve takes what it's sent");
     }
 
-    /// The next message, or `None` once the link has ended.
+    /// The next message other than agents' statuses, or `None` once the
+    /// link has ended.
     async fn next(&mut self) -> Option<ToViewer> {
         if let Some(skipped) = self.skipped.pop_front() {
             return Some(skipped);
         }
+        loop {
+            match self.received().await {
+                Some(ToViewer::Agents(statuses)) => self.statuses.push_back(statuses),
+                other => return other,
+            }
+        }
+    }
+
+    /// The next message on the link.
+    async fn received(&mut self) -> Option<ToViewer> {
         tokio::time::timeout(PATIENCE, self.from.recv())
             .await
             .expect("a message, or the link's end, in good time")
@@ -155,6 +181,7 @@ impl Viewer {
                         | ToViewer::Picture { .. }
                         | ToViewer::Changes { .. }
                         | ToViewer::Chats(_)
+                        | ToViewer::Agents(_)
                 ),
                 "only what was on its way before the end, not {message:?}"
             );

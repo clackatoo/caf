@@ -4,9 +4,10 @@
 //! # How it works
 //!
 //! [`Caf::start`] spawns one task that owns the [`Core`], the
-//! [`AgentDriver`], the [`TimerDriver`] and the [`Policy`]. Handles talk to
-//! it through a queue, and it waits on four things at once: a handle's
-//! command, an adapter's event, the timer, and a policy's answer. Each
+//! [`AgentDriver`], the [`TimerDriver`], the [`SetupDriver`] and the
+//! [`Policy`]. Handles talk to it through a queue, and it waits on five
+//! things at once: a handle's command, an adapter's event, the timer, the
+//! setup driver's report, and a policy's answer. Each
 //! goes into the core with the time from [`TimerDriver::now`], and every
 //! directive that comes out goes to its driver:
 //!
@@ -17,10 +18,18 @@
 //! | `Policy(Decide)` | [`Policy::decide`], whose future runs as a task of its own; its answer comes back as [`Event::Policy`] |
 //! | `Policy(Withdrawn)` | Stops that decision's task. An answer it gave already is still handed in, and the core ignores it |
 //! | `Viewer(Changed)` | Wakes the chat's watches, which read with [`Core::read`] |
+//! | `Setup` | [`SetupDriver::apply`]; its reports come back as [`Event::Setup`] |
 //! | `Report` | The [`log`] facade, target `caf` |
 //!
 //! A [`Steps`] given to [`Caf::start_watching`] sees each event once the
 //! core has it, with its directives, before they go to their drivers.
+//!
+//! As it starts, before the task runs, CAF calls [`Core::check_agents`],
+//! recorded as [`HostCommand::CheckAgents`], so the setup driver's survey
+//! is under way by the time anything else happens. After each event, the
+//! [`AgentsWatch`]es are told if any agent's status changed: they read
+//! [`Core::agents`] through a `watch` channel, so a slow one only ever
+//! misses statuses that were replaced.
 //!
 //! Watches pull rather than being pushed to: a watch asks for what
 //! changed since it last read, so the only changes held for it are the
@@ -58,6 +67,7 @@ use tokio::task::{AbortHandle, JoinHandle, JoinSet};
 
 use crate::agent::{AgentDriver, AgentLimits};
 use crate::policy::{AlwaysAsk, Policy};
+use crate::setup::SetupDriver;
 use crate::steps::{Step, Steps};
 use crate::timer::TimerDriver;
 
@@ -178,6 +188,8 @@ struct Common<A: AppItem> {
     agents: Arc<[AgentName]>,
     /// The open chats, in the order they were opened.
     chats: watch::Receiver<Vec<ChatSummary>>,
+    /// Where every agent stands, in the order they were offered.
+    statuses: watch::Receiver<Vec<AgentStatus>>,
     /// See [`Caf::run`].
     run: Arc<str>,
 }
@@ -189,6 +201,7 @@ impl<A: AppItem> Clone for Common<A> {
             ended: self.ended.clone(),
             agents: Arc::clone(&self.agents),
             chats: self.chats.clone(),
+            statuses: self.statuses.clone(),
             run: Arc::clone(&self.run),
         }
     }
@@ -226,6 +239,14 @@ impl<A: AppItem> WeakCaf<A> {
     pub(crate) fn watch_chats(&self) -> ChatsWatch {
         ChatsWatch {
             list: self.shared.chats.clone(),
+            first: true,
+        }
+    }
+
+    /// See [`Caf::watch_agents`].
+    pub(crate) fn watch_agents(&self) -> AgentsWatch {
+        AgentsWatch {
+            list: self.shared.statuses.clone(),
             first: true,
         }
     }
@@ -372,10 +393,25 @@ impl<A: AppItem> Caf<A> {
             .map(|agent| agent.name.clone())
             .collect();
         let (open, chats) = watch::channel(Vec::new());
-        let task = Task {
-            core: Core::new(config.host, config.agents),
+        let root = config
+            .installs
+            .or_else(SetupDriver::default_root)
+            .unwrap_or_else(|| {
+                let root = std::env::temp_dir().join("caf/agents");
+                log::warn!(
+                    target: "caf",
+                    "there's no home folder for installs: using {}, which may not last",
+                    root.display()
+                );
+                root
+            });
+        let core = Core::new(config.host, config.agents);
+        let (told, statuses) = watch::channel(core.agents());
+        let mut task = Task {
+            core,
             agents: AgentDriver::new(config.agent_limits),
             timers: TimerDriver::new(),
+            setup: SetupDriver::new(root),
             policy: config.policy,
             deciding: JoinSet::new(),
             tickets: HashMap::new(),
@@ -386,6 +422,7 @@ impl<A: AppItem> Caf<A> {
             recorder,
             steps,
             open,
+            statuses: told,
             inbox,
             listening: true,
             reads: reading,
@@ -394,6 +431,7 @@ impl<A: AppItem> Caf<A> {
             waiting: Vec::new(),
             out: Vec::new(),
         };
+        task.check_agents();
         let task = tokio::spawn(task.run());
         let caf = Self {
             commands,
@@ -403,6 +441,7 @@ impl<A: AppItem> Caf<A> {
                 ended,
                 agents,
                 chats,
+                statuses,
                 run: new_run().into(),
             },
         };
@@ -428,7 +467,7 @@ impl<A: AppItem> Caf<A> {
     /// changes. CAF looks at what's installed as it starts.
     #[must_use]
     pub fn watch_agents(&self) -> AgentsWatch {
-        todo!()
+        self.downgrade().watch_agents()
     }
 
     /// Looks again at what's installed and what the machine has, such as
@@ -440,7 +479,7 @@ impl<A: AppItem> Caf<A> {
     ///
     /// [`Core::check_agents`]: caf_core::Core::check_agents
     pub async fn check_agents(&self) -> Result<(), Error> {
-        todo!()
+        self.ask(|reply| Command::CheckAgents { reply }).await
     }
 
     /// Installs an agent. See [`Core::install`]; progress shows in
@@ -452,8 +491,7 @@ impl<A: AppItem> Caf<A> {
     ///
     /// [`Core::install`]: caf_core::Core::install
     pub async fn install(&self, agent: &AgentName) -> Result<(), Error> {
-        let _ = agent;
-        todo!()
+        self.about(agent, AgentCall::Install).await
     }
 
     /// Stops installing an agent. See [`Core::stop_install`].
@@ -464,8 +502,7 @@ impl<A: AppItem> Caf<A> {
     ///
     /// [`Core::stop_install`]: caf_core::Core::stop_install
     pub async fn stop_install(&self, agent: &AgentName) -> Result<(), Error> {
-        let _ = agent;
-        todo!()
+        self.about(agent, AgentCall::StopInstall).await
     }
 
     /// Starts signing in to an agent. See [`Core::sign_in`]; the link to
@@ -477,8 +514,7 @@ impl<A: AppItem> Caf<A> {
     ///
     /// [`Core::sign_in`]: caf_core::Core::sign_in
     pub async fn sign_in(&self, agent: &AgentName) -> Result<(), Error> {
-        let _ = agent;
-        todo!()
+        self.about(agent, AgentCall::SignIn).await
     }
 
     /// Gives a sign-in what the user pasted. See [`Core::paste`].
@@ -489,8 +525,13 @@ impl<A: AppItem> Caf<A> {
     ///
     /// [`Core::paste`]: caf_core::Core::paste
     pub async fn paste(&self, agent: &AgentName, text: String) -> Result<(), Error> {
-        let _ = (agent, text);
-        todo!()
+        self.about(agent, AgentCall::Paste(text)).await
+    }
+
+    /// Asks the task to do `call` about `agent`.
+    async fn about(&self, agent: &AgentName, call: AgentCall) -> Result<(), Error> {
+        let agent = agent.clone();
+        (self.ask(|reply| Command::Agent { agent, call, reply })).await
     }
 
     /// Stops a sign-in. See [`Core::stop_sign_in`].
@@ -501,8 +542,7 @@ impl<A: AppItem> Caf<A> {
     ///
     /// [`Core::stop_sign_in`]: caf_core::Core::stop_sign_in
     pub async fn stop_sign_in(&self, agent: &AgentName) -> Result<(), Error> {
-        let _ = agent;
-        todo!()
+        self.about(agent, AgentCall::StopSignIn).await
     }
 
     /// Signs out of an agent. See [`Core::sign_out`].
@@ -513,8 +553,7 @@ impl<A: AppItem> Caf<A> {
     ///
     /// [`Core::sign_out`]: caf_core::Core::sign_out
     pub async fn sign_out(&self, agent: &AgentName) -> Result<(), Error> {
-        let _ = agent;
-        todo!()
+        self.about(agent, AgentCall::SignOut).await
     }
 
     /// Follows which chats are open, with each one's agent and folder.
@@ -706,7 +745,9 @@ impl<A: AppItem> Drop for Watch<A> {
 /// Follows where every agent stands. Like [`Watch`], it doesn't keep CAF
 /// running.
 pub struct AgentsWatch {
-    _todo: (),
+    list: watch::Receiver<Vec<AgentStatus>>,
+    /// It hasn't given the list yet.
+    first: bool,
 }
 
 impl AgentsWatch {
@@ -717,7 +758,14 @@ impl AgentsWatch {
     ///
     /// Cancel-safe: dropped before it resolves, it loses nothing.
     pub async fn next(&mut self) -> Option<Vec<AgentStatus>> {
-        todo!()
+        if self.first {
+            // The task drops the list's sender as it ends.
+            self.list.has_changed().ok()?;
+            self.first = false;
+        } else {
+            self.list.changed().await.ok()?;
+        }
+        Some(self.list.borrow_and_update().clone())
     }
 }
 
@@ -891,6 +939,24 @@ enum Command {
     Shutdown {
         reply: oneshot::Sender<()>,
     },
+    CheckAgents {
+        reply: oneshot::Sender<Result<(), Refused>>,
+    },
+    Agent {
+        agent: AgentName,
+        call: AgentCall,
+        reply: oneshot::Sender<Result<(), Refused>>,
+    },
+}
+
+/// Something a handle asks the task to do about an agent.
+enum AgentCall {
+    Install,
+    StopInstall,
+    SignIn,
+    Paste(String),
+    StopSignIn,
+    SignOut,
 }
 
 /// A watch's read: what changed in `chat` since `since`, and a way to
@@ -959,6 +1025,7 @@ struct Task<A: AppItem> {
     core: Core<A>,
     agents: AgentDriver,
     timers: TimerDriver,
+    setup: SetupDriver,
     policy: Box<dyn Policy>,
     /// The policy's decisions under way.
     deciding: JoinSet<PolicyAnswer>,
@@ -976,6 +1043,9 @@ struct Task<A: AppItem> {
     steps: Option<Box<dyn Steps<A>>>,
     /// The open chats, for [`ChatsWatch`]es. Dropped as the task ends.
     open: watch::Sender<Vec<ChatSummary>>,
+    /// Every agent's status, for [`AgentsWatch`]es. Dropped as the task
+    /// ends.
+    statuses: watch::Sender<Vec<AgentStatus>>,
     inbox: mpsc::Receiver<Command>,
     /// Whether any handle is left to send commands.
     listening: bool,
@@ -1011,6 +1081,7 @@ impl<A: AppItem> Task<A> {
                     }
                 },
                 (process, event) = self.agents.next() => self.give(Event::Agent { process, event }),
+                (ticket, event) = self.setup.next() => self.give(Event::Setup { ticket, event }),
                 () = self.timers.woken() => self.give(Event::Woken),
                 Some(decided) = self.deciding.join_next_with_id() => self.decided(decided),
             }
@@ -1118,6 +1189,65 @@ impl<A: AppItem> Task<A> {
                 }
                 let _ = reply.send(result);
             }
+            Command::CheckAgents { reply } => {
+                self.check_agents();
+                let _ = reply.send(Ok(()));
+            }
+            Command::Agent { agent, call, reply } => {
+                let result = self.agent(&agent, call);
+                let _ = reply.send(result);
+            }
+        }
+    }
+
+    /// Looks at what's installed and what the machine has.
+    fn check_agents(&mut self) {
+        self.host(
+            |core, now, out| {
+                core.check_agents(now, out);
+                Ok(())
+            },
+            |()| Some(HostCommand::CheckAgents),
+        )
+        .unwrap_or_default();
+    }
+
+    /// Does `call` about `agent`.
+    fn agent(&mut self, agent: &AgentName, call: AgentCall) -> Result<(), Refused> {
+        let named = || agent.clone();
+        match call {
+            AgentCall::Install => self.host(
+                |core, now, out| core.install(now, agent, out),
+                |()| Some(HostCommand::Install(named())),
+            ),
+            AgentCall::StopInstall => self.host(
+                |core, now, out| core.stop_install(now, agent, out),
+                |()| Some(HostCommand::StopInstall(named())),
+            ),
+            AgentCall::SignIn => self.host(
+                |core, now, out| core.sign_in(now, agent, out),
+                |()| Some(HostCommand::SignIn(named())),
+            ),
+            AgentCall::Paste(text) => {
+                let recorded = self.keeping().then(|| text.clone());
+                self.host(
+                    |core, now, out| core.paste(now, agent, text, out),
+                    |()| {
+                        recorded.map(|text| HostCommand::Paste {
+                            agent: named(),
+                            text,
+                        })
+                    },
+                )
+            }
+            AgentCall::StopSignIn => self.host(
+                |core, now, out| core.stop_sign_in(now, agent, out),
+                |()| Some(HostCommand::StopSignIn(named())),
+            ),
+            AgentCall::SignOut => self.host(
+                |core, now, out| core.sign_out(now, agent, out),
+                |()| Some(HostCommand::SignOut(named())),
+            ),
         }
     }
 
@@ -1343,12 +1473,27 @@ impl<A: AppItem> Task<A> {
                         self.feeds.remove(&chat);
                     }
                 }
+                Directive::Setup(setup) => self.setup.apply(setup),
                 Directive::Report(report) => log_report(&report),
                 // Storage comes in a later feature, and none are made yet.
                 _ => {}
             }
         }
         self.out = out;
+        self.tell_agents();
+    }
+
+    /// Tells the [`AgentsWatch`]es where every agent stands, if that
+    /// changed.
+    fn tell_agents(&self) {
+        let now = self.core.agents();
+        self.statuses.send_if_modified(|was| {
+            let changed = *was != now;
+            if changed {
+                *was = now;
+            }
+            changed
+        });
     }
 
     /// Whether `chat` is closed, or was never there.
