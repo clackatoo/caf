@@ -32,12 +32,16 @@ subtle = "2.6"
 # fs: the app's files and the recording. signal: Ctrl-C shuts CAF down,
 # so the recording is complete.
 tokio = { workspace = true, features = ["fs", "net", "rt-multi-thread", "signal"] }
+# axum's WebSocket errors, told apart: one too big, or breaking the
+# protocol, is closed with its code. The version axum uses.
+tungstenite = { version = "0.29", default-features = false }
 # agents.toml.
 toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }
 # The inspector channel's TypeScript types, behind the feature `ts`.
 ts-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 # A real WebSocket client, for the HTTP-level tests.
 tokio-tungstenite = "0.29"
 

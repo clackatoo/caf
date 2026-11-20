@@ -163,6 +163,7 @@ dependencies = [
  "caf-core",
  "caf-driver-tokio",
  "caf-fake-agent",
+ "futures-util",
  "getrandom",
  "log",
  "serde",
@@ -172,6 +173,7 @@ dependencies = [
  "tokio-tungstenite",
  "toml",
  "ts-rs",
+ "tungstenite",
 ]
 
 [[package]]

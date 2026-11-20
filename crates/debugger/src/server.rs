@@ -253,8 +253,21 @@ fn read<T: for<'de> Deserialize<'de>>(incoming: Option<Result<Message, axum::Err
             Read::Bad(close_code::UNSUPPORTED, "messages are JSON text")
         }
         Some(Ok(Message::Ping(_) | Message::Pong(_))) => Read::Skip,
-        // Too big, or broken: the socket has failed.
-        Some(Ok(Message::Close(_)) | Err(_)) | None => Read::Closed,
+        Some(Err(error)) => failed(error),
+        Some(Ok(Message::Close(_))) | None => Read::Closed,
+    }
+}
+
+/// Why reading failed: a message too big, or one breaking the protocol,
+/// is said so in the close; otherwise the connection has gone.
+fn failed<T>(error: axum::Error) -> Read<T> {
+    let error = error.into_inner();
+    match error.downcast_ref::<tungstenite::Error>() {
+        Some(tungstenite::Error::Capacity(_)) => Read::Bad(close_code::SIZE, "a message too big"),
+        Some(tungstenite::Error::Protocol(_) | tungstenite::Error::Utf8(_)) => {
+            Read::Bad(close_code::PROTOCOL, "not WebSocket")
+        }
+        _ => Read::Closed,
     }
 }
 
