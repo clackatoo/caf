@@ -1,6 +1,6 @@
 # Checks every push and pull request: formatting, clippy (including
 # caf-core's no-I/O rule), the docs, the tests, and the TypeScript caf-sdk
-# against the types generated from caf-core's.
+# against the types generated from caf-core's, with its own tests.
 name: CI
 
 on:
@@ -103,4 +103,8 @@ jobs:
           node-version: "24"
       - run: npm ci
       - run: npx tsc --noEmit
+        working-directory: ts/sdk
+      # apply, ChatCopy and Connection, and the conformance fixtures in
+      # fixtures/apply.
+      - run: npx vitest run
         working-directory: ts/sdk
