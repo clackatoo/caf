@@ -23,3 +23,9 @@ caf-core and checked in. After changing a type CAF serialises,
 regenerate them with
 `CAF_BLESS=1 cargo test -p caf-core --features ts typescript_types`;
 CI fails while they're stale.
+
+The conformance fixtures in `fixtures/apply/` (each chat in the core's
+tests, change by change, which every SDK's `apply` must follow) are
+written by the core's test harness. After changing what the core
+records, regenerate them with `CAF_BLESS=1 cargo test -p caf-core`; the
+tests fail while any is stale, missing or extra.

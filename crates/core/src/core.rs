@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use self::record::Log;
 use self::state::{Ask, Conn, Ids, Pending, Proc, Run};
 use crate::agent::{AgentSpec, McpServer};
-use crate::change::Read;
+use crate::change::{Mismatch, Read};
 use crate::chat::{AppItem, Chat, NoAppItems, UserMessage};
 use crate::directive::{Directive, Level, Report};
 use crate::event::{Event, HostCommand};
@@ -78,6 +78,12 @@ pub struct Core<A: AppItem = NoAppItems> {
     /// The host asked for everything to stop: nothing is started again
     /// until it asks for something new.
     shutting_down: bool,
+    /// Changes that didn't fit their chat's record since the call began:
+    /// bugs, reported when it ends.
+    misfits: Vec<(ChatId, Mismatch)>,
+    /// What tests saw of each chat's record, change by change.
+    #[cfg(test)]
+    applied: BTreeMap<ChatId, record::Applied<A>>,
 }
 
 /// What to open a chat with.
@@ -204,6 +210,9 @@ impl<A: AppItem> Core<A> {
             wake: None,
             dirty: BTreeSet::new(),
             shutting_down: false,
+            misfits: Vec::new(),
+            #[cfg(test)]
+            applied: BTreeMap::new(),
         }
     }
 
@@ -434,6 +443,16 @@ impl<A: AppItem> Core<A> {
     /// when to wake the core next.
     fn finish(&mut self, now: Now, out: &mut Vec<Directive>) {
         self.advance_all(now, out);
+        for (chat, mismatch) in std::mem::take(&mut self.misfits) {
+            report(
+                out,
+                Level::Warn,
+                format!(
+                    "a bug in CAF: a change to chat {} didn't fit its record, and was dropped: {mismatch:?}",
+                    chat.0
+                ),
+            );
+        }
         for chat in std::mem::take(&mut self.dirty) {
             if let Some(log) = self.logs.get(&chat) {
                 out.push(Directive::Viewer(
@@ -464,21 +483,15 @@ impl<A: AppItem> Core<A> {
     /// Readings of the steady clock ([`Mono`](crate::time::Mono)) are
     /// nanoseconds, and pass 2^53 after about 104 days of the host running,
     /// so a JavaScript reader may round them.
-    #[cfg(feature = "inspect")]
+    #[cfg(any(test, feature = "inspect"))]
     #[must_use]
     pub fn inspect(&self) -> serde_json::Value {
-        todo!()
-    }
-
-    /// A snapshot of everything the core keeps, as JSON: what tests and
-    /// recorded traces check.
-    #[cfg(test)]
-    pub(crate) fn snapshot(&self) -> serde_json::Value {
         let pending: Vec<_> = (self.pending.iter())
             .map(|((proc, id), pending)| serde_json::json!({ "proc": proc, "id": id, "pending": pending }))
             .collect();
         serde_json::json!({
             "chats": self.chats.values().collect::<Vec<_>>(),
+            "logs": self.logs,
             "runs": self.runs,
             "conns": self.conns,
             "procs": self.procs,

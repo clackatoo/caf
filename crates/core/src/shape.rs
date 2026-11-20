@@ -1,6 +1,7 @@
 //! Tests of the one shape every CAF type is written in (see the crate
 //! docs): one of every type, written and read back through JSON and
-//! through MessagePack in named mode, and the exact shape of some.
+//! through MessagePack in named mode, and the exact shape of some. Its
+//! sample values are other tests' too.
 
 use std::fmt::Debug;
 
@@ -155,18 +156,18 @@ fn raw(json: &str) -> Box<RawValue> {
     RawValue::from_string(json.to_owned()).expect("JSON")
 }
 
-fn now() -> Now {
+pub(crate) fn now() -> Now {
     Now {
         wall: Wall(1_800_000_000_000),
         mono: Mono(5_000_000),
     }
 }
 
-fn message() -> UserMessage {
+pub(crate) fn message() -> UserMessage {
     UserMessage::text("hi")
 }
 
-fn tool() -> ToolCall {
+pub(crate) fn tool() -> ToolCall {
     ToolCall {
         title: "Read lib.rs".into(),
         kind: ToolKind::Read,
@@ -177,7 +178,7 @@ fn tool() -> ToolCall {
     }
 }
 
-fn item() -> Item {
+pub(crate) fn item() -> Item {
     Item {
         id: ItemId(3),
         window: Window::instant(now()),
@@ -186,7 +187,7 @@ fn item() -> Item {
     }
 }
 
-fn turn() -> Turn {
+pub(crate) fn turn() -> Turn {
     Turn {
         id: TurnId(2),
         starter: Starter::User(message()),
@@ -197,7 +198,7 @@ fn turn() -> Turn {
     }
 }
 
-fn question() -> Question {
+pub(crate) fn question() -> Question {
     Question {
         id: QuestionId(4),
         window: Window::open(now()),
@@ -213,7 +214,7 @@ fn question() -> Question {
     }
 }
 
-fn usage() -> Usage {
+pub(crate) fn usage() -> Usage {
     Usage {
         used: 5000,
         size: 200_000,
@@ -224,7 +225,7 @@ fn usage() -> Usage {
     }
 }
 
-fn chat() -> Chat {
+pub(crate) fn chat() -> Chat {
     Chat {
         id: ChatId(1),
         agent: AgentName("claude".into()),

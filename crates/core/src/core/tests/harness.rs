@@ -1,12 +1,12 @@
 //! The scripted-event harness every core test runs on.
 //!
 //! A test is a script: events at times in, and the directives they give
-//! out, rendered as JSON, plus a JSON snapshot of the core's state. JSON,
-//! because recorded traces are JSON: every event a script gives the core
-//! is recorded as JSON, and [`Script::replay`] feeds the recording to a
-//! fresh core through [`Core::handle`], which must give the same
-//! directives and end in the same state. That's how a bug becomes a
-//! recorded trace.
+//! out, rendered as JSON, plus the core's whole state
+//! ([`Core::inspect`]). JSON, because recorded traces are JSON: every
+//! event a script gives the core is recorded as JSON, and
+//! [`Script::replay`] feeds the recording to a fresh core through
+//! [`Core::handle`], which must give the same directives and end in the
+//! same state. That's how a bug becomes a recorded trace.
 //!
 //! Ids start at 1000, and the clock is always given in: `at` sets it in
 //! milliseconds since the script started.
@@ -17,13 +17,15 @@
 //!   have the timer driver wake it over and over;
 //! - no request of the agent's is answered twice, and by the end each is
 //!   answered once, unless its process went before it could be;
-//! - its recording replays to the same directives and state.
+//! - its recording replays to the same directives and state;
+//! - its chats' conformance fixtures are current (see [`fixtures`]).
 
 use std::collections::BTreeMap;
 
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
+use super::fixtures;
 use crate::acp::{Frame, Message, RequestId, RpcError};
 use crate::agent::{AgentSpec, SpawnCommand};
 use crate::chat::UserMessage;
@@ -321,7 +323,7 @@ impl Script {
 
     /// The core's state, as JSON.
     pub(crate) fn state(&self) -> Value {
-        self.core.snapshot()
+        self.core.inspect()
     }
 
     /// A chat's state, as JSON.
@@ -345,7 +347,7 @@ impl Script {
             assert_eq!(&got, expected, "step {step} of the replay, {json}");
         }
         assert_eq!(
-            core.snapshot(),
+            core.inspect(),
             self.state(),
             "the replay ends in the same state"
         );
@@ -399,6 +401,7 @@ impl Drop for Script {
         if !std::thread::panicking() {
             self.check_answers();
             self.replay();
+            fixtures::check(&self.core.applied);
         }
     }
 }

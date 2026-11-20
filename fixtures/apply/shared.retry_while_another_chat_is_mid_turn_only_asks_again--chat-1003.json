@@ -1,0 +1,5 @@
+{"picture":{"chat":{"id":1003,"agent":"claude","cwd":"/elsewhere","state":{"type":"Opening"},"turns":[],"usage":null,"questions":[]},"latest":999},"steps":[
+{"change":{"no":1000,"change":{"type":"QuestionAsked","value":{"id":1005,"window":{"start":1800000030000,"end":{"type":"Open"}},"kind":{"type":"SlowToOpen","value":{"adapter_answered":true}}}}},"chat":{"id":1003,"agent":"claude","cwd":"/elsewhere","state":{"type":"Opening"},"turns":[],"usage":null,"questions":[{"id":1005,"window":{"start":1800000030000,"end":{"type":"Open"}},"kind":{"type":"SlowToOpen","value":{"adapter_answered":true}}}]}},
+{"change":{"no":1001,"change":{"type":"QuestionGone","value":1005}},"chat":{"id":1003,"agent":"claude","cwd":"/elsewhere","state":{"type":"Opening"},"turns":[],"usage":null,"questions":[]}},
+{"change":{"no":1002,"change":{"type":"State","value":{"type":"Open","value":{"session":"sess-2"}}}},"chat":{"id":1003,"agent":"claude","cwd":"/elsewhere","state":{"type":"Open","value":{"session":"sess-2"}},"turns":[],"usage":null,"questions":[]}}
+]}

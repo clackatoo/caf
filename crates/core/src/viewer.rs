@@ -277,20 +277,19 @@ impl<A: AppItem> ChatCopy<A> {
     /// A copy of a chat sent whole, as in [`ToViewer::Picture`].
     #[must_use]
     pub fn new(chat: Chat<A>, latest: ChangeNo) -> Self {
-        let _ = (chat, latest);
-        todo!()
+        Self { chat, latest }
     }
 
     /// The chat, as far as the copy has read.
     #[must_use]
     pub fn chat(&self) -> &Chat<A> {
-        todo!()
+        &self.chat
     }
 
     /// The last change the copy has.
     #[must_use]
     pub fn latest(&self) -> ChangeNo {
-        todo!()
+        self.latest
     }
 
     /// Applies changes, oldest first, as in [`ToViewer::Changes`].
@@ -303,7 +302,19 @@ impl<A: AppItem> ChatCopy<A> {
     /// changes it applied before then, and is behind: ask for the chat
     /// whole again.
     pub fn take(&mut self, changes: &[Numbered<A>]) -> Result<(), NeedPicture> {
-        let _ = changes;
-        todo!()
+        for each in changes {
+            if each.no <= self.latest {
+                continue;
+            }
+            if each.no.0 != self.latest.0 + 1 {
+                return Err(NeedPicture);
+            }
+            self.chat.apply(&each.change).map_err(|_| NeedPicture)?;
+            self.latest = each.no;
+        }
+        Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -4,6 +4,7 @@
 
 use serde_json::json;
 
+use super::fixtures;
 use super::harness::{Script, assert_has, host, render, with, writes};
 use super::stop::permission;
 use super::{CHAT, PROC, SESSION};
@@ -145,8 +146,9 @@ fn a_live_claude_run_replays_to_its_end() {
             .count(),
         3
     );
+    fixtures::check(&core.applied);
     // The same recording replays the same way again.
     let (again, outs_again) = replay_recording(CLAUDE_LIVE);
     assert_eq!(outs_again, outs);
-    assert_eq!(again.snapshot(), core.snapshot());
+    assert_eq!(again.inspect(), core.inspect());
 }

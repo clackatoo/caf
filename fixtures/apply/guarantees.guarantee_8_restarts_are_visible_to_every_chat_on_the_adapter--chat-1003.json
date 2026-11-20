@@ -1,0 +1,4 @@
+{"picture":{"chat":{"id":1003,"agent":"claude","cwd":"/elsewhere","state":{"type":"Opening"},"turns":[],"usage":null,"questions":[]},"latest":999},"steps":[
+{"change":{"no":1000,"change":{"type":"State","value":{"type":"Open","value":{"session":"sess-2"}}}},"chat":{"id":1003,"agent":"claude","cwd":"/elsewhere","state":{"type":"Open","value":{"session":"sess-2"}},"turns":[],"usage":null,"questions":[]}},
+{"change":{"no":1001,"change":{"type":"State","value":{"type":"Lost","value":{"reason":{"type":"Restarted"}}}}},"chat":{"id":1003,"agent":"claude","cwd":"/elsewhere","state":{"type":"Lost","value":{"reason":{"type":"Restarted"}}},"turns":[],"usage":null,"questions":[]}}
+]}
