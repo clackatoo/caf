@@ -2,6 +2,11 @@
 
 /**
  * A message from the app to the server.
+ *
+ * Every `StateAt` is answered with one `State`, in the order asked, even
+ * when several wait together. Of the moves (`Seek` and `Follow`) waiting
+ * together when the server gets to them, only the last is answered,
+ * before the states.
  */
 export type FromInspector = { "type": "Seek", "value": { 
 /**

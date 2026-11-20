@@ -507,7 +507,7 @@ async fn a_big_recording_downloads_whole_as_it_is_read() {
 }
 
 #[tokio::test]
-async fn seeks_waiting_together_are_answered_once_for_the_last() {
+async fn of_seeks_waiting_together_only_the_last_is_answered_but_every_state_is() {
     let server = Server::start(|_| {}).await;
     let mut socket = server.inspector().await;
     // Hello, Steps, Position, and the Past at the end, the Picture last.
@@ -518,24 +518,36 @@ async fn seeks_waiting_together_are_answered_once_for_the_last() {
             break;
         }
     }
-    // A drag across the timeline, with the state asked for at each step.
+    // A drag across the timeline, with the state asked for at each step,
+    // and twice at the last, as the State tab asks for a step and the one
+    // before it.
     for step in 1..=60 {
         let seek = serde_json::to_string(&FromInspector::Seek { step }).unwrap();
         let state = serde_json::to_string(&FromInspector::StateAt { step }).unwrap();
         socket.feed(Message::text(seek)).await.unwrap();
         socket.feed(Message::text(state)).await.unwrap();
     }
+    let again = serde_json::to_string(&FromInspector::StateAt { step: 60 }).unwrap();
+    socket.feed(Message::text(again)).await.unwrap();
     socket.flush().await.unwrap();
     let mut positions = Vec::new();
     let mut states = Vec::new();
-    while states.last() != Some(&60) {
+    while states.len() < 61 {
         match next(&mut socket).await {
             ToInspector::Position { at, .. } => positions.push(at),
-            ToInspector::State { at, .. } => states.push(at),
+            ToInspector::State { at, core } => {
+                assert_eq!(
+                    core["chats"].as_array().map(Vec::len),
+                    Some(usize::from(at > 0))
+                );
+                states.push(at);
+            }
             _ => {}
         }
     }
     assert_eq!(positions.last(), Some(&60), "the last seek is answered");
     assert!(positions.len() < 20, "not every seek: {positions:?}");
-    assert!(states.len() < 20, "not every state: {states:?}");
+    let mut asked: Vec<u64> = (1..=60).collect();
+    asked.push(60);
+    assert_eq!(states, asked, "every state, once each, in order");
 }

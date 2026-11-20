@@ -355,10 +355,10 @@ async fn inspect(
 
 /// One app's inspector channel.
 ///
-/// What the app asks for is answered in turn, but a move or a state the
-/// app has already asked again for isn't: of the messages waiting when
-/// it gets to them, only the last move (a Seek or Follow) and the last
-/// StateAt are answered, the move first. So dragging the timeline costs
+/// What the app asks for is answered in turn, but a move the app has
+/// already moved on from isn't: of the messages waiting when it gets to
+/// them, only the last move (a Seek or Follow) is answered, then every
+/// StateAt, each with one State, in order. So dragging the timeline costs
 /// one replay per answer, not one per step dragged over. Replaying runs
 /// on a thread for blocking work, never on the threads CAF runs on.
 struct Inspector {
@@ -494,7 +494,7 @@ impl Inspector {
         Ok(())
     }
 
-    /// Answers what the app asked for: the last move and the last state.
+    /// Answers what the app asked for: the last move, then every state.
     async fn answer(&mut self, asked: Vec<FromInspector>) -> Result<(), Gone> {
         if asked.is_empty() {
             return Ok(());
@@ -505,10 +505,12 @@ impl Inspector {
         let end = self.sent;
         let moved =
             (asked.iter()).rfind(|message| !matches!(message, FromInspector::StateAt { .. }));
-        let state = (asked.iter()).rev().find_map(|message| match message {
-            FromInspector::StateAt { step } => Some(*step),
-            _ => None,
-        });
+        let states: Vec<u64> = (asked.iter())
+            .filter_map(|message| match message {
+                FromInspector::StateAt { step } => Some((*step).min(end)),
+                _ => None,
+            })
+            .collect();
         match moved {
             Some(FromInspector::Seek { step }) => {
                 self.following = false;
@@ -534,14 +536,20 @@ impl Inspector {
             }
             _ => {}
         }
-        if let Some(step) = state {
-            let at = step.min(end);
-            let core = blocking(&mut self.state, move |player| {
-                player.go(at);
-                player.state()
-            })
-            .await?;
-            self.send(&ToInspector::State { at, core }).await?;
+        // A step asked for again straight after is worked out once.
+        let mut last: Option<(u64, ToInspector)> = None;
+        for at in states {
+            if !matches!(&last, Some((was, _)) if *was == at) {
+                let core = blocking(&mut self.state, move |player| {
+                    player.go(at);
+                    player.state()
+                })
+                .await?;
+                last = Some((at, ToInspector::State { at, core }));
+            }
+            if let Some((_, state)) = &last {
+                self.send(state).await?;
+            }
         }
         Ok(())
     }

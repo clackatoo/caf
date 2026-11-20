@@ -34,7 +34,12 @@
 //! 4. Live, each new step comes in a [`ToInspector::Steps`] as it
 //!    happens, and moves `end` on. While following, `at` moves with it.
 //!
-//! The app asks for what it needs with [`FromInspector`].
+//! The app asks for what it needs with [`FromInspector`]. Every
+//! [`FromInspector::StateAt`] is answered with one [`ToInspector::State`],
+//! in the order asked. Of the moves ([`FromInspector::Seek`] and
+//! [`FromInspector::Follow`]) waiting together when the server gets to
+//! them, only the last is answered, before the states: a seek the app has
+//! already moved on from isn't worth a replay.
 //!
 //! # Following and looking back
 //!
@@ -223,6 +228,11 @@ pub struct Step {
 }
 
 /// A message from the app to the server.
+///
+/// Every `StateAt` is answered with one `State`, in the order asked, even
+/// when several wait together. Of the moves (`Seek` and `Follow`) waiting
+/// together when the server gets to them, only the last is answered,
+/// before the states.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
@@ -230,17 +240,20 @@ pub enum FromInspector {
     /// Look at a position: the answer is a [`ToInspector::Position`],
     /// then the chats as they were there, as [`ToInspector::Past`]. A
     /// position past the end is taken as the end. Live, this stops
-    /// following.
+    /// following. Of the moves waiting together, only the last is
+    /// answered.
     Seek {
         /// The position.
         step: u64,
     },
     /// Follow live again: the answer is a [`ToInspector::Position`].
-    /// In replay, nothing changes but the answer.
+    /// In replay, nothing changes but the answer. Of the moves waiting
+    /// together, only the last is answered.
     Follow,
-    /// Ask for the core's state at a position: the answer is a
-    /// [`ToInspector::State`]. A position past the end is taken as the
-    /// end.
+    /// Ask for the core's state at a position. Each is answered with one
+    /// [`ToInspector::State`], in the order asked, even when several wait
+    /// together, such as a step's state and the one before it. A position
+    /// past the end is taken as the end, and the State says which it was.
     StateAt {
         /// The position.
         step: u64,
