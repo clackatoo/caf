@@ -37,7 +37,7 @@
 
   async function open(event: SubmitEvent) {
     event.preventDefault()
-    if (opening || agent === '' || !absolute) return
+    if (readOnly || opening || agent === '' || !absolute) return
     opening = true
     problem = null
     const error = await attempt(() => actions.open(agent, cwd.trim()))

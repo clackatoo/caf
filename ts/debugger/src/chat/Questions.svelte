@@ -22,6 +22,22 @@
   } = $props()
 
   /** Questions being answered now, and why an answer failed. */
+  /**
+   * Each question with its key: its id, and how many questions before it
+   * share that id (a chat may hold two with one id). Keyed so, an answered
+   * question's buttons go with it: were they reused for the next question,
+   * the focus left on one would answer that question unseen.
+   */
+  const keyed = $derived.by(() => {
+    const seen = new Map<QuestionId, number>()
+    return questions.map((question) => {
+      const n = seen.get(question.id) ?? 0
+      seen.set(question.id, n + 1)
+      return { question, key: `${question.id}#${n}` }
+    })
+  })
+
+  let section = $state<HTMLElement>()
   let busy = $state<ReadonlySet<QuestionId>>(new Set())
   let problems = $state<ReadonlyMap<QuestionId, string>>(new Map())
 
@@ -38,9 +54,14 @@
 
   function onkeydown(event: KeyboardEvent) {
     if (event.key !== 'Escape' || readOnly || event.defaultPrevented) return
-    // Only Escape meant for the chat: pressed in it, or with nothing else focused.
+    // Only Escape meant for this chat: pressed in this view, or with
+    // nothing focused on a page that shows only this one.
+    const root = section?.closest('.caf-chat')
+    if (root == null) return
     const target = event.target
-    if (target !== document.body && !(target instanceof Element && target.closest('.caf-chat') !== null)) return
+    const inside = target instanceof Node && root.contains(target)
+    const alone = target === document.body && document.querySelectorAll('.caf-chat').length === 1
+    if (!inside && !alone) return
     const slow = questions.find((question) => question.kind.type === 'SlowToOpen')
     if (slow === undefined) return
     event.preventDefault()
@@ -51,15 +72,14 @@
 <svelte:window {onkeydown} />
 
 {#if questions.length > 0}
-  <section class="questions" aria-label="Questions">
-    <!-- Not keyed by id: a chat may hold two questions with one id, and the
-         agent chooses its options' ids. -->
-    {#each questions as question, i (i)}
+  <section class="questions" aria-label="Questions" bind:this={section}>
+    {#each keyed as { question, key } (key)}
       {@const kind = question.kind}
       <div class="question" data-kind={kind.type}>
         {#if kind.type === 'Permission'}
           <div class="ask">The agent asks permission: <strong>{kind.value.title}</strong></div>
           <div class="options">
+            <!-- By position: the agent chooses its options' ids. -->
             {#each kind.value.options as option, j (j)}
               <button
                 type="button"

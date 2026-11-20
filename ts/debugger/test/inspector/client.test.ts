@@ -68,6 +68,39 @@ describe('steps and the position', () => {
     expect(inspector.problem).toContain('Steps came from 2')
   })
 
+  it('looking at the last step, live, follows', () => {
+    const { socket, inspector } = open()
+    socket.say({ type: 'Steps', value: { from: 1, steps: [step(1), step(2)] } })
+    socket.say({ type: 'Position', value: { live: false, at: 1, end: 2 } })
+    inspector.look(2)
+    inspector.look(5)
+    // Where it is already: nothing to ask.
+    inspector.look(1)
+    inspector.look(0)
+    expect(socket.sent).toEqual([{ type: 'Follow' }, { type: 'Follow' }, { type: 'Seek', value: { step: 0 } }])
+  })
+
+  it('looking at the last step in replay seeks to it: there is nothing live to follow', () => {
+    const socket = new FakeSocket()
+    const inspector = new Inspector(socket)
+    socket.emit('open')
+    socket.say({ type: 'Hello', value: { mode: { type: 'Replay' }, file: 'x.jsonl', run: null } })
+    socket.say({ type: 'Steps', value: { from: 1, steps: [step(1), step(2)] } })
+    inspector.look(2)
+    expect(socket.sent).toEqual([{ type: 'Seek', value: { step: 2 } }])
+  })
+
+  it('tells a link refused before it opened from one that dropped', () => {
+    const refused = new FakeSocket()
+    const never = new Inspector(refused)
+    refused.emit('close')
+    expect(never.link).toBe('closed')
+    expect(never.refused).toBe(true)
+    const { socket, inspector } = open()
+    socket.emit('close')
+    expect(inspector.refused).toBe(false)
+  })
+
   it('asks to seek, within the steps there are, and to follow', () => {
     const { socket, inspector } = open()
     socket.say({ type: 'Steps', value: { from: 1, steps: [step(1), step(2)] } })
@@ -195,6 +228,21 @@ describe('the chats as they were', () => {
     socket.say({ type: 'Position', value: { live: false, at: 9, end: 9 } })
     past(socket, 9, { type: 'Chats', value: [summary] })
     expect(inspector.past.chats.get(id)?.state).toEqual({ type: 'Closed' })
+  })
+
+  it("keeps every chat's copy while moving back, between one Picture and the next", () => {
+    const { socket, inspector } = open()
+    const other = { ...fixture.picture, chat: { ...fixture.picture.chat, id: id + 100 } }
+    const both = [summary, { ...summary, id: id + 100 }]
+    socket.say({ type: 'Position', value: { live: false, at: 8, end: 9 } })
+    past(socket, 8, { type: 'Chats', value: both })
+    past(socket, 8, { type: 'Picture', value: fixture.picture })
+    past(socket, 8, { type: 'Picture', value: other })
+    socket.say({ type: 'Position', value: { live: false, at: 7, end: 9 } })
+    past(socket, 7, { type: 'Chats', value: both })
+    past(socket, 7, { type: 'Picture', value: fixture.picture })
+    // Chat id + 100's Picture hasn't come yet: its copy from before stays.
+    expect([...inspector.past.chats.keys()]).toEqual([id, id + 100])
   })
 
   it('takes nothing as Past while following', () => {

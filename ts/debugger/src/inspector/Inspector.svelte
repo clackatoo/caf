@@ -12,6 +12,16 @@
   const tabs = ['Steps', 'State', 'Changes'] as const
   let tab = $state<(typeof tabs)[number]>('Steps')
   let showDivergence = $state(false)
+
+  /** Arrow keys move between the tabs, as tabs do. */
+  function ontabkey(event: KeyboardEvent) {
+    const i = tabs.indexOf(tab)
+    const next = event.key === 'ArrowRight' ? i + 1 : event.key === 'ArrowLeft' ? i - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : null
+    if (next === null) return
+    event.preventDefault()
+    tab = tabs[(next + tabs.length) % tabs.length]!
+    document.getElementById(`inspector-tab-${tab}`)?.focus()
+  }
 </script>
 
 <section class="inspector" aria-label="Inspector">
@@ -46,12 +56,21 @@
     <div class="diverged" role="alert"><strong>The server sent something wrong:</strong> {inspector.problem}</div>
   {/if}
 
-  <div class="tabs" role="tablist">
+  <div class="tabs" role="tablist" aria-label="Inspector" tabindex="-1" onkeydown={ontabkey}>
     {#each tabs as name (name)}
-      <button type="button" role="tab" aria-selected={tab === name} class:active={tab === name} onclick={() => (tab = name)}>{name}</button>
+      <button
+        type="button"
+        role="tab"
+        id="inspector-tab-{name}"
+        aria-selected={tab === name}
+        aria-controls="inspector-panel"
+        tabindex={tab === name ? 0 : -1}
+        class:active={tab === name}
+        onclick={() => (tab = name)}>{name}</button
+      >
     {/each}
   </div>
-  <div class="panel" role="tabpanel">
+  <div class="panel" role="tabpanel" id="inspector-panel" aria-labelledby="inspector-tab-{tab}">
     {#if tab === 'Steps'}
       <StepsTab {inspector} />
     {:else if tab === 'State'}

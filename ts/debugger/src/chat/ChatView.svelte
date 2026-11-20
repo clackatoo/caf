@@ -21,11 +21,14 @@
     chat,
     actions,
     readOnly = false,
+    readOnlyWhy = 'As it was then: nothing can be done here.',
     appSummary = () => "An item of the app's own",
   }: {
     chat: DeepReadonly<Chat>
     actions: ChatActions
     readOnly?: boolean
+    /** Why nothing can be done, said while `readOnly`. */
+    readOnlyWhy?: string
     /** The one-line summary of one of the app's own items, which only the app can write. */
     appSummary?: (app: unknown) => string
   } = $props()
@@ -54,6 +57,9 @@
   }
 </script>
 
+<!-- Drawn afresh for another chat, so nothing typed or shown for one (a
+     draft, why something failed) carries over to the next. -->
+{#key chat.id}
 <section class="caf-chat" aria-label="Chat {chat.id}">
   <header>
     <div class="who">
@@ -68,7 +74,7 @@
     {/if}
   </header>
   {#if problem !== null}<div class="problem" role="alert">{problem}</div>{/if}
-  {#if readOnly}<div class="looking-back" role="status">As it was then: nothing can be done here.</div>{/if}
+  {#if readOnly}<div class="looking-back" role="status">{readOnlyWhy}</div>{/if}
   <StateBanner state={chat.state} />
 
   <div class="turns" bind:this={scroller} {onscroll}>
@@ -88,6 +94,7 @@
     stop={actions.stop}
   />
 </section>
+{/key}
 
 <style>
   .caf-chat {

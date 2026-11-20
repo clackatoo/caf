@@ -1,15 +1,17 @@
 // The import check passes on the chat view as it is, and fails on a copy
-// of it that imports the inspector, another of the app's files, an npm
-// package it may not use, or uses {@html} outside Markdown.svelte.
+// of it with one breach added: importing the inspector or another of the
+// app's files however it's spelt, a package it may not use, CSS that
+// reaches outside, or {@html} outside Markdown.svelte however it's spelt.
 
 import { execFileSync } from 'node:child_process'
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 
 const app = resolve(import.meta.dirname, '..')
 const script = join(app, 'scripts', 'check-imports.mjs')
+// Inside the app, so the copies find its node_modules.
+const scratch = join(app, '.check-copies')
 
 function check(root: string): { ok: boolean; out: string } {
   try {
@@ -20,44 +22,53 @@ function check(root: string): { ok: boolean; out: string } {
   }
 }
 
-let copies: string[] = []
-afterEach(() => {
-  for (const copy of copies) rmSync(copy, { recursive: true, force: true })
-  copies = []
-})
+afterAll(() => rmSync(scratch, { recursive: true, force: true }))
 
-/** A copy of the app's src/chat, with one file added. */
-function withFile(name: string, source: string): string {
-  const root = mkdtempSync(join(tmpdir(), 'caf-imports-'))
-  copies.push(root)
-  cpSync(join(app, 'src', 'chat'), join(root, 'src', 'chat'), { recursive: true })
-  writeFileSync(join(root, 'src', 'chat', name), source)
+/** A copy of the app's src/chat, and the rest of src beside it, with files added to src/chat. */
+function withFiles(added: Record<string, string>): string {
+  mkdirSync(scratch, { recursive: true })
+  const root = mkdtempSync(join(scratch, 'copy-'))
+  cpSync(join(app, 'src'), join(root, 'src'), { recursive: true })
+  for (const [name, source] of Object.entries(added)) writeFileSync(join(root, 'src', 'chat', name), source)
   return root
 }
 
 describe('the import check', () => {
   it('passes the chat view as it is', () => {
-    expect(check(app).ok).toBe(true)
+    const result = check(app)
+    expect(result.out).toContain('stands alone')
+    expect(result.ok).toBe(true)
   })
 
-  const breaches: [string, string, string][] = [
-    ['Bad.svelte', `<script lang="ts">import { Inspector } from '../inspector/client.svelte.ts'</script>`, 'outside src/chat/'],
-    ['bad.ts', `import { socketUrl } from '../link.ts'`, 'outside src/chat/'],
-    ['bad2.ts', `export { x } from "../../somewhere/else.ts"`, 'outside src/chat/'],
-    ['bad3.ts', `const lazy = import('../inspector/Inspector.svelte')`, 'outside src/chat/'],
-    ['bad4.ts', `import confetti from 'canvas-confetti'`, "isn't @clackatoo/caf"],
-    ['bad5.ts', `import './inspector-styles.css'`, 'from the inspector'],
-    ['Bad2.svelte', `<p>{@html '<b>x</b>'}</p>`, 'uses {@html}'],
+  it('passes a copy with nothing added', () => {
+    expect(check(withFiles({})).ok).toBe(true)
+  })
+
+  const breaches: [string, Record<string, string>, string][] = [
+    ['a static import of the inspector', { 'Bad.svelte': `<script lang="ts">import { Inspector } from '../inspector/client.svelte.ts'; void Inspector</script>` }, 'outside src/chat/'],
+    ["one of the app's files", { 'bad.ts': `export { socketUrl } from '../link.ts'` }, 'outside src/chat/'],
+    ['a dynamic import', { 'bad.ts': `export const lazy = () => import('./words.ts')` }, 'at run time'],
+    ['a template-literal import', { 'bad.ts': 'export const lazy = () => import(`../link.ts`)' }, 'src/chat/bad.ts'],
+    ['import.meta.glob', { 'bad.ts': `export const all = import.meta.glob('../inspector/*.ts')` }, 'src/chat/bad.ts'],
+    ['an import strip() would have hidden between comment-like strings', { 'bad.ts': `const s = '/*'\nimport { socketUrl } from '../link.ts'\nconst t = '*/'\nexport { s, t, socketUrl }` }, 'outside src/chat/'],
+    ['an import after a regex with //', { 'bad.ts': `const re = /\\/\\//; import { socketUrl } from '../link.ts'\nexport { re, socketUrl }` }, 'outside src/chat/'],
+    ['a .mts file', { 'bad.mts': `export { socketUrl } from '../link.ts'` }, 'outside src/chat/'],
+    ['a package path that climbs out', { 'bad.ts': `export * from 'svelte/../../../debugger/src/link.ts'` }, 'src/chat/bad.ts'],
+    ['a package it may not use', { 'bad.ts': `export { parse } from 'vite'` }, "isn't @clackatoo/caf"],
+    ['CSS @import without quotes', { 'bad.css': `@import url(../../app.css);`, 'bad.ts': `import './bad.css'` }, 'CSS @import'],
+    ['CSS url() in a style block', { 'Bad.svelte': `<p>x</p><style>p { background: url(https://example.com/x.png) }</style>` }, 'CSS url()'],
+    ['{@html}', { 'Bad.svelte': `<p>{@html '<b>x</b>'}</p>` }, 'uses {@html}'],
+    ['{ @html } with spaces', { 'Bad.svelte': `<p>{ @html "<b>x</b>"}</p>` }, 'uses {@html}'],
   ]
-  for (const [name, source, says] of breaches) {
-    it(`fails ${source}`, () => {
-      const result = check(withFile(name, source))
-      expect(result.ok).toBe(false)
+  for (const [what, files, says] of breaches) {
+    it(`fails ${what}`, () => {
+      const result = check(withFiles(files))
+      expect(result.ok, result.out).toBe(false)
       expect(result.out).toContain(says)
     })
   }
 
   it("doesn't count an import in a comment", () => {
-    expect(check(withFile('fine.ts', `// import x from '../inspector/x.ts'\n/* import y from 'left-pad' */\nexport {}`)).ok).toBe(true)
+    expect(check(withFiles({ 'fine.ts': `// import x from '../inspector/x.ts'\n/* import y from 'left-pad' */\nexport {}` })).ok).toBe(true)
   })
 })

@@ -55,4 +55,13 @@ describe('the chat list', () => {
     draw({ readOnly: true })
     expect((screen.getByRole('button', { name: 'New chat' }) as HTMLButtonElement).disabled).toBe(true)
   })
+
+  it('opens nothing from a form left open when the list turned read-only', async () => {
+    const { actions, rerender } = draw()
+    await fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    await fireEvent.input(screen.getByRole('textbox'), { target: { value: '/x' } })
+    await rerender({ readOnly: true })
+    await fireEvent.submit(screen.getByRole('button', { name: 'Open' }).closest('form')!)
+    expect(actions.open).not.toHaveBeenCalled()
+  })
 })

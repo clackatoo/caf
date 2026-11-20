@@ -91,7 +91,8 @@
 
   {#if turn.life.type === 'Failed'}
     {@const failure = turn.life.value}
-    <div class="failure" role="alert">
+    <!-- Not an alert: a page of history would announce every old failure. -->
+    <div class="failure">
       <div class="why"><span class="who">CAF</span>{failureText(failure.reason)}</div>
       {#if failure.agent_said !== null}
         <figure class="said">
@@ -121,8 +122,13 @@
     padding: 0.8em 0;
     border-bottom: 1px solid var(--caf-border);
   }
+  /* History is drawn quieter, in muted text rather than see-through, which
+     would fall below readable contrast. */
   .turn.imported {
-    opacity: 0.62;
+    color: var(--caf-muted);
+  }
+  .turn.imported .message {
+    background: var(--caf-inset);
   }
   header {
     display: flex;

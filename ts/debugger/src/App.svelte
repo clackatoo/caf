@@ -10,8 +10,10 @@
   import { Inspector } from './inspector/client.svelte.ts'
   import InspectorView from './inspector/Inspector.svelte'
   import Timeline from './inspector/Timeline.svelte'
-  import { httpUrl, socketUrl, type LinkState } from './link.ts'
+  import { webSocket } from '@clackatoo/caf'
+  import { hasToken, httpUrl, socketUrl, type LinkState } from './link.ts'
   import { Live } from './live.svelte.ts'
+  import { canAct } from './view.ts'
 
   let inspector = $state.raw(connectInspector())
   let live = $state.raw<Live | null>(null)
@@ -31,7 +33,7 @@
     if (mode !== 'Live' || live !== null) return
     const made = new Live()
     live = made
-    void made.connect(socketUrl('/viewer'))
+    void made.connect(() => webSocket(socketUrl('/viewer')))
   })
 
   const lookingBack = $derived(mode === 'Replay' || !inspector.position.live)
@@ -40,10 +42,18 @@
     selected === null ? null : lookingBack ? (inspector.past.chats.get(selected) ?? null) : (live?.chat ?? null),
   )
 
-  // The live watch follows the chat chosen.
+  // The live watch follows the chat chosen, link up or not: while it's
+  // down, the chat chosen is remembered, and watched once it's back.
   $effect(() => {
-    if (live !== null && live.link === 'open') live.watch(selected)
+    live?.watch(selected)
   })
+
+  const actable = $derived(canAct({ mode, following: inspector.position.live, viewer: live?.link ?? null }))
+  const readOnlyWhy = $derived(
+    lookingBack ? 'As it was then: nothing can be done here.' : 'The link to CAF is down: nothing can be done until it’s back.',
+  )
+  /** The page has no token, or the server refused it: Reconnect can't help. */
+  const locked = $derived(!hasToken() || inspector.refused)
 
   // With nothing chosen, show the newest chat there is. A chat chosen
   // stays chosen: moving on the timeline never changes which chat is
@@ -86,13 +96,28 @@
     return chat
   }
 
-  function save() {
-    saving?.close()
-    const a = document.createElement('a')
-    a.href = httpUrl('/recording')
-    a.download = ''
-    a.rel = 'noopener'
-    a.click()
+  let saveProblem = $state<string | null>(null)
+
+  /**
+   * Downloads the recording. It's fetched, then saved from a blob: a link
+   * straight to `/recording?token=…` would leave the token in the
+   * browser's download history.
+   */
+  async function save() {
+    saveProblem = null
+    try {
+      const response = await fetch(httpUrl('/recording'))
+      if (!response.ok) throw new Error(`the server said ${response.status} ${response.statusText}`)
+      const url = URL.createObjectURL(await response.blob())
+      const a = document.createElement('a')
+      a.href = url
+      a.download = inspector.hello?.file?.split(/[\\/]/).at(-1) || 'caf-recording.jsonl'
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      saving?.close()
+    } catch (error) {
+      saveProblem = `It couldn't be downloaded: ${error instanceof Error ? error.message : String(error)}.`
+    }
   }
 
   // Dragging the divider.
@@ -128,7 +153,9 @@
     <span class="link" data-link={link}>
       {link === 'open' ? 'Connected' : link === 'connecting' ? 'Connecting…' : 'Disconnected'}
     </span>
-    {#if link === 'closed'}<button type="button" onclick={reconnect}>Reconnect</button>{/if}
+    {#if locked}
+      <span class="problem">This page can't reach caf-debugger: open the address it printed, with its <code>#token=</code>, again.</span>
+    {:else if link === 'closed'}<button type="button" onclick={reconnect}>Reconnect</button>{/if}
     {#if live?.problem}<span class="problem">{live.problem}</span>{/if}
     <span class="spacer"></span>
     {#if mode === 'Live'}
@@ -142,11 +169,11 @@
   <main bind:this={main} style:grid-template-columns={showInspector ? `${split}fr 6px ${1 - split}fr` : '1fr'}>
     <div class="left">
       <div class="list">
-        <ChatList chats={summaries} agents={live?.agents ?? []} {selected} actions={listActions} readOnly={lookingBack} />
+        <ChatList chats={summaries} agents={live?.agents ?? []} {selected} actions={listActions} readOnly={!actable} />
       </div>
       <div class="chat">
         {#if chat !== null}
-          <ChatView {chat} actions={chatActions} readOnly={lookingBack} />
+          <ChatView {chat} actions={chatActions} readOnly={!actable} {readOnlyWhy} />
         {:else}
           <p class="empty">
             {#if selected === null}
@@ -165,6 +192,7 @@
       <div
         class="divider"
         role="separator"
+        aria-label="Resize the chat and the inspector"
         aria-orientation="vertical"
         aria-valuenow={Math.round(split * 100)}
         tabindex="0"
@@ -178,8 +206,8 @@
   <Timeline {inspector} />
 </div>
 
-<dialog bind:this={saving} class="save">
-  <h2>Save a bug report</h2>
+<dialog bind:this={saving} class="save" aria-labelledby="save-title">
+  <h2 id="save-title">Save a bug report</h2>
   <p>
     The bug report is this run's recording: every event CAF's core was given, so anyone can replay it step by step. It holds
     <strong>everything said</strong> in this run: your messages, the agents' answers and thinking, the files they read, the commands
@@ -187,6 +215,7 @@
     out.
   </p>
   <p>Share it only with someone you'd show all of that to.</p>
+  {#if saveProblem !== null}<p class="problem" role="alert">{saveProblem}</p>{/if}
   <div class="buttons">
     <button type="button" onclick={() => saving?.close()}>Cancel</button>
     <button type="button" class="primary" onclick={save}>Download it</button>

@@ -2,7 +2,7 @@
   // Where the chat stands with its agent, when that's worth saying: while
   // it opens, once its session is lost, and once it's closed.
   import type { ChatState, DeepReadonly } from '@clackatoo/caf'
-  import { lostText, tagOf } from './words.ts'
+  import { lostNext, lostText, tagOf } from './words.ts'
 
   let { state }: { state: DeepReadonly<ChatState> } = $props()
 </script>
@@ -12,7 +12,7 @@
 {:else if state.type === 'Lost'}
   {@const reason = state.value.reason}
   <div class="banner lost" role="status" data-reason={reason.type}>
-    <div>{lostText(reason)} Your next message opens it again.</div>
+    <div>{lostText(reason)} {lostNext(reason) ?? ''}</div>
     {#if reason.type === 'CouldNotStart'}
       <figure>
         <figcaption>The system said:</figcaption>

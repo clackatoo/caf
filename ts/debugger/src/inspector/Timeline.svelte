@@ -29,13 +29,8 @@
     dragging = null
   }
 
-  /** Looks at a position: the end, live, means follow. */
   function go(at: number) {
-    if (live && at >= position.end) {
-      if (!position.live) inspector.follow()
-    } else if (at !== position.at || position.live) {
-      inspector.seek(at)
-    }
+    inspector.look(at)
   }
 </script>
 

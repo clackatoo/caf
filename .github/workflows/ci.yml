@@ -150,3 +150,6 @@ jobs:
         working-directory: ts/debugger
       - run: npm run e2e
         working-directory: ts/debugger
+        env:
+          CAF_DEBUGGER: ${{ github.workspace }}/target/debug/caf-debugger
+          CAF_FAKE_AGENT_BIN: ${{ github.workspace }}/target/debug/caf-fake-agent

@@ -4,12 +4,12 @@
 import {
   CafError,
   Connection,
-  webSocket,
   type AgentName,
   type Chat,
   type ChatId,
   type ChatSummary,
   type DeepReadonly,
+  type Transport,
   type Watching,
 } from '@clackatoo/caf'
 import type { LinkState } from './link.ts'
@@ -27,18 +27,24 @@ export class Live {
   #watching: Watching | null = null
   #watched: ChatId | null = null
 
-  /** Connects to `url`; resolves once welcomed, or with `problem` set. */
-  async connect(url: string): Promise<void> {
+  /**
+   * Connects over the transport `open` gives, such as `webSocket(url)`;
+   * resolves once welcomed, or with `problem` set. The chat chosen before,
+   * if any, is watched again.
+   */
+  async connect(open: () => Promise<Transport>): Promise<void> {
     this.link = 'connecting'
     this.problem = null
     try {
-      const caf = await Connection.open(await webSocket(url), { signal: AbortSignal.timeout(10_000) })
+      const caf = await Connection.open(await open(), { signal: AbortSignal.timeout(10_000) })
       this.#caf = caf
       this.agents = caf.agents
       this.chats = caf.chats
       caf.onChats((chats) => (this.chats = chats))
       caf.onClose(() => {
         if (this.#caf !== caf) return
+        // The chat shown stays as it was, read-only (see `canAct`) until
+        // the link is back.
         this.link = 'closed'
         this.#caf = null
         this.#watching = null
@@ -51,7 +57,10 @@ export class Live {
     }
   }
 
-  /** Follows one chat, in place of the one before. */
+  /**
+   * Follows one chat, in place of the one before. With the link down, it's
+   * remembered, and nothing is shown for it until the link is back.
+   */
   watch(chat: ChatId | null): void {
     if (this.#watched === chat && this.#watching !== null) return
     this.#watching?.stop()

@@ -20,6 +20,13 @@ const KEPT_STATES = 16
 
 export class Inspector {
   link = $state<LinkState>('connecting')
+  /**
+   * The link closed before it ever opened: the server refused it, most
+   * likely for its token (caf-debugger restarted, or the page was opened
+   * again without the address it printed), or it's not running.
+   */
+  refused = $state(false)
+  #opened = false
   /** What the server is doing, once it has said. */
   hello = $state.raw<{ mode: Mode; file: string | null; run: string | null } | null>(null)
   /** Where the app is looking. Steps are numbered from 1; position `at` is just after step `at`, and 0 is before any. */
@@ -41,8 +48,14 @@ export class Inspector {
 
   constructor(socket: Socket) {
     this.#socket = socket
-    socket.addEventListener('open', () => (this.link = 'open'))
-    socket.addEventListener('close', () => (this.link = 'closed'))
+    socket.addEventListener('open', () => {
+      this.#opened = true
+      this.link = 'open'
+    })
+    socket.addEventListener('close', () => {
+      this.refused = !this.#opened
+      this.link = 'closed'
+    })
     socket.addEventListener('message', (event) => {
       if (typeof event.data !== 'string') return
       let message: ToInspector
@@ -73,6 +86,18 @@ export class Inspector {
   /** Look at a position: live, this stops following. */
   seek(step: number): void {
     this.#send({ type: 'Seek', value: { step: Math.max(0, Math.min(step, this.position.end)) } })
+  }
+
+  /**
+   * Look at a position, as the timeline and the Steps table do: the last
+   * step, live, means following again.
+   */
+  look(step: number): void {
+    if (this.live && step >= this.position.end) {
+      if (!this.position.live) this.follow()
+    } else if (step !== this.position.at || this.position.live) {
+      this.seek(step)
+    }
   }
 
   /** Follow live again. */

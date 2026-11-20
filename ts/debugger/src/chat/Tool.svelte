@@ -3,18 +3,21 @@
   // unfolding to what it was given and what it gave back.
   import type { DeepReadonly, ToolCall, Window } from '@clackatoo/caf'
   import { took } from './time.ts'
+  import { rawJson, unhidden } from './unhidden.ts'
   import { toolKind, toolStatus } from './words.ts'
 
   let { tool, window }: { tool: DeepReadonly<ToolCall>; window: DeepReadonly<Window> } = $props()
 
   const kind = $derived(toolKind(tool.kind))
   const time = $derived(took(window))
-  const input = $derived(tool.input === null ? null : JSON.stringify(tool.input, null, 2))
+  const input = $derived(tool.input === null ? null : rawJson(tool.input))
+  const ended = $derived(tool.status.type === 'Done' || tool.status.type === 'Failed')
 </script>
 
 <details class="tool" data-status={tool.status.type}>
   <summary>
-    <span class="icon" title={kind.name} aria-label={kind.name}>{kind.icon}</span>
+    <span class="icon" title={kind.name} aria-hidden="true">{kind.icon}</span>
+    <span class="kind">{kind.name}</span>
     <span class="title">{tool.title}</span>
     <span class="status">{toolStatus(tool.status)}</span>
     {#if time !== null}<span class="time">{time}</span>{/if}
@@ -28,9 +31,9 @@
     {/if}
     <div class="label">Output</div>
     {#if tool.output === ''}
-      <div class="none">None yet</div>
+      <div class="none">{ended ? 'None' : 'None yet'}</div>
     {:else}
-      <pre>{tool.output}</pre>
+      <pre>{unhidden(tool.output)}</pre>
     {/if}
   </div>
 </details>
@@ -59,6 +62,15 @@
   }
   details[open] > summary::before {
     content: '▾';
+  }
+  /* The kind's name, for screen readers: the icon says it to the eye. */
+  .kind {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .title {
     flex: 1;

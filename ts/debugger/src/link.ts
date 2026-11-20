@@ -28,6 +28,11 @@ export function takeToken(location: Location = window.location, history: History
   return token
 }
 
+/** Whether the page was opened with a token. */
+export function hasToken(): boolean {
+  return token !== ''
+}
+
 /** A WebSocket address on this server, with the token. */
 export function socketUrl(path: string, location: Location = window.location): string {
   const url = new URL(path, location.href)

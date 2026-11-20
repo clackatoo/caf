@@ -12,6 +12,9 @@ const repo = resolve(import.meta.dirname, '../../..')
 /** The binary: `CAF_DEBUGGER`, or the workspace's debug build. */
 export const binary = process.env.CAF_DEBUGGER ?? resolve(repo, 'target/debug/caf-debugger')
 
+/** The fake agent, named outright so the server never has to guess: `CAF_FAKE_AGENT_BIN`, or the workspace's debug build. */
+export const fake = process.env.CAF_FAKE_AGENT_BIN ?? resolve(repo, 'target/debug/caf-fake-agent')
+
 /** The checked-in recordings. */
 export const traces = resolve(process.env.CAF_TRACES ?? resolve(repo, 'crates/core/src/core/tests/traces'))
 
@@ -27,7 +30,7 @@ export function start(args: string[]): Promise<Server & { process: ChildProcess;
   // Live runs are recorded under $XDG_STATE_HOME: a folder of the test's own.
   const state = mkdtempSync(join(tmpdir(), 'caf-e2e-'))
   return new Promise((done, fail) => {
-    const env = { ...process.env, XDG_STATE_HOME: state }
+    const env = { ...process.env, XDG_STATE_HOME: state, CAF_FAKE_AGENT_BIN: fake }
     const child = spawn(binary, [...args, '--port', '0'], { stdio: ['ignore', 'pipe', 'pipe'], env })
     let printed = ''
     const hear = (chunk: Buffer) => {
@@ -42,8 +45,20 @@ export function start(args: string[]): Promise<Server & { process: ChildProcess;
   })
 }
 
-/** A test with `server`: caf-debugger started with the test's `serve` arguments. */
+/**
+ * A test with `server`: caf-debugger started with the test's `serve`
+ * arguments. Its page fails the test if the app's Content-Security-Policy
+ * ever blocks anything, which would mean the policy and the app disagree.
+ */
 export const test = base.extend<{ serve: string[]; server: Server }>({
+  page: async ({ page }, use) => {
+    const blocked: string[] = []
+    page.on('console', (message) => {
+      if (/Content Security Policy/i.test(message.text())) blocked.push(message.text())
+    })
+    await use(page)
+    if (blocked.length > 0) throw new Error(`The page's CSP blocked:\n${blocked.join('\n')}`)
+  },
   serve: [[], { option: true }],
   server: async ({ serve }, use) => {
     const server = await start(serve)

@@ -71,6 +71,32 @@ export function lostText(reason: DeepReadonly<Lost>): string {
   }
 }
 
+/**
+ * What the user's next message does about a lost session, or null if it
+ * can't help: after a shutdown, or an adapter that can't do what the chat
+ * needs.
+ */
+export function lostNext(reason: DeepReadonly<Lost>): string | null {
+  switch (reason.type) {
+    case 'CouldNotStart':
+      return 'Your next message tries to start it again.'
+    case 'SignInNeeded':
+      return 'Sign in, then send a message to open it again.'
+    case 'Incompatible':
+      return reason.value.type === 'BadAnswer' ? 'Your next message tries again.' : null
+    case 'ShutDown':
+      return null
+    case 'AgentStopped':
+    case 'Restarted':
+    case 'Refused':
+    case 'Stopped':
+    case 'InUse':
+      return 'Your next message opens it again.'
+    default:
+      return null
+  }
+}
+
 /** What an adapter can't do, finishing `lostText`'s sentence. */
 export function incompatibleText(what: DeepReadonly<Incompatible>): string {
   switch (what.type) {

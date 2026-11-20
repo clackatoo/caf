@@ -55,7 +55,6 @@ describe('the chat state', () => {
     it(`says why it was lost: ${JSON.stringify(reason)}`, () => {
       const { container } = draw(chat({ state: lost(reason) }))
       for (const words of says) expect(text(container)).toContain(words)
-      expect(text(container)).toContain('Your next message opens it again.')
     })
   }
 
@@ -225,7 +224,8 @@ describe('items', () => {
     const row = container.querySelector('details.tool') as HTMLDetailsElement
     expect(row.open).toBe(false)
     const summary = row.querySelector('summary')!
-    expect(summary.querySelector('.icon')?.getAttribute('aria-label')).toBe('Run')
+    expect(summary.querySelector('.kind')?.textContent).toBe('Run')
+    expect(summary.querySelector('.icon')?.getAttribute('aria-hidden')).toBe('true')
     expect(summary.querySelector('.title')?.textContent).toBe('cargo test')
     expect(summary.querySelector('.status')?.textContent).toBe('Done')
     expect(summary.querySelector('.time')?.textContent).toBe('1.5 s')
@@ -240,7 +240,7 @@ describe('items', () => {
       value: { title: 't', kind: { type: 'Teleport' } as never, status: { type: 'Pondering' } as never, input: null, output: '', app: null },
     })
     const { container } = draw(chat({ turns: [turn({ items: [tool] })] }))
-    expect(container.querySelector('.tool .icon')?.getAttribute('aria-label')).toBe('Unknown kind (Teleport)')
+    expect(container.querySelector('.tool .kind')?.textContent).toBe('Unknown kind (Teleport)')
     expect(container.querySelector('.tool .status')?.textContent).toBe('Unknown (Pondering)')
   })
 
@@ -369,6 +369,41 @@ describe('questions', () => {
     const { actions } = draw(chat({ questions: [asked] }))
     await fireEvent.click(button('Always allow'))
     expect(actions.answer).toHaveBeenCalledWith(asked.id, { type: 'Permission', value: 'always' })
+  })
+
+  it("doesn't move focus onto the next question's option once one is answered", async () => {
+    const ask = (title: string, first: string) =>
+      question({
+        type: 'Permission',
+        value: { tool: null, title, options: [{ id: 'a', label: first, kind: { type: 'AllowAlways' } }, { id: 'r', label: 'Reject', kind: { type: 'RejectOnce' } }] },
+      })
+    const q1 = ask('Read notes.txt', 'Allow (Q1)')
+    const q2 = ask('Run rm -rf ~', 'Always allow (Q2)')
+    const view = draw(chat({ questions: [q1, q2] }))
+    const first = button('Allow (Q1)')
+    first.focus()
+    await fireEvent.click(first)
+    // CAF takes Q1 away.
+    await view.rerender({ chat: chat({ questions: [q2] }) })
+    const focused = document.activeElement
+    const pinned = view.container.querySelector('.questions')!
+    expect(focused instanceof HTMLButtonElement && pinned.contains(focused)).toBe(false)
+    expect(view.actions.answer).toHaveBeenCalledTimes(1)
+  })
+
+  it('still draws two questions with one id', () => {
+    const asked = question({ type: 'SlowToOpen', value: { adapter_answered: true } })
+    const { container } = draw(chat({ questions: [asked, { ...asked }] }))
+    expect(container.querySelectorAll('.question')).toHaveLength(2)
+  })
+
+  it("answers nothing on Enter, even with an option focused by the page's last click", async () => {
+    const { actions, container } = draw(chat({ questions: [permission()] }))
+    const box = screen.getByRole('textbox', { name: 'Message' })
+    box.focus()
+    await fireEvent.keyDown(box, { key: 'Enter' })
+    expect(actions.answer).not.toHaveBeenCalled()
+    expect(container.querySelector('.questions button:focus')).toBeNull()
   })
 
   it("answers nothing on Enter: no option is the default", async () => {
@@ -503,5 +538,78 @@ describe('read-only', () => {
     for (const each of buttons) await fireEvent.click(each)
     await fireEvent.keyDown(document.body, { key: 'Escape' })
     for (const action of Object.values(actions)) expect(action).not.toHaveBeenCalled()
+  })
+})
+
+describe('a different chat in the same view', () => {
+  it("doesn't carry a draft, or why something failed, from one chat to the next", async () => {
+    const given = actions()
+    given.send.mockRejectedValue(new CafError({ type: 'Disconnected' }))
+    const view = draw(chat({ id: 1 }), { actions: given })
+    const box = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement
+    await fireEvent.input(box, { target: { value: 'meant for chat 1' } })
+    await fireEvent.click(button('Send'))
+    await waitFor(() => expect(text(view.container)).toContain('The link to CAF dropped'))
+    await view.rerender({ chat: chat({ id: 2 }) })
+    const now = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement
+    expect(now.value).toBe('')
+    expect(text(view.container)).not.toContain('The link to CAF dropped')
+  })
+})
+
+describe('two chat views on one page', () => {
+  it('Escape in one keeps only its own question waiting', async () => {
+    const slow = () => question({ type: 'SlowToOpen', value: { adapter_answered: true } })
+    const one = draw(chat({ id: 1, questions: [slow()] }))
+    const two = draw(chat({ id: 2, questions: [slow()] }))
+    const box = two.container.querySelector('textarea')!
+    box.focus()
+    await fireEvent.keyDown(box, { key: 'Escape' })
+    expect(two.actions.answer).toHaveBeenCalledTimes(1)
+    expect(one.actions.answer).not.toHaveBeenCalled()
+  })
+})
+
+describe('words for what comes next', () => {
+  const next: [unknown, string | null][] = [
+    [{ type: 'ShutDown' }, null],
+    [{ type: 'SignInNeeded' }, 'Sign in, then send a message to open it again.'],
+    [{ type: 'Incompatible', value: { type: 'HttpMcp' } }, null],
+    [{ type: 'Incompatible', value: { type: 'Protocol', value: { version: 2 } } }, null],
+    [{ type: 'Restarted' }, 'Your next message opens it again.'],
+    [{ type: 'Eclipse' }, null],
+  ]
+  for (const [reason, says] of next) {
+    it(`after ${JSON.stringify(reason)}, says ${says === null ? 'nothing about a next message' : says}`, () => {
+      const { container } = draw(chat({ state: lost(reason) }))
+      if (says === null) expect(text(container)).not.toMatch(/next message|send a message/)
+      else expect(text(container)).toContain(says)
+    })
+  }
+})
+
+describe('a tool that ended', () => {
+  it('says None for no output once it has ended, and None yet while it runs', () => {
+    const tool = (status: string) =>
+      item({ type: 'Tool', value: { title: 't', kind: { type: 'Read' }, status: { type: status } as never, input: null, output: '', app: null } })
+    const { container } = draw(chat({ turns: [turn({ items: [tool('Done'), tool('Failed'), tool('Running')] })] }))
+    const outputs = [...container.querySelectorAll('.tool .none')].map((none) => none.textContent)
+    expect(outputs).toEqual(['None', 'None', 'None', 'None', 'None', 'None yet'])
+  })
+})
+
+describe("text that hides or reorders itself", () => {
+  it('shows bidi controls and invisible characters in raw JSON as escapes', () => {
+    const tool = item({
+      type: 'Tool',
+      value: { title: 't', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'echo \u202Egnp.exe\u200B' }, output: 'out\u2066put', app: null },
+    })
+    const unknown = item({ type: 'Unknown', value: { what: 'x\u202E', raw: { a: '\u202Eb' } } })
+    const { container } = draw(chat({ turns: [turn({ items: [tool, unknown] })] }))
+    const all = container.textContent ?? ''
+    expect(all).not.toMatch(/[\u202A-\u202E\u2066-\u2069\u200B]/)
+    expect(all).toContain('<U+202E>')
+    expect(all).toContain('<U+200B>')
+    expect(all).toContain('<U+2066>')
   })
 })

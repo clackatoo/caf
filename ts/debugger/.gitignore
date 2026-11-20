@@ -1,3 +1,4 @@
 # Playwright's output
 /test-results/
 /playwright-report/
+/.check-copies/

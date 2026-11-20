@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { Directive, Event } from '@clackatoo/caf'
 import { decodeWrite, stderrText, traffic } from '../../src/inspector/decode.ts'
 import { diff } from '../../src/inspector/diff.ts'
+import { sinceFirst } from '../../src/inspector/time.ts'
 import { directiveSummary, eventSummary, frameSummary, worstReport } from '../../src/inspector/summary.ts'
 
 const bytes = (text: string) => [...new TextEncoder().encode(text)]
@@ -33,6 +34,13 @@ describe('diff', () => {
   it('finds nothing between equal values', () => {
     const { changed, removed } = diff({ a: [1, { b: null }] }, { a: [1, { b: null }] })
     expect(changed.size + removed.size).toBe(0)
+  })
+
+  it('sees keys named as inherited ones, such as toString', () => {
+    const { changed, removed } = diff({ toString: 1, constructor: 2 }, { valueOf: 3 })
+    expect([...removed.keys()]).toEqual(['/toString', '/constructor'])
+    expect(changed.has('/valueOf')).toBe(true)
+    expect(diff({}, { constructor: 1 }).changed.has('/constructor')).toBe(true)
   })
 
   it('escapes keys with slashes', () => {
@@ -106,5 +114,13 @@ describe('summaries', () => {
     expect(directiveSummary({ type: 'Agent', value: { type: 'Write', value: { process: 2, bytes: [1, 2, 3] } } })).toBe('Agent 2: write 3 bytes')
     expect(worstReport([])).toBeNull()
     expect(worstReport([{ type: 'Report', value: { level: { type: 'Info' }, message: '' } }, warn])).toBe('Warn')
+  })
+})
+
+describe('step times', () => {
+  it('counts milliseconds since the first step on the steady clock', () => {
+    expect(sinceFirst(1_000_000_000, 1_000_000_000)).toBe('+0.000 s')
+    expect(sinceFirst(1_000_000_000, 3_500_250_000)).toBe('+2.500 s')
+    expect(sinceFirst(5, 125_000_005 + 60_000_000_000)).toBe('+60.125 s')
   })
 })

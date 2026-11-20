@@ -7,6 +7,7 @@
   import JsonTree from './JsonTree.svelte'
   import { traffic } from './decode.ts'
   import { directiveSummary, eventSummary, frameSummary, worstReport } from './summary.ts'
+  import { sinceFirst, wallTime } from './time.ts'
 
   let { inspector }: { inspector: Inspector } = $props()
 
@@ -32,27 +33,26 @@
     }
   })
 
-  function time(wall: number): string {
-    const date = new Date(wall)
-    return `${date.toLocaleTimeString(undefined, { hour12: false })}.${String(date.getMilliseconds()).padStart(3, '0')}`
-  }
+  /** The first step's steady reading, that times are counted from. */
+  const origin = $derived(count > 0 ? (inspector.step(1)?.now.mono ?? 0) : 0)
 
   function onkeydown(event: KeyboardEvent) {
-    if (event.key === 'ArrowDown' || event.key === 'j') inspector.seek(at + 1)
-    else if (event.key === 'ArrowUp' || event.key === 'k') inspector.seek(at - 1)
+    if (event.key === 'ArrowDown' || event.key === 'j') inspector.look(at + 1)
+    else if (event.key === 'ArrowUp' || event.key === 'k') inspector.look(Math.max(0, at - 1))
     else return
     event.preventDefault()
   }
 </script>
 
 <div class="steps">
-  <div class="head" role="row">
-    <span class="no">#</span><span class="time">Time</span><span class="what">Event</span><span class="count" title="Directives">Dir.</span>
+  <div class="head" aria-hidden="true">
+    <span class="no">#</span><span class="time" title="Since the first step, on the steady clock">Time</span><span class="what">Event</span><span class="count" title="Directives">Dir.</span>
   </div>
   <div
     class="table"
-    role="grid"
+    role="listbox"
     aria-label="Steps"
+    aria-activedescendant={at >= 1 && at >= first && at <= last ? `step-${at}` : undefined}
     tabindex="0"
     bind:this={table}
     bind:clientHeight={height}
@@ -64,20 +64,25 @@
         {@const row = inspector.step(no)}
         {#if row !== undefined}
           {@const report = worstReport(row.directives)}
-          <button
-            type="button"
+          <!-- An option of the list, which takes the keys for it. -->
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <div
+            role="option"
+            tabindex="-1"
+            id="step-{no}"
+            aria-selected={no === at}
             class="row"
             class:selected={no === at}
             class:diverged={inspector.diverged?.at === no}
             data-report={report}
             style:top="{(no - 1) * ROW}px"
-            onclick={() => inspector.seek(no)}
+            onclick={() => inspector.look(no)}
           >
             <span class="no">{no}</span>
-            <span class="time">{time(row.now.wall)}</span>
+            <span class="time" title={wallTime(row.now.wall)}>{sinceFirst(origin, row.now.mono)}</span>
             <span class="what">{eventSummary(row.event)}</span>
             <span class="count">{row.directives.length}</span>
-          </button>
+          </div>
         {/if}
       {/each}
     </div>
@@ -88,7 +93,14 @@
     {#if step === undefined}
       <p class="empty">{at === 0 ? 'Before the first step: the core is fresh.' : 'This step hasn’t come yet.'}</p>
     {:else}
-      <h3>Step {step.no} <span class="sub">at {time(step.now.wall)}, steady clock {String(step.now.mono)} ns</span></h3>
+      <h3>
+        Step {step.no}
+        <span class="sub">
+          at {wallTime(step.now.wall)}, {sinceFirst(origin, step.now.mono)} since the first step
+          <!-- The steady reading went through JSON.parse: past 2^53 ns it's rounded. -->
+          (steady clock ≈{step.now.mono} ns)
+        </span>
+      </h3>
       <section>
         <h4>Event</h4>
         <div class="summary">{eventSummary(step.event)}</div>
@@ -143,7 +155,7 @@
   .head,
   .row {
     display: grid;
-    grid-template-columns: 4.5em 7.5em 1fr 3em;
+    grid-template-columns: 4.5em 6.5em 1fr 3em;
     gap: 0.5em;
     align-items: center;
     padding: 0 0.6em;
@@ -180,6 +192,7 @@
     text-align: left;
     cursor: pointer;
     font-family: inherit;
+    box-sizing: border-box;
   }
   .row:hover {
     background: var(--caf-hover);

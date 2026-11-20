@@ -47,11 +47,11 @@ function walk(before: unknown, after: unknown, path: string, changed: Set<string
     let any = false
     for (const [name, value] of Object.entries(after)) {
       const child = `${path}/${key(name)}`
-      if (!(name in before)) any = mark(value, child, changed) || any
+      if (!Object.hasOwn(before, name)) any = mark(value, child, changed) || any
       else any = walk(before[name], value, child, changed, removed) || any
     }
     for (const [name, value] of Object.entries(before)) {
-      if (!(name in after)) {
+      if (!Object.hasOwn(after, name)) {
         removed.set(`${path}/${key(name)}`, value)
         any = true
       }

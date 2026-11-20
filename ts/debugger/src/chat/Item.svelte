@@ -3,6 +3,7 @@
   import type { DeepReadonly, Item } from '@clackatoo/caf'
   import Markdown from './Markdown.svelte'
   import Tool from './Tool.svelte'
+  import { rawJson, unhidden } from './unhidden.ts'
   import { noteText, tagOf } from './words.ts'
 
   let {
@@ -34,13 +35,13 @@
   <div class="app">{appSummary(kind.value)}</div>
 {:else if kind.type === 'Unknown'}
   <details class="unknown">
-    <summary>Something the agent sent that CAF couldn't read: <code>{kind.value.what}</code></summary>
-    <pre>{JSON.stringify(kind.value.raw, null, 2)}</pre>
+    <summary>Something the agent sent that CAF couldn't read: <code>{unhidden(kind.value.what)}</code></summary>
+    <pre>{rawJson(kind.value.raw)}</pre>
   </details>
 {:else}
   <details class="unknown">
     <summary>An item of a kind this viewer doesn't know: <code>{tagOf(kind)}</code></summary>
-    <pre>{JSON.stringify(kind, null, 2)}</pre>
+    <pre>{rawJson(kind)}</pre>
   </details>
 {/if}
 
