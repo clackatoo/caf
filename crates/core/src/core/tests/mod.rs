@@ -1,6 +1,5 @@
 //! Tests of the core, as scripts of events (see [`harness`]).
 
-mod fixtures;
 mod harness;
 
 mod basics;

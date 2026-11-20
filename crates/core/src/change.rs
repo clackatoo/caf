@@ -120,7 +120,9 @@ pub enum Read<'a, A: AppItem = NoAppItems> {
 /// have. A viewer that meets one has missed something, and needs the chat
 /// whole again; inside the core, it's a bug.
 #[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
 pub enum Mismatch {
     /// No turn has this id.
     NoTurn(TurnId),

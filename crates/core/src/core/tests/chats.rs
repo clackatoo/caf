@@ -69,6 +69,59 @@ fn thinking_isnt_kept_for_a_host_that_doesnt_show_it() {
     assert_eq!(script.chat(CHAT)["turns"][0]["items"], json!([]));
 }
 
+/// Thinking streams in pieces, as words do, into one item.
+#[test]
+fn thinking_streams_into_one_item_for_a_host_that_shows_it() {
+    let mut host = host();
+    host.shows.thinking = true;
+    let mut script = Script::new(host);
+    script.open_claude();
+    script.send(CHAT, "go").0.expect("sent");
+    for text in ["Let me", " look."] {
+        script.update(PROC, SESSION, &json!({ "sessionUpdate": "agent_thought_chunk", "content": { "type": "text", "text": text } }));
+    }
+    script.update(PROC, SESSION, &words("Done."));
+    assert_eq!(
+        script.chat(CHAT)["turns"][0]["items"]
+            .as_array()
+            .map(|items| items
+                .iter()
+                .map(|item| item["kind"].clone())
+                .collect::<Vec<_>>()),
+        Some(vec![
+            json!({ "type": "Thinking", "value": "Let me look." }),
+            json!({ "type": "Words", "value": "Done." }),
+        ])
+    );
+}
+
+/// While a message waits its turn, what the agent sends goes to the turn
+/// it's working on, not the last.
+#[test]
+fn words_and_tools_go_to_the_running_turn_while_a_message_waits() {
+    let mut script = Script::with_claude();
+    script.send(CHAT, "first").0.expect("sent");
+    script.send(CHAT, "second").0.expect("waiting");
+    script.update(PROC, SESSION, &words("a"));
+    script.update(PROC, SESSION, &words("b"));
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Read lib.rs", "kind": "read", "status": "pending" }));
+    script.update(
+        PROC,
+        SESSION,
+        &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed" }),
+    );
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "turns": [
+            { "life": { "type": "Running" }, "items": [
+                { "kind": { "type": "Words", "value": "ab" } },
+                { "kind": { "type": "Tool", "value": { "status": { "type": "Done" } } } }
+            ] },
+            { "life": { "type": "Waiting" }, "items": [] }
+        ] }),
+    );
+}
+
 #[test]
 fn what_the_agent_says_outside_a_prompt_is_a_turn_it_started() {
     let mut script = Script::with_claude();

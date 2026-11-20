@@ -36,6 +36,19 @@
           "agent": "claude",
           "cwd": "/work",
           "session": {
+            "type": "New"
+          }
+        }
+      }
+    },
+    {
+      "type": "Open",
+      "value": {
+        "request": 2,
+        "open": {
+          "agent": "claude",
+          "cwd": "/work",
+          "session": {
             "type": "Continue",
             "value": "s1"
           }
@@ -45,7 +58,7 @@
     {
       "type": "Send",
       "value": {
-        "request": 2,
+        "request": 3,
         "chat": 1,
         "message": {
           "parts": [
@@ -60,15 +73,15 @@
     {
       "type": "Stop",
       "value": {
-        "request": 3,
+        "request": 4,
         "chat": 1
       }
     },
     {
       "type": "Answer",
       "value": {
-        "request": 4,
-        "question": 4,
+        "request": 5,
+        "question": 26,
         "answer": {
           "type": "Permission",
           "value": "allow"
@@ -78,8 +91,8 @@
     {
       "type": "Answer",
       "value": {
-        "request": 5,
-        "question": 6,
+        "request": 6,
+        "question": 27,
         "answer": {
           "type": "SlowToOpen",
           "value": {
@@ -89,9 +102,35 @@
       }
     },
     {
+      "type": "Answer",
+      "value": {
+        "request": 7,
+        "question": 27,
+        "answer": {
+          "type": "SlowToOpen",
+          "value": {
+            "type": "Retry"
+          }
+        }
+      }
+    },
+    {
+      "type": "Answer",
+      "value": {
+        "request": 8,
+        "question": 27,
+        "answer": {
+          "type": "SlowToOpen",
+          "value": {
+            "type": "Stop"
+          }
+        }
+      }
+    },
+    {
       "type": "Close",
       "value": {
-        "request": 6,
+        "request": 9,
         "chat": 1
       }
     }
@@ -152,7 +191,7 @@
                   "parts": [
                     {
                       "type": "Text",
-                      "value": "hi"
+                      "value": "Earlier"
                     }
                   ]
                 }
@@ -161,19 +200,60 @@
                 "type": "Finished"
               },
               "window": {
-                "start": 1800000000000,
+                "start": null,
                 "end": {
-                  "type": "Open"
+                  "type": "Unknown"
                 }
               },
               "items": [
                 {
                   "id": 3,
                   "window": {
-                    "start": 1800000000000,
+                    "start": null,
+                    "end": {
+                      "type": "Unknown"
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Words",
+                    "value": "From before."
+                  }
+                }
+              ],
+              "imported": true
+            },
+            {
+              "id": 17,
+              "starter": {
+                "type": "User",
+                "value": {
+                  "parts": [
+                    {
+                      "type": "Text",
+                      "value": "Fix the tests"
+                    }
+                  ]
+                }
+              },
+              "life": {
+                "type": "Finished"
+              },
+              "window": {
+                "start": 1800000000100,
+                "end": {
+                  "type": "At",
+                  "value": 1800000000200
+                }
+              },
+              "items": [
+                {
+                  "id": 4,
+                  "window": {
+                    "start": 1800000000100,
                     "end": {
                       "type": "At",
-                      "value": 1800000000000
+                      "value": 1800000000104
                     }
                   },
                   "parent": null,
@@ -181,8 +261,459 @@
                     "type": "Words",
                     "value": "On it."
                   }
+                },
+                {
+                  "id": 5,
+                  "window": {
+                    "start": 1800000000105,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000106
+                    }
+                  },
+                  "parent": 4,
+                  "kind": {
+                    "type": "Thinking",
+                    "value": "Reading the tests."
+                  }
+                },
+                {
+                  "id": 6,
+                  "window": {
+                    "start": 1800000000110,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000120
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Tool",
+                    "value": {
+                      "title": "Read lib.rs",
+                      "kind": {
+                        "type": "Read"
+                      },
+                      "status": {
+                        "type": "Pending"
+                      },
+                      "input": {
+                        "path": "lib.rs"
+                      },
+                      "output": "fn main() {}",
+                      "app": null
+                    }
+                  }
+                },
+                {
+                  "id": 7,
+                  "window": {
+                    "start": 1800000000110,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000120
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Tool",
+                    "value": {
+                      "title": "Edit lib.rs",
+                      "kind": {
+                        "type": "Edit"
+                      },
+                      "status": {
+                        "type": "Running"
+                      },
+                      "input": {
+                        "path": "lib.rs"
+                      },
+                      "output": "fn main() {}",
+                      "app": null
+                    }
+                  }
+                },
+                {
+                  "id": 8,
+                  "window": {
+                    "start": 1800000000110,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000120
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Tool",
+                    "value": {
+                      "title": "Delete lib.rs",
+                      "kind": {
+                        "type": "Delete"
+                      },
+                      "status": {
+                        "type": "Done"
+                      },
+                      "input": {
+                        "path": "lib.rs"
+                      },
+                      "output": "fn main() {}",
+                      "app": null
+                    }
+                  }
+                },
+                {
+                  "id": 9,
+                  "window": {
+                    "start": 1800000000110,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000120
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Tool",
+                    "value": {
+                      "title": "Move lib.rs",
+                      "kind": {
+                        "type": "Move"
+                      },
+                      "status": {
+                        "type": "Failed"
+                      },
+                      "input": {
+                        "path": "lib.rs"
+                      },
+                      "output": "fn main() {}",
+                      "app": null
+                    }
+                  }
+                },
+                {
+                  "id": 10,
+                  "window": {
+                    "start": 1800000000110,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000120
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Tool",
+                    "value": {
+                      "title": "Search lib.rs",
+                      "kind": {
+                        "type": "Search"
+                      },
+                      "status": {
+                        "type": "Pending"
+                      },
+                      "input": {
+                        "path": "lib.rs"
+                      },
+                      "output": "fn main() {}",
+                      "app": null
+                    }
+                  }
+                },
+                {
+                  "id": 11,
+                  "window": {
+                    "start": 1800000000110,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000120
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Tool",
+                    "value": {
+                      "title": "Execute lib.rs",
+                      "kind": {
+                        "type": "Execute"
+                      },
+                      "status": {
+                        "type": "Running"
+                      },
+                      "input": {
+                        "path": "lib.rs"
+                      },
+                      "output": "fn main() {}",
+                      "app": null
+                    }
+                  }
+                },
+                {
+                  "id": 12,
+                  "window": {
+                    "start": 1800000000110,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000120
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Tool",
+                    "value": {
+                      "title": "Think lib.rs",
+                      "kind": {
+                        "type": "Think"
+                      },
+                      "status": {
+                        "type": "Done"
+                      },
+                      "input": {
+                        "path": "lib.rs"
+                      },
+                      "output": "fn main() {}",
+                      "app": null
+                    }
+                  }
+                },
+                {
+                  "id": 13,
+                  "window": {
+                    "start": 1800000000110,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000120
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Tool",
+                    "value": {
+                      "title": "Fetch lib.rs",
+                      "kind": {
+                        "type": "Fetch"
+                      },
+                      "status": {
+                        "type": "Failed"
+                      },
+                      "input": {
+                        "path": "lib.rs"
+                      },
+                      "output": "fn main() {}",
+                      "app": null
+                    }
+                  }
+                },
+                {
+                  "id": 14,
+                  "window": {
+                    "start": 1800000000110,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000120
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Tool",
+                    "value": {
+                      "title": "Other lib.rs",
+                      "kind": {
+                        "type": "Other"
+                      },
+                      "status": {
+                        "type": "Pending"
+                      },
+                      "input": {
+                        "path": "lib.rs"
+                      },
+                      "output": "fn main() {}",
+                      "app": null
+                    }
+                  }
+                },
+                {
+                  "id": 15,
+                  "window": {
+                    "start": 1800000000130,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000130
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Compacted",
+                    "value": {}
+                  }
+                },
+                {
+                  "id": 16,
+                  "window": {
+                    "start": 1800000000140,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000140
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Unknown",
+                    "value": {
+                      "what": "an update of a kind CAF doesn't know",
+                      "raw": {
+                        "sessionUpdate": "plan",
+                        "entries": []
+                      }
+                    }
+                  }
                 }
               ],
+              "imported": false
+            },
+            {
+              "id": 18,
+              "starter": {
+                "type": "Caf"
+              },
+              "life": {
+                "type": "Finished"
+              },
+              "window": {
+                "start": 1800000000300,
+                "end": {
+                  "type": "At",
+                  "value": 1800000000300
+                }
+              },
+              "items": [
+                {
+                  "id": 21,
+                  "window": {
+                    "start": 1800000000300,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000300
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Note",
+                    "value": {
+                      "type": "SessionGone"
+                    }
+                  }
+                },
+                {
+                  "id": 22,
+                  "window": {
+                    "start": 1800000000300,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000300
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Note",
+                    "value": {
+                      "type": "CannotContinue"
+                    }
+                  }
+                },
+                {
+                  "id": 23,
+                  "window": {
+                    "start": 1800000000300,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000300
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Note",
+                    "value": {
+                      "type": "SessionStuck"
+                    }
+                  }
+                }
+              ],
+              "imported": false
+            },
+            {
+              "id": 19,
+              "starter": {
+                "type": "Agent"
+              },
+              "life": {
+                "type": "Running"
+              },
+              "window": {
+                "start": 1800000000400,
+                "end": {
+                  "type": "Open"
+                }
+              },
+              "items": [
+                {
+                  "id": 20,
+                  "window": {
+                    "start": 1800000000400,
+                    "end": {
+                      "type": "Open"
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Words",
+                    "value": "Also,"
+                  }
+                }
+              ],
+              "imported": false
+            },
+            {
+              "id": 24,
+              "starter": {
+                "type": "OtherChat",
+                "value": {
+                  "from": 9,
+                  "message": {
+                    "parts": [
+                      {
+                        "type": "Text",
+                        "value": "Review this"
+                      }
+                    ]
+                  }
+                }
+              },
+              "life": {
+                "type": "Waiting"
+              },
+              "window": {
+                "start": 1800000000500,
+                "end": {
+                  "type": "Open"
+                }
+              },
+              "items": [],
+              "imported": false
+            },
+            {
+              "id": 25,
+              "starter": {
+                "type": "Notice",
+                "value": "The build failed"
+              },
+              "life": {
+                "type": "Waiting"
+              },
+              "window": {
+                "start": 1800000000600,
+                "end": {
+                  "type": "Open"
+                }
+              },
+              "items": [],
               "imported": false
             }
           ],
@@ -196,9 +727,9 @@
           },
           "questions": [
             {
-              "id": 4,
+              "id": 26,
               "window": {
-                "start": 1800000000000,
+                "start": 1800000000410,
                 "end": {
                   "type": "Open"
                 }
@@ -206,17 +737,60 @@
               "kind": {
                 "type": "Permission",
                 "value": {
-                  "tool": 3,
-                  "title": "Run ls",
+                  "tool": 11,
+                  "title": "Run cargo test",
                   "options": [
                     {
                       "id": "allow",
-                      "label": "Allow",
+                      "label": "allow",
                       "kind": {
                         "type": "AllowOnce"
                       }
+                    },
+                    {
+                      "id": "allow-always",
+                      "label": "allow-always",
+                      "kind": {
+                        "type": "AllowAlways"
+                      }
+                    },
+                    {
+                      "id": "reject",
+                      "label": "reject",
+                      "kind": {
+                        "type": "RejectOnce"
+                      }
+                    },
+                    {
+                      "id": "reject-always",
+                      "label": "reject-always",
+                      "kind": {
+                        "type": "RejectAlways"
+                      }
+                    },
+                    {
+                      "id": "other",
+                      "label": "other",
+                      "kind": {
+                        "type": "Other"
+                      }
                     }
                   ]
+                }
+              }
+            },
+            {
+              "id": 27,
+              "window": {
+                "start": 1800000000420,
+                "end": {
+                  "type": "Open"
+                }
+              },
+              "kind": {
+                "type": "SlowToOpen",
+                "value": {
+                  "adapter_answered": true
                 }
               }
             }
@@ -235,6 +809,44 @@
             "change": {
               "type": "State",
               "value": {
+                "type": "Opening"
+              }
+            }
+          },
+          {
+            "no": 7,
+            "change": {
+              "type": "State",
+              "value": {
+                "type": "Open",
+                "value": {
+                  "session": "s2"
+                }
+              }
+            }
+          },
+          {
+            "no": 8,
+            "change": {
+              "type": "State",
+              "value": {
+                "type": "Lost",
+                "value": {
+                  "reason": {
+                    "type": "CouldNotStart",
+                    "value": {
+                      "error": "No such file or directory"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "no": 9,
+            "change": {
+              "type": "State",
+              "value": {
                 "type": "Lost",
                 "value": {
                   "reason": {
@@ -250,18 +862,188 @@
             }
           },
           {
-            "no": 7,
+            "no": 10,
+            "change": {
+              "type": "State",
+              "value": {
+                "type": "Lost",
+                "value": {
+                  "reason": {
+                    "type": "Restarted"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "no": 11,
+            "change": {
+              "type": "State",
+              "value": {
+                "type": "Lost",
+                "value": {
+                  "reason": {
+                    "type": "SignInNeeded"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "no": 12,
+            "change": {
+              "type": "State",
+              "value": {
+                "type": "Lost",
+                "value": {
+                  "reason": {
+                    "type": "Refused",
+                    "value": {
+                      "message": "Session not found"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "no": 13,
+            "change": {
+              "type": "State",
+              "value": {
+                "type": "Lost",
+                "value": {
+                  "reason": {
+                    "type": "Stopped"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "no": 14,
+            "change": {
+              "type": "State",
+              "value": {
+                "type": "Lost",
+                "value": {
+                  "reason": {
+                    "type": "Incompatible",
+                    "value": {
+                      "type": "Protocol",
+                      "value": {
+                        "version": 2
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "no": 15,
+            "change": {
+              "type": "State",
+              "value": {
+                "type": "Lost",
+                "value": {
+                  "reason": {
+                    "type": "Incompatible",
+                    "value": {
+                      "type": "Protocol",
+                      "value": {
+                        "version": null
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "no": 16,
+            "change": {
+              "type": "State",
+              "value": {
+                "type": "Lost",
+                "value": {
+                  "reason": {
+                    "type": "Incompatible",
+                    "value": {
+                      "type": "HttpMcp"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "no": 17,
+            "change": {
+              "type": "State",
+              "value": {
+                "type": "Lost",
+                "value": {
+                  "reason": {
+                    "type": "Incompatible",
+                    "value": {
+                      "type": "BadAnswer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "no": 18,
+            "change": {
+              "type": "State",
+              "value": {
+                "type": "Lost",
+                "value": {
+                  "reason": {
+                    "type": "InUse"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "no": 19,
+            "change": {
+              "type": "State",
+              "value": {
+                "type": "Lost",
+                "value": {
+                  "reason": {
+                    "type": "ShutDown"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "no": 20,
+            "change": {
+              "type": "State",
+              "value": {
+                "type": "Closed"
+              }
+            }
+          },
+          {
+            "no": 21,
             "change": {
               "type": "TurnAdded",
               "value": {
-                "id": 7,
+                "id": 30,
                 "starter": {
                   "type": "User",
                   "value": {
                     "parts": [
                       {
                         "type": "Text",
-                        "value": "hi"
+                        "value": "And the docs"
                       }
                     ]
                   }
@@ -270,7 +1052,7 @@
                   "type": "Waiting"
                 },
                 "window": {
-                  "start": 1800000000000,
+                  "start": 1800000000700,
                   "end": {
                     "type": "Open"
                   }
@@ -281,13 +1063,13 @@
             }
           },
           {
-            "no": 8,
+            "no": 22,
             "change": {
               "type": "TurnInserted",
               "value": {
-                "before": 7,
+                "before": 30,
                 "turn": {
-                  "id": 8,
+                  "id": 31,
                   "starter": {
                     "type": "Caf"
                   },
@@ -295,19 +1077,20 @@
                     "type": "Finished"
                   },
                   "window": {
-                    "start": 1800000000000,
+                    "start": 1800000000710,
                     "end": {
-                      "type": "Open"
+                      "type": "At",
+                      "value": 1800000000710
                     }
                   },
                   "items": [
                     {
-                      "id": 9,
+                      "id": 32,
                       "window": {
-                        "start": 1800000000000,
+                        "start": 1800000000710,
                         "end": {
                           "type": "At",
-                          "value": 1800000000000
+                          "value": 1800000000710
                         }
                       },
                       "parent": null,
@@ -325,16 +1108,109 @@
             }
           },
           {
-            "no": 9,
+            "no": 23,
             "change": {
               "type": "TurnLife",
               "value": {
-                "turn": 2,
+                "turn": 19,
+                "life": {
+                  "type": "Waiting"
+                },
+                "end": {
+                  "type": "Open"
+                }
+              }
+            }
+          },
+          {
+            "no": 24,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Running"
+                },
+                "end": {
+                  "type": "Open"
+                }
+              }
+            }
+          },
+          {
+            "no": 25,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Stopping"
+                },
+                "end": {
+                  "type": "Open"
+                }
+              }
+            }
+          },
+          {
+            "no": 26,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Finished"
+                },
+                "end": {
+                  "type": "At",
+                  "value": 1800000000900
+                }
+              }
+            }
+          },
+          {
+            "no": 27,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Stopped"
+                },
+                "end": {
+                  "type": "At",
+                  "value": 1800000000900
+                }
+              }
+            }
+          },
+          {
+            "no": 28,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "CutOff"
+                },
+                "end": {
+                  "type": "At",
+                  "value": 1800000000900
+                }
+              }
+            }
+          },
+          {
+            "no": 29,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
                 "life": {
                   "type": "Failed",
                   "value": {
                     "reason": {
-                      "type": "UsageLimit"
+                      "type": "TooLong"
                     },
                     "agent_said": "Try again at 5pm",
                     "remedy": {
@@ -344,36 +1220,304 @@
                 },
                 "end": {
                   "type": "At",
-                  "value": 1800000001000
+                  "value": 1800000000900
                 }
               }
             }
           },
           {
-            "no": 10,
+            "no": 30,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Failed",
+                  "value": {
+                    "reason": {
+                      "type": "TooManySteps"
+                    },
+                    "agent_said": null,
+                    "remedy": {
+                      "type": "SignIn"
+                    }
+                  }
+                },
+                "end": {
+                  "type": "At",
+                  "value": 1800000000900
+                }
+              }
+            }
+          },
+          {
+            "no": 31,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Failed",
+                  "value": {
+                    "reason": {
+                      "type": "Refused"
+                    },
+                    "agent_said": "Try again at 5pm",
+                    "remedy": {
+                      "type": "NewChat"
+                    }
+                  }
+                },
+                "end": {
+                  "type": "At",
+                  "value": 1800000000900
+                }
+              }
+            }
+          },
+          {
+            "no": 32,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Failed",
+                  "value": {
+                    "reason": {
+                      "type": "SignInNeeded"
+                    },
+                    "agent_said": null,
+                    "remedy": null
+                  }
+                },
+                "end": {
+                  "type": "At",
+                  "value": 1800000000900
+                }
+              }
+            }
+          },
+          {
+            "no": 33,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Failed",
+                  "value": {
+                    "reason": {
+                      "type": "AccessDenied"
+                    },
+                    "agent_said": "Try again at 5pm",
+                    "remedy": {
+                      "type": "SendAgain"
+                    }
+                  }
+                },
+                "end": {
+                  "type": "At",
+                  "value": 1800000000900
+                }
+              }
+            }
+          },
+          {
+            "no": 34,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Failed",
+                  "value": {
+                    "reason": {
+                      "type": "BadRequest"
+                    },
+                    "agent_said": null,
+                    "remedy": {
+                      "type": "SignIn"
+                    }
+                  }
+                },
+                "end": {
+                  "type": "At",
+                  "value": 1800000000900
+                }
+              }
+            }
+          },
+          {
+            "no": 35,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Failed",
+                  "value": {
+                    "reason": {
+                      "type": "UsageLimit"
+                    },
+                    "agent_said": "Try again at 5pm",
+                    "remedy": {
+                      "type": "NewChat"
+                    }
+                  }
+                },
+                "end": {
+                  "type": "At",
+                  "value": 1800000000900
+                }
+              }
+            }
+          },
+          {
+            "no": 36,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Failed",
+                  "value": {
+                    "reason": {
+                      "type": "ProviderError"
+                    },
+                    "agent_said": null,
+                    "remedy": null
+                  }
+                },
+                "end": {
+                  "type": "At",
+                  "value": 1800000000900
+                }
+              }
+            }
+          },
+          {
+            "no": 37,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Failed",
+                  "value": {
+                    "reason": {
+                      "type": "AgentStopped"
+                    },
+                    "agent_said": "Try again at 5pm",
+                    "remedy": {
+                      "type": "SendAgain"
+                    }
+                  }
+                },
+                "end": {
+                  "type": "At",
+                  "value": 1800000000900
+                }
+              }
+            }
+          },
+          {
+            "no": 38,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Failed",
+                  "value": {
+                    "reason": {
+                      "type": "DidNotStop"
+                    },
+                    "agent_said": null,
+                    "remedy": {
+                      "type": "SignIn"
+                    }
+                  }
+                },
+                "end": {
+                  "type": "At",
+                  "value": 1800000000900
+                }
+              }
+            }
+          },
+          {
+            "no": 39,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Failed",
+                  "value": {
+                    "reason": {
+                      "type": "BadAnswer"
+                    },
+                    "agent_said": "Try again at 5pm",
+                    "remedy": {
+                      "type": "NewChat"
+                    }
+                  }
+                },
+                "end": {
+                  "type": "At",
+                  "value": 1800000000900
+                }
+              }
+            }
+          },
+          {
+            "no": 40,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Failed",
+                  "value": {
+                    "reason": {
+                      "type": "Other"
+                    },
+                    "agent_said": null,
+                    "remedy": null
+                  }
+                },
+                "end": {
+                  "type": "At",
+                  "value": 1800000000900
+                }
+              }
+            }
+          },
+          {
+            "no": 41,
             "change": {
               "type": "ItemAdded",
               "value": {
-                "turn": 2,
+                "turn": 19,
                 "item": {
-                  "id": 10,
+                  "id": 33,
                   "window": {
-                    "start": 1800000000000,
+                    "start": 1800000000800,
                     "end": {
-                      "type": "At",
-                      "value": 1800000000000
+                      "type": "Open"
                     }
                   },
                   "parent": null,
                   "kind": {
                     "type": "Tool",
                     "value": {
-                      "title": "Read lib.rs",
+                      "title": "Execute lib.rs",
                       "kind": {
-                        "type": "Read"
+                        "type": "Execute"
                       },
                       "status": {
-                        "type": "Done"
+                        "type": "Pending"
                       },
                       "input": {
                         "path": "lib.rs"
@@ -387,25 +1531,25 @@
             }
           },
           {
-            "no": 11,
+            "no": 42,
             "change": {
               "type": "Appended",
               "value": {
-                "item": 3,
-                "text": " Done."
+                "item": 20,
+                "text": " the docs."
               }
             }
           },
           {
-            "no": 12,
+            "no": 43,
             "change": {
               "type": "ToolChanged",
               "value": {
-                "item": 10,
+                "item": 33,
                 "tool": {
-                  "title": "Read lib.rs",
+                  "title": "Execute lib.rs",
                   "kind": {
-                    "type": "Read"
+                    "type": "Execute"
                   },
                   "status": {
                     "type": "Done"
@@ -420,40 +1564,37 @@
             }
           },
           {
-            "no": 13,
+            "no": 44,
             "change": {
               "type": "ItemEnded",
               "value": {
-                "item": 3,
+                "item": 20,
                 "end": {
                   "type": "At",
-                  "value": 1800000001000
+                  "value": 1800000000810
                 }
               }
             }
           },
           {
-            "no": 14,
+            "no": 45,
             "change": {
               "type": "Usage",
               "value": {
-                "used": 5000,
+                "used": 6000,
                 "size": 200000,
-                "cost": {
-                  "amount": 0.25,
-                  "currency": "USD"
-                }
+                "cost": null
               }
             }
           },
           {
-            "no": 15,
+            "no": 46,
             "change": {
               "type": "QuestionAsked",
               "value": {
-                "id": 4,
+                "id": 34,
                 "window": {
-                  "start": 1800000000000,
+                  "start": 1800000000820,
                   "end": {
                     "type": "Open"
                   }
@@ -461,8 +1602,8 @@
                 "kind": {
                   "type": "Permission",
                   "value": {
-                    "tool": 3,
-                    "title": "Run ls",
+                    "tool": null,
+                    "title": "Fetch docs.rs",
                     "options": [
                       {
                         "id": "allow",
@@ -478,10 +1619,10 @@
             }
           },
           {
-            "no": 16,
+            "no": 47,
             "change": {
               "type": "QuestionGone",
-              "value": 4
+              "value": 26
             }
           }
         ]
@@ -509,7 +1650,7 @@
         "request": 2,
         "outcome": {
           "type": "Sent",
-          "value": 7
+          "value": 30
         }
       }
     },
@@ -527,6 +1668,120 @@
       "value": {
         "request": 4,
         "outcome": {
+          "type": "NotAllowed"
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 5,
+        "outcome": {
+          "type": "Gone"
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 6,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "NoSuchChat"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 7,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "Closed"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 8,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "NoSuchAgent"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 9,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "RelativeFolder"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 10,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "Unsendable"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 11,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "QueueFull"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 12,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "Unsupported"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 13,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "CommandNotAlone"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 14,
+        "outcome": {
           "type": "Refused",
           "value": {
             "type": "NoSuchQuestion"
@@ -537,18 +1792,24 @@
     {
       "type": "Done",
       "value": {
-        "request": 5,
+        "request": 15,
         "outcome": {
-          "type": "NotAllowed"
+          "type": "Refused",
+          "value": {
+            "type": "WrongAnswer"
+          }
         }
       }
     },
     {
       "type": "Done",
       "value": {
-        "request": 6,
+        "request": 16,
         "outcome": {
-          "type": "Gone"
+          "type": "Refused",
+          "value": {
+            "type": "NothingToStop"
+          }
         }
       }
     }

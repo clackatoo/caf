@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::acp::{Frame, Message, RequestId, RpcError, Shape};
 use crate::agent::{AgentSpec, EnvChange, McpServer, SpawnCommand};
-use crate::change::{Change, Numbered};
+use crate::change::{Change, Mismatch, Numbered};
 use crate::chat::{
     Chat, ChatState, Compacted, Cost, Failure, FailureReason, Incompatible, Item, ItemKind, Lost,
     Note, Part, Remedy, Starter, ToolCall, ToolKind, ToolStatus, Turn, TurnLife, Unknown, Usage,
@@ -272,28 +272,6 @@ fn answered() -> Message {
     }
 }
 
-/// Which [`Change`] this is, counting from 0: for tests that hold one
-/// of every kind. A new kind doesn't compile until it's counted here and
-/// in [`CHANGES`].
-pub(crate) fn change_kind(change: &Change) -> usize {
-    match change {
-        Change::State(_) => 0,
-        Change::TurnAdded(_) => 1,
-        Change::TurnInserted { .. } => 2,
-        Change::TurnLife { .. } => 3,
-        Change::ItemAdded { .. } => 4,
-        Change::Appended { .. } => 5,
-        Change::ToolChanged { .. } => 6,
-        Change::ItemEnded { .. } => 7,
-        Change::Usage(_) => 8,
-        Change::QuestionAsked(_) => 9,
-        Change::QuestionGone(_) => 10,
-    }
-}
-
-/// How many kinds of [`Change`] there are.
-pub(crate) const CHANGES: usize = 11;
-
 /// Adds one of every type CAF writes to `s`, but for those that have no
 /// values (`NoAppItems`, `StorageEvent`, `StorageDirective`).
 pub(crate) fn every_type(s: &mut Samples) {
@@ -365,6 +343,7 @@ pub(crate) fn every_type(s: &mut Samples) {
         change: change.clone(),
     });
     s.both(&change);
+    s.both(&Mismatch::NotText(ItemId(3)));
     // question
     s.both(&question());
     s.both(&QuestionKind::SlowToOpen(SlowToOpen {

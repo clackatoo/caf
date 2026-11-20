@@ -25,7 +25,6 @@ use std::collections::BTreeMap;
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
-use super::fixtures;
 use crate::acp::{Frame, Message, RequestId, RpcError};
 use crate::agent::{AgentSpec, SpawnCommand};
 use crate::chat::UserMessage;
@@ -34,6 +33,7 @@ use crate::directive::{
     AgentDirective, Directive, PolicyDirective, TimerDirective, ViewerDirective,
 };
 use crate::event::{AgentEvent, Event, HostCommand, PolicyAnswer};
+use crate::fixtures::{self, After};
 use crate::host::Host;
 use crate::ids::{ChatId, QuestionId, Ticket, TurnId};
 use crate::profiles::{Builtin, ProfileChoice};
@@ -61,6 +61,8 @@ pub(crate) struct Script {
     /// The agent's requests, by process and id, and how often each was
     /// answered.
     answers: BTreeMap<(u64, String), usize>,
+    /// Whether its chats' conformance fixtures are checked when it ends.
+    fixtures: bool,
 }
 
 /// The agents a test offers: Claude, as the Claude profile expects it.
@@ -96,7 +98,15 @@ impl Script {
             trace: Vec::new(),
             outs: Vec::new(),
             answers: BTreeMap::new(),
+            fixtures: true,
         }
+    }
+
+    /// Writes no conformance fixtures: for a script that only makes a
+    /// recording, of a scenario another script already runs.
+    pub(crate) fn without_fixtures(&mut self) -> &mut Self {
+        self.fixtures = false;
+        self
     }
 
     /// Sets the clock to `ms` milliseconds since the start.
@@ -401,9 +411,25 @@ impl Drop for Script {
         if !std::thread::panicking() {
             self.check_answers();
             self.replay();
-            fixtures::check(&self.core.applied);
+            if self.fixtures {
+                check_fixtures(&self.core);
+            }
         }
     }
+}
+
+/// Checks the conformance fixtures of `core`'s chats (see
+/// [`fixtures`]): each chat's record, change by change, as its tests saw
+/// it.
+pub(crate) fn check_fixtures(core: &Core) {
+    let chats = core.applied.iter().map(|(chat, applied)| {
+        let steps = (applied.steps.iter()).map(|(change, chat)| (change, After::Chat(chat)));
+        (
+            chat.0,
+            fixtures::text(&applied.picture, applied.latest, steps),
+        )
+    });
+    fixtures::check_script(&fixtures::next_script(), chats);
 }
 
 /// `message`, a JSON-RPC message, as the agent driver hands it over.

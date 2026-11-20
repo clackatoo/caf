@@ -58,7 +58,7 @@ mod tests {
 
     use crate::acp::{Frame, Message, RequestId, RpcError, Shape};
     use crate::agent::{AgentSpec, EnvChange, McpServer, SpawnCommand};
-    use crate::change::{Change, Numbered};
+    use crate::change::{Change, Mismatch, Numbered};
     use crate::chat::{
         Chat, ChatState, Compacted, Cost, Failure, FailureReason, Incompatible, Item, ItemKind,
         Lost, NoAppItems, Note, Part, Remedy, Starter, ToolCall, ToolKind, ToolStatus, Turn,
@@ -121,6 +121,7 @@ mod tests {
             SpawnCommand,
             // change
             Change,
+            Mismatch,
             Numbered,
             // chat
             Chat,

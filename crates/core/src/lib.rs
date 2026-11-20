@@ -139,8 +139,12 @@ pub mod chat;
 mod core;
 pub mod directive;
 pub mod event;
+#[cfg(test)]
+mod fixtures;
 pub mod host;
 pub mod ids;
+#[cfg(test)]
+mod kinds;
 pub mod profiles;
 pub mod question;
 #[cfg(test)]

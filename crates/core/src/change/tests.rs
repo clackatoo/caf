@@ -1,8 +1,10 @@
 //! Tests of [`Chat::apply`]: each change, and each one that doesn't fit.
+//! Each writes a conformance fixture (see [`fixtures`]).
 
-use crate::change::{Change, Mismatch};
+use crate::change::{Change, Mismatch, Numbered};
 use crate::chat::{Chat, ChatState, Item, ItemKind, Lost, ToolStatus, TurnLife, Usage};
-use crate::ids::{ItemId, QuestionId, TurnId};
+use crate::fixtures::{self, After};
+use crate::ids::{ChangeNo, ItemId, QuestionId, TurnId};
 use crate::shape::{chat, item, question, tool, turn, usage};
 use crate::time::{End, Wall};
 
@@ -29,21 +31,54 @@ fn two_turns() -> Chat {
     chat
 }
 
-/// `change` applied to [`two_turns`].
+/// The change after [`two_turns`]'s last, which is 5.
+fn numbered(no: u64, change: Change) -> Numbered {
+    Numbered {
+        no: ChangeNo(5 + no),
+        change,
+    }
+}
+
+/// `changes` applied to [`two_turns`] in turn, each written to the
+/// test's conformance fixture with the chat after it.
 #[track_caller]
-fn applied(change: Change) -> Chat {
+fn applied_all(changes: Vec<Change>) -> Chat {
     let mut chat = two_turns();
-    chat.apply(&change).expect("it fits");
+    let mut steps = Vec::new();
+    for (change, no) in changes.into_iter().zip(1..) {
+        chat.apply(&change).expect("it fits");
+        steps.push((numbered(no, change), chat.clone()));
+    }
+    let text = fixtures::text(
+        &two_turns(),
+        ChangeNo(5),
+        (steps.iter()).map(|(change, chat)| (change, After::Chat(chat))),
+    );
+    fixtures::check(&format!("{}.json", fixtures::next_script()), &text);
     chat
 }
 
-/// Applying `change` to [`two_turns`] fails with `mismatch`, and leaves
-/// the chat as it was.
+/// `change` applied to [`two_turns`].
 #[track_caller]
-fn misfits(change: Change, mismatch: Mismatch) {
+fn applied(change: Change) -> Chat {
+    applied_all(vec![change])
+}
+
+/// Applying `change` to [`two_turns`] fails with `mismatch`, and leaves
+/// the chat as it was. Its conformance fixture is named after the test
+/// and `case`.
+#[track_caller]
+fn misfits(case: &str, change: Change, mismatch: Mismatch) {
     let mut chat = two_turns();
-    assert_eq!(chat.apply(&change), Err(mismatch));
+    assert_eq!(chat.apply(&change), Err(mismatch.clone()));
     assert_eq!(chat, two_turns(), "the chat is unchanged");
+    let change = numbered(1, change);
+    let text = fixtures::text(
+        &two_turns(),
+        ChangeNo(5),
+        [(&change, After::Mismatch(&mismatch))],
+    );
+    fixtures::check(&format!("{}--{case}.json", fixtures::test_name()), &text);
 }
 
 fn ids(chat: &Chat) -> Vec<u64> {
@@ -169,10 +204,11 @@ fn questions_come_and_go() {
     second.id = QuestionId(10);
     let asked = applied(Change::QuestionAsked(second.clone()));
     assert_eq!(asked.questions, [question(), second.clone()]);
-    let mut chat = asked;
-    chat.apply(&Change::QuestionGone(QuestionId(4)))
-        .expect("it fits");
-    assert_eq!(chat.questions, [second]);
+    let gone = applied_all(vec![
+        Change::QuestionAsked(second.clone()),
+        Change::QuestionGone(QuestionId(4)),
+    ]);
+    assert_eq!(gone.questions, [second], "only the one answered goes");
 }
 
 #[test]
@@ -180,6 +216,7 @@ fn a_change_naming_what_the_chat_lacks_changes_nothing() {
     let turn = turn();
     let end = End::At(Wall(1_800_000_009_000));
     misfits(
+        "insert-before-no-turn",
         Change::TurnInserted {
             before: TurnId(99),
             turn: turn.clone(),
@@ -187,6 +224,7 @@ fn a_change_naming_what_the_chat_lacks_changes_nothing() {
         Mismatch::NoTurn(TurnId(99)),
     );
     misfits(
+        "life-of-no-turn",
         Change::TurnLife {
             turn: TurnId(99),
             life: TurnLife::Finished,
@@ -195,6 +233,7 @@ fn a_change_naming_what_the_chat_lacks_changes_nothing() {
         Mismatch::NoTurn(TurnId(99)),
     );
     misfits(
+        "item-for-no-turn",
         Change::ItemAdded {
             turn: TurnId(99),
             item: item(),
@@ -202,6 +241,7 @@ fn a_change_naming_what_the_chat_lacks_changes_nothing() {
         Mismatch::NoTurn(TurnId(99)),
     );
     misfits(
+        "words-for-no-item",
         Change::Appended {
             item: ItemId(99),
             text: "x".into(),
@@ -209,6 +249,7 @@ fn a_change_naming_what_the_chat_lacks_changes_nothing() {
         Mismatch::NoItem(ItemId(99)),
     );
     misfits(
+        "words-for-a-tool",
         Change::Appended {
             item: ItemId(7),
             text: "x".into(),
@@ -216,6 +257,7 @@ fn a_change_naming_what_the_chat_lacks_changes_nothing() {
         Mismatch::NotText(ItemId(7)),
     );
     misfits(
+        "tool-for-no-item",
         Change::ToolChanged {
             item: ItemId(99),
             tool: tool(),
@@ -223,6 +265,7 @@ fn a_change_naming_what_the_chat_lacks_changes_nothing() {
         Mismatch::NoItem(ItemId(99)),
     );
     misfits(
+        "tool-for-words",
         Change::ToolChanged {
             item: ItemId(3),
             tool: tool(),
@@ -230,6 +273,7 @@ fn a_change_naming_what_the_chat_lacks_changes_nothing() {
         Mismatch::NotTool(ItemId(3)),
     );
     misfits(
+        "end-of-no-item",
         Change::ItemEnded {
             item: ItemId(99),
             end,
@@ -237,6 +281,7 @@ fn a_change_naming_what_the_chat_lacks_changes_nothing() {
         Mismatch::NoItem(ItemId(99)),
     );
     misfits(
+        "no-question",
         Change::QuestionGone(QuestionId(99)),
         Mismatch::NoQuestion(QuestionId(99)),
     );

@@ -101,6 +101,41 @@ fn the_user_is_asked_when_the_policy_says_so() {
     assert!(replies(&out, &json!(7)).is_empty());
 }
 
+/// Two questions can wait at once, and answering one leaves the other.
+#[test]
+fn two_questions_wait_at_once_and_answering_one_leaves_the_other() {
+    let mut script = Script::with_claude();
+    let first = asked(&mut script);
+    script.policy(first, PolicyAnswer::AskUser);
+    let out = script.says(PROC, &permission(8, "tool-2"));
+    script.policy(ticket(&out), PolicyAnswer::AskUser);
+    let ids = |script: &Script| -> Vec<u64> {
+        (script.chat(CHAT)["questions"]
+            .as_array()
+            .expect("questions")
+            .iter())
+        .map(|question| question["id"].as_u64().expect("an id"))
+        .collect()
+    };
+    let [one, two] = ids(&script)[..] else {
+        panic!("two questions: {:?}", ids(&script))
+    };
+    let (answered, out) = script.answer(
+        QuestionId(one),
+        Answer::Permission(OptionId("allow".to_owned())),
+    );
+    answered.expect("answered");
+    assert_eq!(reply(&out, 7), selected("allow"));
+    assert_eq!(ids(&script), [two]);
+    let (answered, out) = script.answer(
+        QuestionId(two),
+        Answer::Permission(OptionId("reject".to_owned())),
+    );
+    answered.expect("answered");
+    assert_eq!(reply(&out, 8), selected("reject"));
+    assert!(ids(&script).is_empty());
+}
+
 #[test]
 fn a_host_that_cant_ask_the_user_gets_a_safe_refusal() {
     let mut host = host();

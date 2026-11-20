@@ -319,4 +319,6 @@ impl<A: AppItem> ChatCopy<A> {
 }
 
 #[cfg(test)]
+mod sample;
+#[cfg(test)]
 mod tests;
