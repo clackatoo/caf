@@ -45,6 +45,45 @@
 //! settings are made with their constructor and changed by setting
 //! fields.
 //!
+//! # One shape, in every format
+//!
+//! Every CAF type is written the same way in JSON (recordings, the viewer
+//! wire to TypeScript) and in MessagePack in named mode (saved state, the
+//! viewer wire to Rust), so the same rules describe them all:
+//!
+//! - **Every enum CAF owns is its variant's name as `type`, with what it
+//!   holds, if anything, as `value`**: `{"type": "Open"}`,
+//!   `{"type": "Words", "value": "hi"}`,
+//!   `{"type": "Lost", "value": {"reason": {"type": "ShutDown"}}}`.
+//!   TypeScript reads each as a plain union, by `switch (x.type)`. `type`
+//!   is always written first.
+//! - **Names are as in Rust**: fields in snake_case, variants in
+//!   PascalCase, so these docs describe the wire exactly.
+//! - **Ids are plain numbers or strings**, such as a [`ChatId`] as `1000`.
+//! - **What isn't CAF's keeps its own shape:** what an agent sent, such as
+//!   a message's params or an [`Unknown`](chat::Unknown) item's data, stays
+//!   exactly as it came; Rust's own types keep serde's shapes, such as
+//!   `Option` as the value or `null`, `Result` as `{"Ok": …}` or
+//!   `{"Err": …}`, `Duration` as `{"secs", "nanos"}`, and an `OsString` as
+//!   `{"Unix": [bytes]}`.
+//!
+//! A JSON-RPC message's params, result and error data
+//! ([`acp::Message`]) are kept as the agent wrote them, so they're only
+//! ever written as JSON, never as MessagePack, and read back only with
+//! each `type` before its `value`, as CAF writes it.
+//!
+//! # Numbers
+//!
+//! Every number on the viewer wire ([`viewer`]) and in a chat is below
+//! 2^53, so JavaScript reads it exactly: CAF's ids count up from 1, and
+//! times are milliseconds ([`Wall`](time::Wall)).
+//!
+//! What only debugging tools read may not be: events, directives and
+//! recordings carry readings of the steady clock ([`Mono`](time::Mono)),
+//! which are nanoseconds and pass 2^53 after about 104 days of the host
+//! running, and what an agent sent, such as its request ids, is any
+//! number it chose.
+//!
 //! # Guarantees
 //!
 //! Each of these has a test.

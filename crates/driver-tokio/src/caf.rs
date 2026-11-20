@@ -69,7 +69,8 @@ pub struct Config {
     /// [`Core`] as a test. `None` by default. The file must not exist yet.
     ///
     /// It's JSON lines, of version 2. The first holds the host and the
-    /// agents: `{"caf_recording": 2, "host": …, "agents": […]}`. Each line
+    /// agents: `{"caf_recording": 2, "host": …, "agents": […]}`; a reader
+    /// checks the version before reading the rest. Each line
     /// after it is one event the core was given, with its time, in order:
     /// `{"now": …, "event": …}`. Everything is in CAF's one shape (see
     /// caf-core's docs), such as `{"type": "Woken"}`, with each `type`
