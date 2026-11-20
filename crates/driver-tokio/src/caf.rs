@@ -202,7 +202,11 @@ impl<A: AppItem> WeakCaf<A> {
     /// A watch on `chat`, from `since` if the watcher has that already.
     pub(crate) fn watch(&self, chat: ChatId, since: Option<ChangeNo>) -> Watch<A> {
         let mut last = (self.shared.last.lock()).unwrap_or_else(PoisonError::into_inner);
-        last.watched.insert(chat);
+        // Once the task has ended, the last words are written: there's
+        // nothing to keep for a new watch.
+        if !last.ended {
+            last.watched.insert(chat);
+        }
         drop(last);
         Watch {
             commands: self.commands.clone(),
@@ -738,6 +742,8 @@ struct Last<A: AppItem> {
     watched: HashSet<ChatId>,
     /// Each of them as CAF left it. Empty until the task ends.
     chats: HashMap<ChatId, (Chat<A>, ChangeNo)>,
+    /// The task has ended, and `chats` is filled in.
+    ended: bool,
 }
 
 impl<A: AppItem> Default for Last<A> {
@@ -745,6 +751,7 @@ impl<A: AppItem> Default for Last<A> {
         Self {
             watched: HashSet::new(),
             chats: HashMap::new(),
+            ended: false,
         }
     }
 }
@@ -799,7 +806,12 @@ impl<A: AppItem> Task<A> {
         }
         {
             let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
-            let Last { watched, chats } = &mut *last;
+            let Last {
+                watched,
+                chats,
+                ended,
+            } = &mut *last;
+            *ended = true;
             for &chat in &*watched {
                 if let Some(Read::Picture {
                     chat: whole,
@@ -1559,5 +1571,17 @@ mod tests {
         assert_eq!(watched, 0, "a watch for no chat is forgotten once it ends");
         caf.shutdown().await;
         running.await;
+    }
+
+    #[tokio::test]
+    async fn a_watch_made_after_caf_has_ended_leaves_nothing_behind() {
+        let (caf, running) =
+            Caf::<NoAppItems>::start(Config::new(Host::new("test", "1.0.0"), vec![]));
+        caf.shutdown().await;
+        running.await;
+        let mut watch = caf.chat(ChatId(1000)).watch();
+        assert!(watch.next().await.is_none());
+        let watched = caf.shared.last.lock().unwrap().watched.len();
+        assert_eq!(watched, 0, "nothing is kept for a watch once CAF has ended");
     }
 }

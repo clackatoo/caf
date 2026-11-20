@@ -855,3 +855,87 @@ async fn a_viewer_doesnt_keep_caf_running() {
     );
     viewer.ends().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_while_caf_shuts_down_is_answered_gone() {
+    let dir = Dir::new();
+    // An adapter too busy to hear it's told to stop, and a host that waits
+    // a while before stopping it firmly, so shutting down takes a while.
+    let script = dir.script(
+        "script.jsonl",
+        &after_handshake(&[json!({"sleep": 60_000})]),
+    );
+    let mut host = host();
+    host.timers.kill_after = std::time::Duration::from_secs(3);
+    let (caf, running) = Caf::start(Config::new(host, vec![fake(&dir, &script)]));
+    let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
+    let mut watch = chat.watch();
+    until(&chat, &mut watch, "the session", |chat| {
+        matches!(chat.state, ChatState::Open { .. })
+    })
+    .await;
+    let (mut viewer, ..) = Viewer::welcomed(&caf, opening(), 8).await;
+    viewer.watch(chat.id).await;
+    let shutting_down = tokio::spawn({
+        let caf = caf.clone();
+        async move { caf.shutdown().await }
+    });
+    // Shutting down has begun once the chat says so.
+    loop {
+        match viewer.next().await {
+            Some(ToViewer::Changes { changes, .. })
+                if changes.iter().any(|numbered| {
+                    matches!(
+                        numbered.change,
+                        Change::State(ChatState::Lost {
+                            reason: Lost::ShutDown
+                        })
+                    )
+                }) =>
+            {
+                break;
+            }
+            Some(_) => {}
+            None => panic!("the link ended before shutting down began"),
+        }
+    }
+    let asks = [
+        FromViewer::Open {
+            request: RequestNo(1),
+            open: OpenRequest::new("fake", &dir.0),
+        },
+        FromViewer::Send {
+            request: RequestNo(2),
+            chat: chat.id,
+            message: UserMessage::text("Anyone?"),
+        },
+        FromViewer::Stop {
+            request: RequestNo(3),
+            chat: chat.id,
+        },
+        FromViewer::Answer {
+            request: RequestNo(4),
+            question: QuestionId(1),
+            answer: Answer::Permission(OptionId("allow".into())),
+        },
+        FromViewer::Close {
+            request: RequestNo(5),
+            chat: chat.id,
+        },
+    ];
+    for (request, ask) in (1..).zip(asks) {
+        viewer.send(ask).await;
+        assert_eq!(
+            viewer.done(request).await.0,
+            Outcome::Gone,
+            "request {request}"
+        );
+    }
+    drop((caf, chat, watch));
+    tokio::time::timeout(PATIENCE, shutting_down)
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(PATIENCE, running).await.unwrap();
+    viewer.ends().await;
+}

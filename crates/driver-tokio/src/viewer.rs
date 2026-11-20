@@ -77,8 +77,9 @@ impl Default for ViewerRules {
 /// chat whole again rather than every change it missed. So a slow viewer
 /// never makes CAF hold more for it than one chat's latest picture.
 ///
-/// A request CAF can't take because it's shutting down gets no
-/// [`ToViewer::Done`]: the link ends soon after, which tells the viewer.
+/// Every request gets exactly one [`ToViewer::Done`], unless the link
+/// ends first: one made while CAF shuts down is answered
+/// [`Outcome::Gone`].
 pub async fn serve<A: AppItem>(
     caf: Caf<A>,
     rules: Arc<ViewerRules>,
@@ -236,29 +237,28 @@ impl<A: AppItem> Link<A> {
             // nothing to do.
             _ => return,
         };
-        if let Some(outcome) = outcome {
-            room.send(ToViewer::Done { request, outcome });
-        }
+        room.send(ToViewer::Done { request, outcome });
     }
 }
 
-/// Asks the host whether to open the chat, and opens it if so. `None` if
-/// CAF is shutting down.
+/// Asks the host whether to open the chat, and opens it if so.
 async fn opened<A: AppItem>(
     caf: &WeakCaf<A>,
     rules: &ViewerRules,
     request: &OpenRequest,
-) -> Option<Outcome> {
+) -> Outcome {
     let opener = &rules.open;
     let open = match std::panic::catch_unwind(AssertUnwindSafe(|| opener(request))) {
         Ok(Some(open)) => open,
-        Ok(None) => return Some(Outcome::NotAllowed),
+        Ok(None) => return Outcome::NotAllowed,
         Err(_) => {
             log::warn!(target: "caf", "the host's opener panicked on a viewer's request: not allowed");
-            return Some(Outcome::NotAllowed);
+            return Outcome::NotAllowed;
         }
     };
-    let caf = caf.upgrade()?;
+    let Some(caf) = caf.upgrade() else {
+        return Outcome::Gone;
+    };
     outcome(
         caf.open_chat(open)
             .await
@@ -266,25 +266,27 @@ async fn opened<A: AppItem>(
     )
 }
 
-/// Sends, stops, answers or closes, if viewers may. `None` if CAF is
-/// shutting down.
+/// Sends, stops, answers or closes, if viewers may.
 async fn act<A: AppItem, F: Future<Output = Result<Outcome, Error>>>(
     caf: &WeakCaf<A>,
     rules: &ViewerRules,
     act: impl FnOnce(Caf<A>) -> F,
-) -> Option<Outcome> {
+) -> Outcome {
     if !rules.act {
-        return Some(Outcome::NotAllowed);
+        return Outcome::NotAllowed;
     }
-    outcome(act(caf.upgrade()?).await)
+    let Some(caf) = caf.upgrade() else {
+        return Outcome::Gone;
+    };
+    outcome(act(caf).await)
 }
 
-/// How a request went, as the wire says it, or `None` if CAF is gone.
-fn outcome(result: Result<Outcome, Error>) -> Option<Outcome> {
+/// How a request went, as the wire says it.
+fn outcome(result: Result<Outcome, Error>) -> Outcome {
     match result {
-        Ok(outcome) => Some(outcome),
-        Err(Error::Refused(refused)) => Some(Outcome::Refused(refused)),
-        Err(_) => None,
+        Ok(outcome) => outcome,
+        Err(Error::Refused(refused)) => Outcome::Refused(refused),
+        Err(_) => Outcome::Gone,
     }
 }
 
