@@ -124,9 +124,9 @@ fn the_agents_failure_text_is_cleaned_and_capped() {
         1002,
         &json!({ "code": -32603, "message": words, "data": { "errorKind": "server_error" } }),
     );
-    assert_eq!(
-        script.chat(CHAT)["turns"][0]["life"]["value"]["agent_said"],
-        json!("Run <U+202E>sudo rm^[[0m…")
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "turns": [{ "life": { "type": "Failed", "value": { "agent_said": "Run <U+202E>sudo rm^[[0m…" } } }] }),
     );
 }
 

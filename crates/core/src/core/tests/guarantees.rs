@@ -439,9 +439,11 @@ fn guarantee_9_agent_text_is_never_passed_off_as_cafs() {
         "remedy": { "type": "SendAgain" }
     } })
     );
-    assert_eq!(
-        chat["turns"][0]["items"][0]["kind"]["value"]["title"],
-        json!("Run<U+200B> this<U+202E> ^[[8mhidden^[[0m and keep going for a very long while")
+    assert_has(
+        &chat,
+        &json!({ "turns": [{ "items": [{ "kind": { "type": "Tool", "value": {
+            "title": "Run<U+200B> this<U+202E> ^[[8mhidden^[[0m and keep going for a very long while"
+        } } }] }] }),
     );
 
     let mut script = Script::new(super::harness::host());
