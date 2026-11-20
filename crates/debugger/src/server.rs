@@ -95,7 +95,10 @@ impl App {
 /// Where the built app is: `ts/debugger/dist` in CAF's repository.
 #[must_use]
 pub fn dist() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ts/debugger/dist")
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2);
+    repository.map_or_else(PathBuf::new, |repository| {
+        repository.join("ts/debugger/dist")
+    })
 }
 
 /// A new token: 32 random bytes, in hex.

@@ -6,19 +6,23 @@
 //! - **Any message** is answered at once by a handler: a line of thinking,
 //!   then a few words, each a chunk of its own, and the turn ends.
 //! - **The message `ask`**, exactly, is waited for by the script itself,
-//!   round after round: the words come slowly, so Stop can be tried, then
-//!   it asks permission to run a command, and once that's answered, the
-//!   turn ends.
+//!   round after round: a few words, then it asks permission to run a
+//!   command, and once that's answered, the turn ends. While the question
+//!   waits, Stop ends the turn as a real adapter does, with
+//!   `cancelled`.
 //!
-//! A handler can't wait or sleep, and the fake's patterns match a prompt
-//! only whole, which is why the slow round needs its exact word. The
+//! A handler can't wait, and the fake's patterns match a prompt only
+//! whole, which is why the round that asks needs its exact word. Nor can
+//! the script stop partway through a round, so a round says nothing
+//! after it starts to wait: a stopped turn hears nothing more, rather
+//! than the rest of its words arriving as a turn of the agent's own. The
 //! fake serves one session, so the debugger starts one for each chat.
 
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-/// The message that makes the fake go slowly and ask permission.
+/// The message that makes the fake ask permission.
 pub const ASK: &str = "ask";
 
 /// How many times `ask` can be sent to one fake: more are answered as
@@ -30,21 +34,20 @@ const SESSION: &str = "fake-1";
 
 /// The words the fake says to any message.
 const REPLY: &str = "This is CAF's fake agent, with no model behind it, so it says this to \
-                     every message. Send exactly \"ask\" to see it reply slowly and ask \
-                     permission to run a command.";
+                     every message. Send exactly \"ask\" to see it ask permission to run a \
+                     command.";
 
-/// The words of the slow reply, before it asks.
-const SLOW: &str = "Let me look at that. I'll take my time, so you can try stopping me. \
-                    Now I'd like to run a command.";
+/// The words before it asks.
+const ASKING: &str = "I'd like to run a command. Allow it, refuse it, or stop me.";
 
 /// The script, as the fake reads it.
 #[must_use]
 pub fn script() -> String {
     let mut lines = vec![
         "# caf-debugger's fake agent: see `fake.rs` in caf-debugger.".to_owned(),
-        // Stop ends the slow round's prompt. The name `prompt` is given
+        // Stop ends the asking round's prompt. The name `prompt` is given
         // to `initialize` first, answered at once, so a stop before any
-        // slow round answers nothing rather than naming nothing.
+        // asking round answers nothing rather than naming nothing.
         line(&json!({"on": {"method": "session/cancel", "do": [
             {"respond": {"to": "prompt", "result": {"stopReason": "cancelled"}}},
         ]}})),
@@ -64,7 +67,7 @@ pub fn script() -> String {
         line(&json!({"respond": {"result": {"sessionId": SESSION}}})),
     ];
     for round in 1..=ROUNDS {
-        lines.extend(slow(round).iter().map(line));
+        lines.extend(asking(round).iter().map(line));
     }
     lines.join("\n") + "\n"
 }
@@ -100,18 +103,15 @@ fn reply() -> Value {
     Value::Array(steps)
 }
 
-/// One slow round, for the message `ask`.
-fn slow(round: u32) -> Vec<Value> {
+/// One round of asking, for the message `ask`.
+fn asking(round: u32) -> Vec<Value> {
     let tool = format!("fake-{round}");
     let ask_text = json!({"params": {"prompt": [{"type": "text", "text": ASK}]}});
     let mut steps = vec![
         json!({"wait": {"method": "session/prompt", "match": ask_text, "as": "prompt"}}),
         json!({"think": {"session": SESSION, "text": "They asked me to ask."}}),
     ];
-    for word in words(SLOW) {
-        steps.push(json!({"say": {"session": SESSION, "text": word}}));
-        steps.push(json!({"sleep": 150}));
-    }
+    steps.extend(words(ASKING).map(|word| json!({"say": {"session": SESSION, "text": word}})));
     steps.extend([
         json!({"request": {"method": "session/request_permission", "as": "permission", "params": {
             "sessionId": SESSION,
@@ -122,7 +122,6 @@ fn slow(round: u32) -> Vec<Value> {
             ],
         }}}),
         json!({"await": {"to": "permission"}}),
-        json!({"say": {"session": SESSION, "text": " Thanks for answering."}}),
         json!({"respond": {"to": "prompt", "result": {"stopReason": "end_turn"}}}),
     ]);
     steps
