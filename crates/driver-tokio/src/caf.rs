@@ -28,7 +28,9 @@
 //! ([`Limits::kept_changes`](caf_core::host::Limits::kept_changes)). A
 //! watch further behind than that gets the whole chat again.
 
+use std::collections::hash_map::RandomState;
 use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasher, Hasher};
 use std::io::{BufWriter, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::panic::AssertUnwindSafe;
@@ -161,6 +163,8 @@ struct Common<A: AppItem> {
     agents: Arc<[AgentName]>,
     /// The open chats, in the order they were opened.
     chats: watch::Receiver<Vec<ChatSummary>>,
+    /// See [`Caf::run`].
+    run: Arc<str>,
 }
 
 impl<A: AppItem> Clone for Common<A> {
@@ -170,6 +174,7 @@ impl<A: AppItem> Clone for Common<A> {
             ended: self.ended.clone(),
             agents: Arc::clone(&self.agents),
             chats: self.chats.clone(),
+            run: Arc::clone(&self.run),
         }
     }
 }
@@ -195,6 +200,11 @@ impl<A: AppItem> WeakCaf<A> {
     /// See [`Caf::agents`].
     pub(crate) fn agents(&self) -> &[AgentName] {
         &self.shared.agents
+    }
+
+    /// See [`Caf::run`].
+    pub(crate) fn run(&self) -> &str {
+        &self.shared.run
     }
 
     /// See [`Caf::watch_chats`].
@@ -376,6 +386,7 @@ impl<A: AppItem> Caf<A> {
                 ended,
                 agents,
                 chats,
+                run: new_run().into(),
             },
         };
         (caf, Running { task })
@@ -385,6 +396,14 @@ impl<A: AppItem> Caf<A> {
     #[must_use]
     pub fn agents(&self) -> &[AgentName] {
         &self.shared.agents
+    }
+
+    /// This run of CAF: different every time CAF starts, so a viewer can
+    /// tell a restarted CAF from the one it was watching. A change's
+    /// number means something only within one run.
+    #[must_use]
+    pub fn run(&self) -> &str {
+        &self.shared.run
     }
 
     /// Follows which chats are open, with each one's agent and folder.
@@ -1209,6 +1228,14 @@ impl<A: AppItem> Task<A> {
             wake,
         })
     }
+}
+
+/// A new run's name: 128 random bits, as hex.
+fn new_run() -> String {
+    // Each `RandomState` has keys of its own, random for the process, so
+    // what each hashes differs from every other's.
+    let half = || RandomState::new().build_hasher().finish();
+    format!("{:016x}{:016x}", half(), half())
 }
 
 /// What's written in a recording for "redacted".

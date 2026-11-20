@@ -122,6 +122,7 @@ pub async fn serve<A: AppItem>(
         version,
         agents: caf.agents().to_vec(),
         chats: open,
+        run: caf.run().to_owned(),
     };
     if to.send(welcome).await.is_err() {
         return;

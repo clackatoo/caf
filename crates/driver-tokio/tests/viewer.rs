@@ -55,7 +55,11 @@ impl Viewer {
                 version: 1,
                 agents,
                 chats,
-            }) => (viewer, agents, chats),
+                run,
+            }) => {
+                assert_eq!(run, caf.run(), "the viewer hears CAF's run");
+                (viewer, agents, chats)
+            }
             other => panic!("a welcome, not {other:?}"),
         }
     }
@@ -216,6 +220,7 @@ async fn the_welcome_has_the_agents_and_the_open_chats() {
         version,
         agents,
         chats,
+        ..
     }) = viewer.next().await
     else {
         panic!("a welcome")
@@ -1228,4 +1233,30 @@ async fn serve_ends_though_its_viewer_has_stopped_reading() {
         "serve ends with CAF"
     );
     drop((to, from));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_viewer_hears_its_cafs_run_and_each_caf_has_its_own() {
+    let (one, one_running) = Caf::start(Config::new(host(), Vec::new()));
+    let (other, other_running) =
+        Caf::start_watching(Config::new(host(), Vec::new()), Hold::default());
+    assert_ne!(one.run(), other.run());
+    for caf in [&one, &other] {
+        let run = caf.run();
+        assert_eq!(run.len(), 32, "128 bits as hex: {run}");
+        assert!(run.bytes().all(|byte| byte.is_ascii_hexdigit()), "{run}");
+    }
+    let mut viewers = Vec::new();
+    for _ in 0..3 {
+        // Each checks it hears `one`'s run.
+        let (viewer, ..) = Viewer::welcomed(&one, ViewerRules::default(), 8).await;
+        viewers.push(viewer);
+    }
+    let (watching, ..) = Viewer::welcomed(&other, ViewerRules::default(), 8).await;
+    shut_down(&one, one_running).await;
+    shut_down(&other, other_running).await;
+    for viewer in viewers {
+        viewer.ends().await;
+    }
+    watching.ends().await;
 }

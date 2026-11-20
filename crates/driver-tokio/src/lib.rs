@@ -56,8 +56,8 @@
 //! - A viewer doesn't keep CAF running, and `serve` ends when CAF does,
 //!   after telling the viewer each watched chat has ended.
 //!
-//! [`Caf::agents`] and [`Caf::watch_chats`] give what a host needs to
-//! serve viewers some other way, and [`ChatHandle::watch_from`] resumes a
+//! [`Caf::agents`], [`Caf::run`] and [`Caf::watch_chats`] give what a
+//! host needs to serve viewers some other way, and [`ChatHandle::watch_from`] resumes a
 //! viewer's watch from the last change it has.
 //!
 //! # Watching every step
