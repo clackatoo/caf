@@ -156,6 +156,10 @@ impl Default for AgentLimits {
 ///   be opened, or a removal holds it for over two seconds, the start
 ///   fails. Something the process started that outlives it doesn't hold
 ///   the install.
+/// - **A program open for writing** can't be run ("text file busy"). One
+///   just written, such as one CAF just installed, can be, for a moment,
+///   in a process another thread is starting. So starting one waits up to
+///   two seconds for it.
 /// - **SIGPIPE:** writing to a process that has gone raises it. Rust
 ///   programs ignore it; a host whose `main` isn't Rust's must too.
 /// - **A process another thread starts** holds every pipe open in this
@@ -308,7 +312,11 @@ async fn run(
         Some(folder) => hold_folder(&folder).await.map(Some),
         None => Ok(None),
     };
-    let mut process = match held.and_then(|held| Process::start(&command, held, limits)) {
+    let started = match held {
+        Ok(held) => start_when_written(&command, held, limits).await,
+        Err(error) => Err(error),
+    };
+    let mut process = match started {
         Ok(process) => process,
         Err(error) => {
             let event = AgentEvent::StartFailed {
@@ -363,6 +371,32 @@ async fn run(
     }
 }
 
+/// How long starting a program waits while it's open for writing.
+const BUSY_WAIT: Duration = Duration::from_secs(2);
+
+/// Starts `command`, waiting briefly while its program is open for
+/// writing ("text file busy"). A program just written, such as one CAF
+/// just installed, stays open for writing for a moment in every process
+/// another thread started meanwhile, until that process starts its own
+/// program.
+async fn start_when_written(
+    command: &SpawnCommand,
+    mut held: Option<File>,
+    limits: AgentLimits,
+) -> io::Result<Process> {
+    let give_up = Instant::now() + BUSY_WAIT;
+    loop {
+        match Process::start(command, &mut held, limits.clone()) {
+            Err(error)
+                if error.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < give_up =>
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            started => return started,
+        }
+    }
+}
+
 /// A running process: its pipes, and what's on its way to and from it.
 struct Process {
     limits: AgentLimits,
@@ -407,10 +441,15 @@ enum Queued {
 }
 
 impl Process {
-    /// Starts `command`, holding `held`'s lock until it's reaped.
-    fn start(command: &SpawnCommand, held: Option<File>, limits: AgentLimits) -> io::Result<Self> {
+    /// Starts `command`, taking `held`'s lock to hold until it's reaped.
+    /// If it fails, `held` is left as it was.
+    fn start(
+        command: &SpawnCommand,
+        held: &mut Option<File>,
+        limits: AgentLimits,
+    ) -> io::Result<Self> {
         let (mut leader, stdin, stdout, stderr) = spawn(command)?;
-        leader.held = held;
+        leader.held = held.take();
         let mut process = Self {
             framer: Framer::new(limits.biggest_line),
             limits,

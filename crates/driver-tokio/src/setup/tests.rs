@@ -424,6 +424,21 @@ fn zip() -> Vec<u8> {
     archive.finish().unwrap().into_inner()
 }
 
+/// What `program` prints, run as soon as it can be: just written, it may
+/// be "text file busy" for a moment, while a process another test is
+/// starting holds it open for writing.
+fn run(program: &Path) -> std::process::Output {
+    for _ in 0..200 {
+        match Command::new(program).output() {
+            Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            output => return output.unwrap(),
+        }
+    }
+    panic!("{} stays busy", program.display())
+}
+
 fn download(url: &str, body: &[u8], unpack: Unpack) -> Install {
     Install::Download(vec![
         Artifact::new(
@@ -468,7 +483,7 @@ async fn downloads_are_checked_and_unpacked_into_place() {
         };
         let mode = std::fs::metadata(&program).unwrap().permissions().mode();
         assert_eq!(mode & 0o111, 0o111, "{unpack:?}: it can be run");
-        let output = Command::new(&program).output().unwrap();
+        let output = run(&program);
         assert_eq!(output.stdout, b"agent\n");
         if unpack == Unpack::Zip {
             assert_eq!(
@@ -719,6 +734,31 @@ async fn an_install_isnt_removed_while_a_process_runs_from_it() {
     });
     let events = done(&mut setup, Ticket(2000)).await;
     assert_eq!(events, [SetupEvent::Removed { removed: true }]);
+}
+
+#[tokio::test]
+async fn a_program_still_open_for_writing_is_waited_for_briefly() {
+    // As one just installed may be, for a moment, when another thread
+    // starts a process while it's written: running it fails with "text
+    // file busy" until that process has started its own program.
+    let dir = Dir::new();
+    let program = dir.path("agent");
+    std::fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let writing = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&program)
+        .unwrap();
+    let mut agents = AgentDriver::new(AgentLimits::default());
+    agents.apply(AgentDirective::Start {
+        process: Ticket(1000),
+        command: SpawnCommand::new(&program),
+        hold: None,
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(writing);
+    let (_, event) = tokio::time::timeout(PATIENCE, agents.next()).await.unwrap();
+    assert!(matches!(event, AgentEvent::Started { .. }), "{event:?}");
 }
 
 #[tokio::test]

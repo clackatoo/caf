@@ -63,7 +63,7 @@ pub(super) async fn sign_in(sign_in: SignIn, reporter: Reporter, mut stop: onesh
         _ => None,
     };
     let browser = match link {
-        LinkFrom::Browser => match Browser::make(&temp) {
+        LinkFrom::Browser => match Browser::make(&temp).await {
             Ok(browser) => {
                 (command.env).push(caf_core::agent::EnvChange::Set(
                     "BROWSER".into(),
@@ -438,8 +438,43 @@ printf '%s' "$1" > "$folder/.link$$" && mv "$folder/.link$$" "$folder/link$$"
 "#;
 
 impl Browser {
-    /// Makes one, in a new folder in `temp`.
-    fn make(temp: &Path) -> io::Result<Self> {
+    /// Makes one, in a new folder in `temp`, and runs it once, so it's
+    /// known to run: see [`Browser::runs`].
+    async fn make(temp: &Path) -> io::Result<Self> {
+        let browser = Self::write(temp)?;
+        browser.runs().await?;
+        Ok(browser)
+    }
+
+    /// Waits until the script can be run. Just written, it can't for a
+    /// moment ("text file busy") while a process another thread started
+    /// meanwhile holds it open for writing, until that process starts its
+    /// own program. Once it has run, it always can: nothing else can open
+    /// it for writing. Run with no link, it gives none.
+    async fn runs(&self) -> io::Result<()> {
+        let give_up = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let ran = tokio::process::Command::new(self.script())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await;
+            match ran {
+                Err(error)
+                    if error.raw_os_error() == Some(libc::ETXTBSY)
+                        && tokio::time::Instant::now() < give_up =>
+                {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => return Err(error),
+                Ok(_) => return Ok(()),
+            }
+        }
+    }
+
+    /// Writes one, in a new folder in `temp`.
+    fn write(temp: &Path) -> io::Result<Self> {
         let folder = temp.join(hidden_name("caf-browser", "sign-in").trim_start_matches('.'));
         fs::DirBuilder::new().mode(0o700).create(&folder)?;
         let browser = Self { folder };
@@ -504,6 +539,35 @@ impl Drop for Browser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_browser_is_ready_once_it_can_run() {
+        let temp = std::env::temp_dir().join(format!("caf-browser-test-{}", std::process::id()));
+        fs::create_dir_all(&temp).unwrap();
+        let browser = Browser::write(&temp).unwrap();
+        // Held open for writing, as a process another thread is starting
+        // may hold it for a moment.
+        let writing = fs::OpenOptions::new()
+            .write(true)
+            .open(browser.script())
+            .unwrap();
+        let let_go = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            drop(writing);
+        });
+        browser.runs().await.expect("it runs once it can");
+        let_go.await.unwrap();
+        assert!(
+            browser.links().is_empty(),
+            "run with no link, it gives none"
+        );
+        drop(browser);
+        assert!(
+            fs::read_dir(&temp).unwrap().next().is_none(),
+            "its folder goes"
+        );
+        fs::remove_dir(&temp).unwrap();
+    }
 
     #[test]
     fn escape_sequences_and_controls_are_taken_out() {
