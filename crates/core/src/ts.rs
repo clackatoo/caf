@@ -324,8 +324,10 @@ mod tests {
     }
 
     /// What in generated TypeScript `text` isn't in the one shape: an
-    /// enum written as a bare string (`"A" | "B"`), or as `{ "A": … }`.
-    /// The only string literals are the tags, `"type": "A"`, and the only
+    /// enum written as a bare string (`"A" | "B"`), as `{ "A": … }`, with
+    /// its fields beside its tag (`{ "type": "A", field: … }`), or with a
+    /// variant renamed from Rust's. The only string literals are the tags,
+    /// `"type": "A"`, each followed by `}` or `"value"`, and the only
     /// quoted keys `type` and `value`, and the std types' own.
     fn untagged(text: &str) -> Vec<String> {
         let mut code = String::new();
@@ -357,6 +359,14 @@ mod tests {
                 }
             } else if !(at >= 2 && pieces[at - 1].trim() == ":" && pieces[at - 2] == "type") {
                 found.push(format!("the string \"{literal}\""));
+            } else if !literal.starts_with(char::is_uppercase) {
+                found.push(format!("the renamed variant \"{literal}\""));
+            } else if !(after.starts_with('}')
+                || (pieces[at + 1].trim() == "," && pieces.get(at + 2) == Some(&"value")))
+            {
+                found.push(format!(
+                    "the variant \"{literal}\", with no value beside it"
+                ));
             }
         }
         found
@@ -376,10 +386,21 @@ mod tests {
             })
             .collect();
         assert!(wrong.is_empty(), "not in the one shape: {wrong:#?}");
-        // It finds both.
+        // It finds each way an enum can be out of it: a bare string, serde's
+        // default shape, a tag with no `value` beside it, and a renamed
+        // variant.
         assert_eq!(untagged(r#"type L = "Warn" | "Info";"#).len(), 2);
         assert_eq!(
             untagged(r#"type E = { "At": Wall } | { "type": "Open" };"#).len(),
+            1
+        );
+        assert_eq!(
+            untagged(r#"type I = { "type": "Lost", reason: Lost } | { "type": "Open" };"#).len(),
+            1
+        );
+        assert_eq!(
+            untagged(r#"type R = { "type": "words", "value": string } | { "type": "At", "value": Wall };"#)
+                .len(),
             1
         );
     }
