@@ -436,11 +436,11 @@ struct Browser {
     folder: PathBuf,
 }
 
-/// The script. It writes the link to a hidden file, then renames it, so
-/// the driver never reads half a link.
+/// The script. It writes its arguments, one a line, to a hidden file,
+/// then renames it, so the driver never reads half a link.
 const SCRIPT: &str = r#"#!/bin/sh
 folder=$(dirname "$0")
-printf '%s' "$1" > "$folder/.link$$" && mv "$folder/.link$$" "$folder/link$$"
+printf '%s\n' "$@" > "$folder/.link$$" && mv "$folder/.link$$" "$folder/link$$"
 "#;
 
 impl Browser {
@@ -497,7 +497,10 @@ impl Browser {
         self.folder.join("browser")
     }
 
-    /// The links handed to it since it was last looked at, each once.
+    /// The links handed to it since it was last looked at, each once: of
+    /// each run's arguments, those that are links (with `://`), as they
+    /// came, so an option such as `--new-window` before one is passed
+    /// over.
     fn links(&self) -> Vec<String> {
         let Ok(entries) = fs::read_dir(&self.folder) else {
             return Vec::new();
@@ -508,11 +511,13 @@ impl Browser {
             if !entry.file_name().to_string_lossy().starts_with("link") {
                 continue;
             }
-            let link = read_small(&path);
+            let given = read_small(&path);
             let _ = fs::remove_file(&path);
-            if let Some(link) = link {
+            // One argument a line: the links among them, not options such
+            // as `--new-window` that some programs put first.
+            for link in given.iter().flat_map(|given| given.lines()) {
                 let link = link.trim();
-                if !link.is_empty()
+                if link.contains("://")
                     && link.len() <= LONGEST_LINK
                     && !link.contains(char::is_control)
                 {
@@ -545,6 +550,39 @@ impl Drop for Browser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_browser_hands_back_its_link_however_it_was_given() {
+        let temp = std::env::temp_dir().join(format!("caf-browser-args-{}", std::process::id()));
+        fs::create_dir_all(&temp).unwrap();
+        let browser = Browser::make(&temp).await.unwrap();
+        let link = "https://claude.ai/oauth/authorize?code=true&state=a%20b&scope=x+y#frag";
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new(browser.script())
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        };
+        run(&[link]);
+        assert_eq!(browser.links(), [link]);
+        // As some programs run a browser: with options before the link.
+        run(&["--new-window", link]);
+        assert_eq!(browser.links(), [link]);
+        // Or several links at once: each is handed back.
+        run(&[link, "https://claude.com/other"]);
+        let mut links = browser.links();
+        links.sort();
+        assert_eq!(
+            links,
+            [
+                "https://claude.ai/oauth/authorize?code=true&state=a%20b&scope=x+y#frag",
+                "https://claude.com/other"
+            ]
+        );
+        drop(browser);
+        fs::remove_dir(&temp).unwrap();
+    }
 
     #[tokio::test]
     async fn a_browser_is_ready_once_it_can_run() {
