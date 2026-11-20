@@ -25,8 +25,8 @@
 
   // Keep the step looked at in view as it moves, such as while following.
   $effect(() => {
-    if (table === undefined || at < 1) return
-    const y = (at - 1) * ROW
+    if (table === undefined) return
+    const y = Math.max(0, at - 1) * ROW
     if (y < table.scrollTop || y + ROW > table.scrollTop + table.clientHeight) {
       table.scrollTop = Math.max(0, y - table.clientHeight / 2)
     }

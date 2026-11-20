@@ -124,7 +124,7 @@
     <span class="brand">CAF debugger</span>
     {#if mode !== null}
       <span class="mode" data-mode={mode}>{mode}</span>
-      {#if inspector.hello?.file}<span class="file" title={inspector.hello.file}>{inspector.hello.file}</span>{/if}
+      {#if inspector.hello?.file}<span class="file" title={inspector.hello.file}><bdi>{inspector.hello.file}</bdi></span>{/if}
     {/if}
     <span class="link" data-link={link}>
       {link === 'open' ? 'Connected' : link === 'connecting' ? 'Connecting…' : 'Disconnected'}

@@ -58,7 +58,8 @@
   <header>
     <div class="who">
       <span class="agent">{chat.agent}</span>
-      <span class="cwd" title={chat.cwd}>{chat.cwd}</span>
+      <!-- Cut from the left, so the end of the path shows. -->
+      <span class="cwd" title={chat.cwd}><bdi>{chat.cwd}</bdi></span>
     </div>
     {#if chat.usage !== null}<Usage usage={chat.usage} />{/if}
     <span class="state" data-state={chat.state.type}>{stateLabel(chat.state)}</span>
