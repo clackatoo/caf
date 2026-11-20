@@ -13,6 +13,8 @@
 
   $effect(() => {
     const wanted = at
+    // Again once the link opens, if it wasn't when first asked.
+    if (inspector.link !== 'open') return
     const timer = setTimeout(() => inspector.stateAt(wanted), 120)
     return () => clearTimeout(timer)
   })

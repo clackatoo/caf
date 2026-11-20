@@ -16,6 +16,8 @@
   // step while following, and on every pixel while dragging).
   $effect(() => {
     const wanted = at
+    // Again once the link opens, if it wasn't when first asked.
+    if (inspector.link !== 'open') return
     const timer = setTimeout(() => {
       inspector.stateAt(wanted)
       if (wanted > 0) inspector.stateAt(wanted - 1)

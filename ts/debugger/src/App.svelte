@@ -45,12 +45,11 @@
     if (live !== null && live.link === 'open') live.watch(selected)
   })
 
-  // With nothing chosen, show the newest chat there is.
+  // With nothing chosen, show the newest chat there is. A chat chosen
+  // stays chosen: moving on the timeline never changes which chat is
+  // shown, even to a step before it existed.
   $effect(() => {
-    if (selected === null || !summaries.some((summary) => summary.id === selected)) {
-      const there = selected !== null && (lookingBack ? inspector.past.chats.has(selected) : false)
-      if (!there) selected = summaries.at(-1)?.id ?? null
-    }
+    if (selected === null && summaries.length > 0) selected = summaries.at(-1)!.id
   })
 
   const link = $derived.by((): LinkState => {
@@ -150,7 +149,13 @@
           <ChatView {chat} actions={chatActions} readOnly={lookingBack} />
         {:else}
           <p class="empty">
-            {#if selected !== null}Loading chat {selected}…{:else if lookingBack}No chats at this step.{:else}No chat yet: open one with New chat.{/if}
+            {#if selected === null}
+              {lookingBack ? 'No chats at this step.' : 'No chat yet: open one with New chat.'}
+            {:else if lookingBack && !summaries.some((summary) => summary.id === selected)}
+              Chat {selected} didn't exist at this step.
+            {:else}
+              Loading chat {selected}…
+            {/if}
           </p>
         {/if}
       </div>

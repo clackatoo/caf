@@ -83,17 +83,19 @@ export class Inspector {
   /** Asks for the core's state at a position, unless it has it or has asked. */
   stateAt(step: number): void {
     if (step < 0 || this.#states.has(step) || this.#asked.has(step)) return
-    this.#asked.add(step)
-    this.#send({ type: 'StateAt', value: { step } })
+    // Not sent until the link is open: whoever asks, asks again then.
+    if (this.#send({ type: 'StateAt', value: { step } })) this.#asked.add(step)
   }
 
   close(): void {
     this.#socket.close()
   }
 
-  #send(message: FromInspector): void {
-    if (this.link !== 'open') return
+  /** Sends a message, if the link is open: whether it was sent. */
+  #send(message: FromInspector): boolean {
+    if (this.link !== 'open') return false
     this.#socket.send(JSON.stringify(message))
+    return true
   }
 
   #hear(message: ToInspector): void {

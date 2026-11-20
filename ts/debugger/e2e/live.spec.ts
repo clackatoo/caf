@@ -95,7 +95,8 @@ test('looks back at the chat as it was, read-only, then follows again', async ({
   await expect(page.getByText('As it was then')).toBeVisible()
   await expect(page.getByRole('textbox', { name: 'Message' })).toBeDisabled()
   await position.fill('0')
-  await expect(page.getByText('No chats at this step.')).toBeVisible()
+  // The chat chosen stays chosen, before it existed too.
+  await expect(page.getByText(/Chat \d+ didn't exist at this step\./)).toBeVisible()
 
   await page.getByRole('button', { name: 'Back to live' }).click()
   await expect(page.locator('.timeline .live')).toBeVisible()

@@ -102,6 +102,16 @@ describe('states', () => {
     expect(socket.sent).toHaveLength(1)
   })
 
+  it('asks again once the link opens, if it was asked before', () => {
+    const socket = new FakeSocket()
+    const inspector = new Inspector(socket)
+    inspector.stateAt(2)
+    expect(socket.sent).toEqual([])
+    socket.emit('open')
+    inspector.stateAt(2)
+    expect(socket.sent).toEqual([{ type: 'StateAt', value: { step: 2 } }])
+  })
+
   it('keeps only the latest few', () => {
     const { socket, inspector } = open()
     for (let at = 0; at < 40; at++) socket.say({ type: 'State', value: { at, core: at } })

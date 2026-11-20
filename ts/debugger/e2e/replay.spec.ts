@@ -27,7 +27,8 @@ test.describe('replaying the live 0.98.0 recording', () => {
 
     // Back to before anything: no chats.
     await position.fill('0')
-    await expect(page.getByText('No chats at this step.')).toBeVisible()
+    // The chat chosen stays chosen, before it existed too.
+    await expect(page.getByText("Chat 1 didn't exist at this step.")).toBeVisible()
     await expect(page.locator('.timeline .where')).toHaveText(`Step 0 of ${end}`)
 
     // Forward, by steps: the chat comes back as it was.
