@@ -2,9 +2,20 @@
 //!
 //! **Memory.** Time travel needs every step, so the book keeps them all,
 //! for as long as the debugger runs: each event as the JSON it came as,
-//! the agent's messages whole, with its directives. A copy of the core is
-//! kept every [`CHECKPOINT`] steps too. So a long live run grows, by
-//! about what it's said; restart the debugger to start afresh.
+//! the agent's messages whole, with its directives. That's about the size
+//! of the run's recording.
+//!
+//! It keeps copies of the core along the way too, so moving to a step
+//! needn't replay from the start: one every [`CHECKPOINT`] steps at first,
+//! and never more than [`MOST_COPIES`]. When there would be more, every
+//! other copy goes and the spacing doubles. Each copy is the whole core as
+//! it was then, every chat with all its turns, so the copies take at most
+//! [`MOST_COPIES`] times what the core holds at the end, and usually about
+//! half that. A move replays at most the spacing: [`CHECKPOINT`] steps
+//! until the run is [`MOST_COPIES`] times that long, and a 32nd to a 64th
+//! of the run after.
+//!
+//! So a long live run grows: restart the debugger to start afresh.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
@@ -16,9 +27,23 @@ use tokio::sync::watch;
 use crate::inspector::{Check, Mode, Step, ToInspector};
 use crate::replay::Base;
 
-/// How many steps apart the copies of the core are kept: so moving to any
-/// step replays at most this many from the nearest copy.
+/// How many steps apart the copies of the core are kept at first: so
+/// moving to any step replays at most this many from the nearest copy,
+/// until there are [`MOST_COPIES`].
 pub const CHECKPOINT: u64 = 1000;
+
+/// The most copies of the core kept.
+pub const MOST_COPIES: usize = 64;
+
+/// Copies of the core, evenly spaced.
+struct Copies {
+    /// How many steps apart they are: [`CHECKPOINT`], doubled each time
+    /// there would be too many.
+    spacing: u64,
+    /// The core just after each step a multiple of `spacing`, in order,
+    /// with its position.
+    list: Vec<(u64, Arc<Core>)>,
+}
 
 /// Every step so far, and what's known about them. Live, the checker adds
 /// each step as CAF takes it; in replay, they're all there from the
@@ -33,9 +58,8 @@ pub struct Book {
     /// What the core was made with.
     pub base: Arc<Base>,
     steps: RwLock<Vec<Arc<Step>>>,
-    /// The core just after every [`CHECKPOINT`]th step, in order: the
-    /// first is after step [`CHECKPOINT`].
-    checkpoints: RwLock<Vec<Arc<Core>>>,
+    /// Copies of the core along the way.
+    checkpoints: RwLock<Copies>,
     /// The last step's number, for sockets to wait on.
     end: watch::Sender<u64>,
     /// The first step each check failed at.
@@ -84,7 +108,10 @@ impl Book {
             run,
             base: Arc::new(base),
             steps: RwLock::default(),
-            checkpoints: RwLock::default(),
+            checkpoints: RwLock::new(Copies {
+                spacing: CHECKPOINT,
+                list: Vec::new(),
+            }),
             end: watch::Sender::new(0),
             diverged: Mutex::default(),
             recording_checked: AtomicU64::new(0),
@@ -106,22 +133,57 @@ impl Book {
         self.end.send_replace(end);
     }
 
-    /// Keeps a copy of the core at `at`, if `at` is the next
-    /// [`CHECKPOINT`] to keep. The copy is made only then.
+    /// Keeps a copy of the core at `at`, the step just taken, if it's
+    /// due: at a multiple of the spacing, one after the last copy. The
+    /// copy is made only then. With [`MOST_COPIES`] kept already, every
+    /// other one goes first, and the spacing doubles.
     pub fn checkpoint(&self, at: u64, core: &Core) {
-        let mut all = (self.checkpoints.write()).unwrap_or_else(PoisonError::into_inner);
-        if at > 0 && at == (all.len() as u64 + 1) * CHECKPOINT {
-            all.push(Arc::new(core.clone()));
+        let mut copies = (self.checkpoints.write()).unwrap_or_else(PoisonError::into_inner);
+        let due = |copies: &Copies| {
+            at > 0
+                && at.is_multiple_of(copies.spacing)
+                && copies.list.last().is_none_or(|(last, _)| at > *last)
+        };
+        if !due(&copies) {
+            return;
         }
+        if copies.list.len() >= MOST_COPIES {
+            copies.spacing *= 2;
+            let spacing = copies.spacing;
+            copies
+                .list
+                .retain(|(position, _)| position.is_multiple_of(spacing));
+            if !due(&copies) {
+                return;
+            }
+        }
+        copies.list.push((at, Arc::new(core.clone())));
     }
 
     /// The copy of the core nearest before or at `at`, and its position.
     #[must_use]
     pub fn nearest(&self, at: u64) -> Option<(u64, Arc<Core>)> {
-        let all = (self.checkpoints.read()).unwrap_or_else(PoisonError::into_inner);
-        let index = usize::try_from(at / CHECKPOINT).ok()?.checked_sub(1)?;
-        let index = index.min(all.len().checked_sub(1)?);
-        Some(((index as u64 + 1) * CHECKPOINT, Arc::clone(&all[index])))
+        let copies = (self.checkpoints.read()).unwrap_or_else(PoisonError::into_inner);
+        let after = copies.list.partition_point(|(position, _)| *position <= at);
+        let (position, copy) = copies.list.get(after.checked_sub(1)?)?;
+        Some((*position, Arc::clone(copy)))
+    }
+
+    /// How many copies of the core are kept.
+    #[must_use]
+    pub fn copies(&self) -> usize {
+        (self.checkpoints.read())
+            .unwrap_or_else(PoisonError::into_inner)
+            .list
+            .len()
+    }
+
+    /// How many steps apart the copies of the core are now.
+    #[must_use]
+    pub fn spacing(&self) -> u64 {
+        (self.checkpoints.read())
+            .unwrap_or_else(PoisonError::into_inner)
+            .spacing
     }
 
     /// The steps after the first `after`, up to `to` at most.
@@ -213,5 +275,42 @@ impl Book {
     #[must_use]
     pub fn first_slow(&self) -> bool {
         !self.slow.swap(true, Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use caf_core::Host;
+
+    use super::{Book, CHECKPOINT, MOST_COPIES};
+    use crate::inspector::Mode;
+    use crate::replay::Base;
+
+    #[test]
+    fn the_copies_of_the_core_stay_few_however_long_the_run() {
+        let book = Book::new(
+            Mode::Replay,
+            None,
+            None,
+            Base {
+                host: Host::new("test", "1"),
+                agents: Vec::new(),
+            },
+        );
+        let core = book.base.core();
+        let mut most = 0;
+        for at in 1..=1_000_000 {
+            book.checkpoint(at, &core);
+            most = most.max(book.copies());
+        }
+        assert!(most <= MOST_COPIES, "{most} copies");
+        assert!(book.copies() >= MOST_COPIES / 2, "{} copies", book.copies());
+        // Evenly spaced, so a move replays at most the spacing.
+        let spacing = book.spacing();
+        assert!(spacing >= 1_000_000 / MOST_COPIES as u64 && spacing.is_multiple_of(CHECKPOINT));
+        for at in [0, 999, 1000, 500_000, 999_999, 1_000_000] {
+            let nearest = book.nearest(at).map_or(0, |(position, _)| position);
+            assert!(nearest <= at && at - nearest < spacing, "{at}: {nearest}");
+        }
     }
 }

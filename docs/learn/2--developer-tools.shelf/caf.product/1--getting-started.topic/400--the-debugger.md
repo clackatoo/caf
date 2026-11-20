@@ -178,8 +178,11 @@ core was given. Only your browser can see it, but take care with
 screenshots.
 
 The debugger keeps every step in memory for as long as it runs, so moving
-back through time can reach any of them: a long live run grows by about
-what was said in it. Restart it to start afresh.
+back through time can reach any of them. The steps take about what the
+recording does. The copies of its core it keeps along the way (see
+below) take more: at most 64 of them, each the whole core as it was then,
+every chat with all its turns, so up to 64 times what the chats hold at
+the end. So a long live run grows; restart the debugger to start afresh.
 
 ## Moving through time
 
@@ -194,18 +197,24 @@ meanwhile. Go back to the end to follow again.
 
 Looking back works by replay: the debugger keeps a core of its own, and
 gives it the run's events up to the step you chose. Every streamed chunk
-of words is a step, so a long run has tens of thousands; the debugger
-keeps a copy of its core every 1000 steps, and a move starts from the
-nearest copy before the step, so it replays at most 1000 steps however
-long the run. The chat view gets those chats the way any viewer gets a
+of words is a step, so a long run has tens of thousands. So the debugger
+keeps copies of its core along the way, and a move starts from the
+nearest copy before the step:
+
+- for the first 64,000 steps, a copy every 1000 steps, so a move replays
+  at most 1000;
+- after that, still at most 64 copies: each time there would be more,
+  every other one goes and the spacing doubles, so a move replays at most
+  a 32nd of the run. The chat view gets those chats the way any viewer gets a
 chat: whole when moving back, and as numbered changes when moving forward.
 So moving through time also checks that the chat view's SDK and the core
 build the same chat.
 
-A move should take less than 50 ms, which holds while replaying runs at
-50 µs a step or quicker. A release build replays at a few µs a step, a
-debug build at a few tens. The first time a move is slower, the debugger
-logs it, once a run.
+A move should take less than 50 ms, which holds, up to 64,000 steps,
+while replaying runs at 50 µs a step or quicker. A release build replays
+at a few µs a step, a debug build at a few tens, so in a release build it
+holds far longer: a run of a million steps moves in about 60 ms. The first
+time a move is slower, the debugger logs it, once a run.
 
 ## "Replay diverged"
 

@@ -11,15 +11,22 @@
 //! - **both**, it shows the core and the chats as they were at any step
 //!   ([`Player`]).
 //!
-//! Moving to a step starts from the nearest copy of the core before it,
-//! kept every [`CHECKPOINT`](crate::steps::CHECKPOINT) steps, or from a fresh core, and gives it the
-//! steps in between; moving forward a little just gives it the next ones.
-//! So a move replays at most [`CHECKPOINT`](crate::steps::CHECKPOINT) steps, however long the run.
+//! Moving to a step starts from the nearest copy of the core before it
+//! (see [`Book`] for how they're kept), or from a fresh core, and gives
+//! it the steps in between; moving forward a little just gives it the
+//! next ones. So a move replays at most the copies' spacing:
+//! [`CHECKPOINT`] steps, until the run is [`MOST_COPIES`] times that long,
+//! and after that a 32nd to a 64th of the run.
 //!
 //! **The budget** is [`BUDGET`] for any one move. A move replays at most
-//! [`CHECKPOINT`](crate::steps::CHECKPOINT) steps, so that holds while replaying keeps up a rate of
-//! [`PER_STEP`] or better. The first time a move, or loading a recording,
-//! is slower than that, it's logged, once a run.
+//! [`CHECKPOINT`] steps in a run of up to 64,000, so that holds while
+//! replaying keeps up a rate of [`PER_STEP`] or better. In a longer run,
+//! moves replay more, and may take longer. The first time a move, or
+//! loading a recording, is slower than its budget, it's logged, once a
+//! run.
+//!
+//! [`CHECKPOINT`]: crate::steps::CHECKPOINT
+//! [`MOST_COPIES`]: crate::steps::MOST_COPIES
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -123,7 +130,7 @@ impl std::error::Error for LoadError {}
 
 /// Reads a recording (see the tokio kit's `Config::record`) and replays
 /// it into a fresh core, for the directives it gives out: the steps of a
-/// replay. A copy of the core is kept every [`CHECKPOINT`](crate::steps::CHECKPOINT) steps.
+/// replay. Copies of the core are kept along the way, as [`Book`] says.
 ///
 /// It stops where the recording says it stopped, and before a last line
 /// cut off partway, as a recording copied while CAF wrote it ends.

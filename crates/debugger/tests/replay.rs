@@ -119,7 +119,12 @@ fn a_long_run_moves_within_budget_from_copies_of_the_core() {
     // build, which is far slower than a release one.
     let mut player = Player::new(Arc::clone(&book));
     player.go(end);
-    for to in [end - 10, end - 1500, 2] {
+    // The worst: just before a copy, so the whole spacing less one is
+    // replayed from the copy before.
+    let spacing = book.spacing();
+    let worst = (end / spacing) * spacing - 1;
+    assert_eq!(worst % spacing, spacing - 1);
+    for to in [end - 10, worst, end - 1500, 2] {
         let started = Instant::now();
         player.go(to);
         let took = started.elapsed();
