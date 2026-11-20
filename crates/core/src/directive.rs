@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use crate::agent::SpawnCommand;
 use crate::ids::{ChangeNo, ChatId, Ticket};
-use crate::install::{Bundled, Install, LinkFrom, StatusCommand};
+use crate::install::{Install, LinkFrom, SignedInAs};
 use crate::time::Mono;
 
 /// Work for a driver.
@@ -267,15 +267,14 @@ pub enum SetupDirective {
         /// The folder's name.
         folder: String,
     },
-    /// Run a sign-in command from the folder `folder`, handing back its
-    /// link and code as it gives them, until it ends or is stopped.
+    /// Run a sign-in command, handing back its link and code as it gives
+    /// them, until it ends or is stopped.
     SignIn {
         /// Its ticket.
         ticket: Ticket,
-        /// The install folder's name.
-        folder: String,
-        /// The command.
-        command: Bundled,
+        /// The command, resolved: the adapter as the agent is started, or
+        /// a file in its install.
+        command: SpawnCommand,
         /// Where its link comes from.
         link: LinkFrom,
         /// What comes before the code it shows, if it shows one.
@@ -288,25 +287,25 @@ pub enum SetupDirective {
         /// What they pasted.
         text: String,
     },
-    /// Run a command from the folder `folder` and say whether it
-    /// succeeded, such as signing out.
+    /// Run a command and say whether it succeeded, such as signing out.
     Run {
         /// Its ticket.
         ticket: Ticket,
-        /// The install folder's name.
-        folder: String,
-        /// The command.
-        command: Bundled,
+        /// The command, resolved.
+        command: SpawnCommand,
     },
-    /// Run a status command from the folder `folder`, and hand back only
-    /// the fields it names.
+    /// Run a status command, and hand back only the fields its recipe
+    /// names.
     Status {
         /// Its ticket.
         ticket: Ticket,
-        /// The install folder's name.
-        folder: String,
-        /// The command and the fields to read.
-        command: StatusCommand,
+        /// The command, resolved.
+        command: SpawnCommand,
+        /// The JSON pointer of the field that's `true` when signed in.
+        signed_in: String,
+        /// The JSON pointer of the field naming how, and what its values
+        /// mean.
+        how: Option<(String, Vec<(String, SignedInAs)>)>,
     },
     /// Stop an install, sign-in or command under way. Its last report says
     /// it was stopped.

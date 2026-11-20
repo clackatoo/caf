@@ -37,9 +37,9 @@ pub struct Recipe {
     pub size: u64,
     /// What the machine must have first.
     pub needs: Needs,
-    /// The adapter to run, by its path inside the install, and its
-    /// arguments.
-    pub program: Bundled,
+    /// The adapter to run, as a file inside the install, with its
+    /// arguments and environment.
+    pub adapter: Bundled,
     /// How to sign in, if the agent can be signed in to by CAF.
     pub sign_in: Option<SignIn>,
     /// How to sign out.
@@ -126,18 +126,34 @@ pub struct Needs {
     pub npm: bool,
 }
 
-/// A program inside an agent's install, with its arguments and
+/// A program that comes with an agent, with its arguments and
 /// environment.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Bundled {
-    /// Its path, relative to the install's folder.
-    pub path: PathBuf,
+    /// Which program.
+    pub program: Program,
     /// Its arguments.
     pub args: Vec<String>,
     /// Variables to set for it.
     pub env: Vec<(String, EnvValue)>,
+}
+
+/// Which program a recipe runs.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum Program {
+    /// The agent's adapter itself, however it's started: CAF's install of
+    /// it, or the host's own command. Adapters that pass a command line on
+    /// to the agent's own program, as `claude-agent-acp --cli` does, can
+    /// sign in this way whoever installed them.
+    Adapter,
+    /// A file inside CAF's install of the agent, by its path relative to
+    /// the install's folder. Only for agents CAF installed.
+    InInstall(PathBuf),
 }
 
 /// The value of a variable a recipe sets.
@@ -155,8 +171,9 @@ pub enum EnvValue {
     PrivateFolder,
 }
 
-/// How to sign in to an agent: a command from inside its install, never the
-/// user's own copy, and never anything the agent suggests.
+/// How to sign in to an agent: a command that comes with it (its adapter,
+/// or a file in its install), never the user's own copy, and never
+/// anything the agent suggests.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

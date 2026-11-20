@@ -178,8 +178,8 @@ pub enum Refused {
     NotInstallable,
     /// It's installed already.
     AlreadyInstalled,
-    /// CAF can't sign in to this agent: its profile has no sign-in, or it
-    /// isn't installed yet.
+    /// CAF can't sign in to this agent: its profile has no sign-in, or the
+    /// sign-in needs a file from CAF's install and it isn't installed yet.
     CannotSignIn,
     /// No sign-in is under way for this agent.
     NotSigningIn,
@@ -322,7 +322,8 @@ impl<A: AppItem> Core<A> {
     /// # Errors
     ///
     /// [`Refused::NoSuchAgent`]; [`Refused::CannotSignIn`] if its profile
-    /// has no sign-in, or it isn't installed yet.
+    /// has no sign-in, or its sign-in needs a file from CAF's install and
+    /// it isn't installed yet.
     pub fn sign_in(
         &mut self,
         now: Now,
