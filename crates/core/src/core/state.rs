@@ -121,6 +121,7 @@ impl Proc {
 
 /// Where a process is with `initialize`.
 #[derive(Debug, Serialize)]
+#[serde(tag = "type", content = "value")]
 pub(super) enum Init {
     /// Asked; past `deadline`, the chats waiting on it are told it's
     /// slow, and the deadline is cleared until they choose to wait more.
@@ -170,6 +171,7 @@ pub(super) struct Ending {
 
 /// A step in stopping a process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", content = "value")]
 pub(super) enum Step {
     /// SIGTERM.
     Term,
@@ -179,6 +181,7 @@ pub(super) enum Step {
 
 /// Whether a process's group is watched for emptiness.
 #[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", content = "value")]
 pub(super) enum Group {
     /// Not yet.
     Unwatched,
@@ -201,6 +204,7 @@ pub(super) struct Pending {
 
 /// What a request is for, and who asked.
 #[derive(Debug, Serialize)]
+#[serde(tag = "type", content = "value")]
 pub(super) enum Purpose {
     /// `initialize`, for the process's connection.
     Initialize,
@@ -233,6 +237,7 @@ pub(super) enum Purpose {
 
 /// How a session is opened.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", content = "value")]
 pub(super) enum How {
     /// `session/new`.
     New,
@@ -323,6 +328,7 @@ pub(super) struct Run<A: AppItem> {
 
 /// Where a chat is with its session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", content = "value")]
 pub(super) enum Open {
     /// Not open, and not wanted until a message comes.
     Idle,

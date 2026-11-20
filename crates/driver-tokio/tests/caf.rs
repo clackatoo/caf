@@ -690,7 +690,7 @@ fn replay(text: &str) -> Core {
     let mut lines = text.lines();
     let header: Header =
         serde_json::from_str(lines.next().expect("a header")).expect("the header reads");
-    assert_eq!(header.caf_recording, 1);
+    assert_eq!(header.caf_recording, 2, "a recording of version 2");
     let mut core = Core::new(header.host, header.agents);
     let mut out = Vec::new();
     // A recording cut short says so, and ends there.
@@ -771,7 +771,9 @@ async fn a_recorded_run_replays_to_the_same_state() {
         "the account email is never recorded"
     );
     assert!(
-        text.contains(r#"{"Notification":{"method":"_auth/status_update","params":null}}"#),
+        text.contains(
+            r#"{"type":"Notification","value":{"method":"_auth/status_update","params":null}}"#
+        ),
         "the sign-in status is recorded, without its params"
     );
     assert!(
@@ -793,7 +795,7 @@ async fn a_recorded_run_replays_to_the_same_state() {
         command.env
     );
     assert!(
-        text.contains(r#""event":{"Stderr":"warming up\n"}"#),
+        text.contains(r#""event":{"type":"Stderr","value":"warming up\n"}"#),
         "error output is written as text"
     );
     let core = replay(&text);

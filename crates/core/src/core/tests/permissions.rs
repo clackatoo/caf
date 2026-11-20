@@ -63,13 +63,13 @@ fn the_user_is_asked_when_the_policy_says_so() {
         &script.chat(CHAT),
         &json!({ "questions": [{
         "id": 1006,
-        "kind": { "Permission": {
+        "kind": { "type": "Permission", "value": {
             "tool": 1004,
             "title": "Run `cargo test`",
             "options": [
-                { "id": "allow", "label": "Allow", "kind": "AllowOnce" },
-                { "id": "always", "label": "Always allow", "kind": "AllowAlways" },
-                { "id": "reject", "label": "Reject", "kind": "RejectOnce" }
+                { "id": "allow", "label": "Allow", "kind": { "type": "AllowOnce" } },
+                { "id": "always", "label": "Always allow", "kind": { "type": "AllowAlways" } },
+                { "id": "reject", "label": "Reject", "kind": { "type": "RejectOnce" } }
             ]
         } }
     }] }),
@@ -149,7 +149,7 @@ fn allowing_once_when_the_agent_doesnt_offer_it_asks_the_user() {
     );
     assert_has(
         &script.chat(CHAT),
-        &json!({ "questions": [{ "kind": { "Permission": { "options": [{ "kind": "Other" }, { "kind": "RejectOnce" }] } } }] }),
+        &json!({ "questions": [{ "kind": { "type": "Permission", "value": { "options": [{ "kind": { "type": "Other" } }, { "kind": { "type": "RejectOnce" } }] } } }] }),
     );
     let question = script.chat(CHAT)["questions"][0]["id"]
         .as_u64()
@@ -201,15 +201,15 @@ fn a_permission_request_names_a_tool_call_not_seen_yet() {
     let decision = asked(&mut script);
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "items": [{ "id": 1004, "kind": { "Tool": {
-        "title": "Run `cargo test`", "kind": "Execute", "status": "Pending", "input": { "command": "cargo test" }
+        &json!({ "turns": [{ "items": [{ "id": 1004, "kind": { "type": "Tool", "value": {
+        "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Pending" }, "input": { "command": "cargo test" }
     } } }] }] }),
     );
     // When it comes, it's the same item.
     script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "tool-1", "title": "cargo test", "kind": "execute", "status": "in_progress" }));
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "items": [{ "id": 1004, "kind": { "Tool": { "title": "cargo test", "status": "Running" } } }] }] }),
+        &json!({ "turns": [{ "items": [{ "id": 1004, "kind": { "type": "Tool", "value": { "title": "cargo test", "status": { "type": "Running" } } } }] }] }),
     );
     script.policy(decision, PolicyAnswer::Allow);
 }

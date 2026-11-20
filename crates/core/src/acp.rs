@@ -390,6 +390,7 @@ impl<'de> Visitor<'de> for &mut Head {
 /// driver hands the core.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Frame {
     /// A JSON-RPC message.
     Message(Message),
@@ -422,6 +423,7 @@ pub enum Frame {
 /// keys found there, whatever their values.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Shape {
     /// It had `result` or `error`, and neither `method` nor `params`: an
     /// answer.
@@ -437,6 +439,7 @@ pub enum Shape {
 /// raw JSON until the core knows what they are.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Message {
     /// A request: a method with an id. The agent wants an answer.
     Request {
@@ -470,6 +473,7 @@ pub enum Message {
 /// anything JSON-RPC allows.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum RequestId {
     /// A number.
     Number(i64),

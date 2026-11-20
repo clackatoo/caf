@@ -61,6 +61,7 @@ pub struct Shows {
 /// tells every affected chat when that happens, whichever is chosen.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Grouping {
     /// One process per agent, shared by all its chats: what clackatoo
     /// does today. The default.

@@ -22,7 +22,7 @@ fn an_agent_turn_ends_after_a_quiet_minute_unless_a_tool_still_runs() {
     script.woken();
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "starter": "Agent", "life": "Running" }] }),
+        &json!({ "turns": [{ "starter": { "type": "Agent" }, "life": { "type": "Running" } }] }),
     );
     script.at(100_000);
     script.update(
@@ -35,8 +35,8 @@ fn an_agent_turn_ends_after_a_quiet_minute_unless_a_tool_still_runs() {
     assert_has(
         &script.chat(CHAT),
         &json!({ "turns": [{
-        "starter": "Agent", "life": "Finished",
-        "items": [{ "kind": { "Words": "Checking the build." } }, { "kind": { "Tool": { "status": "Done" } } }]
+        "starter": { "type": "Agent" }, "life": { "type": "Finished" },
+        "items": [{ "kind": { "type": "Words", "value": "Checking the build." } }, { "kind": { "type": "Tool", "value": { "status": { "type": "Done" } } } }]
     }] }),
     );
 }
@@ -53,7 +53,7 @@ fn stop_ends_an_agent_turn_and_what_was_in_flight_opens_no_new_one() {
     );
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "starter": "Agent", "life": "Stopped" }] }),
+        &json!({ "turns": [{ "starter": { "type": "Agent" }, "life": { "type": "Stopped" } }] }),
     );
     script.at(1000);
     let out = script.update(PROC, SESSION, &words(" done"));
@@ -63,7 +63,7 @@ fn stop_ends_an_agent_turn_and_what_was_in_flight_opens_no_new_one() {
     script.update(PROC, SESSION, &words("Later work."));
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "life": "Stopped" }, { "starter": "Agent", "life": "Running" }] }),
+        &json!({ "turns": [{ "life": { "type": "Stopped" } }, { "starter": { "type": "Agent" }, "life": { "type": "Running" } }] }),
     );
 }
 
@@ -89,7 +89,7 @@ fn notices_and_unknown_updates_never_open_a_turn() {
     );
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "items": [{ "kind": { "Unknown": { "what": "notice" } } }] }] }),
+        &json!({ "turns": [{ "items": [{ "kind": { "type": "Unknown", "value": { "what": "notice" } } }] }] }),
     );
     script.answers(PROC, 1002, &json!({ "stopReason": "end_turn" }));
 }
@@ -127,7 +127,7 @@ fn an_agent_turn_waiting_on_a_tool_or_a_question_isnt_quiet() {
     script.woken();
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "starter": "Agent", "life": "Running" }] }),
+        &json!({ "turns": [{ "starter": { "type": "Agent" }, "life": { "type": "Running" } }] }),
     );
     assert_eq!(
         script.chat(CHAT)["questions"].as_array().map(Vec::len),

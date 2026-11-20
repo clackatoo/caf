@@ -36,6 +36,7 @@ pub trait AppItem:
 
 /// The item type of an app with none of its own: it can never be made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum NoAppItems {}
 
 impl AppItem for NoAppItems {
@@ -93,6 +94,7 @@ pub struct Cost {
 /// Where a chat stands with its agent.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum ChatState {
     /// Starting its agent or opening its session. Messages sent now wait.
     ///
@@ -123,6 +125,7 @@ pub enum ChatState {
 /// Why a chat lost its session.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Lost {
     /// The adapter couldn't be started.
     CouldNotStart {
@@ -157,6 +160,7 @@ pub enum Lost {
 /// What an adapter can't do that a chat needs.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Incompatible {
     /// It speaks a version of ACP that CAF doesn't: this one, if it said
     /// which.
@@ -194,6 +198,7 @@ pub struct Turn<A: AppItem = NoAppItems> {
 /// What started a turn.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Starter {
     /// The user sent this.
     User(UserMessage),
@@ -240,6 +245,7 @@ impl UserMessage {
 /// One part of a message.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Part {
     /// Text. A slash command such as `/compact` must be a message's only
     /// part: adapters look for it in different places.
@@ -250,6 +256,7 @@ pub enum Part {
 /// Where a turn is in its life.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum TurnLife {
     /// Waiting to be sent: its chat is opening, or another turn is
     /// running.
@@ -284,6 +291,7 @@ pub struct Failure {
 /// What went wrong with a turn.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum FailureReason {
     /// The answer hit the model's length limit.
     TooLong,
@@ -319,6 +327,7 @@ pub enum FailureReason {
 /// every host offers the same ones. *Later*, except `SendAgain`.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Remedy {
     /// Send the same message again.
     SendAgain,
@@ -351,6 +360,7 @@ pub struct Item<A: AppItem = NoAppItems> {
 /// [`ItemKind::App`].
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 #[serde(bound = "A: AppItem")]
 pub enum ItemKind<A: AppItem = NoAppItems> {
     /// The agent's words, in Markdown.
@@ -394,6 +404,7 @@ pub struct ToolCall<A: AppItem = NoAppItems> {
 /// What kind of tool a call is, as the agent says.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum ToolKind {
     /// Reading files.
     Read,
@@ -418,6 +429,7 @@ pub enum ToolKind {
 /// Where a tool call is.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum ToolStatus {
     /// Not started yet, such as while waiting for permission.
     Pending,
@@ -437,6 +449,7 @@ pub struct Compacted {}
 /// Something CAF says in a turn.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Note {
     /// The agent no longer had the session the chat continues, so a new
     /// one was opened: it remembers nothing from before.

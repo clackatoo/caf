@@ -57,6 +57,7 @@ pub struct Window {
 /// The end of a [`Window`].
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum End {
     /// It's still going.
     Open,

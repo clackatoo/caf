@@ -110,6 +110,7 @@ impl OpenChat {
 /// Which session a chat opens.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum SessionChoice {
     /// A new one.
     New,
@@ -125,6 +126,7 @@ pub enum SessionChoice {
 /// nothing.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Refused {
     /// No chat has that id.
     NoSuchChat,

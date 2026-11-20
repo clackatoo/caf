@@ -25,6 +25,7 @@ pub struct Question {
 /// What a question asks.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum QuestionKind {
     /// The agent asks permission to do something.
     Permission(Permission),
@@ -66,6 +67,7 @@ pub struct OptionId(pub String);
 /// What a permission answer means.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum OptionKind {
     /// Allow this once.
     AllowOnce,
@@ -92,6 +94,7 @@ pub struct SlowToOpen {
 /// An answer to a question.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Answer {
     /// Choose one of a permission question's options.
     Permission(OptionId),
@@ -102,6 +105,7 @@ pub enum Answer {
 /// What to do about a session that's slow to open.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum SlowChoice {
     /// Keep waiting. What a host should pick when the user dismisses the
     /// question.

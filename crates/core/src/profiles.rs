@@ -53,6 +53,7 @@ use crate::chat::{FailureReason, Remedy};
 /// Which profile an agent should have.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum ProfileChoice {
     /// One CAF knows.
     Builtin(Builtin),
@@ -68,6 +69,7 @@ pub enum ProfileChoice {
 /// lets CAF add more without breaking anyone's `match`.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Builtin {
     /// Claude Code, through `@agentclientprotocol/claude-agent-acp`.
     /// Checked at 0.98.0.
@@ -100,6 +102,7 @@ pub struct AdapterInfo {
 /// How far CAF has checked the adapter it's talking to.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Checked {
     /// This exact version is checked: every feature its profile lists is
     /// on.

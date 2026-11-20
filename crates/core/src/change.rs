@@ -29,6 +29,7 @@ pub struct Numbered<A: AppItem = NoAppItems> {
 /// One change to a chat.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 #[serde(bound = "A: AppItem")]
 pub enum Change<A: AppItem = NoAppItems> {
     /// The chat's state changed.

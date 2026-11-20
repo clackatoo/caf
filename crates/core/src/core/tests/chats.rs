@@ -41,17 +41,17 @@ fn words_thinking_and_tools_become_items_in_order() {
     script.update(PROC, SESSION, &words("Found it."));
     script.update(PROC, SESSION, &json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "image", "data": "aGk=", "mimeType": "image/png" } }));
     script.update(PROC, SESSION, &json!({ "sessionUpdate": "usage_update", "used": 5000, "size": 200_000, "cost": { "amount": 0.25, "currency": "USD" } }));
-    let wall = |ms: i64| json!({ "At": 1_800_000_000_000_i64 + ms });
+    let wall = |ms: i64| json!({ "type": "At", "value": 1_800_000_000_000_i64 + ms });
     assert_has(
         &script.chat(CHAT),
         &json!({
             "usage": { "used": 5000, "size": 200_000, "cost": { "amount": 0.25, "currency": "USD" } },
             "turns": [{ "items": [
-                { "kind": { "Thinking": "Let me look" }, "window": { "end": wall(20) } },
-                { "kind": { "Words": "Looking." }, "window": { "end": wall(30) } },
-                { "kind": { "Tool": { "title": "Read lib.rs", "kind": "Read", "status": "Done", "input": { "path": "lib.rs" }, "output": "fn main() {}" } }, "window": { "end": wall(40) } },
-                { "kind": { "Words": "Found it." } },
-                { "kind": { "Unknown": { "what": "agent_message_chunk" } } }
+                { "kind": { "type": "Thinking", "value": "Let me look" }, "window": { "end": wall(20) } },
+                { "kind": { "type": "Words", "value": "Looking." }, "window": { "end": wall(30) } },
+                { "kind": { "type": "Tool", "value": { "title": "Read lib.rs", "kind": { "type": "Read" }, "status": { "type": "Done" }, "input": { "path": "lib.rs" }, "output": "fn main() {}" } }, "window": { "end": wall(40) } },
+                { "kind": { "type": "Words", "value": "Found it." } },
+                { "kind": { "type": "Unknown", "value": { "what": "agent_message_chunk" } } }
             ] }]
         }),
     );
@@ -81,14 +81,14 @@ fn what_the_agent_says_outside_a_prompt_is_a_turn_it_started() {
     assert_has(
         &script.chat(CHAT),
         &json!({ "turns": [{
-        "starter": "Agent", "life": "Running",
-        "items": [{ "kind": { "Words": "The build finished." } }, { "kind": { "Unknown": { "what": "notice", "raw": { "title": "Task done" } } } }]
+        "starter": { "type": "Agent" }, "life": { "type": "Running" },
+        "items": [{ "kind": { "type": "Words", "value": "The build finished." } }, { "kind": { "type": "Unknown", "value": { "what": "notice", "raw": { "title": "Task done" } } } }]
     }] }),
     );
     script.send(CHAT, "thanks").0.expect("sent");
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "starter": "Agent", "life": "Finished" }, { "life": "Running" }] }),
+        &json!({ "turns": [{ "starter": { "type": "Agent" }, "life": { "type": "Finished" } }, { "life": { "type": "Running" } }] }),
     );
 }
 
@@ -102,8 +102,8 @@ fn an_update_caf_cant_read_is_kept_as_it_came() {
     assert_has(
         &script.chat(CHAT),
         &json!({ "turns": [{ "items": [
-        { "kind": { "Unknown": { "what": "tool_call", "raw": broken } } },
-        { "kind": { "Unknown": { "what": "session/update", "raw": { "no": "tag" } } } }
+        { "kind": { "type": "Unknown", "value": { "what": "tool_call", "raw": broken } } },
+        { "kind": { "type": "Unknown", "value": { "what": "session/update", "raw": { "no": "tag" } } } }
     ] }] }),
     );
 }
@@ -206,7 +206,7 @@ fn mcp_servers_go_with_the_session_unless_the_agent_cant_take_them() {
     assert!(with(&out, "write").is_empty());
     assert_has(
         &script.chat(chat),
-        &json!({ "state": { "Lost": { "reason": { "Incompatible": "HttpMcp" } } } }),
+        &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "Incompatible", "value": { "type": "HttpMcp" } } } } }),
     );
 }
 

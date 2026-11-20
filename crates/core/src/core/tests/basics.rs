@@ -33,7 +33,10 @@ fn a_chat_starts_its_adapter_opens_a_session_and_runs_a_turn() {
     );
     // Waits for initialize: 30 s.
     assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 30_000 })]);
-    assert_has(&script.chat(CHAT), &json!({ "state": "Opening" }));
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "state": { "type": "Opening" } }),
+    );
 
     script.at(240);
     let out = script.answers(PROC, 1000, &claude_init());
@@ -46,9 +49,9 @@ fn a_chat_starts_its_adapter_opens_a_session_and_runs_a_turn() {
     assert_has(
         &script.state(),
         &json!({ "conns": { "1001": { "profile": {
-        "profile": { "Builtin": "ClaudeAgentAcp" },
+        "profile": { "type": "Builtin", "value": { "type": "ClaudeAgentAcp" } },
         "adapter": { "name": "@agentclientprotocol/claude-agent-acp", "version": "0.98.0" },
-        "checked": "Yes"
+        "checked": { "type": "Yes" }
     } } } }),
     );
 
@@ -56,7 +59,7 @@ fn a_chat_starts_its_adapter_opens_a_session_and_runs_a_turn() {
     let out = script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
     assert_has(
         &script.chat(CHAT),
-        &json!({ "state": { "Open": { "session": SESSION } } }),
+        &json!({ "state": { "type": "Open", "value": { "session": SESSION } } }),
     );
     // Nothing waits on a deadline now.
     assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": null })]);
@@ -82,10 +85,10 @@ fn a_chat_starts_its_adapter_opens_a_session_and_runs_a_turn() {
         &script.chat(CHAT),
         &json!({ "turns": [{
         "id": turn.0,
-        "starter": { "User": { "parts": [{ "Text": "Fix the tests" }] } },
-        "life": "Finished",
-        "window": { "start": 1_800_000_002_000_i64, "end": { "At": 1_800_000_003_000_i64 } },
-        "items": [{ "kind": { "Words": "On it." }, "window": { "end": { "At": 1_800_000_003_000_i64 } } }],
+        "starter": { "type": "User", "value": { "parts": [{ "type": "Text", "value": "Fix the tests" }] } },
+        "life": { "type": "Finished" },
+        "window": { "start": 1_800_000_002_000_i64, "end": { "type": "At", "value": 1_800_000_003_000_i64 } },
+        "items": [{ "kind": { "type": "Words", "value": "On it." }, "window": { "end": { "type": "At", "value": 1_800_000_003_000_i64 } } }],
         "imported": false
     }] }),
     );

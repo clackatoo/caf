@@ -20,18 +20,18 @@ fn ended(answer: Result<Value, Value>) -> Value {
 }
 
 fn failed(reason: &str, remedy: Value) -> Value {
-    json!({ "Failed": { "reason": reason, "agent_said": null, "remedy": remedy } })
+    json!({ "type": "Failed", "value": { "reason": { "type": reason }, "agent_said": null, "remedy": remedy } })
 }
 
 #[test]
 fn a_turn_ends_as_its_stop_reason_says() {
     assert_eq!(
         ended(Ok(json!({ "stopReason": "end_turn" }))),
-        json!("Finished")
+        json!({ "type": "Finished" })
     );
     assert_eq!(
         ended(Ok(json!({ "stopReason": "cancelled" }))),
-        json!("Stopped")
+        json!({ "type": "Stopped" })
     );
     assert_eq!(
         ended(Ok(json!({ "stopReason": "max_tokens" }))),
@@ -39,7 +39,7 @@ fn a_turn_ends_as_its_stop_reason_says() {
     );
     assert_eq!(
         ended(Ok(json!({ "stopReason": "max_turn_requests" }))),
-        failed("TooManySteps", json!("SendAgain"))
+        failed("TooManySteps", json!({ "type": "SendAgain" }))
     );
     assert_eq!(
         ended(Ok(json!({ "stopReason": "refusal" }))),
@@ -48,11 +48,11 @@ fn a_turn_ends_as_its_stop_reason_says() {
     // Newer than CAF: read leniently.
     assert_eq!(
         ended(Ok(json!({ "stopReason": "paused_for_tea" }))),
-        json!("Finished")
+        json!({ "type": "Finished" })
     );
     assert_eq!(
         ended(Ok(json!({}))),
-        failed("BadAnswer", json!("SendAgain"))
+        failed("BadAnswer", json!({ "type": "SendAgain" }))
     );
 }
 
@@ -63,14 +63,14 @@ fn claudes_failures_are_read_by_their_kind() {
             json!({ "code": -32603, "message": "Internal error: It broke", "data": { "errorKind": kind } }),
         )
     };
-    let said = |reason: &str, remedy: Value| json!({ "Failed": { "reason": reason, "agent_said": "It broke", "remedy": remedy } });
+    let said = |reason: &str, remedy: Value| json!({ "type": "Failed", "value": { "reason": { "type": reason }, "agent_said": "It broke", "remedy": remedy } });
     assert_eq!(
         ended(error("rate_limit")),
-        said("UsageLimit", json!("SendAgain"))
+        said("UsageLimit", json!({ "type": "SendAgain" }))
     );
     assert_eq!(
         ended(error("overloaded")),
-        said("ProviderError", json!("SendAgain"))
+        said("ProviderError", json!({ "type": "SendAgain" }))
     );
     assert_eq!(
         ended(error("authentication_failed")),
@@ -93,7 +93,7 @@ fn claudes_failures_are_read_by_their_kind() {
 }
 
 fn said_sign_in(words: &str) -> Value {
-    json!({ "Failed": { "reason": "SignInNeeded", "agent_said": words, "remedy": null } })
+    json!({ "type": "Failed", "value": { "reason": { "type": "SignInNeeded" }, "agent_said": words, "remedy": null } })
 }
 
 #[test]
@@ -105,8 +105,8 @@ fn a_failure_the_agent_already_said_as_words_is_shown_once() {
     assert_has(
         &script.chat(CHAT),
         &json!({ "turns": [{
-        "life": { "Failed": { "reason": "UsageLimit", "agent_said": null, "remedy": "SendAgain" } },
-        "items": [{ "kind": { "Words": "API Error: Rate limited" } }]
+        "life": { "type": "Failed", "value": { "reason": { "type": "UsageLimit" }, "agent_said": null, "remedy": { "type": "SendAgain" } } },
+        "items": [{ "kind": { "type": "Words", "value": "API Error: Rate limited" } }]
     }] }),
     );
 }
@@ -125,7 +125,7 @@ fn the_agents_failure_text_is_cleaned_and_capped() {
         &json!({ "code": -32603, "message": words, "data": { "errorKind": "server_error" } }),
     );
     assert_eq!(
-        script.chat(CHAT)["turns"][0]["life"]["Failed"]["agent_said"],
+        script.chat(CHAT)["turns"][0]["life"]["value"]["agent_said"],
         json!("Run <U+202E>sudo rm^[[0m…")
     );
 }
@@ -143,7 +143,7 @@ fn an_adapter_that_isnt_the_one_its_profile_is_for_is_read_cautiously() {
     script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
     assert_has(
         &script.state(),
-        &json!({ "conns": { "1001": { "profile": { "profile": "Cautious", "checked": "Mismatch" } } } }),
+        &json!({ "conns": { "1001": { "profile": { "profile": { "type": "Cautious" }, "checked": { "type": "Mismatch" } } } } }),
     );
     script.send(CHAT, "go").0.expect("sent");
     script.fails(
@@ -153,7 +153,7 @@ fn an_adapter_that_isnt_the_one_its_profile_is_for_is_read_cautiously() {
     );
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "life": { "Failed": { "reason": "Other" } } }] }),
+        &json!({ "turns": [{ "life": { "type": "Failed", "value": { "reason": { "type": "Other" } } } }] }),
     );
 }
 
@@ -169,7 +169,7 @@ fn a_newer_claude_keeps_its_profile() {
     script.answers(PROC, 1000, &init);
     assert_has(
         &script.state(),
-        &json!({ "conns": { "1001": { "profile": { "profile": { "Builtin": "ClaudeAgentAcp" }, "checked": "Newer" } } } }),
+        &json!({ "conns": { "1001": { "profile": { "profile": { "type": "Builtin", "value": { "type": "ClaudeAgentAcp" } }, "checked": { "type": "Newer" } } } } }),
     );
 }
 
@@ -187,13 +187,13 @@ fn sign_in_said_in_the_error_output_explains_the_adapter_stopping() {
     script.agent(PROC, crate::event::AgentEvent::OutputClosed);
     assert_has(
         &script.chat(CHAT),
-        &json!({ "state": { "Lost": { "reason": "SignInNeeded" } } }),
+        &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "SignInNeeded" } } } }),
     );
 }
 
 #[test]
 fn every_kind_of_claude_failure_is_read_and_offered_send_again_only_where_it_helps() {
-    let again = json!("SendAgain");
+    let again = json!({ "type": "SendAgain" });
     for (kinds, reason, remedy) in [
         (
             &["authentication_failed", "oauth_org_not_allowed"][..],
@@ -238,7 +238,7 @@ fn every_kind_of_claude_failure_is_read_and_offered_send_again_only_where_it_hel
             ));
             assert_eq!(
                 life,
-                json!({ "Failed": { "reason": reason, "agent_said": "x", "remedy": remedy } }),
+                json!({ "type": "Failed", "value": { "reason": { "type": reason }, "agent_said": "x", "remedy": remedy } }),
                 "{kind}"
             );
         }
@@ -252,7 +252,7 @@ fn a_bare_internal_error_says_its_details() {
     ));
     assert_eq!(
         life,
-        json!({ "Failed": { "reason": "Other", "agent_said": "spawn ENOMEM", "remedy": "SendAgain" } })
+        json!({ "type": "Failed", "value": { "reason": { "type": "Other" }, "agent_said": "spawn ENOMEM", "remedy": { "type": "SendAgain" } } })
     );
 }
 
@@ -284,7 +284,7 @@ fn a_prompt_to_a_session_the_adapter_dropped_resumes_it_and_sends_again() {
         );
         assert_has(
             &script.chat(CHAT),
-            &json!({ "state": { "Open": { "session": SESSION } }, "turns": [{ "id": turn.expect("sent").0, "life": "Running" }] }),
+            &json!({ "state": { "type": "Open", "value": { "session": SESSION } }, "turns": [{ "id": turn.expect("sent").0, "life": { "type": "Running" } }] }),
         );
         script.answers(PROC, 1004, &json!({ "stopReason": "end_turn" }));
     }
@@ -310,8 +310,8 @@ fn a_dropped_session_that_cant_be_resumed_is_replaced_and_the_chat_says_so() {
     assert_has(
         &script.chat(CHAT),
         &json!({
-            "state": { "Open": { "session": "fresh" } },
-            "turns": [{ "starter": "Caf", "items": [{ "kind": { "Note": "SessionGone" } }] }, { "id": turn.expect("sent").0, "life": "Running" }]
+            "state": { "type": "Open", "value": { "session": "fresh" } },
+            "turns": [{ "starter": { "type": "Caf" }, "items": [{ "kind": { "type": "Note", "value": { "type": "SessionGone" } } }] }, { "id": turn.expect("sent").0, "life": { "type": "Running" } }]
         }),
     );
     script.answers(PROC, 1005, &json!({ "stopReason": "end_turn" }));
@@ -332,14 +332,14 @@ fn a_message_is_sent_again_to_a_dropped_session_at_most_once() {
     assert_has(
         &script.chat(CHAT),
         &json!({
-            "turns": [{ "id": turn.expect("sent").0, "life": { "Failed": { "reason": "AgentStopped", "agent_said": null, "remedy": "SendAgain" } } }]
+            "turns": [{ "id": turn.expect("sent").0, "life": { "type": "Failed", "value": { "reason": { "type": "AgentStopped" }, "agent_said": null, "remedy": { "type": "SendAgain" } } } }]
         }),
     );
     // The chat still opens its session again, for the next message.
     script.answers(PROC, 1005, &json!({}));
     assert_has(
         &script.chat(CHAT),
-        &json!({ "state": { "Open": { "session": SESSION } } }),
+        &json!({ "state": { "type": "Open", "value": { "session": SESSION } } }),
     );
 }
 
@@ -351,7 +351,7 @@ fn a_turn_being_stopped_isnt_sent_again_when_its_session_was_dropped() {
     let out = script.fails(PROC, 1002, &not_found(true));
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "id": turn.expect("sent").0, "life": "Stopped" }] }),
+        &json!({ "turns": [{ "id": turn.expect("sent").0, "life": { "type": "Stopped" } }] }),
     );
     sent(&out, "session/resume");
     let out = script.answers(PROC, 1003, &json!({}));
@@ -375,7 +375,7 @@ fn a_cautious_profile_matches_no_agents_text() {
     );
     assert_has(
         &script.chat(CHAT),
-        &json!({ "state": { "Open": {} }, "turns": [{ "life": { "Failed": { "reason": "Other" } } }] }),
+        &json!({ "state": { "type": "Open", "value": {} }, "turns": [{ "life": { "type": "Failed", "value": { "reason": { "type": "Other" } } } }] }),
     );
 }
 
@@ -385,9 +385,9 @@ fn failure_text_streamed_at_the_end_of_the_words_is_shown_once() {
     script.send(CHAT, "go").0.expect("sent");
     script.update(PROC, SESSION, &json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Working on it… API Error: Rate limited\n" } }));
     script.fails(PROC, 1002, &json!({ "code": -32603, "message": "Internal error: API Error: Rate limited", "data": { "errorKind": "rate_limit" } }));
-    assert_eq!(
-        script.chat(CHAT)["turns"][0]["life"]["Failed"]["agent_said"],
-        Value::Null
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "turns": [{ "life": { "type": "Failed", "value": { "agent_said": null } } }] }),
     );
 }
 
@@ -403,7 +403,7 @@ fn a_prerelease_of_the_checked_version_isnt_it() {
     script.answers(PROC, 1000, &init);
     assert_has(
         &script.state(),
-        &json!({ "conns": { "1001": { "profile": { "checked": "Mismatch" } } } }),
+        &json!({ "conns": { "1001": { "profile": { "checked": { "type": "Mismatch" } } } } }),
     );
 }
 
@@ -415,6 +415,6 @@ fn a_tool_call_with_no_title_is_still_a_tool() {
     script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "title": "Read a.rs", "status": "completed" }));
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "items": [{ "kind": { "Tool": { "title": "Read a.rs", "kind": "Read", "status": "Done" } } }] }] }),
+        &json!({ "turns": [{ "items": [{ "kind": { "type": "Tool", "value": { "title": "Read a.rs", "kind": { "type": "Read" }, "status": { "type": "Done" } } } }] }] }),
     );
 }

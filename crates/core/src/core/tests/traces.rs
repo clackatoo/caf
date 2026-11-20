@@ -33,10 +33,10 @@ fn a_recorded_claude_turn_replays_from_json() {
     assert_has(
         &script.chat(CHAT),
         &json!({
-            "state": { "Open": { "session": SESSION } },
-            "turns": [{ "life": "Finished", "items": [
-                { "kind": { "Words": "Running them." } },
-                { "kind": { "Tool": { "title": "Run `cargo test`", "status": "Done", "output": "test result: ok" } } }
+            "state": { "type": "Open", "value": { "session": SESSION } },
+            "turns": [{ "life": { "type": "Finished" }, "items": [
+                { "kind": { "type": "Words", "value": "Running them." } },
+                { "kind": { "type": "Tool", "value": { "title": "Run `cargo test`", "status": { "type": "Done" }, "output": "test result: ok" } } }
             ] }]
         }),
     );
@@ -76,6 +76,7 @@ const CLAUDE_LIVE: &str = include_str!("traces/claude-0.98.0-live.jsonl");
 fn replay_recording(text: &str) -> (Core, Vec<Vec<serde_json::Value>>) {
     #[derive(serde::Deserialize)]
     struct Header {
+        caf_recording: u32,
         host: crate::host::Host,
         agents: Vec<crate::agent::AgentSpec>,
     }
@@ -87,6 +88,7 @@ fn replay_recording(text: &str) -> (Core, Vec<Vec<serde_json::Value>>) {
     let mut lines = text.lines();
     let header: Header =
         serde_json::from_str(lines.next().expect("a header")).expect("the header reads");
+    assert_eq!(header.caf_recording, 2, "a recording of version 2");
     let mut core = Core::new(header.host, header.agents);
     let mut outs = Vec::new();
     // A recording cut short says so, and ends there.
@@ -112,10 +114,10 @@ fn a_live_claude_run_replays_to_its_end() {
     assert_has(
         &chat,
         &json!({
-            "state": { "Lost": { "reason": "ShutDown" } },
+            "state": { "type": "Lost", "value": { "reason": { "type": "ShutDown" } } },
             "turns": [
-                { "starter": { "User": { "parts": [{ "Text": "Reply with exactly the word pong." }] } }, "life": "Finished", "items": [{ "kind": { "Words": "pong" } }] },
-                { "starter": { "User": {} }, "life": "Stopped", "items": [{ "kind": { "Words": "**The Keeper of Halden Rock**\n\nFor thirty-one years, Ed" } }] }
+                { "starter": { "type": "User", "value": { "parts": [{ "type": "Text", "value": "Reply with exactly the word pong." }] } }, "life": { "type": "Finished" }, "items": [{ "kind": { "type": "Words", "value": "pong" } }] },
+                { "starter": { "type": "User", "value": {} }, "life": { "type": "Stopped" }, "items": [{ "kind": { "type": "Words", "value": "**The Keeper of Halden Rock**\n\nFor thirty-one years, Ed" } }] }
             ],
             "questions": []
         }),

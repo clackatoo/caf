@@ -136,7 +136,7 @@ fn guarantee_2_every_caf_request_ends() {
     script.woken();
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "life": { "Failed": { "reason": "DidNotStop" } } }] }),
+        &json!({ "turns": [{ "life": { "type": "Failed", "value": { "reason": { "type": "DidNotStop" } } } }] }),
     );
     assert_eq!(script.state()["pending"], json!([]));
 
@@ -165,7 +165,7 @@ fn guarantee_2_every_caf_request_ends() {
     assert_eq!(script.state()["pending"], json!([]));
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{}, { "life": { "Failed": { "reason": "AgentStopped" } } }] }),
+        &json!({ "turns": [{}, { "life": { "type": "Failed", "value": { "reason": { "type": "AgentStopped" } } } }] }),
     );
 }
 
@@ -181,8 +181,8 @@ fn guarantee_3_nothing_the_agent_sends_is_silently_dropped() {
     assert_has(
         &script.chat(CHAT),
         &json!({ "turns": [{ "items": [
-        { "kind": { "Unknown": { "what": "hologram", "raw": new_kind } } },
-        { "kind": { "Unknown": { "what": "usage_update", "raw": unreadable } } }
+        { "kind": { "type": "Unknown", "value": { "what": "hologram", "raw": new_kind } } },
+        { "kind": { "type": "Unknown", "value": { "what": "usage_update", "raw": unreadable } } }
     ] }] }),
     );
     // What fits nowhere is reported.
@@ -222,13 +222,13 @@ fn guarantee_4_every_event_names_what_it_belongs_to() {
     assert_has(
         &script.chat(CHAT),
         &json!({ "turns": [
-        { "items": [{ "kind": { "Tool": { "title": "Build", "status": "Done", "output": "ok" } } }] },
-        { "items": [{ "kind": { "Words": "now" } }] }
+        { "items": [{ "kind": { "type": "Tool", "value": { "title": "Build", "status": { "type": "Done" }, "output": "ok" } } }] },
+        { "items": [{ "kind": { "type": "Words", "value": "now" } }] }
     ] }),
     );
     assert_has(
         &script.chat(OTHER),
-        &json!({ "turns": [{ "starter": "Agent", "life": "Running", "items": [{ "kind": { "Words": "elsewhere" } }] }] }),
+        &json!({ "turns": [{ "starter": { "type": "Agent" }, "life": { "type": "Running" }, "items": [{ "kind": { "type": "Words", "value": "elsewhere" } }] }] }),
     );
     script.answers(PROC, 1004, &json!({ "stopReason": "end_turn" }));
     // Its own turn ends on its own deadline, once quiet.
@@ -236,7 +236,7 @@ fn guarantee_4_every_event_names_what_it_belongs_to() {
     script.woken();
     assert_has(
         &script.chat(OTHER),
-        &json!({ "turns": [{ "starter": "Agent", "life": "Finished" }] }),
+        &json!({ "turns": [{ "starter": { "type": "Agent" }, "life": { "type": "Finished" } }] }),
     );
 }
 
@@ -344,7 +344,7 @@ fn guarantee_7_nothing_replayed_acts() {
         &script.chat(CHAT),
         &json!({
             "questions": [],
-            "turns": [{ "imported": true, "life": "Finished", "items": [{ "kind": { "Tool": { "status": "Failed" } } }] }]
+            "turns": [{ "imported": true, "life": { "type": "Finished" }, "items": [{ "kind": { "type": "Tool", "value": { "status": { "type": "Failed" } } } }] }]
         }),
     );
     assert_eq!(script.state()["asks"], json!({}));
@@ -368,13 +368,13 @@ fn guarantee_8_restarts_are_visible_to_every_chat_on_the_adapter() {
     assert_has(
         &script.chat(CHAT),
         &json!({
-            "state": "Opening",
-            "turns": [{ "life": { "Failed": { "reason": "DidNotStop" } } }, { "id": waiting.expect("queued").0, "life": "Waiting" }]
+            "state": { "type": "Opening" },
+            "turns": [{ "life": { "type": "Failed", "value": { "reason": { "type": "DidNotStop" } } } }, { "id": waiting.expect("queued").0, "life": { "type": "Waiting" } }]
         }),
     );
     assert_has(
         &script.chat(OTHER),
-        &json!({ "state": { "Lost": { "reason": "Restarted" } } }),
+        &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "Restarted" } } } }),
     );
     script.agent(PROC, AgentEvent::OutputClosed);
     let out = script.agent(PROC, AgentEvent::Group { empty: true });
@@ -413,14 +413,14 @@ fn guarantee_9_agent_text_is_never_passed_off_as_cafs() {
     // and capped.
     assert_eq!(
         chat["turns"][0]["life"],
-        json!({ "Failed": {
-        "reason": "ProviderError",
+        json!({ "type": "Failed", "value": {
+        "reason": { "type": "ProviderError" },
         "agent_said": "Run<U+200B> this<U+202E> ^[[8mhi…",
-        "remedy": "SendAgain"
+        "remedy": { "type": "SendAgain" }
     } })
     );
     assert_eq!(
-        chat["turns"][0]["items"][0]["kind"]["Tool"]["title"],
+        chat["turns"][0]["items"][0]["kind"]["value"]["title"],
         json!("Run<U+200B> this<U+202E> ^[[8mhidden^[[0m and keep going for a very long while")
     );
 
@@ -437,6 +437,6 @@ fn guarantee_9_agent_text_is_never_passed_off_as_cafs() {
     );
     assert_has(
         &script.chat(CHAT),
-        &json!({ "state": { "Lost": { "reason": { "Refused": { "message": "no<U+2066> cwd" } } } } }),
+        &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "Refused", "value": { "message": "no<U+2066> cwd" } } } } }),
     );
 }

@@ -70,6 +70,7 @@ pub const VERSIONS: RangeInclusive<u32> = 1..=1;
 /// A message from a viewer to CAF.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum FromViewer {
     /// The first message: the versions the viewer speaks.
     Hello {
@@ -136,6 +137,7 @@ pub enum FromViewer {
 /// A message from CAF to a viewer.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 #[serde(bound = "A: AppItem")]
 pub enum ToViewer<A: AppItem = NoAppItems> {
     /// The answer to [`FromViewer::Hello`].
@@ -232,6 +234,7 @@ pub struct OpenRequest {
 /// How a viewer's request went.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Outcome {
     /// The chat was opened, with this id. It's in the next
     /// [`ToViewer::Chats`] too.

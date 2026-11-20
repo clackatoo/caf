@@ -75,6 +75,7 @@ impl SpawnCommand {
 /// One change to a program's environment.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum EnvChange {
     /// Set a variable.
     Set(OsString, OsString),
@@ -87,6 +88,7 @@ pub enum EnvChange {
 /// wraps it, proxies it or shortens its timeouts.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum McpServer {
     /// A program the agent starts and talks to over its standard input
     /// and output. Every agent supports this.

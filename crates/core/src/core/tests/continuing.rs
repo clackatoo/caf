@@ -41,8 +41,8 @@ fn a_session_the_agent_no_longer_has_is_opened_new_and_the_chat_says_so() {
     assert_has(
         &script.chat(CHAT),
         &json!({
-            "state": { "Open": { "session": "fresh" } },
-            "turns": [{ "starter": "Caf", "life": "Finished", "items": [{ "kind": { "Note": "SessionGone" } }] }]
+            "state": { "type": "Open", "value": { "session": "fresh" } },
+            "turns": [{ "starter": { "type": "Caf" }, "life": { "type": "Finished" }, "items": [{ "kind": { "type": "Note", "value": { "type": "SessionGone" } } }] }]
         }),
     );
 }
@@ -57,7 +57,7 @@ fn an_agent_that_cant_continue_sessions_gets_a_new_one_and_the_chat_says_so() {
     script.answers(PROC, 1001, &json!({ "sessionId": "fresh" }));
     assert_has(
         &script.chat(CHAT),
-        &json!({ "turns": [{ "starter": "Caf", "items": [{ "kind": { "Note": "CannotContinue" } }] }] }),
+        &json!({ "turns": [{ "starter": { "type": "Caf" }, "items": [{ "kind": { "type": "Note", "value": { "type": "CannotContinue" } } }] }] }),
     );
 }
 
@@ -108,24 +108,24 @@ fn a_loaded_session_imports_its_history_and_nothing_replayed_acts() {
         &sent(&out, "session/prompt"),
         &json!({ "params": { "sessionId": "old", "prompt": [{ "text": "and now?" }] } }),
     );
-    let unknown = json!({ "start": null, "end": "Unknown" });
+    let unknown = json!({ "start": null, "end": { "type": "Unknown" } });
     assert_has(
         &script.chat(CHAT),
         &json!({
-            "state": { "Open": { "session": "old" } },
+            "state": { "type": "Open", "value": { "session": "old" } },
             "turns": [
                 {
-                    "starter": { "User": { "parts": [{ "Text": "first" }, { "Text": "with context" }] } },
-                    "life": "Finished", "imported": true, "window": unknown,
+                    "starter": { "type": "User", "value": { "parts": [{ "type": "Text", "value": "first" }, { "type": "Text", "value": "with context" }] } },
+                    "life": { "type": "Finished" }, "imported": true, "window": unknown,
                     "items": [
-                        { "kind": { "Thinking": "hmm" }, "window": unknown },
-                        { "kind": { "Words": "Sure, done." } },
-                        { "kind": { "Tool": { "title": "Edit", "kind": "Edit", "status": "Failed", "output": "edited" } } }
+                        { "kind": { "type": "Thinking", "value": "hmm" }, "window": unknown },
+                        { "kind": { "type": "Words", "value": "Sure, done." } },
+                        { "kind": { "type": "Tool", "value": { "title": "Edit", "kind": { "type": "Edit" }, "status": { "type": "Failed" }, "output": "edited" } } }
                     ]
                 },
-                { "starter": { "User": { "parts": [{ "Text": "second" }] } }, "imported": true, "items": [] },
+                { "starter": { "type": "User", "value": { "parts": [{ "type": "Text", "value": "second" }] } }, "imported": true, "items": [] },
                 // History goes before the message sent while it loaded.
-                { "id": waiting.0, "life": "Running" }
+                { "id": waiting.0, "life": { "type": "Running" } }
             ]
         }),
     );
@@ -151,7 +151,7 @@ fn a_loaded_session_imports_its_history_and_nothing_replayed_acts() {
     );
     assert_has(
         &script.chat(CHAT)["turns"][0]["items"][2],
-        &json!({ "kind": { "Tool": { "status": "Done" } } }),
+        &json!({ "kind": { "type": "Tool", "value": { "status": { "type": "Done" } } } }),
     );
     assert_eq!(script.chat(CHAT)["turns"][2]["items"], json!([]));
     script.answers(PROC, 1002, &json!({ "stopReason": "end_turn" }));
@@ -172,10 +172,10 @@ fn a_load_that_fails_fails_the_waiting_message_visibly() {
     assert_has(
         &script.chat(CHAT),
         &json!({
-            "state": { "Lost": { "reason": { "Refused": { "message": "Internal error: disk <U+202E>full" } } } },
+            "state": { "type": "Lost", "value": { "reason": { "type": "Refused", "value": { "message": "Internal error: disk <U+202E>full" } } } },
             "turns": [
-                { "imported": true, "starter": { "User": { "parts": [{ "Text": "first" }] } } },
-                { "id": waiting.expect("queued").0, "life": { "Failed": { "reason": "Other", "agent_said": "Internal error: disk <U+202E>full" } } }
+                { "imported": true, "starter": { "type": "User", "value": { "parts": [{ "type": "Text", "value": "first" }] } } },
+                { "id": waiting.expect("queued").0, "life": { "type": "Failed", "value": { "reason": { "type": "Other" }, "agent_said": "Internal error: disk <U+202E>full" } } }
             ]
         }),
     );

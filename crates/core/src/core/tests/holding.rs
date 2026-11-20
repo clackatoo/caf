@@ -40,7 +40,7 @@ fn a_session_held_on_another_connection_is_in_use() {
     assert!(writes(&out).is_empty(), "never resumed twice: {out:#?}");
     assert_has(
         &script.chat(other),
-        &json!({ "state": { "Lost": { "reason": "InUse" } } }),
+        &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "InUse" } } } }),
     );
 }
 
@@ -62,7 +62,10 @@ fn a_session_waits_for_a_process_that_still_has_it_to_go() {
         writes(&out).is_empty(),
         "not while the old process may still write it"
     );
-    assert_has(&script.chat(other), &json!({ "state": "Opening" }));
+    assert_has(
+        &script.chat(other),
+        &json!({ "state": { "type": "Opening" } }),
+    );
     script.agent(PROC, AgentEvent::Exited(Exit::Code(0)));
     script.agent(PROC, AgentEvent::OutputClosed);
     let out = script.agent(PROC, AgentEvent::Group { empty: true });
@@ -93,8 +96,8 @@ fn a_session_isnt_asked_for_again_while_an_abandoned_open_of_it_is_pending() {
     assert_has(
         &script.chat(CHAT),
         &json!({ "turns": [
-        { "imported": true, "starter": { "User": { "parts": [{ "Text": "second load" }] } } },
-        { "starter": { "User": { "parts": [{ "Text": "again" }] } }, "life": "Running" }
+        { "imported": true, "starter": { "type": "User", "value": { "parts": [{ "type": "Text", "value": "second load" }] } } },
+        { "starter": { "type": "User", "value": { "parts": [{ "type": "Text", "value": "again" }] } }, "life": { "type": "Running" } }
     ] }),
     );
     script.answers(PROC, 1003, &json!({ "stopReason": "end_turn" }));
@@ -113,7 +116,7 @@ fn a_chat_waiting_on_a_process_already_slow_is_asked_at_once() {
     let other = other.expect("opened");
     assert_has(
         &script.chat(other),
-        &json!({ "questions": [{ "kind": { "SlowToOpen": { "adapter_answered": false } } }] }),
+        &json!({ "questions": [{ "kind": { "type": "SlowToOpen", "value": { "adapter_answered": false } } }] }),
     );
 
     // Keep waiting covers every chat waiting on it.
@@ -223,7 +226,7 @@ fn a_chat_waiting_on_a_hold_is_asked_if_it_lasts() {
     script.woken();
     assert_has(
         &script.chat(CHAT),
-        &json!({ "state": "Opening", "questions": [{ "kind": { "SlowToOpen": { "adapter_answered": true } } }] }),
+        &json!({ "state": { "type": "Opening" }, "questions": [{ "kind": { "type": "SlowToOpen", "value": { "adapter_answered": true } } }] }),
     );
     // Once the hold ends the chat asks, and the question goes.
     let out = script.answers(PROC, 1001, &json!({}));
