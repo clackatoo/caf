@@ -6,16 +6,18 @@ mod common;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use caf_core::OpenChat;
 use caf_core::Refused;
 use caf_core::agent::{
     AgentSpec, AgentStatus, EnvChange, InstallState, SignInLink, SignInState, SpawnCommand,
 };
+use caf_core::chat::ChatState;
 use caf_core::ids::AgentName;
 use caf_core::install::SignedInAs;
 use caf_core::profiles::{Builtin, ProfileChoice};
 use caf_core::viewer::{AgentAction, FromViewer, Outcome, RequestNo, ToViewer};
 use caf_driver_tokio::viewer::{ViewerRules, serve};
-use caf_driver_tokio::{AgentsWatch, Caf, Config, Error};
+use caf_driver_tokio::{AgentsWatch, Caf, ChatHandle, Config, Error};
 use caf_fake_agent::{AUTH_EMAIL, AUTH_SECRET, AUTH_VAR, Auth};
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -34,7 +36,7 @@ const CODE: &str = "pasted-one-time-code";
 fn claude(dir: &Dir, auth: &Auth) -> AgentSpec {
     let settings = dir.path("auth.json");
     std::fs::write(&settings, serde_json::to_string(auth).unwrap()).unwrap();
-    let script = dir.script("script.jsonl", &handshake("s1"));
+    let script = dir.script("script.jsonl", &claude_handshake());
     let mut command = SpawnCommand::new(caf_fake_agent::binary());
     command.env = vec![
         EnvChange::Set(caf_fake_agent::SCRIPT_VAR.into(), script.into()),
@@ -45,6 +47,27 @@ fn claude(dir: &Dir, auth: &Auth) -> AgentSpec {
         command,
         ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
     )
+}
+
+/// A handshake as Claude's adapter, at the version its profile was
+/// checked at: so CAF lets the host's own command run the profile's
+/// sign-in.
+fn claude_handshake() -> Vec<serde_json::Value> {
+    let mut steps = handshake("s1");
+    steps[2] = json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true}, "agentInfo": {"name": "@agentclientprotocol/claude-agent-acp", "version": "0.98.0"}}}});
+    steps
+}
+
+/// Opens a chat with `agent`, and waits until its session is open: so its
+/// adapter has said what it is.
+async fn checked(caf: &Caf, dir: &Dir, agent: &str) -> ChatHandle {
+    let chat = caf.open_chat(OpenChat::new(agent, &dir.0)).await.unwrap();
+    let mut watch = chat.watch();
+    until(&chat, &mut watch, "the session to open", |chat| {
+        matches!(chat.state, ChatState::Open { .. })
+    })
+    .await;
+    chat
 }
 
 /// A sign-in that hands its link to `$BROWSER`, then waits for the code.
@@ -110,11 +133,12 @@ async fn a_sign_in_runs_through_the_agents_own_adapter() {
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].name, name("claude"));
     assert_eq!(first[0].install, InstallState::Host, "the host starts it");
-    // Its status command says it's signed out.
-    until_agents(&mut agents, "signed out", |statuses| {
-        *sign_in_of(statuses) == SignInState::SignedOut
-    })
-    .await;
+    assert_eq!(
+        caf.sign_in(&name("claude")).await,
+        Err(Error::Refused(Refused::CannotSignIn)),
+        "not until its adapter has said it's Claude's"
+    );
+    let _chat = checked(&caf, &dir, "claude").await;
 
     caf.sign_in(&name("claude")).await.unwrap();
     let signing = until_agents(&mut agents, "the link", |statuses| {
@@ -197,6 +221,15 @@ async fn what_cant_be_done_for_an_agent_is_refused() {
     );
     assert_eq!(
         refused(caf.sign_out(&name("fake")).await),
+        Refused::CannotSignIn
+    );
+    // Nor to Claude's, until its adapter has said it's Claude's.
+    assert_eq!(
+        refused(caf.sign_in(&name("claude")).await),
+        Refused::CannotSignIn
+    );
+    assert_eq!(
+        refused(caf.sign_out(&name("claude")).await),
         Refused::CannotSignIn
     );
     assert_eq!(
@@ -306,6 +339,7 @@ async fn viewers_hear_every_agents_status_and_act_on_agents_only_if_allowed() {
         );
     }
 
+    let _chat = checked(&caf, &dir, "claude").await;
     let mut rules = ViewerRules::default();
     rules.agents = true;
     let (to, mut from) = viewer(&caf, rules).await;
