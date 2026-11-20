@@ -158,3 +158,88 @@ fn compare(core: &mut Core, no: u64, raw: &Raw) -> Option<Diverged> {
     );
     (!same).then(|| diverged(Some(got)))
 }
+
+#[cfg(test)]
+mod tests {
+    use caf_core::agent::{AgentSpec, SpawnCommand};
+    use caf_core::profiles::ProfileChoice;
+    use caf_core::time::{Mono, Now, Wall};
+    use caf_core::viewer::OpenRequest;
+    use serde_json::json;
+    use serde_json::value::RawValue;
+
+    use super::{Raw, compare, host, rules};
+    use crate::replay::{Base, take, to_json};
+
+    fn agents() -> Vec<AgentSpec> {
+        vec![AgentSpec::new(
+            "fake",
+            SpawnCommand::new("/bin/true"),
+            ProfileChoice::Cautious,
+        )]
+    }
+
+    fn raw(event: &serde_json::Value, directives: Box<RawValue>) -> Raw {
+        Raw {
+            now: Now {
+                wall: Wall(1000),
+                mono: Mono(1000),
+            },
+            event: serde_json::value::to_raw_value(event).unwrap(),
+            directives,
+        }
+    }
+
+    #[test]
+    fn the_check_finds_directives_that_differ_and_events_that_dont_read() {
+        let base = Base {
+            host: host(),
+            agents: agents(),
+        };
+        let open = json!({"type": "Host", "value": {"type": "OpenChat", "value": {
+            "chat": 1, "open": {"agent": "fake", "cwd": "/work", "session": {"type": "New"}, "mcp_servers": []},
+        }}});
+        // What a core gives out for it, as CAF's would.
+        let mut real = base.core();
+        let step = raw(&open, to_json(&[]));
+        let out = take(&mut real, step.now, &step.event).expect("it reads");
+        assert!(!out.is_empty());
+
+        let mut replay = base.core();
+        assert!(compare(&mut replay, 1, &raw(&open, to_json(&out))).is_none());
+
+        let mut replay = base.core();
+        let diverged = compare(&mut replay, 7, &raw(&open, to_json(&[]))).expect("it differs");
+        assert_eq!(diverged.at, 7);
+        assert_eq!(diverged.expected.get(), "[]");
+        assert_eq!(
+            diverged.got.map(|got| got.get().to_owned()),
+            Some(to_json(&out).get().to_owned())
+        );
+
+        let mut replay = base.core();
+        let unreadable = raw(&json!({"type": "Nonsense"}), to_json(&[]));
+        assert!(
+            compare(&mut replay, 2, &unreadable)
+                .expect("it differs")
+                .got
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn viewers_may_open_the_agents_on_offer_in_absolute_folders_with_no_tools() {
+        let rules = rules(&agents());
+        let open = rules.open.as_ref();
+        let mut request = OpenRequest::new("fake", "/home/me/project");
+        let chat = open(&request).expect("allowed");
+        assert_eq!(chat.agent.0, "fake");
+        assert!(chat.mcp_servers.is_empty());
+        request.cwd = "project".into();
+        assert!(open(&request).is_none(), "a relative folder");
+        assert!(
+            open(&OpenRequest::new("claude", "/home/me")).is_none(),
+            "not on offer"
+        );
+    }
+}
