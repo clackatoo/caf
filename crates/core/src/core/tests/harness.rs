@@ -32,10 +32,10 @@ use crate::core::{Core, OpenChat, Refused};
 use crate::directive::{
     AgentDirective, Directive, PolicyDirective, SetupDirective, TimerDirective, ViewerDirective,
 };
-use crate::event::{AgentEvent, Event, HostCommand, PolicyAnswer};
+use crate::event::{AgentEvent, Event, HostCommand, PolicyAnswer, SetupEvent};
 use crate::fixtures::{self, After};
 use crate::host::Host;
-use crate::ids::{ChatId, QuestionId, Ticket, TurnId};
+use crate::ids::{AgentName, ChatId, QuestionId, Ticket, TurnId};
 use crate::profiles::{Builtin, ProfileChoice};
 use crate::question::Answer;
 use crate::time::{Mono, Now, Wall};
@@ -79,6 +79,10 @@ pub(crate) fn agents() -> Vec<AgentSpec> {
             SpawnCommand::new("/opt/caf/plain-acp"),
             ProfileChoice::Cautious,
         ),
+        // Two made-up agents CAF installs, with recipes of different
+        // shapes, so nothing assumes Claude.
+        AgentSpec::installed("npm-agent", Builtin::TestNpm),
+        AgentSpec::installed("dl-agent", Builtin::TestDownload),
     ]
 }
 
@@ -271,6 +275,97 @@ impl Script {
             |()| HostCommand::Shutdown,
         );
         out
+    }
+
+    /// Looks at what's installed.
+    pub(crate) fn check_agents(&mut self) -> Vec<Value> {
+        let (_, out) = self.host_call(
+            |core, now, out| {
+                core.check_agents(now, out);
+                Ok(())
+            },
+            |()| HostCommand::CheckAgents,
+        );
+        out
+    }
+
+    /// Installs `agent`.
+    pub(crate) fn install(&mut self, agent: &str) -> (Result<(), Refused>, Vec<Value>) {
+        let name = AgentName(agent.to_owned());
+        self.host_call(
+            |core, now, out| core.install(now, &name, out),
+            |()| HostCommand::Install(AgentName(agent.to_owned())),
+        )
+    }
+
+    /// Stops installing `agent`.
+    pub(crate) fn stop_install(&mut self, agent: &str) -> (Result<(), Refused>, Vec<Value>) {
+        let name = AgentName(agent.to_owned());
+        self.host_call(
+            |core, now, out| core.stop_install(now, &name, out),
+            |()| HostCommand::StopInstall(AgentName(agent.to_owned())),
+        )
+    }
+
+    /// Signs in to `agent`.
+    pub(crate) fn sign_in(&mut self, agent: &str) -> (Result<(), Refused>, Vec<Value>) {
+        let name = AgentName(agent.to_owned());
+        self.host_call(
+            |core, now, out| core.sign_in(now, &name, out),
+            |()| HostCommand::SignIn(AgentName(agent.to_owned())),
+        )
+    }
+
+    /// Pastes `text` to `agent`'s sign-in.
+    pub(crate) fn paste(&mut self, agent: &str, text: &str) -> (Result<(), Refused>, Vec<Value>) {
+        let name = AgentName(agent.to_owned());
+        self.host_call(
+            |core, now, out| core.paste(now, &name, text.to_owned(), out),
+            |()| HostCommand::Paste {
+                agent: AgentName(agent.to_owned()),
+                text: text.to_owned(),
+            },
+        )
+    }
+
+    /// Stops signing in to `agent`.
+    pub(crate) fn stop_sign_in(&mut self, agent: &str) -> (Result<(), Refused>, Vec<Value>) {
+        let name = AgentName(agent.to_owned());
+        self.host_call(
+            |core, now, out| core.stop_sign_in(now, &name, out),
+            |()| HostCommand::StopSignIn(AgentName(agent.to_owned())),
+        )
+    }
+
+    /// Signs out of `agent`.
+    pub(crate) fn sign_out(&mut self, agent: &str) -> (Result<(), Refused>, Vec<Value>) {
+        let name = AgentName(agent.to_owned());
+        self.host_call(
+            |core, now, out| core.sign_out(now, &name, out),
+            |()| HostCommand::SignOut(AgentName(agent.to_owned())),
+        )
+    }
+
+    /// The setup driver reports `event` on `ticket`.
+    pub(crate) fn setup(&mut self, ticket: u64, event: SetupEvent) -> Vec<Value> {
+        self.event(Event::Setup {
+            ticket: Ticket(ticket),
+            event,
+        })
+    }
+
+    /// Where every agent stands, as JSON.
+    pub(crate) fn agents(&self) -> Value {
+        serde_json::to_value(self.core.agents()).expect("statuses serialise")
+    }
+
+    /// Where `agent` stands, as JSON.
+    pub(crate) fn agent_status(&self, agent: &str) -> Value {
+        let all = self.agents();
+        (all.as_array().into_iter().flatten())
+            .find(|each| each["name"] == agent)
+            .cloned()
+            .unwrap_or_else(|| panic!("no agent {agent} in {all:#}"))
     }
 
     /// Something happens to process `proc`.
@@ -474,8 +569,10 @@ pub(crate) fn render(directive: &Directive) -> Value {
                 hold,
             } => {
                 let mut start = json!({ "start": process.0, "program": command.program });
+                // From CAF's install: how it's started is the recipe's.
                 if let Some(hold) = hold {
                     start["hold"] = json!(hold);
+                    start["command"] = spawn(command);
                 }
                 start
             }

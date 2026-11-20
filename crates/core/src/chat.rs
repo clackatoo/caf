@@ -345,7 +345,9 @@ pub enum FailureReason {
 }
 
 /// What the user can do about a failure. CAF does the remedy itself, so
-/// every host offers the same ones. *Later*, except `SendAgain`.
+/// every host offers the same ones: `SendAgain` is sending the message
+/// again, and `SignIn` is [`Core::sign_in`](crate::Core::sign_in).
+/// `NewChat` is *later*.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -353,8 +355,13 @@ pub enum FailureReason {
 pub enum Remedy {
     /// Send the same message again.
     SendAgain,
-    /// Sign in, with CAF's own command for this agent: never one the agent
-    /// suggested.
+    /// Sign in, with CAF's own command for this agent, from its profile:
+    /// never one the agent suggested. Offered only where CAF can run that
+    /// command now ([`Core::sign_in`](crate::Core::sign_in) wouldn't
+    /// refuse); elsewhere a failure for want of signing in offers what it
+    /// did before, if anything. Once the user has signed in, the chat says
+    /// so ([`Note::SignedIn`]), and the message can be sent again: CAF
+    /// never sends it again by itself.
     SignIn,
     /// Start a new chat with the same agent and folder.
     NewChat,

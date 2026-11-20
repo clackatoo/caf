@@ -156,7 +156,11 @@ impl<A: AppItem> Core<A> {
         }
         let life = match reply {
             Reply::Result(result) => ended_by(&result),
-            Reply::Error(error) => TurnLife::Failed(self.failure(chat, turn, &error)),
+            Reply::Error(error) => {
+                let mut failure = self.failure(chat, turn, &error);
+                self.sign_in_failure(chat, &mut failure);
+                TurnLife::Failed(failure)
+            }
             Reply::Unreadable => {
                 TurnLife::Failed(failure(FailureReason::BadAnswer, Some(Remedy::SendAgain)))
             }
@@ -369,6 +373,7 @@ impl<A: AppItem> Core<A> {
             .as_ref()
             .map(|running| (running.turn, running.proc, running.stop_by.is_some()));
         let agent_turn = run.agent_turn;
+        let for_agent = whole.state == ChatState::WaitingForAgent;
         if waiting.is_empty() && running.is_none() && agent_turn.is_none() && !opening {
             return Err(Refused::NothingToStop);
         }
@@ -405,11 +410,15 @@ impl<A: AppItem> Core<A> {
                 }
             }
         }
+        let stopped = !waiting.is_empty();
         for turn in waiting {
             self.set_life(now, chat, turn, TurnLife::Stopped);
         }
         if opening {
             self.stop_opening(now, chat, out);
+        }
+        if for_agent {
+            self.stopped_waiting(now, chat, stopped);
         }
         Ok(())
     }

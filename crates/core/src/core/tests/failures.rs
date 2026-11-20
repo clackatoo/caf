@@ -72,9 +72,11 @@ fn claudes_failures_are_read_by_their_kind() {
         ended(error("overloaded")),
         said("ProviderError", json!({ "type": "SendAgain" }))
     );
+    // Claude's profile signs in itself, through the adapter that said
+    // it's Claude's.
     assert_eq!(
         ended(error("authentication_failed")),
-        said("SignInNeeded", Value::Null)
+        said("SignInNeeded", json!({ "type": "SignIn" }))
     );
     assert_eq!(
         ended(error("max_output_tokens")),
@@ -93,7 +95,7 @@ fn claudes_failures_are_read_by_their_kind() {
 }
 
 fn said_sign_in(words: &str) -> Value {
-    json!({ "type": "Failed", "value": { "reason": { "type": "SignInNeeded" }, "agent_said": words, "remedy": null } })
+    json!({ "type": "Failed", "value": { "reason": { "type": "SignInNeeded" }, "agent_said": words, "remedy": { "type": "SignIn" } } })
 }
 
 #[test]
@@ -192,13 +194,13 @@ fn sign_in_said_in_the_error_output_explains_the_adapter_stopping() {
 }
 
 #[test]
-fn every_kind_of_claude_failure_is_read_and_offered_send_again_only_where_it_helps() {
+fn every_kind_of_claude_failure_is_read_and_offered_a_remedy_only_where_it_helps() {
     let again = json!({ "type": "SendAgain" });
     for (kinds, reason, remedy) in [
         (
             &["authentication_failed", "oauth_org_not_allowed"][..],
             "SignInNeeded",
-            Value::Null,
+            json!({ "type": "SignIn" }),
         ),
         (
             &["billing_error", "account_on_hold"][..],

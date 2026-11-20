@@ -479,7 +479,7 @@ fn a_session_refused_for_sign_in_says_so() {
         &script.chat(CHAT),
         &json!({
             "state": { "type": "Lost", "value": { "reason": { "type": "SignInNeeded" } } },
-            "turns": [{ "id": turn.expect("sent").0, "life": { "type": "Failed", "value": { "reason": { "type": "SignInNeeded" }, "remedy": { "type": "SendAgain" } } } }]
+            "turns": [{ "id": turn.expect("sent").0, "life": { "type": "Failed", "value": { "reason": { "type": "SignInNeeded" }, "remedy": { "type": "SignIn" } } } }]
         }),
     );
 }
