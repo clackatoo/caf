@@ -20,8 +20,12 @@
 //   which renders Markdown with HTML off, with `{@html}`. Anywhere else,
 //   `{@html}`, `bind:innerHTML`/`outerHTML`, `srcdoc`, and the DOM's
 //   `innerHTML`, `outerHTML`, `insertAdjacentHTML`,
-//   `createContextualFragment` and `document.write`, by name or by string,
-//   fail the check.
+//   `createContextualFragment`, `setHTMLUnsafe`, `parseHTMLUnsafe`,
+//   `DOMParser`'s `parseFromString` and `document.write` (on any object's
+//   `document`), by name or by string, fail the check.
+// - **TypeScript only:** a .js file in src/chat/ fails, since JSDoc can
+//   import out of this check's sight. Triple-slash references count as
+//   imports.
 //
 // Run in CI: `npm run check:imports`. It exits non-zero on any breach. It
 // takes another folder to check instead of this app's, which its tests use.
@@ -136,7 +140,17 @@ try {
 }
 
 /** DOM names that put HTML in the page as it is. */
-const sinks = new Set(['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'createContextualFragment', 'srcdoc'])
+const sinks = new Set([
+  'innerHTML',
+  'outerHTML',
+  'insertAdjacentHTML',
+  'createContextualFragment',
+  'srcdoc',
+  'setHTMLUnsafe',
+  'parseHTMLUnsafe',
+  // DOMParser's: the nodes it makes come alive when put in the page.
+  'parseFromString',
+])
 
 /** An import as written in `file`, held to the same rule as a resolved one. */
 function written(file, specifier) {
@@ -156,9 +170,20 @@ function css(file, source) {
   if (/\burl\s*\(/i.test(plain)) breaches.push(`${name(file)}: CSS url(), which may load anything`)
 }
 
+/** `document`, or anything's `.document`, such as `window.document`. */
+function isDocument(node) {
+  return (ts.isIdentifier(node) && node.text === 'document') || (ts.isPropertyAccessExpression(node) && node.name.text === 'document')
+}
+
 /** A script, with TypeScript's parser. */
 function script(file, source) {
-  const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, /\.[cm]?jsx?$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS)
+  const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  // `/// <reference path=…>`, relative to the file however it's written,
+  // and `/// <reference types=…>`, a package.
+  for (const reference of tree.referencedFiles) {
+    written(file, /^[./]/.test(reference.fileName) ? reference.fileName : `./${reference.fileName}`)
+  }
+  for (const reference of tree.typeReferenceDirectives) written(file, reference.fileName)
   const visit = (node) => {
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
       written(file, node.moduleSpecifier.text)
@@ -169,7 +194,7 @@ function script(file, source) {
       if (first && ts.isStringLiteralLike(first)) written(file, first.text)
     } else if (ts.isPropertyAccessExpression(node) && ts.isMetaProperty(node.expression) && node.name.text === 'url') {
       breaches.push(`${name(file)}: uses import.meta.url, which reaches files without importing them`)
-    } else if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'document' && /^write(ln)?$/.test(node.name.text)) {
+    } else if (ts.isPropertyAccessExpression(node) && /^write(ln)?$/.test(node.name.text) && isDocument(node.expression)) {
       breaches.push(`${name(file)}: uses document.write, which puts HTML in the page as it is`)
     } else if ((ts.isIdentifier(node) || ts.isPrivateIdentifier(node) || ts.isStringLiteralLike(node)) && sinks.has(node.text)) {
       breaches.push(`${name(file)}: uses ${node.text}, which puts HTML in the page as it is`)
@@ -218,7 +243,11 @@ function component(file, source) {
         if (node.object?.type === 'MetaProperty' && node.property?.name === 'url') {
           breaches.push(`${from}: uses import.meta.url, which reaches files without importing them`)
         }
-        if (node.object?.type === 'Identifier' && node.object.name === 'document' && /^write(ln)?$/.test(node.property?.name ?? '')) {
+        if (
+          /^write(ln)?$/.test(node.property?.name ?? '') &&
+          ((node.object?.type === 'Identifier' && node.object.name === 'document') ||
+            (node.object?.type === 'MemberExpression' && node.object.property?.name === 'document'))
+        ) {
           breaches.push(`${from}: uses document.write, which puts HTML in the page as it is`)
         }
         break
@@ -241,7 +270,10 @@ for (const file of files) {
   const source = readFileSync(file, 'utf8')
   if (file.endsWith('.svelte')) component(file, source)
   else if (file.endsWith('.css')) css(file, source)
-  else if (/\.[cm]?[jt]sx?$/.test(file)) script(file, source)
+  // JavaScript could import in JSDoc, out of this check's sight: the chat
+  // view is TypeScript.
+  else if (/\.[cm]?jsx?$/.test(file)) breaches.push(`${name(file)}: a .js file; the chat view is TypeScript`)
+  else if (/\.[cm]?tsx?$/.test(file)) script(file, source)
 }
 
 if (breaches.length > 0) {

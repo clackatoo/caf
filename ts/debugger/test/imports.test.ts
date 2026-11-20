@@ -77,6 +77,18 @@ describe('the import check', () => {
     ['document.write', { 'bad.ts': `export function put(s: string) { document.write(s) }` }, 'document.write'],
     ['createContextualFragment', { 'bad.ts': `export const f = (s: string) => document.createRange().createContextualFragment(s)` }, 'createContextualFragment'],
     ['srcdoc', { 'Bad.svelte': `<iframe title="x" srcdoc="<b>x</b>"></iframe>` }, 'srcdoc'],
+    ['setHTMLUnsafe', { 'bad.ts': `export function put(el: Element, s: string) { (el as any).setHTMLUnsafe(s) }` }, 'setHTMLUnsafe'],
+    ['parseHTMLUnsafe', { 'bad.ts': `export const d = (s: string) => (Document as any).parseHTMLUnsafe(s)` }, 'parseHTMLUnsafe'],
+    [
+      "DOMParser's parseFromString",
+      { 'bad.ts': `export function put(el: Element, s: string) { el.append(...new DOMParser().parseFromString(s, 'text/html').body.childNodes) }` },
+      'parseFromString',
+    ],
+    ['window.document.write', { 'bad.ts': `export function put(s: string) { window.document.write(s) }` }, 'document.write'],
+    ['globalThis.document.writeln', { 'bad.ts': `export function put(s: string) { globalThis.document.writeln(s) }` }, 'document.write'],
+    ['document.write in a component', { 'Bad.svelte': `<button onclick={() => window.document.write('x')}>x</button>` }, 'document.write'],
+    ['a triple-slash reference', { 'bad.ts': `/// <reference path="../link.ts" />\nexport const a = 1` }, 'outside src/chat/'],
+    ['a .js file', { 'bad.js': `/** @typedef {import('../link.ts').LinkState} L */\nexport const a = 1` }, '.js'],
   ]
   for (const [what, files, says] of breaches) {
     it(`fails ${what}`, () => {
