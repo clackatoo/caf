@@ -6,6 +6,22 @@
 //! as the [`Event::Host`] they're recorded as, and only if the core took
 //! them.
 //!
+//! The event is exactly what the core was given, so a fresh core given
+//! the same events, in order, gives out the same directives.
+//!
+//! **Steps hold secrets.** A recording hides them, but a step can't: the
+//! values of MCP servers' variables and headers, in the host's
+//! [`Event::Host`] opening a chat and in the directive that starts its
+//! session, and the account's email, in Claude's sign-in status. So treat
+//! what a watcher sees as private, as the host's own, and never write it
+//! out as it is: hide those first, as a recording does.
+//!
+//! **The cost.** With a watcher, each event is written as JSON and read
+//! back on CAF's task, since events can't be copied: that includes the
+//! agent's messages, up to
+//! [`Limits::biggest_message`](caf_core::host::Limits::biggest_message)
+//! each. Without one, watching costs nothing more than a check each step.
+//!
 //! [`Config::record`]: crate::Config::record
 //! [`ChatHandle::send`]: crate::ChatHandle::send
 //! [`Event::Host`]: caf_core::Event::Host
