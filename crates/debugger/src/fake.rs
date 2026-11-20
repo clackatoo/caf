@@ -15,6 +15,10 @@
 //!   waits, Stop ends the turn as a real adapter does, with
 //!   `cancelled`.
 //!
+//! A Stop while the question waits must end the turn `cancelled`, never
+//! `end_turn`: the round makes sure of it with a request CAF refuses,
+//! which comes back only after any cancel (see [`asking`]).
+//!
 //! A handler can't wait, and the fake's patterns match a prompt only
 //! whole, which is why the round that asks needs its exact word. Nor can
 //! the script stop partway through a round, so a round says nothing
@@ -133,6 +137,14 @@ fn asking(round: u32) -> Vec<Value> {
             ],
         }}}),
         json!({"await": {"to": "permission"}}),
+        // A Stop answers the question `cancelled` before it sends
+        // `session/cancel`, so the cancel may not have been read yet.
+        // CAF refuses this request, and answers it only after what it
+        // sent before, so once its answer is in, so is any cancel, and
+        // the cancel's handler has answered the prompt `cancelled`
+        // before `end_turn` below, which then does nothing.
+        json!({"request": {"method": "_caf_fake/sync", "as": "sync"}}),
+        json!({"await": {"to": "sync"}}),
         json!({"respond": {"to": "prompt", "result": {"stopReason": "end_turn"}}}),
     ]);
     steps

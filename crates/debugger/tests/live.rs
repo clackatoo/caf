@@ -480,3 +480,37 @@ async fn the_fake_fails_a_turn_once_and_answers_it_sent_again() {
     assert!(debugger.live.book.diverged().is_none());
     debugger.live.caf.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stopping_the_fake_while_it_asks_always_ends_the_turn_stopped() {
+    // CAF answers the question `cancelled` before it sends the cancel, so
+    // a fake that went on once its question was answered would race its
+    // own `cancelled` with `end_turn`. Many rounds in one chat give the
+    // race every chance.
+    const ROUNDS: usize = 30;
+    let debugger = Debugger::start("stop-race").await;
+    let mut viewer = debugger.chat().await;
+    let chat = viewer.chat.clone();
+    for round in 1..=ROUNDS {
+        viewer.say(fake::ASK).await;
+        viewer
+            .until(|chat| chat.turns.len() == round && !chat.questions.is_empty())
+            .await;
+        viewer.request("Stop", json!({"chat": chat})).await;
+        viewer
+            .until(|chat| {
+                let lives = lives(chat);
+                lives.len() == round
+                    && lives[round - 1] != "Running"
+                    && lives[round - 1] != "Stopping"
+            })
+            .await;
+        assert_eq!(
+            lives(viewer.copy.chat())[round - 1],
+            "Stopped",
+            "round {round}"
+        );
+    }
+    assert!(debugger.live.book.diverged().is_none());
+    debugger.live.caf.shutdown().await;
+}
