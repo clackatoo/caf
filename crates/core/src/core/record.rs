@@ -73,12 +73,12 @@ impl<A: AppItem> Core<A> {
     /// the chat's list: the record is built only from the changes viewers
     /// are sent, so the two can't disagree. A change that doesn't fit is
     /// a bug in the core: it's dropped, and reported when the call ends.
-    fn record(&mut self, chat: ChatId, change: Change<A>) {
+    pub(super) fn record(&mut self, chat: ChatId, change: Change<A>) {
         let (Some(whole), Some(log)) = (self.chats.get_mut(&chat), self.logs.get_mut(&chat)) else {
             return;
         };
         #[cfg(test)]
-        let picture = self.applied.entry(chat).or_insert_with(|| Applied {
+        let seen = self.applied.entry(chat).or_insert_with(|| Applied {
             picture: whole.clone(),
             latest: log.latest(),
             steps: Vec::new(),
@@ -95,7 +95,7 @@ impl<A: AppItem> Core<A> {
         log.push(change, self.host.limits.kept_changes);
         #[cfg(test)]
         if let Some(last) = log.changes.last() {
-            picture.steps.push((last.clone(), whole.clone()));
+            seen.steps.push((last.clone(), whole.clone()));
         }
         self.dirty.insert(chat);
     }

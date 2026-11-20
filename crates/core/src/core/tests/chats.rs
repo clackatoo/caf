@@ -3,13 +3,14 @@
 
 use serde_json::json;
 
-use super::harness::{Script, assert_has, host, includes, sent, with};
+use super::harness::{Script, agents, assert_has, host, includes, render, sent, with};
 use super::{CHAT, PROC, SESSION, claude_init};
 use crate::agent::{EnvChange, McpServer, SpawnCommand};
 use crate::change::{Change, Read};
 use crate::chat::{Part, UserMessage};
-use crate::core::{OpenChat, Refused};
-use crate::ids::{ChangeNo, ChatId};
+use crate::core::{Core, OpenChat, Refused};
+use crate::event::Event;
+use crate::ids::{ChangeNo, ChatId, QuestionId};
 
 fn words(text: &str) -> serde_json::Value {
     json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": text } })
@@ -258,6 +259,40 @@ fn viewers_read_changes_or_the_whole_chat() {
         Some(Read::Picture { .. })
     ));
     assert!(script.core.read(ChatId(1), None).is_none());
+}
+
+/// A change that doesn't fit its chat's record is a bug in the core, so
+/// nothing outside can cause one: this one is made by hand. It fails a
+/// debug assertion; in release, it's dropped, and reported when the call
+/// ends.
+#[test]
+#[cfg_attr(debug_assertions, should_panic(expected = "doesn't fit"))]
+fn a_change_that_doesnt_fit_is_dropped_and_reported() {
+    // A bare core: a script's replay wouldn't have the change made by hand.
+    let mut core: Core = Core::new(host(), agents());
+    let now = crate::shape::now();
+    let mut out = Vec::new();
+    let chat = (core.open_chat(now, OpenChat::new("claude", "/work"), &mut out)).expect("opened");
+    let before = core.inspect();
+    core.record(chat, Change::QuestionGone(QuestionId(99)));
+    assert_eq!(
+        core.inspect(),
+        before,
+        "the record and its changes are as they were"
+    );
+    out.clear();
+    core.handle(now, Event::Woken, &mut out);
+    let reports: Vec<_> = (out.iter().map(render))
+        .filter(|each| includes(each, &json!({ "report": "Warn" })))
+        .collect();
+    assert_eq!(reports.len(), 1, "{out:#?}");
+    assert!(
+        reports[0]["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("a bug in CAF")),
+        "{reports:#?}"
+    );
+    assert!(with(&out.iter().map(render).collect::<Vec<_>>(), "changed").is_empty());
 }
 
 #[test]
