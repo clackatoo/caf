@@ -1006,6 +1006,54 @@ async fn a_status_command_gives_only_the_fields_named() {
 }
 
 #[tokio::test]
+async fn a_status_command_that_says_too_much_is_cut_off() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    let mut command = SpawnCommand::new("/bin/sh");
+    command.args = vec!["-c".into(), "yes | head -c 4000000; echo".into()];
+    driver.apply(SetupDirective::Status {
+        ticket: Ticket(1000),
+        command,
+        signed_in: "/loggedIn".into(),
+        how: None,
+    });
+    let events = tokio::time::timeout(Duration::from_secs(10), done(&mut driver, Ticket(1000)))
+        .await
+        .expect("it ends once its answer is too long, not when it times out");
+    assert!(
+        matches!(events.as_slice(), [Ev(SetupEvent::Failed(_))]),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_sign_in_ends_though_what_it_started_holds_its_output() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    let mut command = SpawnCommand::new("/bin/sh");
+    command.args = vec![
+        "-c".into(),
+        "echo 'Open: https://example.com/a'; sleep 30 & exit 0".into(),
+    ];
+    driver.apply(SetupDirective::SignIn {
+        ticket: Ticket(1000),
+        command,
+        link: LinkFrom::Output("Open: ".into()),
+        code_after: None,
+    });
+    let events = tokio::time::timeout(Duration::from_secs(10), done(&mut driver, Ticket(1000)))
+        .await
+        .expect("it ends with its command");
+    assert_eq!(
+        events,
+        [
+            SetupEvent::Link("https://example.com/a".into()),
+            SetupEvent::Ended { ok: true }
+        ]
+    );
+}
+
+#[tokio::test]
 async fn a_command_that_cant_start_fails() {
     let dir = Dir::new();
     let mut driver = driver(&dir);

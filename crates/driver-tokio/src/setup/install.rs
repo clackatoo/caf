@@ -374,7 +374,7 @@ async fn npm(
     // Read as it comes, so a full pipe never holds npm up, keeping the
     // end, where npm says what went wrong.
     let mut errors = child.stderr.take();
-    let said = tokio::spawn(async move {
+    let mut said = tokio::spawn(async move {
         let mut kept = Vec::new();
         let mut buffer = vec![0; 8 << 10];
         while let Some(stderr) = &mut errors {
@@ -410,7 +410,15 @@ async fn npm(
             }
         }
     };
-    let said = said.await.unwrap_or_default();
+    // Something npm started may hold its error output open: what it said
+    // is waited for only a moment.
+    let said = match tokio::time::timeout(PROGRESS, &mut said).await {
+        Ok(said) => said.unwrap_or_default(),
+        Err(_) => {
+            said.abort();
+            String::new()
+        }
+    };
     match status {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => Err(npm_failure(&said, status.code())),

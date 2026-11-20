@@ -148,13 +148,17 @@ pub(super) async fn sign_in(sign_in: SignIn, reporter: Reporter, mut stop: onesh
     };
     // What it said, or handed its browser, before it ended comes before
     // the end. Something it started may hold its output open, so that's
-    // waited for only a moment.
+    // waited for only a moment, and then not read any more.
+    let mut readers: Vec<_> = readers.into_iter().flatten().collect();
     let _ = tokio::time::timeout(POLL * 5, async {
-        for reader in readers.into_iter().flatten() {
+        for reader in &mut readers {
             let _ = reader.await;
         }
     })
     .await;
+    for reader in readers {
+        reader.abort();
+    }
     while let Ok(event) = finds.try_recv() {
         report(event);
     }
@@ -349,11 +353,13 @@ pub(super) async fn status(
             return;
         }
     };
-    let mut stdout = child.stdout.take();
+    let stdout = child.stdout.take();
     let answer = async {
         let mut answer = Vec::new();
-        if let Some(stdout) = &mut stdout {
+        if let Some(stdout) = stdout {
             let _ = stdout.take(LONGEST_ANSWER).read_to_end(&mut answer).await;
+            // Closed, so one with more to say than is read stops, rather
+            // than waiting to be read.
         }
         let status = child.wait().await;
         (answer, status)
