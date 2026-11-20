@@ -174,9 +174,13 @@ impl<A: AppItem> Chat<A> {
             Change::Usage(usage) => self.usage = Some(usage.clone()),
             Change::QuestionAsked(question) => self.questions.push(question.clone()),
             Change::QuestionGone(question) => {
-                let at = (self.questions.iter().position(|each| each.id == *question))
-                    .ok_or(Mismatch::NoQuestion(*question))?;
-                self.questions.remove(at);
+                // Every question with the id goes, as the core's record
+                // always took them.
+                let before = self.questions.len();
+                self.questions.retain(|each| each.id != *question);
+                if self.questions.len() == before {
+                    return Err(Mismatch::NoQuestion(*question));
+                }
             }
         }
         Ok(())

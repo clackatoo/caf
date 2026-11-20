@@ -299,3 +299,22 @@ fn an_item_in_an_earlier_turn_is_found() {
     assert_eq!(chat.turns[0].items[0].window.end, end);
     assert_eq!(chat.turns[1], two_turns().turns[1]);
 }
+
+/// A question gone takes every question with its id, as the core's
+/// record always did, not only the first.
+#[test]
+fn a_question_gone_takes_every_question_with_its_id() {
+    let mut chat = two_turns();
+    let mut again = question();
+    again.window.end = End::At(Wall(1_800_000_009_000));
+    chat.questions.push(again);
+    let mut other = question();
+    other.id = QuestionId(10);
+    chat.questions.push(other.clone());
+    let picture = chat.clone();
+    let gone = numbered(1, Change::QuestionGone(QuestionId(4)));
+    chat.apply(&gone.change).expect("it fits");
+    assert_eq!(chat.questions, [other]);
+    let text = fixtures::text(&picture, ChangeNo(5), [(&gone, After::Chat(&chat))]);
+    fixtures::check(&format!("{}.json", fixtures::next_script()), &text);
+}

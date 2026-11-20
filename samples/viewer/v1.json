@@ -149,7 +149,8 @@
             "agent": "claude",
             "cwd": "/work"
           }
-        ]
+        ],
+        "run": "7f3a9c2e"
       }
     },
     {

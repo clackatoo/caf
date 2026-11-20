@@ -22,7 +22,8 @@ MessagePack with field names; TypeScript sends them as JSON.
 1. The viewer says **Hello**, with the oldest and newest versions of the
    wire it speaks. Anything else first ends the link.
 2. CAF answers **Welcome**, with the version both will speak, the agents a
-   viewer may open chats with, and the open chats. If there's no version in
+   viewer may open chats with, the open chats, and which run of CAF this
+   is. If there's no version in
    common, it says so and ends the link.
 3. The viewer **watches** chats. For each, it gets the chat whole, then its
    changes as they happen.
@@ -49,6 +50,11 @@ change it has.
 
 A viewer that reconnects can say which change it has, and gets only what
 followed, if CAF still has it. Otherwise it gets a picture.
+
+That holds only within one run of CAF. The welcome names the run, and the
+name is different every time CAF starts, when its changes are numbered
+again. A viewer that finds a different run from the one it was watching
+drops its copies and watches each chat afresh.
 
 ### Applying a change
 

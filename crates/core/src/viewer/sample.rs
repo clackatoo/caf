@@ -466,6 +466,7 @@ fn version_1() -> Sample {
             version: 1,
             agents: vec![AgentName("claude".into())],
             chats: vec![summary.clone()],
+            run: "7f3a9c2e".into(),
         },
         ToViewer::NoCommonVersion { min: 1, max: 1 },
         ToViewer::Chats(vec![summary]),

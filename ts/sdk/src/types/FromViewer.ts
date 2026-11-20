@@ -25,7 +25,8 @@ max: number, } } | { "type": "Watch", "value": {
 chat: ChatId, 
 /**
  * The last change the viewer has, if it has the chat already,
- * such as after reconnecting.
+ * such as after reconnecting to the same run of CAF (see
+ * [`ToViewer::Welcome`]'s `run`). After a restart it's `None`.
  */
 since: ChangeNo | null, } } | { "type": "Unwatch", "value": { 
 /**
