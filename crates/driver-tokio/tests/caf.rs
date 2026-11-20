@@ -1,9 +1,12 @@
 //! The whole kit, end to end, against the fake adapter.
 
+mod common;
+
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::Poll;
 use std::time::Duration;
 
 use caf_core::agent::{AgentSpec, EnvChange, McpServer, SpawnCommand};
@@ -1196,4 +1199,49 @@ async fn a_watch_doesnt_keep_caf_running() {
     ));
     assert!(matches!(unread.next().await, Some(Update::Picture(_))));
     assert!(unread.next().await.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn watches_left_partway_through_a_read_dont_hold_caf_up() {
+    let dir = Dir::new();
+    let script = dir.script("script.jsonl", &after_handshake(&[prompt()]));
+    let hold = common::Hold::default();
+    let (caf, running) =
+        Caf::start_watching(Config::new(host(), vec![fake(&dir, &script)]), hold.clone());
+    let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
+    let mut watch = chat.watch();
+    until(&chat, &mut watch, "the session", |chat| {
+        matches!(chat.state, ChatState::Open { .. })
+    })
+    .await;
+    hold.next_step();
+    let sending = tokio::spawn({
+        let chat = caf.chat(chat.id);
+        async move { chat.send(UserMessage::text("Hello")).await }
+    });
+    hold.held().await;
+    // While CAF is held up, many watches start reading, and are then left
+    // as they are: never asked again, and never dropped.
+    let mut left = Vec::new();
+    for id in 5000..5200 {
+        let mut watch = caf.chat(ChatId(id)).watch();
+        let mut next = Box::pin(async move { watch.next().await });
+        std::future::poll_fn(|cx| {
+            let _ = next.as_mut().poll(cx);
+            Poll::Ready(())
+        })
+        .await;
+        left.push(next);
+    }
+    let patience = Duration::from_secs(10);
+    let sent = tokio::time::timeout(patience, sending).await;
+    assert!(matches!(sent, Ok(Ok(Ok(_)))), "the host is heard: {sent:?}");
+    let stopped = tokio::time::timeout(patience, chat.stop()).await;
+    assert!(stopped.is_ok(), "the host is heard after the hold, too");
+    drop((caf, chat, watch));
+    assert!(
+        tokio::time::timeout(patience, running).await.is_ok(),
+        "CAF stops though watches were left partway through a read"
+    );
+    drop(left);
 }

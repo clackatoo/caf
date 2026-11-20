@@ -54,6 +54,11 @@ pub struct ViewerRules {
     /// Whether viewers may send, stop, answer and close. `true` by
     /// default; `false` makes them watch only.
     pub act: bool,
+    /// How many chats one viewer may watch at once: 256 by default. A
+    /// `Watch` for one more is answered with [`ToViewer::Ended`] at once.
+    /// Watching a chat over again doesn't count, and a chat that has
+    /// ended, or was unwatched, makes room for another.
+    pub max_watches: usize,
 }
 
 impl Default for ViewerRules {
@@ -61,6 +66,7 @@ impl Default for ViewerRules {
         Self {
             open: Box::new(|_| None),
             act: true,
+            max_watches: 256,
         }
     }
 }
@@ -74,12 +80,25 @@ impl Default for ViewerRules {
 ///
 /// `to` should be bounded. While it's full, no more of a chat's changes
 /// are taken; once there's room, a viewer that fell far behind gets the
-/// chat whole again rather than every change it missed. So a slow viewer
-/// never makes CAF hold more for it than one chat's latest picture.
+/// chat whole again rather than every change it missed. So what waits
+/// for a slow viewer is what's in `to`: up to its capacity in messages,
+/// each up to a whole chat. Meanwhile `serve` takes at most one more of
+/// the viewer's messages, which waits for room for its answer.
+///
+/// When CAF shuts down, `serve` tells the viewer each watched chat has
+/// ended, then ends: that needs room in `to`, so a viewer that has
+/// stopped reading keeps it waiting until it closes `from` or drops
+/// `to`'s receiver. A closed `from` is noticed only once the message
+/// already taken from it, if any, has been answered, so a host whose
+/// transport breaks should drop `to`'s receiver too.
 ///
 /// Every request gets exactly one [`ToViewer::Done`], unless the link
 /// ends first: one made while CAF shuts down is answered
 /// [`Outcome::Gone`].
+///
+/// `serve` takes messages already decoded, so it can't limit their size:
+/// the host's transport should refuse a message bigger than it means to
+/// take, before decoding it.
 pub async fn serve<A: AppItem>(
     caf: Caf<A>,
     rules: Arc<ViewerRules>,
@@ -156,16 +175,38 @@ struct Link<A: AppItem> {
 
 impl<A: AppItem> Link<A> {
     async fn run(mut self, mut from: mpsc::Receiver<FromViewer>, to: &mpsc::Sender<ToViewer<A>>) {
+        // A message from the viewer taken while there was no room for its
+        // answer.
+        let mut waiting = None;
         loop {
             if self.gone && self.watches.is_empty() {
                 return;
             }
             // Room for one message first, so nothing is taken from a
             // watch while the viewer can't take it: the watch falls
-            // behind instead, and catches up with a picture.
-            let Ok(room) = to.reserve().await else {
-                return;
+            // behind instead, and catches up with a picture. Meanwhile,
+            // one message is taken from the viewer, so a closed `from` is
+            // noticed.
+            let room = tokio::select! {
+                room = to.reserve() => match room {
+                    Ok(room) => room,
+                    Err(_) => return,
+                },
+                message = from.recv(), if waiting.is_none() => match message {
+                    Some(message) => {
+                        waiting = Some(message);
+                        continue;
+                    }
+                    None => return,
+                },
+                // With no watched chat to say has ended, the link ends
+                // with CAF.
+                () = self.caf.ended(), if self.watches.is_empty() => return,
             };
+            if let Some(message) = waiting.take() {
+                self.take(message, room).await;
+                continue;
+            }
             tokio::select! {
                 () = to.closed() => return,
                 message = from.recv() => match message {
@@ -176,7 +217,7 @@ impl<A: AppItem> Link<A> {
                     Some(chats) => room.send(ToViewer::Chats(chats)),
                     None => self.gone = true,
                 },
-                message = self.watches.next() => room.send(message),
+                message = self.watches.next(&self.caf) => room.send(message),
             }
         }
     }
@@ -189,7 +230,11 @@ impl<A: AppItem> Link<A> {
         let rules = &*self.rules;
         let (request, outcome) = match message {
             FromViewer::Watch { chat, since } => {
-                self.watches.watch(chat, caf.watch(chat, since));
+                if !self.watches.watching(chat) && self.watches.len() >= rules.max_watches {
+                    room.send(ToViewer::Ended { chat });
+                } else {
+                    self.watches.watch(caf, chat, since);
+                }
                 return;
             }
             FromViewer::Unwatch { chat } => {
@@ -303,9 +348,34 @@ fn next_of<A: AppItem>(mut watch: Watch<A>) -> Next<A> {
 
 /// The chats a viewer watches, each waiting for its next update.
 struct Watches<A: AppItem> {
-    each: Vec<(ChatId, Next<A>)>,
+    each: Vec<Watched<A>>,
     /// Where the next look starts, so no chat goes unheard.
     turn: usize,
+}
+
+/// One watched chat.
+struct Watched<A: AppItem> {
+    chat: ChatId,
+    next: Next<A>,
+    /// Where the viewer asked to start from.
+    since: Option<ChangeNo>,
+    /// Something has been sent for it since the viewer asked.
+    sent: bool,
+    /// The viewer asked to start from here instead, before anything was
+    /// sent.
+    instead: Option<Option<ChangeNo>>,
+}
+
+impl<A: AppItem> Watched<A> {
+    fn new(caf: &WeakCaf<A>, chat: ChatId, since: Option<ChangeNo>) -> Self {
+        Self {
+            chat,
+            next: next_of(caf.watch(chat, since)),
+            since,
+            sent: false,
+            instead: None,
+        }
+    }
 }
 
 impl<A: AppItem> Default for Watches<A> {
@@ -322,26 +392,57 @@ impl<A: AppItem> Watches<A> {
         self.each.is_empty()
     }
 
-    /// Watches `chat` with `watch`, in place of any watch it had.
-    fn watch(&mut self, chat: ChatId, watch: Watch<A>) {
-        self.unwatch(chat);
-        self.each.push((chat, next_of(watch)));
+    fn len(&self) -> usize {
+        self.each.len()
+    }
+
+    fn watching(&self, chat: ChatId) -> bool {
+        self.each.iter().any(|each| each.chat == chat)
+    }
+
+    /// Watches `chat` from `since`, in place of any watch it had.
+    ///
+    /// A watch that hasn't sent anything yet may be reading the whole
+    /// chat, so it's kept rather than started over: a viewer asking again
+    /// and again costs no more than asking once. If it asked from
+    /// somewhere else, a picture still answers it, and changes from the
+    /// old place are dropped for a read from the new one.
+    fn watch(&mut self, caf: &WeakCaf<A>, chat: ChatId, since: Option<ChangeNo>) {
+        match self.each.iter_mut().find(|each| each.chat == chat) {
+            Some(each) if !each.sent => {
+                each.instead = (since != each.since).then_some(since);
+            }
+            Some(each) => *each = Watched::new(caf, chat, since),
+            None => self.each.push(Watched::new(caf, chat, since)),
+        }
     }
 
     fn unwatch(&mut self, chat: ChatId) {
-        self.each.retain(|(each, _)| *each != chat);
+        self.each.retain(|each| each.chat != chat);
     }
 
     /// The next message from any watched chat: an update, or that it has
     /// ended. Never resolves while nothing is watched. Cancel-safe.
-    async fn next(&mut self) -> ToViewer<A> {
+    async fn next(&mut self, caf: &WeakCaf<A>) -> ToViewer<A> {
         std::future::poll_fn(|cx| {
             let count = self.each.len();
             for look in 0..count {
                 let at = (self.turn + look) % count;
-                let (chat, next) = &mut self.each[at];
-                let chat = *chat;
-                let Poll::Ready((watch, update)) = next.as_mut().poll(cx) else {
+                let each = &mut self.each[at];
+                let chat = each.chat;
+                let polled = loop {
+                    let Poll::Ready((watch, update)) = each.next.as_mut().poll(cx) else {
+                        break None;
+                    };
+                    if let (Some(Update::Changes(_)), Some(since)) = (&update, each.instead) {
+                        // From where the viewer no longer is: read again
+                        // from where it is.
+                        *each = Watched::new(caf, chat, since);
+                        continue;
+                    }
+                    break Some((watch, update));
+                };
+                let Some((watch, update)) = polled else {
                     continue;
                 };
                 self.turn = at + 1;
@@ -356,7 +457,9 @@ impl<A: AppItem> Watches<A> {
                     },
                     Update::Changes(changes) => ToViewer::Changes { chat, changes },
                 };
-                self.each[at].1 = next_of(watch);
+                each.sent = true;
+                each.instead = None;
+                each.next = next_of(watch);
                 return Poll::Ready(message);
             }
             Poll::Pending

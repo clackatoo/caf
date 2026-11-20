@@ -100,7 +100,8 @@ pub enum FromViewer {
         /// [`ToViewer::Welcome`]'s `run`). After a restart it's `None`.
         since: Option<ChangeNo>,
     },
-    /// Stop following a chat.
+    /// Stop following a chat. What was already on its way for it may
+    /// still come.
     Unwatch {
         /// The chat.
         chat: ChatId,
@@ -193,8 +194,9 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
         /// The changes.
         changes: Vec<Numbered<A>>,
     },
-    /// A watched chat is closed, or CAF has shut down: nothing more comes
-    /// for it.
+    /// A watched chat is closed, there's no such chat, CAF has shut
+    /// down, or the viewer already watches as many chats as the host
+    /// allows: nothing more comes for it.
     Ended {
         /// The chat.
         chat: ChatId,

@@ -2,6 +2,7 @@
 
 mod common;
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use caf_core::change::{Change, Numbered};
@@ -23,6 +24,8 @@ struct Viewer {
     to: mpsc::Sender<FromViewer>,
     from: mpsc::Receiver<ToViewer>,
     served: JoinHandle<()>,
+    /// What [`Viewer::done`] read past, for [`Viewer::next`] to give.
+    skipped: VecDeque<ToViewer>,
 }
 
 impl Viewer {
@@ -31,7 +34,12 @@ impl Viewer {
         let (to, from_viewer) = mpsc::channel(16);
         let (to_viewer, from) = mpsc::channel(room);
         let served = tokio::spawn(serve(caf.clone(), Arc::new(rules), from_viewer, to_viewer));
-        Self { to, from, served }
+        Self {
+            to,
+            from,
+            served,
+            skipped: VecDeque::new(),
+        }
     }
 
     /// Connects and says hello, returning the welcome's agents and chats.
@@ -58,22 +66,29 @@ impl Viewer {
 
     /// The next message, or `None` once the link has ended.
     async fn next(&mut self) -> Option<ToViewer> {
+        if let Some(skipped) = self.skipped.pop_front() {
+            return Some(skipped);
+        }
         tokio::time::timeout(PATIENCE, self.from.recv())
             .await
             .expect("a message, or the link's end, in good time")
     }
 
-    /// Reads until the answer to `request`, giving it and what came
-    /// before it.
-    async fn done(&mut self, request: u64) -> (Outcome, Vec<ToViewer>) {
-        let mut before = Vec::new();
+    /// Reads until the answer to `request`, and gives it. What came
+    /// before it comes next.
+    async fn done(&mut self, request: u64) -> Outcome {
+        let mut before = VecDeque::new();
         loop {
             match self.next().await {
                 Some(ToViewer::Done {
                     request: answered,
                     outcome,
-                }) if answered == RequestNo(request) => return (outcome, before),
-                Some(other) => before.push(other),
+                }) if answered == RequestNo(request) => {
+                    before.append(&mut self.skipped);
+                    self.skipped = before;
+                    return outcome;
+                }
+                Some(other) => before.push_back(other),
                 None => panic!("the link ended before request {request} was answered: {before:?}"),
             }
         }
@@ -274,7 +289,7 @@ async fn a_watch_gets_a_picture_then_the_turn_as_it_streams() {
             message: UserMessage::text("Say hello"),
         })
         .await;
-    let (outcome, _) = viewer.done(1).await;
+    let outcome = viewer.done(1).await;
     let Outcome::Sent(turn) = outcome else {
         panic!("sent, not {outcome:?}")
     };
@@ -404,7 +419,12 @@ async fn opening_is_refused_unless_the_host_allows_it() {
             open: OpenRequest::new("fake", &dir.0),
         })
         .await;
-    assert_eq!(viewer.done(1).await, (Outcome::NotAllowed, vec![]));
+    assert_eq!(viewer.done(1).await, Outcome::NotAllowed);
+    assert!(
+        viewer.skipped.is_empty(),
+        "nothing before it: {:?}",
+        viewer.skipped
+    );
 
     let (mut allowed, ..) = Viewer::welcomed(&caf, opening(), 8).await;
     allowed
@@ -413,7 +433,7 @@ async fn opening_is_refused_unless_the_host_allows_it() {
             open: OpenRequest::new("fake", &dir.0),
         })
         .await;
-    let (outcome, _) = allowed.done(2).await;
+    let outcome = allowed.done(2).await;
     let Outcome::Opened(opened) = outcome else {
         panic!("opened, not {outcome:?}")
     };
@@ -432,7 +452,7 @@ async fn opening_is_refused_unless_the_host_allows_it() {
         })
         .await;
     assert_eq!(
-        allowed.done(3).await.0,
+        allowed.done(3).await,
         Outcome::Refused(Refused::RelativeFolder)
     );
     allowed
@@ -442,7 +462,7 @@ async fn opening_is_refused_unless_the_host_allows_it() {
         })
         .await;
     assert_eq!(
-        allowed.done(4).await.0,
+        allowed.done(4).await,
         Outcome::Refused(Refused::NoSuchAgent)
     );
 
@@ -456,14 +476,14 @@ async fn opening_is_refused_unless_the_host_allows_it() {
             open: OpenRequest::new("fake", &dir.0),
         })
         .await;
-    assert_eq!(buggy.done(5).await.0, Outcome::NotAllowed);
+    assert_eq!(buggy.done(5).await, Outcome::NotAllowed);
     buggy
         .send(FromViewer::Stop {
             request: RequestNo(6),
             chat: ChatId(999_999),
         })
         .await;
-    assert_eq!(buggy.done(6).await.0, Outcome::Refused(Refused::NoSuchChat));
+    assert_eq!(buggy.done(6).await, Outcome::Refused(Refused::NoSuchChat));
     shut_down(&caf, running).await;
     for viewer in [viewer, allowed, buggy] {
         viewer.ends().await;
@@ -500,7 +520,7 @@ async fn a_viewer_that_may_not_act_only_watches() {
     ];
     for (request, ask) in (1..).zip(asks) {
         viewer.send(ask).await;
-        assert_eq!(viewer.done(request).await.0, Outcome::NotAllowed);
+        assert_eq!(viewer.done(request).await, Outcome::NotAllowed);
     }
     let now = picture(&chat).await;
     assert!(now.turns.is_empty());
@@ -512,7 +532,7 @@ async fn a_viewer_that_may_not_act_only_watches() {
             open: OpenRequest::new("fake", &dir.0),
         })
         .await;
-    assert!(matches!(viewer.done(5).await.0, Outcome::Opened(_)));
+    assert!(matches!(viewer.done(5).await, Outcome::Opened(_)));
     shut_down(&caf, running).await;
     viewer.ends().await;
 }
@@ -531,7 +551,7 @@ async fn a_viewer_hears_of_chats_others_open_and_close() {
             open: OpenRequest::new("fake", &dir.0),
         })
         .await;
-    let Outcome::Opened(first) = opener.done(1).await.0 else {
+    let Outcome::Opened(first) = opener.done(1).await else {
         panic!("opened")
     };
     let ids = |chats: &[ChatSummary]| chats.iter().map(|chat| chat.id).collect::<Vec<_>>();
@@ -550,7 +570,7 @@ async fn a_viewer_hears_of_chats_others_open_and_close() {
             chat: first,
         })
         .await;
-    assert_eq!(opener.done(2).await.0, Outcome::Done);
+    assert_eq!(opener.done(2).await, Outcome::Done);
     match other.next().await {
         Some(ToViewer::Chats(chats)) => assert_eq!(ids(&chats), [second.id]),
         other => panic!("the list without the closed chat, not {other:?}"),
@@ -577,8 +597,8 @@ async fn a_watched_chat_ends_when_it_closes() {
             chat: chat.id,
         })
         .await;
-    let (outcome, mut heard) = viewer.done(9).await;
-    assert_eq!(outcome, Outcome::Done);
+    assert_eq!(viewer.done(9).await, Outcome::Done);
+    let mut heard = Vec::new();
     while !heard
         .iter()
         .any(|message| *message == ToViewer::Ended { chat: chat.id })
@@ -634,6 +654,21 @@ async fn watched_chats_end_when_caf_shuts_down() {
     loop {
         match keeping_up.next().await {
             Some(ToViewer::Changes { changes, .. }) => latest = changes.last().unwrap().no,
+            // Its last read can come after CAF's task has ended, and then
+            // it gets how CAF left the chat, as one that fell behind does.
+            Some(ToViewer::Picture {
+                chat: whole,
+                latest: number,
+            }) => {
+                assert!(matches!(
+                    whole.state,
+                    ChatState::Lost {
+                        reason: Lost::ShutDown
+                    }
+                ));
+                assert!(number >= latest, "{number:?} is no older than {latest:?}");
+                latest = number;
+            }
             Some(ToViewer::Ended { chat: ended }) => {
                 assert_eq!(ended, chat.id);
                 break;
@@ -705,7 +740,9 @@ async fn a_viewer_leaving_mid_turn_harms_nothing() {
             hear(&changes, &mut heard);
         }
     }
-    let Viewer { to, from, served } = viewer;
+    let Viewer {
+        to, from, served, ..
+    } = viewer;
     drop((to, from));
     assert!(
         matches!(tokio::time::timeout(PATIENCE, served).await, Ok(Ok(()))),
@@ -728,7 +765,9 @@ async fn serve_ends_when_either_channel_closes() {
     // The viewer stops sending, while it's watching.
     let (mut quiet, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
     quiet.watch(chat.id).await;
-    let Viewer { to, from, served } = quiet;
+    let Viewer {
+        to, from, served, ..
+    } = quiet;
     drop(to);
     assert!(matches!(
         tokio::time::timeout(PATIENCE, served).await,
@@ -737,7 +776,9 @@ async fn serve_ends_when_either_channel_closes() {
     drop(from);
     // The viewer stops listening, while nothing changes.
     let (deaf, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
-    let Viewer { to, from, served } = deaf;
+    let Viewer {
+        to, from, served, ..
+    } = deaf;
     drop(from);
     assert!(matches!(
         tokio::time::timeout(PATIENCE, served).await,
@@ -746,7 +787,9 @@ async fn serve_ends_when_either_channel_closes() {
     drop(to);
     // Before the handshake, too.
     let silent = Viewer::connect(&caf, ViewerRules::default(), 8);
-    let Viewer { to, from, served } = silent;
+    let Viewer {
+        to, from, served, ..
+    } = silent;
     drop(from);
     assert!(matches!(
         tokio::time::timeout(PATIENCE, served).await,
@@ -802,10 +845,7 @@ async fn a_viewer_answers_a_question_and_hears_refusals() {
             message: UserMessage::text("Anyone?"),
         })
         .await;
-    assert_eq!(
-        viewer.done(1).await.0,
-        Outcome::Refused(Refused::NoSuchChat)
-    );
+    assert_eq!(viewer.done(1).await, Outcome::Refused(Refused::NoSuchChat));
     viewer
         .send(FromViewer::Send {
             request: RequestNo(2),
@@ -830,10 +870,10 @@ async fn a_viewer_answers_a_question_and_hears_refusals() {
         answer: Answer::Permission(OptionId("allow".into())),
     };
     viewer.send(answer(3)).await;
-    assert_eq!(viewer.done(3).await.0, Outcome::Done);
+    assert_eq!(viewer.done(3).await, Outcome::Done);
     viewer.send(answer(4)).await;
     assert_eq!(
-        viewer.done(4).await.0,
+        viewer.done(4).await,
         Outcome::Refused(Refused::NoSuchQuestion)
     );
     let (heard, _) = viewer.until_finished(chat.id).await;
@@ -926,7 +966,7 @@ async fn a_request_while_caf_shuts_down_is_answered_gone() {
     for (request, ask) in (1..).zip(asks) {
         viewer.send(ask).await;
         assert_eq!(
-            viewer.done(request).await.0,
+            viewer.done(request).await,
             Outcome::Gone,
             "request {request}"
         );
@@ -938,4 +978,254 @@ async fn a_request_while_caf_shuts_down_is_answered_gone() {
         .unwrap();
     tokio::time::timeout(PATIENCE, running).await.unwrap();
     viewer.ends().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn viewers_that_stop_reading_dont_hold_caf_up() {
+    let dir = Dir::new();
+    let script = dir.script("script.jsonl", &after_handshake(&[prompt()]));
+    let hold = Hold::default();
+    let (caf, running) =
+        Caf::start_watching(Config::new(host(), vec![fake(&dir, &script)]), hold.clone());
+    let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
+    let mut watch = chat.watch();
+    until(&chat, &mut watch, "the session", |chat| {
+        matches!(chat.state, ChatState::Open { .. })
+    })
+    .await;
+    let mut viewers = Vec::new();
+    for _ in 0..8 {
+        let (viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 2).await;
+        viewers.push(viewer);
+    }
+    // While CAF is held up, each viewer asks to watch thousands of ids
+    // that aren't chats, and never reads what it's sent.
+    hold.next_step();
+    let sending = tokio::spawn({
+        let chat = caf.chat(chat.id);
+        async move { chat.send(UserMessage::text("Hello")).await }
+    });
+    hold.held().await;
+    for viewer in &viewers {
+        let to = viewer.to.clone();
+        tokio::spawn(async move {
+            for id in 5000..8000 {
+                let watch = FromViewer::Watch {
+                    chat: ChatId(id),
+                    since: None,
+                };
+                if to.send(watch).await.is_err() {
+                    return;
+                }
+            }
+        });
+    }
+    let patience = std::time::Duration::from_secs(10);
+    let sent = tokio::time::timeout(patience, sending).await;
+    assert!(matches!(sent, Ok(Ok(Ok(_)))), "the host is heard: {sent:?}");
+    let stopped = tokio::time::timeout(patience, chat.stop()).await;
+    assert!(stopped.is_ok(), "the host is heard after the hold, too");
+    drop((caf, chat, watch));
+    assert!(
+        tokio::time::timeout(patience, running).await.is_ok(),
+        "CAF stops though its viewers have stopped reading"
+    );
+    // A viewer that goes ends its serve, though it was stuck.
+    for Viewer {
+        to, from, served, ..
+    } in viewers
+    {
+        drop((to, from));
+        assert!(matches!(
+            tokio::time::timeout(PATIENCE, served).await,
+            Ok(Ok(()))
+        ));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nothing_more_comes_for_an_unwatched_chat() {
+    let dir = Dir::new();
+    let (caf, running, chat) = started(&dir, &hello_there()).await;
+    let (mut viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
+    viewer.watch(chat.id).await;
+    viewer.send(FromViewer::Unwatch { chat: chat.id }).await;
+    // Answered after the unwatch, so it has been done.
+    viewer
+        .send(FromViewer::Stop {
+            request: RequestNo(1),
+            chat: ChatId(999_999),
+        })
+        .await;
+    viewer.done(1).await;
+    let mut watch = chat.watch();
+    chat.send(UserMessage::text("Say hello")).await.unwrap();
+    until(&chat, &mut watch, "the turn", finished).await;
+    viewer
+        .send(FromViewer::Stop {
+            request: RequestNo(2),
+            chat: ChatId(999_999),
+        })
+        .await;
+    viewer.done(2).await;
+    assert!(
+        viewer.skipped.is_empty(),
+        "nothing came for the chat: {:?}",
+        viewer.skipped
+    );
+    shut_down(&caf, running).await;
+    viewer.ends().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_viewer_watches_only_as_many_chats_as_the_host_allows() {
+    let dir = Dir::new();
+    // Both chats' sessions, from one adapter.
+    let script = dir.script(
+        "script.jsonl",
+        &after_handshake(&[
+            json!({"wait": {"method": "session/new"}}),
+            json!({"respond": {"result": {"sessionId": "s2"}}}),
+        ]),
+    );
+    let (caf, running) = Caf::start(Config::new(host(), vec![fake(&dir, &script)]));
+    let first = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
+    let second = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
+    // Open, so nothing changes in them meanwhile.
+    for chat in [&first, &second] {
+        let mut watch = chat.watch();
+        until(chat, &mut watch, "the session", |chat| {
+            matches!(chat.state, ChatState::Open { .. })
+        })
+        .await;
+    }
+    let mut rules = ViewerRules::default();
+    rules.max_watches = 1;
+    let (mut viewer, ..) = Viewer::welcomed(&caf, rules, 8).await;
+    viewer.watch(first.id).await;
+    viewer
+        .send(FromViewer::Watch {
+            chat: second.id,
+            since: None,
+        })
+        .await;
+    assert_eq!(
+        viewer.next().await,
+        Some(ToViewer::Ended { chat: second.id })
+    );
+    // Watching the same chat again isn't one more.
+    viewer.watch(first.id).await;
+    // And an unwatched one makes room.
+    viewer.send(FromViewer::Unwatch { chat: first.id }).await;
+    viewer.watch(second.id).await;
+    shut_down(&caf, running).await;
+    viewer.ends().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn watching_a_chat_again_before_anything_comes_starts_it_once() {
+    let dir = Dir::new();
+    let script = dir.script("script.jsonl", &after_handshake(&hello_there()));
+    let hold = Hold::default();
+    let (caf, running) =
+        Caf::start_watching(Config::new(host(), vec![fake(&dir, &script)]), hold.clone());
+    let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
+    let (mut viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
+    let (_, before) = viewer.watch(chat.id).await;
+    viewer.send(FromViewer::Unwatch { chat: chat.id }).await;
+    let mut watch = chat.watch();
+    chat.send(UserMessage::text("Say hello")).await.unwrap();
+    until(&chat, &mut watch, "the turn", finished).await;
+    // While CAF is held up, so nothing can come for the chat, the viewer
+    // asks for it over and over, then asks something CAF must answer.
+    let held = || {
+        let caf = caf.clone();
+        let hold = hold.clone();
+        let folder = dir.0.clone();
+        async move {
+            hold.next_step();
+            // Something the core takes, so CAF takes a step.
+            tokio::spawn(async move { caf.open_chat(OpenChat::new("fake", folder)).await });
+            hold.held().await;
+        }
+    };
+    let asks = |since| FromViewer::Watch {
+        chat: chat.id,
+        since,
+    };
+    held().await;
+    for _ in 0..5 {
+        viewer.send(asks(None)).await;
+    }
+    loop {
+        match viewer.next().await {
+            Some(ToViewer::Picture { chat: whole, .. }) if whole.id == chat.id => break,
+            Some(ToViewer::Chats(_) | ToViewer::Changes { .. }) => {}
+            other => panic!("the chat's picture, not {other:?}"),
+        }
+    }
+    viewer
+        .send(FromViewer::Stop {
+            request: RequestNo(1),
+            chat: ChatId(999_999),
+        })
+        .await;
+    viewer.done(1).await;
+    let again =
+        (viewer.skipped.drain(..)).find(|message| matches!(message, ToViewer::Picture { .. }));
+    assert_eq!(again, None, "one picture, however often it was asked for");
+
+    // Asked from a change it's missed things since, then from nothing:
+    // the changes since are dropped, and it gets the picture asked for.
+    viewer.send(FromViewer::Unwatch { chat: chat.id }).await;
+    held().await;
+    viewer.send(asks(Some(before))).await;
+    viewer.send(asks(None)).await;
+    loop {
+        match viewer.next().await {
+            Some(ToViewer::Chats(_)) => {}
+            Some(ToViewer::Picture { chat: whole, .. }) if whole.id == chat.id => break,
+            other => panic!("the picture asked for last, not {other:?}"),
+        }
+    }
+    shut_down(&caf, running).await;
+    viewer.ends().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_ends_though_its_viewer_has_stopped_reading() {
+    let dir = Dir::new();
+    let (caf, running, chat) = started(&dir, &[]).await;
+    // Each has room for one message, filled with an answer it never reads.
+    let filled = async || {
+        let (viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 1).await;
+        viewer
+            .send(FromViewer::Stop {
+                request: RequestNo(1),
+                chat: ChatId(999_999),
+            })
+            .await;
+        viewer
+    };
+    // One stops sending too.
+    let Viewer {
+        to, from, served, ..
+    } = filled().await;
+    drop(to);
+    assert!(
+        matches!(tokio::time::timeout(PATIENCE, served).await, Ok(Ok(()))),
+        "serve ends when its viewer stops sending"
+    );
+    drop(from);
+    // One goes on as it is, watching nothing, until CAF shuts down.
+    let Viewer {
+        to, from, served, ..
+    } = filled().await;
+    drop(chat);
+    shut_down(&caf, running).await;
+    assert!(
+        matches!(tokio::time::timeout(PATIENCE, served).await, Ok(Ok(()))),
+        "serve ends with CAF"
+    );
+    drop((to, from));
 }

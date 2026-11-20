@@ -4,6 +4,7 @@ mod common;
 
 use std::sync::{Arc, Mutex};
 
+use caf_core::agent::{EnvChange, McpServer, SpawnCommand};
 use caf_core::chat::UserMessage;
 use caf_core::event::{Event, HostCommand};
 use caf_core::host::Host;
@@ -183,4 +184,71 @@ async fn a_watcher_without_a_recording_sees_the_host_calls_the_core_took() {
         seen.windows(2)
             .all(|pair| pair[0].now.mono <= pair[1].now.mono)
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_watcher_sees_secrets_as_they_are_and_its_steps_replay_exactly() {
+    let dir = Dir::new();
+    let mut script = after_handshake(&[
+        json!({"notify": {"method": "_auth/status_update", "params": {"email": "me@example.com"}}}),
+        prompt(),
+        say("s1", "Hi."),
+        end_turn(),
+    ]);
+    // An agent that reaches MCP servers over HTTP too.
+    script[2]["respond"]["result"]["agentCapabilities"]["mcpCapabilities"] = json!({"http": true});
+    let script = dir.script("script.jsonl", &script);
+    let agents = || vec![fake(&dir, &script)];
+    let recording = dir.path("run.jsonl");
+    let mut config = Config::new(host(), agents());
+    config.record = Some(recording.clone());
+    let notebook = Notebook::default();
+    let (caf, running) = Caf::start_watching(config, notebook.clone());
+    let mut open = OpenChat::new("fake", &dir.0);
+    let mut tool = SpawnCommand::new("/bin/true");
+    tool.env = vec![EnvChange::Set("TOKEN".into(), "s3cret-env".into())];
+    open.mcp_servers = vec![
+        McpServer::Stdio {
+            name: "gh".into(),
+            command: tool,
+        },
+        McpServer::Http {
+            name: "maps".into(),
+            url: "http://127.0.0.1:9/mcp".into(),
+            headers: vec![("Authorization".into(), "Bearer s3cret-header".into())],
+        },
+    ];
+    let chat = caf.open_chat(open).await.unwrap();
+    let mut watch = chat.watch();
+    chat.send(UserMessage::text("Hello")).await.unwrap();
+    until(&chat, &mut watch, "the turn", finished).await;
+    shut_down(&caf, running).await;
+
+    let seen = notebook.take();
+    let events =
+        serde_json::to_string(&(seen.iter().map(|seen| &seen.event)).collect::<Vec<_>>()).unwrap();
+    let text = std::fs::read_to_string(&recording).unwrap();
+    // As text, or as the bytes a variable's value is written as.
+    let holds = |text: &str, secret: &str| {
+        let bytes = serde_json::to_string(secret.as_bytes()).unwrap();
+        text.contains(secret) || text.contains(bytes.trim_matches(['[', ']']))
+    };
+    for secret in ["s3cret-env", "s3cret-header", "me@example.com"] {
+        assert!(holds(&events, secret), "the watcher sees {secret}");
+        assert!(!holds(&text, secret), "the recording hides {secret}");
+    }
+    // A fresh core given the steps' events gives out what the live one
+    // did, step by step.
+    let mut core = Core::new(host(), agents());
+    let mut out: Vec<Directive> = Vec::new();
+    for (step, seen) in seen.iter().enumerate() {
+        let event: Event = serde_json::from_value(seen.event.clone()).unwrap();
+        core.handle(seen.now, event, &mut out);
+        assert_eq!(
+            seen.directives,
+            serde_json::to_value(&out).unwrap(),
+            "step {step}'s directives"
+        );
+        out.clear();
+    }
 }

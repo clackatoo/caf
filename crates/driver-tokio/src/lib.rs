@@ -47,9 +47,12 @@
 //! - [`ViewerRules`](viewer::ViewerRules) say what they may do. Opening
 //!   is the host's decision: by default viewers can't open chats, only
 //!   watch and act on the host's. `act: false` makes them watch only.
-//! - A slow viewer costs nothing to keep: while its channel is full, its
+//! - A slow viewer costs little to keep: while its channel is full, its
 //!   chats' changes wait in the core's bounded list, and once it falls
-//!   further behind than that it gets each chat whole again.
+//!   further behind than that it gets each chat whole again. What waits
+//!   for it is what's in its channel, each message up to a whole chat.
+//! - A viewer watches at most
+//!   [`max_watches`](viewer::ViewerRules::max_watches) chats at once.
 //! - A viewer doesn't keep CAF running, and `serve` ends when CAF does,
 //!   after telling the viewer each watched chat has ended.
 //!
@@ -60,8 +63,9 @@
 //! # Watching every step
 //!
 //! [`Caf::start_watching`] gives a [`Steps`] every event the core takes
-//! and every directive it gives out, as a recording holds them: for
-//! debuggers, and for tests that check CAF against a replay.
+//! and every directive it gives out, exactly: for debuggers, and for
+//! tests that check CAF against a replay. Unlike a recording, they hold
+//! the host's secrets, so they're for the host's eyes only.
 //!
 //! The drivers inside are separate pieces, each usable on its own by a
 //! host that wires the core up itself: [`AgentDriver`] runs adapter
