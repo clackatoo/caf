@@ -52,13 +52,15 @@
 
 {#if questions.length > 0}
   <section class="questions" aria-label="Questions">
-    {#each questions as question (question.id)}
+    <!-- Not keyed by id: a chat may hold two questions with one id, and the
+         agent chooses its options' ids. -->
+    {#each questions as question, i (i)}
       {@const kind = question.kind}
       <div class="question" data-kind={kind.type}>
         {#if kind.type === 'Permission'}
           <div class="ask">The agent asks permission: <strong>{kind.value.title}</strong></div>
           <div class="options">
-            {#each kind.value.options as option (option.id)}
+            {#each kind.value.options as option, j (j)}
               <button
                 type="button"
                 class={optionTone(option.kind)}

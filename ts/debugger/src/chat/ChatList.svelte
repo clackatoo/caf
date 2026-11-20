@@ -65,7 +65,7 @@
       <label>
         Agent
         <select bind:value={agent}>
-          {#each agents as name (name)}<option value={name}>{name}</option>{/each}
+          {#each agents as name, i (i)}<option value={name}>{name}</option>{/each}
         </select>
       </label>
       <label>

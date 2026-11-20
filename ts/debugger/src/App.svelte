@@ -1,2 +1,338 @@
 <script lang="ts">
+  // The debugger: the chat view on the left, the inspector on the right,
+  // and the timeline across the bottom.
+  //
+  // Live and following, the chat view shows `/viewer`'s chats, as any
+  // host's does. Looking back, or replaying, it shows the chats as they
+  // were, from the inspector channel's `Past` messages, read-only.
+  import type { AgentName, Answer, ChatId, DeepReadonly, QuestionId, UserMessage } from '@clackatoo/caf'
+  import { ChatList, ChatView, type ChatActions, type ListActions } from './chat/index.ts'
+  import { Inspector } from './inspector/client.svelte.ts'
+  import InspectorView from './inspector/Inspector.svelte'
+  import Timeline from './inspector/Timeline.svelte'
+  import { httpUrl, socketUrl, type LinkState } from './link.ts'
+  import { Live } from './live.svelte.ts'
+
+  let inspector = $state.raw(connectInspector())
+  let live = $state.raw<Live | null>(null)
+  let selected = $state<ChatId | null>(null)
+  let showInspector = $state(true)
+  /** The chat view's share of the width. */
+  let split = $state(0.55)
+  let saving = $state<HTMLDialogElement>()
+
+  function connectInspector(): Inspector {
+    return new Inspector(new WebSocket(socketUrl('/inspect')))
+  }
+
+  const mode = $derived(inspector.hello?.mode.type ?? null)
+  // Live, once the server says so: `/viewer`.
+  $effect(() => {
+    if (mode !== 'Live' || live !== null) return
+    const made = new Live()
+    live = made
+    void made.connect(socketUrl('/viewer'))
+  })
+
+  const lookingBack = $derived(mode === 'Replay' || !inspector.position.live)
+  const summaries = $derived(lookingBack ? inspector.past.summaries : (live?.chats ?? []))
+  const chat = $derived(
+    selected === null ? null : lookingBack ? (inspector.past.chats.get(selected) ?? null) : (live?.chat ?? null),
+  )
+
+  // The live watch follows the chat chosen.
+  $effect(() => {
+    if (live !== null && live.link === 'open') live.watch(selected)
+  })
+
+  // With nothing chosen, show the newest chat there is.
+  $effect(() => {
+    if (selected === null || !summaries.some((summary) => summary.id === selected)) {
+      const there = selected !== null && (lookingBack ? inspector.past.chats.has(selected) : false)
+      if (!there) selected = summaries.at(-1)?.id ?? null
+    }
+  })
+
+  const link = $derived.by((): LinkState => {
+    if (inspector.link !== 'open') return inspector.link
+    if (mode === 'Live') return live?.link ?? 'connecting'
+    return 'open'
+  })
+
+  function reconnect() {
+    inspector.close()
+    live?.close()
+    live = null
+    inspector = connectInspector()
+  }
+
+  const chatActions: ChatActions = {
+    send: (message: UserMessage) => live?.caf.send(need(selected), message),
+    stop: () => live?.caf.stop(need(selected)),
+    answer: (question: QuestionId, answer: Answer) => live?.caf.answer(question, answer),
+    sendAgain: (message: DeepReadonly<UserMessage>) => live?.caf.send(need(selected), structuredClone(message) as UserMessage),
+    close: () => live?.caf.close(need(selected)),
+  }
+
+  const listActions: ListActions = {
+    select: (chat: ChatId) => (selected = chat),
+    open: async (agent: AgentName, cwd: string) => {
+      if (live === null) throw new Error('Not live.')
+      selected = await live.caf.open({ agent, cwd, session: { type: 'New' } })
+    },
+  }
+
+  function need(chat: ChatId | null): ChatId {
+    if (chat === null) throw new Error('No chat is chosen.')
+    return chat
+  }
+
+  function save() {
+    saving?.close()
+    const a = document.createElement('a')
+    a.href = httpUrl('/recording')
+    a.download = ''
+    a.rel = 'noopener'
+    a.click()
+  }
+
+  // Dragging the divider.
+  let main = $state<HTMLElement>()
+  function ondividerdown(event: PointerEvent) {
+    const target = event.currentTarget as HTMLElement
+    target.setPointerCapture(event.pointerId)
+    const move = (moved: PointerEvent) => {
+      if (main === undefined) return
+      const box = main.getBoundingClientRect()
+      split = Math.min(0.85, Math.max(0.25, (moved.clientX - box.left) / box.width))
+    }
+    const up = () => {
+      target.removeEventListener('pointermove', move)
+      target.removeEventListener('pointerup', up)
+    }
+    target.addEventListener('pointermove', move)
+    target.addEventListener('pointerup', up)
+  }
+  function ondividerkey(event: KeyboardEvent) {
+    if (event.key === 'ArrowLeft') split = Math.max(0.25, split - 0.05)
+    else if (event.key === 'ArrowRight') split = Math.min(0.85, split + 0.05)
+  }
 </script>
+
+<div class="app">
+  <header class="bar">
+    <span class="brand">CAF debugger</span>
+    {#if mode !== null}
+      <span class="mode" data-mode={mode}>{mode}</span>
+      {#if inspector.hello?.file}<span class="file" title={inspector.hello.file}>{inspector.hello.file}</span>{/if}
+    {/if}
+    <span class="link" data-link={link}>
+      {link === 'open' ? 'Connected' : link === 'connecting' ? 'Connecting…' : 'Disconnected'}
+    </span>
+    {#if link === 'closed'}<button type="button" onclick={reconnect}>Reconnect</button>{/if}
+    {#if live?.problem}<span class="problem">{live.problem}</span>{/if}
+    <span class="spacer"></span>
+    {#if mode === 'Live'}
+      <button type="button" onclick={() => saving?.showModal()} disabled={!inspector.hello?.file}>Save bug report</button>
+    {/if}
+    <button type="button" aria-pressed={showInspector} onclick={() => (showInspector = !showInspector)}>
+      {showInspector ? 'Hide' : 'Show'} inspector
+    </button>
+  </header>
+
+  <main bind:this={main} style:grid-template-columns={showInspector ? `${split}fr 6px ${1 - split}fr` : '1fr'}>
+    <div class="left">
+      <div class="list">
+        <ChatList chats={summaries} agents={live?.agents ?? []} {selected} actions={listActions} readOnly={lookingBack} />
+      </div>
+      <div class="chat">
+        {#if chat !== null}
+          <ChatView {chat} actions={chatActions} readOnly={lookingBack} />
+        {:else}
+          <p class="empty">
+            {#if selected !== null}Loading chat {selected}…{:else if lookingBack}No chats at this step.{:else}No chat yet: open one with New chat.{/if}
+          </p>
+        {/if}
+      </div>
+    </div>
+    {#if showInspector}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+      <div
+        class="divider"
+        role="separator"
+        aria-orientation="vertical"
+        aria-valuenow={Math.round(split * 100)}
+        tabindex="0"
+        onpointerdown={ondividerdown}
+        onkeydown={ondividerkey}
+      ></div>
+      <div class="right"><InspectorView {inspector} /></div>
+    {/if}
+  </main>
+
+  <Timeline {inspector} />
+</div>
+
+<dialog bind:this={saving} class="save">
+  <h2>Save a bug report</h2>
+  <p>
+    The bug report is this run's recording: every event CAF's core was given, so anyone can replay it step by step. It holds
+    <strong>everything said</strong> in this run: your messages, the agents' answers and thinking, the files they read, the commands
+    they ran and what those printed, and the folders they worked in. Sign-in emails and the values of MCP servers' secrets are left
+    out.
+  </p>
+  <p>Share it only with someone you'd show all of that to.</p>
+  <div class="buttons">
+    <button type="button" onclick={() => saving?.close()}>Cancel</button>
+    <button type="button" class="primary" onclick={save}>Download it</button>
+  </div>
+</dialog>
+
+<style>
+  :global(html),
+  :global(body) {
+    margin: 0;
+    height: 100%;
+    background: var(--caf-bg);
+    color: var(--caf-text);
+    font-family: var(--caf-sans);
+    font-size: 14px;
+  }
+  :global(#app) {
+    height: 100%;
+  }
+  .app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 0.7em;
+    padding: 0.45em 0.8em;
+    border-bottom: 1px solid var(--caf-border);
+    background: var(--caf-panel);
+  }
+  .brand {
+    font-weight: 700;
+  }
+  .mode {
+    padding: 0.05em 0.6em;
+    border-radius: 999px;
+    font-size: 0.85em;
+    background: var(--caf-inset);
+  }
+  .mode[data-mode='Live'] {
+    background: var(--caf-error-bg);
+    color: var(--caf-error);
+  }
+  .file {
+    font-family: var(--caf-mono);
+    font-size: 0.85em;
+    color: var(--caf-muted);
+    max-width: 28em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+  }
+  .link {
+    font-size: 0.85em;
+    color: var(--caf-muted);
+  }
+  .link[data-link='open']::before {
+    content: '● ';
+    color: var(--caf-ok);
+  }
+  .link[data-link='closed'] {
+    color: var(--caf-error);
+  }
+  .problem {
+    color: var(--caf-error);
+    font-size: 0.85em;
+  }
+  .spacer {
+    flex: 1;
+  }
+  button {
+    font: inherit;
+    font-size: 0.9em;
+    padding: 0.25em 0.8em;
+    border-radius: 6px;
+    border: 1px solid var(--caf-border);
+    background: var(--caf-bg);
+    color: var(--caf-text);
+    cursor: pointer;
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .primary {
+    background: var(--caf-accent);
+    border-color: var(--caf-accent);
+    color: var(--caf-accent-text);
+  }
+  main {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+  }
+  .left {
+    display: grid;
+    grid-template-columns: minmax(10em, 15em) 1fr;
+    min-width: 0;
+    min-height: 0;
+  }
+  .list {
+    border-right: 1px solid var(--caf-border);
+    min-height: 0;
+  }
+  .chat {
+    min-width: 0;
+    min-height: 0;
+  }
+  .empty {
+    color: var(--caf-faint);
+    text-align: center;
+    margin-top: 4em;
+  }
+  .divider {
+    cursor: col-resize;
+    background: var(--caf-border);
+    touch-action: none;
+  }
+  .divider:hover,
+  .divider:focus-visible {
+    background: var(--caf-accent);
+    outline: none;
+  }
+  .right {
+    min-width: 0;
+    min-height: 0;
+  }
+  .save {
+    max-width: 34em;
+    border: 1px solid var(--caf-border);
+    border-radius: 10px;
+    background: var(--caf-bg);
+    color: var(--caf-text);
+    padding: 1.2em 1.4em;
+  }
+  .save::backdrop {
+    background: rgb(0 0 0 / 0.35);
+  }
+  .save h2 {
+    margin: 0 0 0.6em;
+    font-size: 1.15em;
+  }
+  .save p {
+    line-height: 1.5;
+  }
+  .buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5em;
+  }
+</style>

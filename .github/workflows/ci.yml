@@ -1,6 +1,7 @@
 # Checks every push and pull request: formatting, clippy (including
 # caf-core's no-I/O rule), the docs, the tests, and the TypeScript caf-sdk
-# against the types generated from caf-core's, with its own tests.
+# against the types generated from caf-core's, with its own tests, and
+# the debugger app.
 name: CI
 
 on:
@@ -108,3 +109,13 @@ jobs:
       # fixtures/apply.
       - run: npx vitest run
         working-directory: ts/sdk
+      # The debugger app: its types, the chat view's tests, the build, and
+      # the check that src/chat/ imports nothing of the app's.
+      - run: npm run check
+        working-directory: ts/debugger
+      - run: npm run check:imports
+        working-directory: ts/debugger
+      - run: npx vitest run
+        working-directory: ts/debugger
+      - run: npm run build
+        working-directory: ts/debugger

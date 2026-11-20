@@ -9,7 +9,8 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+// The app's folder, or another given (the check's own tests use copies).
+const root = resolve(process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..'))
 const chat = join(root, 'src', 'chat')
 
 /** Packages the chat view may use: the SDK, Svelte, and the Markdown renderer. */
