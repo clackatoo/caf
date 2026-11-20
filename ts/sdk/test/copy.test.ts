@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
-import { ChatCopy, type Change, type Numbered } from "../src/index.ts";
-import { busy, numbered } from "./chats.ts";
+import { ChatCopy, type Change, type Item, type Numbered } from "../src/index.ts";
+import { busy, numbered, turn, words as wordItem } from "./chats.ts";
 
 const append = (text: string): Change => ({ type: "Appended", value: { item: 1004, text } });
 const words = (copy: ChatCopy) => copy.chat.turns[1]!.items[0]!.kind;
@@ -126,6 +126,23 @@ describe("ChatCopy", () => {
     ["QuestionAsked with no value", { type: "QuestionAsked" }],
     ["QuestionAsked with no id", { type: "QuestionAsked", value: { kind: {} } }],
     ["QuestionGone with no id", { type: "QuestionGone" }],
+    [
+      "ItemAdded whose words aren't text",
+      { type: "ItemAdded", value: { turn: 1003, item: { ...wordItem(1100, ""), kind: { type: "Words", value: 5 } } } },
+    ],
+    [
+      "ItemAdded whose thinking isn't text",
+      { type: "ItemAdded", value: { turn: 1003, item: { ...wordItem(1100, ""), kind: { type: "Thinking" } } } },
+    ],
+    [
+      "ItemAdded whose item has no window",
+      { type: "ItemAdded", value: { turn: 1003, item: { ...wordItem(1100, ""), window: null } } },
+    ],
+    ["TurnAdded whose turn has no window", { type: "TurnAdded", value: { ...turn(1100), window: undefined } }],
+    [
+      "TurnAdded whose item has no window",
+      { type: "TurnAdded", value: turn(1100, [{ ...wordItem(1101, ""), window: 1 } as unknown as Item]) },
+    ],
   ])("%s needs a picture", (_, change) => {
     const copy = new ChatCopy(busy(), 10);
     const before = copy.chat;

@@ -29,12 +29,16 @@ function hasId(value: unknown): value is Record<string, unknown> & { id: number 
   return isRecord(value) && isNumber(value.id);
 }
 
+/** An item: words and thinking hold text, which `Appended` adds to. */
 export function isItem(value: unknown): value is Item {
-  return hasId(value) && isTagged(value.kind);
+  if (!hasId(value) || !isRecord(value.window) || !isTagged(value.kind)) return false;
+  const kind = value.kind as { type: string; value?: unknown };
+  return (kind.type !== "Words" && kind.type !== "Thinking") || isString(kind.value);
 }
 
+/** A turn: its window is one `TurnLife` ends. */
 export function isTurn(value: unknown): value is Turn {
-  return hasId(value) && isArrayOf(value.items, isItem);
+  return hasId(value) && isRecord(value.window) && isArrayOf(value.items, isItem);
 }
 
 export function isChat(value: unknown): value is Chat {

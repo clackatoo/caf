@@ -1,7 +1,8 @@
 /// <reference types="node" />
 // The shared conformance fixtures: caf-core writes `fixtures/apply/*.json`
 // from its own record of real chats, and every SDK's ChatCopy must turn
-// each picture and its changes into exactly the chats the core had. Along
+// each picture and its changes into exactly the chats the core had, and
+// refuse a change that doesn't fit with exactly the core's Mismatch. Along
 // the way, no change may alter the chat before it, and every turn and item
 // a change doesn't name must be the very object it was.
 
@@ -11,12 +12,25 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, test } from "vitest";
 
-import { ChatCopy, type Change, type ChangeNo, type Chat, type Numbered } from "../src/index.ts";
+import {
+  apply,
+  ChatCopy,
+  type Change,
+  type ChangeNo,
+  type Chat,
+  type DeepReadonly,
+  type Mismatch,
+  type Numbered,
+} from "../src/index.ts";
 
-/** One fixture: a chat's first picture, then each change and the chat after it. */
+/**
+ * One fixture: a chat's first picture, then each change and either the
+ * chat after it or, for a change that doesn't fit, the `Mismatch` it gives.
+ * A mismatch step is always the last, and never a gap.
+ */
 interface Fixture {
   picture: { chat: Chat; latest: ChangeNo };
-  steps: { change: Numbered; chat: Chat }[];
+  steps: ({ change: Numbered; chat: Chat } | { change: Numbered; mismatch: Mismatch })[];
 }
 
 const folder = fileURLToPath(new URL("../../../fixtures/apply/", import.meta.url));
@@ -36,7 +50,7 @@ function frozen<T>(value: T): T {
 }
 
 /** The turn and item a change names, if any, in the chat it's applied to. */
-function named(chat: Readonly<Chat>, change: Change): { turn?: number; item?: number } {
+function named(chat: DeepReadonly<Chat>, change: Change): { turn?: number; item?: number } {
   switch (change.type) {
     case "TurnLife":
     case "ItemAdded":
@@ -54,7 +68,7 @@ function named(chat: Readonly<Chat>, change: Change): { turn?: number; item?: nu
 }
 
 /** Checks that `after` shares with `before` everything `change` doesn't name. */
-function expectShared(before: Readonly<Chat>, after: Readonly<Chat>, change: Change, at: string): void {
+function expectShared(before: DeepReadonly<Chat>, after: DeepReadonly<Chat>, change: Change, at: string): void {
   if (
     !["TurnAdded", "TurnInserted", "TurnLife", "ItemAdded", "Appended", "ToolChanged", "ItemEnded"].includes(
       change.type,
@@ -95,6 +109,16 @@ describe("conformance fixtures", () => {
       const where = `step ${at}, change ${step.change.no}`;
       const before = copy.chat;
       const kept = structuredClone(before);
+      if ("mismatch" in step) {
+        expect(apply(before, frozen(step.change).change), where).toStrictEqual({ mismatch: step.mismatch });
+        const latest = copy.latest;
+        expect(copy.take([step.change]), where).toBe("need-picture");
+        expect(copy.chat, `${where}: the copy after it`).toBe(before);
+        expect(copy.latest, `${where}: the copy after it`).toBe(latest);
+        expect(before, `${where}: the chat before it`).toStrictEqual(kept);
+        expect(at, `${where}: a mismatch is the last step`).toBe(fixture.steps.length - 1);
+        return;
+      }
       expect(copy.take([frozen(step.change)]), where).toBe("ok");
       expect(copy.latest, where).toBe(step.change.no);
       expect(copy.chat, where).toStrictEqual(step.chat);

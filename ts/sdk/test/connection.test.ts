@@ -1,7 +1,17 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { CafError, ChatCopy, Connection, type Change, type Chat, type WatchEvent } from "../src/index.ts";
-import { busy, chat, numbered, turn } from "./chats.ts";
+import {
+  CafError,
+  ChatCopy,
+  Connection,
+  type Change,
+  type Chat,
+  type DeepReadonly,
+  type Item,
+  type Turn,
+  type WatchEvent,
+} from "../src/index.ts";
+import { busy, chat, numbered, turn, words } from "./chats.ts";
 import { connected, FakeTransport, welcome } from "./transport.ts";
 
 /** Waits for promises and microtasks to settle. */
@@ -36,7 +46,7 @@ const append = (text: string): Change => ({ type: "Appended", value: { item: 100
 const picture = (chat: Chat, latest: number) => ({ type: "Picture", value: { chat, latest } }) as const;
 const changes = (...list: ReturnType<typeof numbered>[]) =>
   ({ type: "Changes", value: { chat: 1000, changes: list } }) as const;
-const wordsOf = (chat: Chat) => chat.turns[1]!.items[0]!.kind;
+const wordsOf = (chat: DeepReadonly<Chat>) => chat.turns[1]!.items[0]!.kind;
 
 /** A listener that keeps what it hears. */
 function heard() {
@@ -444,6 +454,48 @@ describe("watching a chat", () => {
     expect(watch.copy?.chat.turns).toHaveLength(0);
   });
 
+  test("a listener that stops the last watch partway through a batch doesn't watch again", async () => {
+    const { caf, link } = await connected();
+    let drawn = 0;
+    const watch = caf.watch(1000, () => {
+      if (++drawn === 2) watch.stop();
+    });
+    link.deliver(picture(busy(), 10));
+    link.take();
+    // 11 is drawn, and the listener stops; 13 then needs a picture.
+    link.deliver(changes(numbered(11, append(" a")), numbered(13, append(" c"))));
+    expect(link.take()).toStrictEqual([{ type: "Unwatch", value: { chat: 1000 } }]);
+  });
+
+  test("a picture that comes while the listener draws isn't asked for again", async () => {
+    const { caf, link } = await connected();
+    let drawing = 0;
+    const watch = caf.watch(1000, () => {
+      // CAF's next picture arrives while the first change of the batch is drawn.
+      if (drawing++ === 1) link.deliver(picture(busy(), 30));
+    });
+    link.deliver(picture(busy(), 10));
+    link.take();
+    link.deliver(changes(numbered(11, append(" a")), numbered(13, append(" c"))));
+    expect(link.take()).toStrictEqual([]);
+    expect(watch.copy?.latest).toBe(30);
+  });
+
+  test("after Ended, a resumed watch that meets a gap asks for the chat whole", async () => {
+    const from = await copyFrom("run-1", 10);
+    const { caf, link } = await connected();
+    // Asked for whole, then ended before the picture came.
+    caf.watch(1000, () => {});
+    link.deliver({ type: "Ended", value: { chat: 1000 } });
+    caf.watch(1000, () => {}, from);
+    link.take();
+    link.deliver(changes(numbered(12, append(" b"))));
+    expect(link.take()).toStrictEqual([
+      { type: "Unwatch", value: { chat: 1000 } },
+      { type: "Watch", value: { chat: 1000, since: null } },
+    ]);
+  });
+
   test("a listener that throws is reported, and the link goes on", async () => {
     const reported: unknown[] = [];
     vi.stubGlobal("reportError", (error: unknown) => reported.push(error));
@@ -695,6 +747,16 @@ describe("what CAF sends", () => {
         picture({ ...busy(), turns: [{ id: 1, items: [{ kind: { type: "Words" } }] }] } as unknown as Chat, 1),
       ),
     ],
+    [
+      "a Picture whose words aren't text",
+      JSON.stringify(
+        picture(chat([turn(1, [{ ...words(2, ""), kind: { type: "Words", value: 5 } } as unknown as Item])]), 1),
+      ),
+    ],
+    [
+      "a Picture whose turn has no window",
+      JSON.stringify(picture(chat([{ ...turn(1), window: null } as unknown as Turn]), 1)),
+    ],
     ["Changes that aren't a list", JSON.stringify({ type: "Changes", value: { chat: 1000, changes: {} } })],
     ["Ended without its chat", JSON.stringify({ type: "Ended", value: {} })],
     ["a Done without its request", JSON.stringify({ type: "Done", value: { outcome: { type: "Done" } } })],
@@ -756,6 +818,26 @@ describe("opening with a signal", () => {
     expect(await outcome(opening)).not.toBe("pending");
     expect(link.take()).toStrictEqual([]);
     expect(link.closed).toBe(true);
+  });
+
+  test.each([
+    ["welcomed", welcome],
+    ["refused", { type: "NoCommonVersion", value: { min: 2, max: 2 } }],
+  ])("stops listening to the signal once %s", async (_, answer) => {
+    const added: unknown[] = [];
+    const removed: unknown[] = [];
+    const signal = {
+      aborted: false,
+      reason: undefined,
+      addEventListener: (type: string, listener: unknown) => void added.push([type, listener]),
+      removeEventListener: (type: string, listener: unknown) => void removed.push([type, listener]),
+    } as unknown as AbortSignal;
+    const link = new FakeTransport();
+    const opening = held(Connection.open(link, { signal }));
+    link.deliver(answer as typeof welcome);
+    await outcome(opening);
+    expect(added).toHaveLength(1);
+    expect(removed).toStrictEqual(added);
   });
 
   test("aborting after the Welcome does nothing", async () => {

@@ -15,6 +15,7 @@ import type {
   UserMessage,
 } from "./types.ts";
 import { ChatCopy } from "./copy.ts";
+import type { DeepReadonly } from "./readonly.ts";
 import { isArrayOf, isChat, isNumber, isRecord, isString, isSummary, isTagged } from "./shape.ts";
 
 /** The versions of the viewer wire this SDK speaks. */
@@ -129,8 +130,8 @@ export interface Watching {
 
 /** What `watch` was told, if anything, as it follows a chat. */
 export type WatchEvent =
-  /** The chat changed, or came whole: draw this. It's read-only: it shares its turns and items with the watch's copy. */
-  | { type: "Chat"; chat: Readonly<Chat> }
+  /** The chat changed, or came whole: draw this. It's read-only all the way down: it shares its turns and items with the watch's copy. */
+  | { type: "Chat"; chat: DeepReadonly<Chat> }
   /** The chat was closed, or CAF shut down: nothing more comes. */
   | { type: "Ended" };
 

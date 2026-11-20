@@ -1,4 +1,5 @@
 import { apply } from "./apply.ts";
+import type { DeepReadonly } from "./readonly.ts";
 import { isChange } from "./shape.ts";
 import type { Chat, ChangeNo, Numbered } from "./types.ts";
 
@@ -8,21 +9,22 @@ import type { Chat, ChangeNo, Numbered } from "./types.ts";
  * `fixtures/apply/` check it.
  */
 export class ChatCopy {
-  #chat: Chat;
+  #chat: DeepReadonly<Chat>;
   #latest: ChangeNo;
 
   /** A copy of a chat sent whole, as in a `Picture`. */
-  constructor(chat: Chat, latest: ChangeNo) {
+  constructor(chat: DeepReadonly<Chat>, latest: ChangeNo) {
     this.#chat = chat;
     this.#latest = latest;
   }
 
   /**
    * The chat, as far as the copy has read. A new object after every
-   * change. It's read-only: it shares its turns and items with the copy,
-   * so changing it would change the copy.
+   * change. It's read-only all the way down (`DeepReadonly`): it shares
+   * its turns and items with the copy, so changing it would change the
+   * copy.
    */
-  get chat(): Readonly<Chat> {
+  get chat(): DeepReadonly<Chat> {
     return this.#chat;
   }
 

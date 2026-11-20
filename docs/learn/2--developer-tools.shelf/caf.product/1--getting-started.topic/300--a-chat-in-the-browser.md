@@ -152,8 +152,9 @@ apart.
 
 Each new chat shares every turn and item that didn't change with the one
 before it, so Svelte, React or plain DOM code can tell what changed by
-comparing objects, and redraw only that. So treat it as read-only: it also
-shares them with the SDK's own copy, and changing it would change the copy.
+comparing objects, and redraw only that. It also shares them with the SDK's
+own copy, so it's typed read-only all the way down (`DeepReadonly<Chat>`):
+changing it would change the copy. `apply` takes a read-only chat too.
 
 CAF first sends a watched chat whole, then its numbered changes. The SDK
 applies them itself. If one is missing, doesn't fit, or is of a kind this

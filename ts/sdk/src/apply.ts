@@ -1,4 +1,10 @@
+import type { DeepReadonly } from "./readonly.ts";
 import type { Chat, Change, Item, ItemId, QuestionId, Turn, TurnId } from "./types.ts";
+
+/** A chat, a turn and an item as `apply` takes them: read-only, or not. */
+type RChat = DeepReadonly<Chat>;
+type RTurn = DeepReadonly<Turn>;
+type RItem = DeepReadonly<Item>;
 
 /** A change that doesn't fit a chat: it names something the chat doesn't have. */
 export type Mismatch =
@@ -19,7 +25,10 @@ export type Mismatch =
  * doesn't have: the viewer has missed something and needs the chat whole.
  * A change of a type this SDK doesn't know is a mismatch too.
  */
-export function apply(chat: Chat, change: Change): { chat: Chat } | { mismatch: Mismatch | "unknown-change" } {
+export function apply(chat: Chat, change: Change): { chat: Chat } | { mismatch: Mismatch | "unknown-change" };
+/** The same, for a read-only chat, such as a copy's: the chat it gives shares with it, so is read-only too. */
+export function apply(chat: RChat, change: Change): { chat: RChat } | { mismatch: Mismatch | "unknown-change" };
+export function apply(chat: RChat, change: Change): { chat: RChat } | { mismatch: Mismatch | "unknown-change" } {
   switch (change.type) {
     case "State":
       return { chat: { ...chat, state: change.value } };
@@ -74,12 +83,12 @@ export function apply(chat: Chat, change: Change): { chat: Chat } | { mismatch: 
 }
 
 /** Where a turn is, searching from the newest as the core does, or -1. */
-function turnAt(chat: Chat, id: TurnId): number {
+function turnAt(chat: RChat, id: TurnId): number {
   return lastIndex(chat.turns, id);
 }
 
 /** The chat with one turn replaced by `change(turn)`, sharing every other. */
-function withTurn(chat: Chat, id: TurnId, change: (turn: Turn) => Turn): { chat: Chat } | { mismatch: Mismatch } {
+function withTurn(chat: RChat, id: TurnId, change: (turn: RTurn) => RTurn): { chat: RChat } | { mismatch: Mismatch } {
   const at = turnAt(chat, id);
   const turn = chat.turns[at];
   if (turn === undefined) return { mismatch: { type: "NoTurn", value: id } };
@@ -92,10 +101,10 @@ function withTurn(chat: Chat, id: TurnId, change: (turn: Turn) => Turn): { chat:
  * with a mismatch instead.
  */
 function withItem(
-  chat: Chat,
+  chat: RChat,
   id: ItemId,
-  change: (item: Item) => Item | Mismatch,
-): { chat: Chat } | { mismatch: Mismatch } {
+  change: (item: RItem) => RItem | Mismatch,
+): { chat: RChat } | { mismatch: Mismatch } {
   // Newest first, as the core searches.
   for (let t = chat.turns.length - 1; t >= 0; t--) {
     const turn = chat.turns[t]!;
