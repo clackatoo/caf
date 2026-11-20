@@ -96,6 +96,8 @@ pub mod host;
 pub mod ids;
 pub mod profiles;
 pub mod question;
+#[cfg(test)]
+mod shape;
 pub mod time;
 #[cfg(feature = "ts")]
 mod ts;
