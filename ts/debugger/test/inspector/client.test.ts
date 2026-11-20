@@ -157,6 +157,7 @@ describe('the protocol', () => {
 describe('states', () => {
   it('asks once for each position, and keeps what comes', () => {
     const { socket, inspector } = open()
+    socket.say({ type: 'Steps', value: { from: 1, steps: Array.from({ length: 10 }, (_, i) => step(i + 1)) } })
     inspector.stateAt(3)
     inspector.stateAt(3)
     expect(socket.sent).toEqual([{ type: 'StateAt', value: { step: 3 } }])
@@ -169,6 +170,7 @@ describe('states', () => {
   it('asks again once the link opens, if it was asked before', () => {
     const socket = new FakeSocket()
     const inspector = new Inspector(socket)
+    socket.say({ type: 'Steps', value: { from: 1, steps: [step(1), step(2)] } })
     inspector.stateAt(2)
     expect(socket.sent).toEqual([])
     socket.emit('open')
@@ -178,6 +180,7 @@ describe('states', () => {
 
   it('asks for one at a time: the server answers only the last StateAt waiting', () => {
     const { socket, inspector } = open()
+    socket.say({ type: 'Steps', value: { from: 1, steps: Array.from({ length: 10 }, (_, i) => step(i + 1)) } })
     inspector.stateAt(3)
     inspector.stateAt(2)
     expect(socket.sent).toEqual([{ type: 'StateAt', value: { step: 3 } }])
@@ -190,8 +193,24 @@ describe('states', () => {
     expect([inspector.state(3), inspector.state(2)]).toEqual([3, 2])
   })
 
+  it("isn't stuck by an answer for another position than asked", () => {
+    const socket = new FakeSocket()
+    const inspector = new Inspector(socket)
+    socket.emit('open')
+    socket.say({ type: 'Hello', value: { protocol: PROTOCOL, mode: { type: 'Replay' }, file: 'f', run: null } })
+    socket.say({ type: 'Steps', value: { from: 1, steps: [step(1), step(2), step(3)] } })
+    // Past the end: asked for at the end, which the server would answer anyway.
+    inspector.stateAt(9)
+    expect(socket.sent).toEqual([{ type: 'StateAt', value: { step: 3 } }])
+    // Answered for a position of the server's choosing, all the same.
+    socket.say({ type: 'State', value: { at: 1, core: {} } })
+    inspector.stateAt(2)
+    expect(socket.sent.at(-1)).toEqual({ type: 'StateAt', value: { step: 2 } })
+  })
+
   it('drops the oldest of many waiting, while dragging', () => {
     const { socket, inspector } = open()
+    socket.say({ type: 'Steps', value: { from: 1, steps: Array.from({ length: 10 }, (_, i) => step(i + 1)) } })
     for (let at = 1; at <= 10; at++) inspector.stateAt(at)
     socket.say({ type: 'State', value: { at: 1, core: 1 } })
     for (let at = 7; at <= 10; at++) socket.say({ type: 'State', value: { at, core: at } })

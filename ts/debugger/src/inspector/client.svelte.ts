@@ -122,7 +122,9 @@ export class Inspector {
   }
 
   /** Asks for the core's state at a position, unless it has it or has asked. */
-  stateAt(step: number): void {
+  stateAt(asked: number): void {
+    // The server takes a position past the end as the end: ask for that.
+    const step = Math.min(asked, this.position.end)
     if (step < 0 || this.#states.has(step) || this.#asking === step) return
     if (!this.#wanted.includes(step)) this.#wanted.push(step)
     if (this.#wanted.length > WANTED) this.#wanted.shift()
@@ -144,7 +146,6 @@ export class Inspector {
       this.#asking = step
     }
   }
-
 
   close(): void {
     this.#socket.close()
@@ -194,7 +195,9 @@ export class Inspector {
         states.set(message.value.at, message.value.core)
         while (states.size > KEPT_STATES) states.delete(states.keys().next().value!)
         this.#states = states
-        if (this.#asking === message.value.at) this.#asking = null
+        // Only one is ever on its way, so this answers it, whatever
+        // position the server answered for.
+        this.#asking = null
         this.#ask()
         break
       }
