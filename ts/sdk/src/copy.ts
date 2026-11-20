@@ -1,3 +1,4 @@
+import { apply } from "./apply.ts";
 import type { Chat, ChangeNo, Numbered } from "./types.ts";
 
 /**
@@ -6,21 +7,23 @@ import type { Chat, ChangeNo, Numbered } from "./types.ts";
  * `fixtures/apply/` check it.
  */
 export class ChatCopy {
+  #chat: Chat;
+  #latest: ChangeNo;
+
   /** A copy of a chat sent whole, as in a `Picture`. */
   constructor(chat: Chat, latest: ChangeNo) {
-    void chat;
-    void latest;
-    throw new Error("todo");
+    this.#chat = chat;
+    this.#latest = latest;
   }
 
   /** The chat, as far as the copy has read. A new object after every change. */
   get chat(): Chat {
-    throw new Error("todo");
+    return this.#chat;
   }
 
   /** The last change the copy has. */
   get latest(): ChangeNo {
-    throw new Error("todo");
+    return this.#latest;
   }
 
   /**
@@ -28,9 +31,27 @@ export class ChatCopy {
    * `"need-picture"` if one is missing, doesn't fit, or is of a type this
    * SDK doesn't know: the copy keeps what it applied before then, and needs
    * the chat whole again.
+   *
+   * A change that isn't shaped as CAF sends one, such as one missing its
+   * number, needs a picture too: it never throws.
    */
   take(changes: readonly Numbered[]): "ok" | "need-picture" {
-    void changes;
-    throw new Error("todo");
+    for (const numbered of changes) {
+      const no: unknown = numbered?.no;
+      if (typeof no !== "number") return "need-picture";
+      if (no <= this.#latest) continue;
+      if (no !== this.#latest + 1) return "need-picture";
+      let applied: ReturnType<typeof apply>;
+      try {
+        applied = apply(this.#chat, numbered.change);
+      } catch {
+        // Its type is one this SDK knows, but not what it holds.
+        return "need-picture";
+      }
+      if (!("chat" in applied)) return "need-picture";
+      this.#chat = applied.chat;
+      this.#latest = no;
+    }
+    return "ok";
   }
 }
