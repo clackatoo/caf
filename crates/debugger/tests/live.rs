@@ -459,3 +459,24 @@ async fn stopping_the_fake_while_it_asks_ends_the_turn_and_it_answers_the_next()
     assert!(debugger.live.book.diverged().is_none());
     debugger.live.caf.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_fake_fails_a_turn_once_and_answers_it_sent_again() {
+    let debugger = Debugger::start("fail").await;
+    let mut viewer = debugger.chat().await;
+    viewer.say(fake::FAIL).await;
+    viewer.until(|chat| lives(chat) == ["Failed"]).await;
+    let life = serde_json::to_value(&viewer.copy.chat().turns[0].life).unwrap();
+    assert_eq!(life["value"]["remedy"]["type"], "SendAgain", "{life:#}");
+    assert!(
+        life.to_string().contains("as it was asked to"),
+        "the agent's words: {life:#}"
+    );
+    // Send again: answered this time.
+    viewer.say(fake::FAIL).await;
+    viewer
+        .until(|chat| lives(chat) == ["Failed", "Finished"])
+        .await;
+    assert!(debugger.live.book.diverged().is_none());
+    debugger.live.caf.shutdown().await;
+}
