@@ -29,3 +29,8 @@ tests, change by change, which every SDK's `apply` must follow) are
 written by the core's test harness. After changing what the core
 records, regenerate them with `CAF_BLESS=1 cargo test -p caf-core`; the
 tests fail while any is stale, missing or extra.
+
+`samples/viewer/v1.json` holds one of every message of version 1 of the
+viewer wire, and a test fails if what CAF writes no longer matches it.
+What a released version sends never changes: a change to it needs a new
+version with its own sample.

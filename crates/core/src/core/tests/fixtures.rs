@@ -32,6 +32,7 @@ use crate::change::Numbered;
 use crate::chat::{Chat, NoAppItems};
 use crate::core::record::Applied;
 use crate::ids::{ChangeNo, ChatId};
+use crate::shape::{CHANGES, change_kind};
 use crate::viewer::ChatCopy;
 
 /// One fixture, as it's read.
@@ -204,7 +205,8 @@ fn test_exists(fixture: &str) -> bool {
 
 /// Every fixture, read through Rust's [`ChatCopy`] change by change,
 /// gives exactly the chat the core had after each change; and all at
-/// once, and again, gives the last.
+/// once, and again, gives the last. Between them, they hold every kind
+/// of change.
 #[test]
 #[expect(
     clippy::disallowed_methods,
@@ -214,6 +216,7 @@ fn every_fixture_is_followed_by_a_chat_copy() {
     let folder = folder();
     let names = names(&folder);
     assert!(!names.is_empty(), "fixtures/apply/ is empty: run `{BLESS}`");
+    let mut kinds = [false; CHANGES];
     for name in names {
         if !test_exists(&name) {
             if blessing() {
@@ -227,6 +230,7 @@ fn every_fixture_is_followed_by_a_chat_copy() {
         let Picture { chat, latest } = fixture.picture;
         let mut copy = ChatCopy::new(chat.clone(), latest);
         for (at, step) in fixture.steps.iter().enumerate() {
+            kinds[change_kind(&step.change.change)] = true;
             copy.take(std::slice::from_ref(&step.change))
                 .unwrap_or_else(|_| panic!("{name}, step {at}: the copy needs a picture"));
             assert_eq!(copy.latest(), step.change.no, "{name}, step {at}");
@@ -240,4 +244,8 @@ fn every_fixture_is_followed_by_a_chat_copy() {
         whole.take(&changes).expect("and again, as a repeat");
         assert_eq!(whole, copy, "{name}: all at once");
     }
+    assert_eq!(
+        kinds, [true; CHANGES],
+        "the fixtures hold every kind of change"
+    );
 }
