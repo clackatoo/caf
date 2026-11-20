@@ -119,6 +119,8 @@ Each line after it is one event, in order:
 Every enum is written as its variant's name as `type`, with what it holds, if
 anything, as `value`, as everywhere in CAF: `{"type": "Woken"}`. This is
 version 2 of the format: check `caf_recording` before reading the rest.
+Each `type` comes before its `value`, and must stay there: what the agent
+sent is kept exactly as it came, and reads back only in that order.
 
 To replay it, make a `Core` from the first line with `Core::new`, read each
 line's event as an `Event`, and give it to `Core::handle` at its time. A
