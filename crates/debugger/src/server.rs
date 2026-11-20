@@ -20,6 +20,9 @@
 //!   always sends it with. `/recording` may also have none, as a
 //!   download link or a page's own `fetch` sends none.
 //! - **No CORS:** nothing here says another origin may read it.
+//! - **A Content-Security-Policy** on the app ([`CSP`]): its page loads
+//!   and connects to nothing but the server, and no other page may frame
+//!   it. Every response has `X-Content-Type-Options: nosniff`.
 //! - **What the app sends is capped:** [`VIEWER_MESSAGE`] on `/viewer`,
 //!   [`INSPECTOR_MESSAGE`] on `/inspect`. A bigger one ends the socket.
 
@@ -535,8 +538,25 @@ async fn recording(
         .into_response()
 }
 
-/// Everything else: a file of the built app.
+/// What the app's page may load and do: only its own scripts, styles,
+/// images and sockets, and no page may frame it. The agent's words are
+/// drawn as Markdown with HTML off, but should anything slip through, it
+/// can't load or run anything from elsewhere, or send the token there.
+pub const CSP: &str =
+    "default-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'";
+
+/// Everything else: a file of the built app, under [`CSP`].
 async fn static_file(State(app): State<Arc<App>>, uri: Uri) -> Response {
+    let mut response = app_file(&app, &uri).await;
+    (response.headers_mut()).insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(CSP),
+    );
+    response
+}
+
+/// A file of the built app, or why not.
+async fn app_file(app: &App, uri: &Uri) -> Response {
     let index = app.dist.join("index.html");
     if !index.is_file() {
         return (

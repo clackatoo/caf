@@ -365,6 +365,7 @@ async fn the_app_is_served_from_its_folder_or_says_how_to_build_it() {
     assert_eq!(status, 503);
     assert!(head.contains("content-type: text/html"));
     assert!(String::from_utf8(body).unwrap().contains("isn't built"));
+    assert!(head.contains("content-security-policy: default-src 'self'"));
 
     let dir = Dir::new("dist");
     std::fs::create_dir_all(dir.0.join("assets")).unwrap();
@@ -384,11 +385,20 @@ async fn the_app_is_served_from_its_folder_or_says_how_to_build_it() {
     );
     assert!(head.contains("content-type: text/html"));
     assert!(head.contains("x-content-type-options: nosniff"));
+    let csp = format!("content-security-policy: {}", server::CSP.to_lowercase());
+    assert!(head.contains(&csp), "{head}");
+    assert!(
+        server::CSP.contains("default-src 'self'")
+            && server::CSP.contains("frame-ancestors 'none'")
+    );
     assert!(!head.contains("access-control-allow-origin"), "no CORS");
     let (status, head, _) = server.get("/assets/app.js", None).await;
     assert_eq!(status, 200);
     assert!(head.contains("content-type: text/javascript"));
-    assert_eq!(server.get("/assets/missing.js", None).await.0, 404);
+    assert!(head.contains(&csp), "{head}");
+    let (status, head, _) = server.get("/assets/missing.js", None).await;
+    assert_eq!(status, 404);
+    assert!(head.contains(&csp) && head.contains("x-content-type-options: nosniff"));
     assert_eq!(server.get("/../caf-debugger-secret", None).await.0, 404);
     assert_eq!(
         server
