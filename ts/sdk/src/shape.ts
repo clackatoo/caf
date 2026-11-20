@@ -2,7 +2,7 @@
 // looks things up, lists where it adds to them, and the type of whatever
 // it reads. What it never reads is the app's to draw, so isn't checked.
 
-import type { Chat, ChatSummary, Item, Turn } from "./types.ts";
+import type { AgentStatus, Chat, ChatSummary, Item, Turn } from "./types.ts";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -47,6 +47,14 @@ export function isChat(value: unknown): value is Chat {
 
 export function isSummary(value: unknown): value is ChatSummary {
   return isRecord(value) && isNumber(value.id) && isString(value.agent) && isString(value.cwd);
+}
+
+/**
+ * An agent's status. Its states are only the app's to draw, so any of
+ * them passes, even of a variant this SDK doesn't know.
+ */
+export function isStatus(value: unknown): value is AgentStatus {
+  return isRecord(value) && isString(value.name) && isTagged(value.install) && isTagged(value.sign_in);
 }
 
 /**

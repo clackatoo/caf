@@ -1,5 +1,7 @@
 import type {
+  AgentAction,
   AgentName,
+  AgentStatus,
   Answer,
   Chat,
   ChangeNo,
@@ -16,7 +18,7 @@ import type {
 } from "./types.ts";
 import { ChatCopy } from "./copy.ts";
 import type { DeepReadonly } from "./readonly.ts";
-import { isArrayOf, isChat, isNumber, isRecord, isString, isSummary, isTagged } from "./shape.ts";
+import { isArrayOf, isChat, isNumber, isRecord, isStatus, isString, isSummary, isTagged } from "./shape.ts";
 
 /** The versions of the viewer wire this SDK speaks. */
 const VERSIONS = { min: 1, max: 1 } as const;
@@ -167,10 +169,11 @@ export type WatchEvent =
  */
 export class Connection {
   readonly #transport: Transport;
-  readonly #agents: readonly AgentName[];
+  #agents: readonly DeepReadonly<AgentStatus>[];
   readonly #run: string;
   #chats: readonly Readonly<ChatSummary>[];
   readonly #chatListeners = new Set<(chats: readonly Readonly<ChatSummary>[]) => void>();
+  readonly #agentListeners = new Set<(agents: readonly DeepReadonly<AgentStatus>[]) => void>();
   readonly #closeListeners = new Set<() => void>();
   #closed = false;
   #nextRequest = 1;
@@ -179,7 +182,12 @@ export class Connection {
   /** Chats CAF has been asked for whole, and hasn't sent yet. */
   readonly #asked = new Set<ChatId>();
 
-  private constructor(transport: Transport, agents: readonly AgentName[], chats: readonly ChatSummary[], run: string) {
+  private constructor(
+    transport: Transport,
+    agents: readonly AgentStatus[],
+    chats: readonly ChatSummary[],
+    run: string,
+  ) {
     this.#transport = transport;
     this.#agents = agents;
     this.#chats = chats;
@@ -187,14 +195,15 @@ export class Connection {
   }
 
   /**
-   * Says hello over `transport`, and resolves once CAF welcomes it. Rejects
-   * with `NoCommonVersion` if CAF speaks no version this SDK does, and with
-   * `Disconnected` if the link ends first, or CAF answers with anything
-   * else.
+   * Says hello over `transport`, and resolves once CAF has welcomed it and
+   * said where its agents stand, which it does next, so `agents` is known
+   * from the start. Rejects with `NoCommonVersion` if CAF speaks no
+   * version this SDK does, and with `Disconnected` if the link ends first,
+   * or CAF answers with anything else.
    *
    * It waits as long as CAF takes to answer. Given a `signal`, aborting it
-   * before the Welcome comes rejects with the signal's reason and closes
-   * the transport; aborting it after does nothing.
+   * before both have come rejects with the signal's reason and closes the
+   * transport; aborting it after does nothing.
    */
   static open(transport: Transport, options?: { signal?: AbortSignal }): Promise<Connection> {
     return new Promise((resolve, reject) => {
@@ -205,6 +214,8 @@ export class Connection {
         return;
       }
       let connection: Connection | null = null;
+      /** What the Welcome said, while the agents' statuses are awaited. */
+      let welcomed: { chats: ChatSummary[]; run: string } | null = null;
       let settled = false;
       const settle = () => {
         settled = true;
@@ -227,6 +238,22 @@ export class Connection {
         const message = parse(text);
         if (message === null) return fail({ type: "Disconnected" });
         const value = message.value;
+        if (welcomed !== null) {
+          switch (message.type) {
+            case "Agents": {
+              if (!isArrayOf(value, isStatus)) return fail({ type: "Disconnected" });
+              settle();
+              connection = new Connection(transport, value, welcomed.chats, welcomed.run);
+              return resolve(connection);
+            }
+            default:
+              // As before the Welcome: a later version's message is
+              // ignored, and any other of this version's breaks the
+              // handshake.
+              if (KNOWN.has(message.type)) return fail({ type: "Disconnected" });
+              return;
+          }
+        }
         switch (message.type) {
           case "Welcome": {
             if (!isRecord(value)) return fail({ type: "Disconnected" });
@@ -237,9 +264,9 @@ export class Connection {
             if (!isArrayOf(agents, isString) || !isArrayOf(chats, isSummary) || !isString(run)) {
               return fail({ type: "Disconnected" });
             }
-            settle();
-            connection = new Connection(transport, agents, chats, run);
-            return resolve(connection);
+            // Its agents' names come again, with their statuses, next.
+            welcomed = { chats, run };
+            return;
           }
           case "NoCommonVersion": {
             if (!isRecord(value) || !isNumber(value.min) || !isNumber(value.max)) return fail({ type: "Disconnected" });
@@ -275,8 +302,12 @@ export class Connection {
     });
   }
 
-  /** The agents a chat may be opened with. */
-  get agents(): readonly AgentName[] {
+  /**
+   * Every agent on offer, in the order the host offers them: those a chat
+   * may be opened with, each installed or not, and signed in or not.
+   * Read-only.
+   */
+  get agents(): readonly DeepReadonly<AgentStatus>[] {
     return this.#agents;
   }
 
@@ -300,6 +331,16 @@ export class Connection {
     const each = (chats: readonly Readonly<ChatSummary>[]) => listener(chats);
     this.#chatListeners.add(each);
     return () => void this.#chatListeners.delete(each);
+  }
+
+  /**
+   * Calls `listener` with every agent's status each time any of it
+   * changes. Returns a function that stops it.
+   */
+  onAgents(listener: (agents: readonly DeepReadonly<AgentStatus>[]) => void): () => void {
+    const each = (agents: readonly DeepReadonly<AgentStatus>[]) => listener(agents);
+    this.#agentListeners.add(each);
+    return () => void this.#agentListeners.delete(each);
   }
 
   /**
@@ -384,9 +425,53 @@ export class Connection {
     return this.#request("Done", (no) => ({ type: "Close", value: { request: no, chat } }));
   }
 
+  /**
+   * Installs an agent CAF installs itself, at the version its profile was
+   * checked at. It resolves once CAF has started: `agents` follows the
+   * install, and chats waiting for the agent start once it's done. The
+   * host decides whether viewers may do this and the rest below: it may
+   * reject with `NotAllowed`.
+   */
+  install(agent: AgentName): Promise<void> {
+    return this.#agent(agent, { type: "Install" });
+  }
+
+  /** Stops installing an agent. Chats waiting for it stop their waiting messages, and go on waiting. */
+  stopInstall(agent: AgentName): Promise<void> {
+    return this.#agent(agent, { type: "StopInstall" });
+  }
+
+  /**
+   * Starts signing in to an agent, with CAF's own command for it. Its
+   * status in `agents` then gives the link to open, and any code to type.
+   */
+  signIn(agent: AgentName): Promise<void> {
+    return this.#agent(agent, { type: "SignIn" });
+  }
+
+  /** Gives an agent's sign-in the code the user pasted, where its status allows a paste. */
+  paste(agent: AgentName, text: string): Promise<void> {
+    return this.#agent(agent, { type: "Paste", value: text });
+  }
+
+  /** Stops signing in to an agent. */
+  stopSignIn(agent: AgentName): Promise<void> {
+    return this.#agent(agent, { type: "StopSignIn" });
+  }
+
+  /** Signs out of an agent. */
+  signOut(agent: AgentName): Promise<void> {
+    return this.#agent(agent, { type: "SignOut" });
+  }
+
   /** Ends the link. */
   disconnect(): void {
     this.#end();
+  }
+
+  /** Asks CAF to do something about an agent. */
+  #agent(agent: AgentName, action: AgentAction): Promise<void> {
+    return this.#request("Done", (no) => ({ type: "Agent", value: { request: no, agent, action } }));
   }
 
   /** Asks CAF something, resolving with the outcome it expects. */
@@ -421,6 +506,12 @@ export class Connection {
         if (!isArrayOf(value, isSummary)) return this.#end();
         this.#chats = value;
         for (const listener of [...this.#chatListeners]) call(listener, value);
+        return;
+      }
+      case "Agents": {
+        if (!isArrayOf(value, isStatus)) return this.#end();
+        this.#agents = value;
+        for (const listener of [...this.#agentListeners]) call(listener, value);
         return;
       }
       case "Picture": {
@@ -530,6 +621,7 @@ export class Connection {
     this.#closeListeners.clear();
     for (const listener of closes) call(listener, undefined);
     this.#chatListeners.clear();
+    this.#agentListeners.clear();
     try {
       this.#transport.close();
     } catch {
@@ -623,7 +715,7 @@ class Watch implements Watching {
 const OUTCOMES = new Set(["Opened", "Sent", "Done", "Refused", "NotAllowed", "Gone"]);
 
 /** The message types of version 1 of the wire, from CAF. */
-const KNOWN = new Set(["Welcome", "NoCommonVersion", "Chats", "Picture", "Changes", "Ended", "Done"]);
+const KNOWN = new Set(["Welcome", "NoCommonVersion", "Chats", "Picture", "Changes", "Ended", "Agents", "Done"]);
 
 /** A message from CAF as far as `{ type, value }`, or null if it isn't one. */
 function parse(text: unknown): { type: string; value: unknown } | null {
