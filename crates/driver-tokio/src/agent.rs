@@ -28,10 +28,12 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
+use std::fs::File;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -47,6 +49,8 @@ use tokio::net::unix::pipe;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+
+use crate::setup::{Lock, lock_file};
 
 /// Limits for the agent driver.
 #[non_exhaustive]
@@ -144,6 +148,14 @@ impl Default for AgentLimits {
 ///   its group and reaps it. Dropping the driver kills every group it
 ///   started, and reaps what's left. If the tokio runtime shuts down
 ///   first, a thread of its own reaps each process left.
+/// - **Installs in use:** a process started with a `hold` folder, CAF's
+///   install of an agent, holds a shared `flock` on that folder from
+///   before it starts until it's reaped, so no CAF program removes the
+///   install meanwhile
+///   ([`SetupDirective::Remove`](caf_core::directive::SetupDirective::Remove)). If the folder can't
+///   be opened, or a removal holds it for over two seconds, the start
+///   fails. Something the process started that outlives it doesn't hold
+///   the install.
 /// - **SIGPIPE:** writing to a process that has gone raises it. Rust
 ///   programs ignore it; a host whose `main` isn't Rust's must too.
 /// - **A process another thread starts** holds every pipe open in this
@@ -211,7 +223,9 @@ impl AgentDriver {
     pub fn apply(&mut self, directive: AgentDirective) {
         let (process, order) = match directive {
             AgentDirective::Start {
-                process, command, ..
+                process,
+                command,
+                hold,
             } => {
                 debug_assert!(
                     !self.processes.contains_key(&process),
@@ -225,6 +239,7 @@ impl AgentDriver {
                 tokio::spawn(run(
                     process,
                     command,
+                    hold,
                     self.limits.clone(),
                     inbox,
                     self.sender.clone(),
@@ -284,11 +299,16 @@ enum Order {
 async fn run(
     ticket: Ticket,
     command: SpawnCommand,
+    hold: Option<PathBuf>,
     limits: AgentLimits,
     mut orders: mpsc::UnboundedReceiver<Order>,
     events: mpsc::Sender<(Ticket, AgentEvent)>,
 ) {
-    let mut process = match Process::start(&command, limits) {
+    let held = match hold {
+        Some(folder) => hold_folder(&folder).await.map(Some),
+        None => Ok(None),
+    };
+    let mut process = match held.and_then(|held| Process::start(&command, held, limits)) {
         Ok(process) => process,
         Err(error) => {
             let event = AgentEvent::StartFailed {
@@ -387,9 +407,10 @@ enum Queued {
 }
 
 impl Process {
-    /// Starts `command`.
-    fn start(command: &SpawnCommand, limits: AgentLimits) -> io::Result<Self> {
-        let (leader, stdin, stdout, stderr) = spawn(command)?;
+    /// Starts `command`, holding `held`'s lock until it's reaped.
+    fn start(command: &SpawnCommand, held: Option<File>, limits: AgentLimits) -> io::Result<Self> {
+        let (mut leader, stdin, stdout, stderr) = spawn(command)?;
+        leader.held = held;
         let mut process = Self {
             framer: Framer::new(limits.biggest_line),
             limits,
@@ -637,6 +658,7 @@ impl Process {
             return;
         };
         self.leader.reaped = true;
+        self.leader.held = None;
         self.read_output();
         self.read_errors();
         let exit = match status.map(|status| (status.exit_status(), status.terminating_signal())) {
@@ -727,6 +749,7 @@ impl Process {
             // dropped.
             if exit(&self.leader.pidfd).await.is_ok() {
                 self.leader.reaped = true;
+                self.leader.held = None;
             }
         }
     }
@@ -800,6 +823,10 @@ struct Leader {
     reaped: bool,
     /// Whether waiting for its exit failed, as when the runtime is going.
     unwatchable: bool,
+    /// The shared lock on the install it runs from, if it's CAF's install
+    /// of an agent: let go of once it's reaped, and not before, so the
+    /// install isn't removed while it runs.
+    held: Option<File>,
 }
 
 /// `pidfd_send_signal`'s flag to signal the pidfd's process group, from
@@ -853,9 +880,17 @@ impl Drop for Leader {
         };
         match self.pidfd.get_ref().try_clone() {
             Ok(pidfd) => {
+                // The lock goes with the thread, and is let go of once it
+                // has reaped the process. If the thread can't be started,
+                // it's let go of as this is dropped, after the reaping
+                // below.
+                let held = self.held.take();
                 let spawned = std::thread::Builder::new()
                     .name("caf-reap".to_owned())
-                    .spawn(move || reap(pidfd.as_fd()));
+                    .spawn(move || {
+                        reap(pidfd.as_fd());
+                        drop(held);
+                    });
                 if spawned.is_err() {
                     reap(self.pidfd.get_ref().as_fd());
                 }
@@ -943,6 +978,7 @@ fn spawn(
         pidfd,
         reaped: false,
         unwatchable: false,
+        held: None,
     };
     let stdin = pipe::Sender::from_owned_fd(OwnedFd::from(stdin))?;
     let stdout = pipe::Receiver::from_owned_fd(OwnedFd::from(stdout))?;
@@ -950,11 +986,40 @@ fn spawn(
     Ok((leader, stdin, stdout, stderr))
 }
 
+/// How long starting a process waits for a shared lock on its install,
+/// while a removal looks whether anything runs from it.
+const HOLD_WAIT: Duration = Duration::from_secs(2);
+
+/// Takes a shared lock on `folder`, an install, for a process about to run
+/// from it. A removal holds it exclusively only for a moment, while it
+/// moves the folder away, so that's waited for, briefly.
+async fn hold_folder(folder: &Path) -> io::Result<File> {
+    let give_up = Instant::now() + HOLD_WAIT;
+    loop {
+        let file = File::open(folder).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("its install, {}, can't be held: {error}", folder.display()),
+            )
+        })?;
+        if let Some(held) = lock_file(file, Lock::SharedNow)? {
+            return Ok(held);
+        }
+        if Instant::now() >= give_up {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("its install, {}, is being removed", folder.display()),
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 /// What runs `command`, with `path` as the `PATH` it inherits. Its
 /// environment changes go on top of the inherited one, then `PATH` keeps
 /// only its absolute directories, so a project folder can't put programs
 /// on it. No `pre_exec` hook, so it can be started with `posix_spawn`.
-fn command_for(command: &SpawnCommand, mut path: Option<OsString>) -> Command {
+pub(crate) fn command_for(command: &SpawnCommand, mut path: Option<OsString>) -> Command {
     let mut process = Command::new(&command.program);
     process.args(&command.args);
     for change in &command.env {
@@ -987,7 +1052,7 @@ fn command_for(command: &SpawnCommand, mut path: Option<OsString>) -> Command {
 
 /// The absolute directories of `path`, a `PATH`, or [`SAFE_PATH`] if
 /// there are none.
-fn absolute_only(path: &OsStr) -> OsString {
+pub(crate) fn absolute_only(path: &OsStr) -> OsString {
     let kept: Vec<&[u8]> = (path.as_bytes().split(|&byte| byte == b':'))
         .filter(|dir| dir.starts_with(b"/"))
         .collect();
