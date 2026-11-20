@@ -4,6 +4,8 @@ type: concept
 description: CAF, the Clackatoo Agent Framework, is a Rust library for building chats with coding agents such as Claude Code into your own program, robustly, without learning each agent's quirks.
 related:
   - caf/concepts/the-core
+  - caf/concepts/viewers
+  - caf/getting-started/the-debugger
   - caf/concepts/chats-turns-and-items
   - caf/concepts/agents-and-profiles
 ---
@@ -54,3 +56,16 @@ it's built. The first, *talking to one agent*, covers starting an adapter,
 opening a session or continuing one, sending messages, seeing the reply
 stream in, stopping a turn, and surviving the adapter dying or hanging. It
 supports Claude Code, through its adapter `claude-agent-acp`.
+
+The second, *the reference app and inspector*, puts chats in other places:
+
+- **[Viewers](~caf/concepts/viewers)**: a small, versioned set of messages
+  that any window or web page can use to follow chats and act on them.
+  `caf_driver_tokio::viewer::serve` is CAF's side of it.
+- **A TypeScript caf-sdk**, `@clackatoo/caf`, for
+  [a chat in the browser](~caf/getting-started/a-chat-in-the-browser).
+  Its types are generated from CAF's own, and shared test cases hold it to
+  exactly what the core does.
+- **[The debugger](~caf/getting-started/the-debugger)**, `caf-debugger`: a
+  chat view to copy, beside an inspector of every step CAF takes. It records
+  every run, replays recordings, and moves back and forth through them.

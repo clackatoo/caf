@@ -13,8 +13,21 @@ It grows out of the agent backend of
 [clackatoo](https://github.com/clackatoo/clackatoo), and clackatoo is its
 first user.
 
-> **CAF is being designed.** There's no code yet. Each feature's API is
-> designed in full before it's built.
+## What's here
+
+- `crates/core` (`caf-core`): the state and rules of every chat, with no
+  I/O at all.
+- `crates/driver-tokio` (`caf-driver-tokio`): CAF on tokio, including
+  `viewer::serve` for a browser or other viewer.
+- `ts/sdk` (`@clackatoo/caf`): the TypeScript caf-sdk.
+- `crates/debugger` and `ts/debugger` (`caf-debugger`): a reference chat
+  view beside an inspector of every step CAF takes, with recordings and
+  time travel.
+- `crates/fake-agent`: a scriptable fake adapter for tests.
+
+CAF is built a feature at a time, each feature's API designed in full
+before it's built. Its docs are on
+[Learn](https://learn.peios.org).
 
 ## License
 
