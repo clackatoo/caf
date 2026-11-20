@@ -27,7 +27,7 @@
 //! | Name | What it is |
 //! |---|---|
 //! | `<agent>-<version>/` | An install, complete: only ever renamed into place whole |
-//! | `<agent>-private/` | An agent's private folder, which outlives its versions: never listed, never removed |
+//! | `<agent>-private/` | An agent's private folder, which outlives its versions: made, readable only by the user, by an install whose directive names it; never listed, never removed. One that's a link is refused |
 //! | `.lock` | The lock every install and removal takes, so only one runs at a time on the machine |
 //! | `.build-…/` | An install being built. Any left when nothing holds `.lock` is a cut-off one, removed |
 //! | `.trash-…/` | An install being removed. Any left when nothing holds `.lock` is removed |
@@ -265,12 +265,12 @@ impl SetupDriver {
                 ticket,
                 folder,
                 install,
-                ..
+                private,
             } => {
                 let (reporter, stop) = self.stoppable(ticket);
                 tokio::spawn(install::install(
                     self.root.clone(),
-                    folder,
+                    install::Folders { folder, private },
                     install,
                     self.options.clone(),
                     reporter,
@@ -286,11 +286,8 @@ impl SetupDriver {
                 command,
                 link,
                 code_after,
-                ..
+                paste,
             } => {
-                // Until the directive says whether the recipe allows
-                // pasting, a sign-in may always be given what's pasted.
-                let paste = true;
                 let (reporter, stop) = self.stoppable(ticket);
                 let pasted = paste.then(|| self.pasted(ticket));
                 tokio::spawn(command::sign_in(

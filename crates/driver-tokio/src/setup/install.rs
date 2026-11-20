@@ -76,16 +76,24 @@ pub(super) async fn survey(root: PathBuf, reporter: Reporter) {
     });
 }
 
-/// Installs `install` as `root/folder`.
+/// The folders an install makes: the install's, and the agent's private
+/// folder if it has one.
+pub(super) struct Folders {
+    pub(super) folder: String,
+    pub(super) private: Option<String>,
+}
+
+/// Installs `install` as `root/folder`, making the agent's private folder
+/// too.
 pub(super) async fn install(
     root: PathBuf,
-    folder: String,
+    folders: Folders,
     install: Install,
     options: Options,
     reporter: Reporter,
     mut stop: oneshot::Receiver<()>,
 ) {
-    let outcome = installing(&root, &folder, install, &options, &reporter, &mut stop).await;
+    let outcome = installing(&root, &folders, install, &options, &reporter, &mut stop).await;
     reporter.last(match outcome {
         Ok(()) => SetupEvent::Installed,
         Err(failure) => SetupEvent::InstallFailed(failure),
@@ -96,14 +104,22 @@ pub(super) async fn install(
 /// fails.
 async fn installing(
     root: &Path,
-    folder: &str,
+    folders: &Folders,
     install: Install,
     options: &Options,
     reporter: &Reporter,
     stop: &mut oneshot::Receiver<()>,
 ) -> Result<(), InstallFailure> {
+    let folder = folders.folder.as_str();
     if !is_install_name(folder) {
         return Err(other(format!("{folder:?} can't be an install's name")));
+    }
+    if let Some(private) = &folders.private
+        && !is_private_name(private)
+    {
+        return Err(other(format!(
+            "{private:?} can't be a private folder's name"
+        )));
     }
     {
         let root = root.to_owned();
@@ -114,7 +130,11 @@ async fn installing(
     let build = root.join(hidden_name(BUILD, folder));
     let prepared = {
         let (place, build, root) = (place.clone(), build.clone(), root.to_owned());
+        let private = folders.private.as_ref().map(|private| root.join(private));
         blocking(move || {
+            if let Some(private) = &private {
+                make_private(private)?;
+            }
             // Under the lock, so it's complete if it's there: someone
             // else installed it while this waited.
             if place.is_dir() {
@@ -213,6 +233,37 @@ fn is_install_name(name: &str) -> bool {
         (Some(Component::Normal(_)), None)
     ) && !name.starts_with('.')
         && !name.ends_with(PRIVATE)
+}
+
+/// Whether `name` can be an agent's private folder: one plain name, not
+/// hidden, ending in `-private`.
+fn is_private_name(name: &str) -> bool {
+    let mut parts = Path::new(name).components();
+    matches!(
+        (parts.next(), parts.next()),
+        (Some(Component::Normal(_)), None)
+    ) && !name.starts_with('.')
+        && name.len() > PRIVATE.len()
+        && name.ends_with(PRIVATE)
+}
+
+/// Makes an agent's private folder, readable only by the user, unless it's
+/// there. One that's a link, or not a folder, is refused: what's at the
+/// other end of a link isn't CAF's to give an agent.
+fn make_private(private: &Path) -> io::Result<()> {
+    let refuse = |why: &str| Err(io::Error::other(format!("{} {why}", private.display())));
+    match fs::symlink_metadata(private) {
+        Ok(found) if found.file_type().is_symlink() => refuse("is a link"),
+        Ok(found) if found.is_dir() => Ok(()),
+        Ok(_) => refuse("isn't a folder"),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            match fs::DirBuilder::new().mode(0o700).create(private) {
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => make_private(private),
+                made => made,
+            }
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Makes the root if it isn't there, readable only by the user.

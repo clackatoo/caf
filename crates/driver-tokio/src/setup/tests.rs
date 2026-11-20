@@ -651,6 +651,89 @@ async fn waiting_for_another_install_can_be_stopped() {
 }
 
 #[tokio::test]
+async fn an_install_makes_its_agents_private_folder_and_never_removes_it() {
+    let dir = Dir::new();
+    let body = tar_gz();
+    let server = serve(body.clone(), false).await;
+    let mut driver = driver(&dir);
+    let install = |ticket, folder: &str, private: &str| SetupDirective::Install {
+        ticket: Ticket(ticket),
+        folder: folder.into(),
+        install: download(&server.url, &body, Unpack::TarGz),
+        private: Some(private.into()),
+    };
+    driver.apply(install(1000, "fake-1.0.0", "fake-private"));
+    let events = done(&mut driver, Ticket(1000)).await;
+    assert_eq!(
+        events.last().expect("a last report"),
+        &SetupEvent::Installed
+    );
+    let private = dir.root().join("fake-private");
+    let mode = std::fs::symlink_metadata(&private)
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o700, "the user's alone");
+    std::fs::write(private.join("token"), "kept").unwrap();
+
+    // A later version keeps what's in it, as it is.
+    std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o750)).unwrap();
+    driver.apply(install(1001, "fake-1.1.0", "fake-private"));
+    let events = done(&mut driver, Ticket(1001)).await;
+    assert_eq!(
+        events.last().expect("a last report"),
+        &SetupEvent::Installed
+    );
+    assert_eq!(
+        std::fs::read_to_string(private.join("token")).unwrap(),
+        "kept"
+    );
+
+    // Neither a survey nor a removal takes it.
+    driver.apply(SetupDirective::Remove {
+        ticket: Ticket(1002),
+        folder: "fake-private".into(),
+    });
+    assert_eq!(
+        done(&mut driver, Ticket(1002)).await,
+        [SetupEvent::Removed { removed: false }]
+    );
+    driver.apply(SetupDirective::Survey {
+        ticket: Ticket(1003),
+    });
+    let events = done(&mut driver, Ticket(1003)).await;
+    let [Ev(SetupEvent::Surveyed { installed, .. })] = events.as_slice() else {
+        panic!("{events:?}")
+    };
+    assert_eq!(installed, &["fake-1.0.0", "fake-1.1.0"]);
+    assert!(private.join("token").exists());
+
+    // One that's a link, or that isn't a private folder's name, is
+    // refused, and nothing is installed.
+    std::os::unix::fs::symlink(dir.path("elsewhere"), dir.root().join("other-private")).unwrap();
+    for (n, private) in ["other-private", "../escape-private", "fake-1.0.0"]
+        .into_iter()
+        .enumerate()
+    {
+        let ticket = 2000 + n as u64;
+        driver.apply(install(ticket, "other-1.0.0", private));
+        let events = done(&mut driver, Ticket(ticket)).await;
+        assert!(
+            matches!(
+                events.as_slice(),
+                [Ev(SetupEvent::InstallFailed(InstallFailure::Other(_)))]
+            ),
+            "{private}: {events:?}"
+        );
+    }
+    assert!(
+        !dir.path("elsewhere").exists(),
+        "nothing was made through the link"
+    );
+    assert!(!dir.root().join("other-1.0.0").exists());
+}
+
+#[tokio::test]
 async fn only_install_folders_can_be_installed_or_removed() {
     let dir = Dir::new();
     let mut driver = driver(&dir);
@@ -881,6 +964,33 @@ async fn a_sign_in_takes_its_link_from_its_output_and_a_pasted_code() {
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert_eq!(events, [SetupEvent::Ended { ok: true }]);
+}
+
+#[tokio::test]
+async fn a_sign_in_that_takes_no_paste_has_no_input() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    // It asks for a code, but its recipe takes none: it reads the end of
+    // its input at once, rather than waiting for a paste that never comes.
+    let command = fake_auth(
+        &dir,
+        &Auth {
+            paste: true,
+            ..Auth::default()
+        },
+        &["auth", "login"],
+    );
+    driver.apply(SetupDirective::SignIn {
+        ticket: Ticket(1000),
+        command,
+        link: LinkFrom::Browser,
+        code_after: None,
+        paste: false,
+    });
+    let events = tokio::time::timeout(Duration::from_secs(10), done(&mut driver, Ticket(1000)))
+        .await
+        .expect("it ends at once, with nothing to read");
+    assert_eq!(events, [SetupEvent::Ended { ok: false }]);
 }
 
 #[tokio::test]
