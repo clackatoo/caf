@@ -27,6 +27,10 @@ use crate::time::{End, Now, Window};
 /// The longest tool title kept, in bytes.
 const MOST_TITLE: usize = 1024;
 
+/// The biggest whole number JavaScript reads exactly, 2^53 - 1: every
+/// number in a chat is at most this.
+pub(super) const MOST_EXACT: u64 = (1 << 53) - 1;
+
 /// What an update does to a chat.
 enum Said {
     /// Words, or thinking if `thinking`.
@@ -124,8 +128,11 @@ impl<A: AppItem> Core<A> {
                 Err(_) => tool_update(&update),
             },
             "tool_call_update" => tool_update(&update),
+            // A number JavaScript can't read exactly makes it unreadable:
+            // every number in a chat is below 2^53.
             "usage_update" => serde_json::from_value::<acp::UsageUpdate>(update.clone())
                 .ok()
+                .filter(|usage| usage.used <= MOST_EXACT && usage.size <= MOST_EXACT)
                 .map(|usage| {
                     Said::Usage(Usage {
                         used: usage.used,

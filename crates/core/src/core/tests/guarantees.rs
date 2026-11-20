@@ -185,6 +185,26 @@ fn guarantee_3_nothing_the_agent_sends_is_silently_dropped() {
         { "kind": { "type": "Unknown", "value": { "what": "usage_update", "raw": unreadable } } }
     ] }] }),
     );
+    // A number JavaScript can't read exactly is unreadable too: it's kept
+    // as it came, never rounded or clamped.
+    let most = (1_u64 << 53) - 1;
+    let used = json!({ "sessionUpdate": "usage_update", "used": most + 1, "size": 10 });
+    let size = json!({ "sessionUpdate": "usage_update", "used": 1, "size": u64::MAX });
+    let fits = json!({ "sessionUpdate": "usage_update", "used": most, "size": most });
+    for update in [&used, &size, &fits] {
+        script.update(PROC, SESSION, update);
+    }
+    assert_has(
+        &script.chat(CHAT),
+        &json!({
+            "usage": { "used": most, "size": most },
+            "turns": [{ "items": [
+                {}, {},
+                { "kind": { "type": "Unknown", "value": { "what": "usage_update", "raw": used } } },
+                { "kind": { "type": "Unknown", "value": { "what": "usage_update", "raw": size } } }
+            ] }]
+        }),
+    );
     // What fits nowhere is reported.
     for message in [
         json!({ "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "nobody", "update": {} } }),

@@ -3,7 +3,10 @@
 //!
 //! Every type CAF serialises derives `TS` under the feature `ts`. Whole
 //! numbers, `u64` and `i64` too, are `number`, as `JSON.parse` reads them:
-//! every one a viewer is sent is below 2^53 (see the crate docs). The
+//! every number CAF itself writes in a chat or on the viewer wire is below
+//! 2^53, and the agent's raw JSON carried inside (`Unknown.raw`,
+//! `ToolCall.input`) is the agent's, read as any JSON is (see the crate
+//! docs). The
 //! generic types are exported with no app items of their own
 //! (`NoAppItems`, which is `never`): ts-rs can't export them generic, as
 //! it fills a type's parameters with its own placeholder, which isn't an

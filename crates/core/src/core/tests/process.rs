@@ -208,6 +208,23 @@ fn a_failed_initialize_fails_the_connection_with_a_typed_reason() {
         &script.chat(CHAT),
         &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "Incompatible", "value": { "type": "Protocol", "value": { "version": 2 } } } } } }),
     );
+
+    // A version JavaScript can't read exactly is kept as not said, never
+    // rounded.
+    let mut script = Script::new(host());
+    script
+        .open(OpenChat::new("claude", "/work"))
+        .0
+        .expect("opened");
+    script.answers(
+        PROC,
+        1000,
+        &json!({ "protocolVersion": 1_u64 << 53, "agentCapabilities": {} }),
+    );
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "Incompatible", "value": { "type": "Protocol", "value": { "version": null } } } } } }),
+    );
 }
 
 #[test]

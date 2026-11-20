@@ -255,7 +255,10 @@ impl<A: AppItem> Core<A> {
         };
         let result = match reply {
             Reply::Result(result) => {
-                let version = result.get("protocolVersion").and_then(Value::as_u64);
+                // One JavaScript can't read exactly isn't kept: every number
+                // in a chat is below 2^53.
+                let version = (result.get("protocolVersion").and_then(Value::as_u64))
+                    .filter(|&version| version <= super::updates::MOST_EXACT);
                 if version == Some(PROTOCOL_VERSION) {
                     Ok(result)
                 } else {

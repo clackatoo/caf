@@ -74,15 +74,23 @@
 //!
 //! # Numbers
 //!
-//! Every number on the viewer wire ([`viewer`]) and in a chat is below
-//! 2^53, so JavaScript reads it exactly: CAF's ids count up from 1, and
-//! times are milliseconds ([`Wall`](time::Wall)).
+//! Every number CAF itself writes in a chat or on the viewer wire
+//! ([`viewer`]) is below 2^53, so JavaScript reads it exactly: CAF's ids
+//! count up from 1, times are milliseconds ([`Wall`](time::Wall)), and a
+//! number the agent gives that CAF keeps, such as how full its memory is,
+//! is read only if it's below 2^53. An update with a bigger one is
+//! unreadable, and kept as an [`Unknown`](chat::Unknown) item. A viewer's
+//! own request numbers are quoted back as it sent them.
 //!
-//! What only debugging tools read may not be: events, directives and
-//! recordings carry readings of the steady clock ([`Mono`](time::Mono)),
-//! which are nanoseconds and pass 2^53 after about 104 days of the host
-//! running, and what an agent sent, such as its request ids, is any
-//! number it chose.
+//! The agent's own JSON that a chat carries ([`Unknown`](chat::Unknown)'s
+//! `raw`, a tool call's `input`) is the agent's, kept as it came:
+//! JavaScript reads it as it reads any JSON.
+//!
+//! What only debugging tools read may hold bigger numbers: events,
+//! directives and recordings carry readings of the steady clock
+//! ([`Mono`](time::Mono)), which are nanoseconds and pass 2^53 after about
+//! 104 days of the host running, and what an agent sent, such as its
+//! request ids, is any number it chose.
 //!
 //! # Guarantees
 //!
