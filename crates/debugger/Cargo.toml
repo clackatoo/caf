@@ -22,6 +22,9 @@ caf-driver-tokio = { path = "../driver-tokio" }
 # The fake agent, offered as `fake` so the debugger works with no real
 # agent.
 caf-fake-agent = { path = "../fake-agent" }
+# Taking what's waiting on a socket without waiting, and streaming the
+# recording.
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 # The token's randomness.
 getrandom = "0.3"
 log.workspace = true
@@ -41,7 +44,6 @@ toml = { version = "0.9", default-features = false, features = ["parse", "serde"
 ts-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
-futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 # A real WebSocket client, for the HTTP-level tests.
 tokio-tungstenite = "0.29"
 

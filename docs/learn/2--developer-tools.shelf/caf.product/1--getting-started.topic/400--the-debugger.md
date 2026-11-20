@@ -36,30 +36,38 @@ cd ts
 npm ci
 npm run build --workspace debugger
 cd ..
-cargo run -p caf-debugger
+cargo run --release -p caf-debugger
 ```
+
+Build it with `--release`: a debug build replays steps about ten times
+slower, which a long run makes noticeable when moving through time (see
+[Moving through time](#moving-through-time)).
 
 It prints where it records the run, and a URL to open:
 
 ```text
 Running CAF with claude, fake.
-Recording to /home/me/.local/state/caf/debugger/2026-11-20T14-03-22Z.jsonl.
+Recording to /home/me/.local/state/caf/debugger/2026-11-20T14-03-22Z-4182.jsonl.
 Open http://127.0.0.1:7320/#token=5f0c…
 ```
 
 Open that URL. Ctrl-C shuts CAF down, which ends each chat cleanly and
-finishes the recording.
+finishes the recording; so do `SIGTERM`, and `SIGHUP` as its terminal
+closes. A second one stops the debugger at once, without waiting for CAF.
 
 `--port` picks another port; `--port 0` picks a free one. If the app isn't
-built, the page says how to build it.
+built, the page says how to build it. The page and the server are built
+apart, so after pulling a new CAF, build the app again: a page built for
+another version of the server says so, rather than half working.
 
 ## The agents
 
-With no options, the debugger offers:
+With no `--agents`, the debugger offers:
 
 - **`claude`**, if Claude's adapter, `claude-agent-acp`, is on your `PATH`;
-- **`fake`**, always: CAF's fake agent, which has no model behind it, so the
-  debugger is useful with no real agent and no cost. It answers any message
+- **`fake`**, if it can be found (below): CAF's fake agent, which has no
+  model behind it, so the debugger is useful with no real agent and no
+  cost. It answers any message
   at once with a few words. Send it exactly `ask`, and it asks permission
   to run a command: answer it, or try Stop while it waits. Send it exactly
   `fail`, and the turn fails, the first time in each chat, so sending it
@@ -67,9 +75,12 @@ With no options, the debugger offers:
 
 The fake agent is built by Cargo as the debugger starts, so start the
 debugger with `cargo run`. Started any other way, it offers the fake agent
-only if `CAF_FAKE_AGENT_BIN` names the `caf-fake-agent` program.
+only if `CAF_FAKE_AGENT_BIN` names the `caf-fake-agent` program, and says
+why not otherwise.
 
-To offer other agents, list them in a file and pass it with `--agents`:
+To offer other agents, list them in a file and pass it with `--agents`.
+Then those are all it offers: not `claude` or `fake`, unless the file names
+them.
 
 ```toml
 [[agent]]
@@ -104,7 +115,9 @@ The debugger starts agents in your folders, and any web page you visit can
 try to reach a port on your machine. So it's locked down:
 
 - It listens on `127.0.0.1` only, so nothing else on the network can reach
-  it.
+  it, and answers only requests addressed to it by that name or
+  `localhost`, so a site that points its own name at your machine gets
+  nothing.
 - Each launch makes a new random **token**, in the URL it prints. It's in
   the part after `#`, which a browser never sends anywhere, so it stays out
   of logs. The page passes it on to the server, which refuses anything
@@ -118,15 +131,18 @@ it can chat with your agents as you.
 ## Recordings
 
 Every live run is recorded, from start to end, to a new file named for when
-it started:
+it started, in UTC, and the debugger's process:
 
 ```text
-~/.local/state/caf/debugger/2026-11-20T14-03-22Z.jsonl
+~/.local/state/caf/debugger/2026-11-20T14-03-22Z-4182.jsonl
 ```
 
 That's under `$XDG_STATE_HOME/caf/debugger/` if `XDG_STATE_HOME` is set.
-Only you can read the folder and the files. **Save bug report**, in the top
-bar, downloads the run's recording so far.
+The debugger makes the folder readable only by you, each time it starts,
+and CAF makes each file so too. **Save bug report**, in the top bar,
+downloads the run's recording so far. If CAF can't make the file, the
+debugger says so as it starts, runs unrecorded, and offers nothing to
+download.
 
 To replay a recording, pass it with `--replay`:
 
@@ -137,6 +153,11 @@ cargo run -p caf-debugger -- --replay 2026-11-20T14-03-22Z.jsonl
 A replay starts nothing and writes nothing: it rebuilds the run from its
 events alone. The chat view is read-only, and the timeline starts at the
 end.
+
+A recording copied while CAF was still writing it may end partway through
+a line: the replay stops before it. Any other line that isn't one of CAF's
+events, such as one from a newer CAF, makes the debugger refuse the file,
+naming the line, since the replay would be wrong from there on.
 
 ### What a recording holds
 
@@ -156,6 +177,10 @@ The inspector itself shows everything, those too: it shows exactly what the
 core was given. Only your browser can see it, but take care with
 screenshots.
 
+The debugger keeps every step in memory for as long as it runs, so moving
+back through time can reach any of them: a long live run grows by about
+what was said in it. Restart it to start afresh.
+
 ## Moving through time
 
 Live, the page **follows** the run: the chat view shows the chats as they
@@ -167,31 +192,41 @@ Drag the timeline back, or pick a step in the inspector, and the page
 after that step, and the chat view is read-only. Steps go on arriving
 meanwhile. Go back to the end to follow again.
 
-Looking back works by replay: the debugger keeps a second core of its own,
-and gives it the recorded events up to the step you chose. Moving back
-replays from the start in a fresh core, and moving forward gives it the
-steps in between. The chat view gets those chats the way any viewer gets a
+Looking back works by replay: the debugger keeps a core of its own, and
+gives it the run's events up to the step you chose. Every streamed chunk
+of words is a step, so a long run has tens of thousands; the debugger
+keeps a copy of its core every 1000 steps, and a move starts from the
+nearest copy before the step, so it replays at most 1000 steps however
+long the run. The chat view gets those chats the way any viewer gets a
 chat: whole when moving back, and as numbered changes when moving forward.
 So moving through time also checks that the chat view's SDK and the core
 build the same chat.
 
-Replaying a whole run should take less than 50 ms. If it takes longer, the
-debugger logs it, and that's the sign it needs checkpoints of the core
-along the way.
+A move should take less than 50 ms, which holds while replaying runs at
+50 µs a step or quicker. A release build replays at a few µs a step, a
+debug build at a few tens. The first time a move is slower, the debugger
+logs it, once a run.
 
 ## "Replay diverged"
 
 The core does no I/O, so given the same events it must always give out the
-same directives. Live, the debugger checks this at every step: its second
-core is given each event as a replay would read it from the recording, and
-must give out exactly what CAF's own core did.
+same directives. Live, the debugger checks this at every step, twice:
 
-If they ever differ, the inspector shows **"replay diverged at step N"**,
-with both lists of directives. That's a bug in CAF: something it does
-isn't decided by its events alone, such as a clock read or a random number,
-or something that affects it isn't in its events, so a recording can't
-replay it. Save the recording and report it.
+- **the steps:** a core of its own is given each event exactly as CAF's
+  core was, read back from JSON, and must give out exactly what CAF's own
+  core did. That's what moving through time replays.
+- **the recording:** another is given each event as the recording holds
+  it, with its secrets hidden, as a replay of a bug report would be. It
+  must give out what CAF's core did, but for the hidden secrets
+  themselves: the values of MCP servers' variables and headers, which
+  reach the agent in the message that opens its session.
 
-After a divergence the debugger's core is no longer a copy of CAF's, so it
-stops checking, and what it shows when looking back at later steps may be
-wrong. The run itself goes on.
+If either ever differs, the inspector shows **"replay diverged at step
+N"**, saying which check, with both lists of directives. That's a bug in
+CAF: something it does isn't decided by its events alone, such as a clock
+read or a random number, or something that affects it isn't in its
+events, or isn't in a recording of them. Save the recording and report it.
+
+After a divergence, that check stops. If it was the steps', the
+debugger's replay no longer matches what CAF did, so what it shows when
+looking back at later steps may be wrong. The run itself goes on.

@@ -55,6 +55,12 @@ const MOST_MISFIT: usize = 1024;
 /// let turn = core.send(now, chat, UserMessage::text("Fix the tests"), &mut out)?;
 /// // …carry out `out`, feed back what the drivers report…
 /// ```
+///
+/// With the feature `inspect`, it's `Clone`, so a debugging tool can keep
+/// copies of a replay along the way and start again from the nearest. A
+/// copy is a core of its own: given the same events, it does what the
+/// original would.
+#[cfg_attr(feature = "inspect", derive(Clone))]
 pub struct Core<A: AppItem = NoAppItems> {
     host: Host,
     agents: BTreeMap<AgentName, AgentSpec>,

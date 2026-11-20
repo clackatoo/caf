@@ -39,8 +39,8 @@ fn the_live_claude_trace_replays_to_the_state_the_core_tests_expect() {
     let steps = book.after(0);
     assert_eq!(steps.len() as u64, book.end());
     assert_eq!(book.end(), 71, "every line after the header is a step");
-    let mut player = Player::new(Arc::clone(&book.base));
-    player.go(book.end(), &steps);
+    let mut player = Player::new(Arc::clone(&book));
+    player.go(book.end());
     let state = player.state();
     let chat = &state["chats"][0];
     assert!(
@@ -80,23 +80,83 @@ fn the_live_claude_trace_replays_to_the_state_the_core_tests_expect() {
     );
 }
 
+/// The live trace, with one of the story's chunks said again `times`
+/// times after the last, as a long turn streams: written into `dir`.
+fn long_run(dir: &Path, times: usize) -> PathBuf {
+    let text = std::fs::read_to_string(claude_live()).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    // Line 37 is a chunk of the second turn's story, and 38 its last.
+    assert!(lines[36].contains("agent_message_chunk") && lines[37].contains("agent_message_chunk"));
+    let mut out: Vec<&str> = lines[..38].to_vec();
+    out.extend(std::iter::repeat_n(lines[36], times));
+    out.extend(&lines[38..]);
+    let path = dir.join("long.jsonl");
+    std::fs::write(&path, out.join("\n") + "\n").unwrap();
+    path
+}
+
+/// The core at `at`, replayed from the start with no copies.
+fn replayed(book: &caf_debugger::steps::Book, at: u64) -> Value {
+    let mut core = book.base.core();
+    for step in book.range(0, at) {
+        replay::take(&mut core, step.now, &step.event).expect("it reads");
+    }
+    core.inspect()
+}
+
+#[test]
+fn a_long_run_moves_within_budget_from_copies_of_the_core() {
+    let dir = std::env::temp_dir().join(format!("caf-debugger-long-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let started = Instant::now();
+    let book = replay::load(&long_run(&dir, 35_000)).expect("it loads");
+    std::fs::remove_dir_all(&dir).unwrap();
+    let end = book.end();
+    assert!(end > 35_000);
+    eprintln!("loading {end} steps took {:?}", started.elapsed());
+
+    // Back from the end to near it, and to the start, even in a debug
+    // build, which is far slower than a release one.
+    let mut player = Player::new(Arc::clone(&book));
+    player.go(end);
+    for to in [end - 10, end - 1500, 2] {
+        let started = Instant::now();
+        player.go(to);
+        let took = started.elapsed();
+        eprintln!("moving back to {to} took {took:?}");
+        assert!(took < BUDGET, "moving back to {to} took {took:?}");
+    }
+    // Forward a long way, too.
+    let started = Instant::now();
+    player.go(end - 10);
+    assert!(
+        started.elapsed() < BUDGET,
+        "forward took {:?}",
+        started.elapsed()
+    );
+
+    // From a copy or not, the core is as a replay from the start makes it.
+    for at in [999, 1000, 1001, 17_500, end - 10, end] {
+        let mut player = Player::new(Arc::clone(&book));
+        player.go(at);
+        assert_eq!(player.state(), replayed(&book, at), "at {at}");
+    }
+    // And moving back and forth between copies too.
+    let mut player = Player::new(Arc::clone(&book));
+    for at in [30_001, 2500, 2499, 7000, 6999, 35_999] {
+        player.go(at);
+        assert_eq!(player.state(), replayed(&book, at), "at {at}");
+    }
+}
+
 #[test]
 fn replaying_the_live_trace_to_its_end_is_within_budget() {
     let book = replay::load(&claude_live()).expect("the trace loads");
-    let steps = book.after(0);
     let started = Instant::now();
-    let mut player = Player::new(Arc::clone(&book.base));
-    player.go(book.end(), &steps);
+    let mut player = Player::new(Arc::clone(&book));
+    player.go(book.end());
     let took = started.elapsed();
-    eprintln!(
-        "replaying {} steps of the live trace took {took:?}, against a budget of {BUDGET:?}",
-        steps.len()
-    );
-    // Debug builds are far slower than the release builds the budget is
-    // for, so only a release build is held to it.
-    if !cfg!(debug_assertions) {
-        assert!(took < BUDGET, "{took:?}");
-    }
+    assert!(took < BUDGET, "{took:?}");
 }
 
 /// The app's copies of the chats, fed only by Past messages, as the app
@@ -144,9 +204,9 @@ impl Copies {
 }
 
 /// The chats a fresh core has at `at`.
-fn chats_at(book: &caf_debugger::steps::Book, at: u64) -> Vec<Chat> {
-    let mut player = Player::new(Arc::clone(&book.base));
-    player.go(at, &book.after(0));
+fn chats_at(book: &Arc<caf_debugger::steps::Book>, at: u64) -> Vec<Chat> {
+    let mut player = Player::new(Arc::clone(book));
+    player.go(at);
     (player.past().into_iter())
         .filter_map(|message| match message {
             ToViewer::Picture { chat, .. } => Some(chat),
@@ -158,15 +218,14 @@ fn chats_at(book: &caf_debugger::steps::Book, at: u64) -> Vec<Chat> {
 #[test]
 fn seeking_forward_gives_changes_and_back_gives_pictures() {
     let book = replay::load(&claude_live()).expect("the trace loads");
-    let steps = book.after(0);
     let end = book.end();
-    let mut player = Player::new(Arc::clone(&book.base));
+    let mut player = Player::new(Arc::clone(&book));
     let mut copies = Copies::default();
 
     // Forward, a step at a time from the start: the chat comes whole
     // once, when it's first there, and only as changes after.
     for at in 0..=end {
-        player.go(at, &steps);
+        player.go(at);
         copies.take(player.past());
         let expected = chats_at(&book, at);
         assert_eq!(
@@ -182,7 +241,7 @@ fn seeking_forward_gives_changes_and_back_gives_pictures() {
     for at in [end / 2, 3, 0] {
         let pictures = copies.pictures;
         let changes = copies.changes;
-        player.go(at, &steps);
+        player.go(at);
         copies.take(player.past());
         let expected = chats_at(&book, at);
         assert_eq!(
@@ -196,9 +255,9 @@ fn seeking_forward_gives_changes_and_back_gives_pictures() {
 
     // Forward again in one jump: changes only.
     let pictures = copies.pictures;
-    player.go(end / 2, &steps);
+    player.go(end / 2);
     copies.take(player.past());
-    player.go(end, &steps);
+    player.go(end);
     copies.take(player.past());
     assert_eq!(
         copies.pictures,
@@ -214,12 +273,11 @@ fn seeking_forward_gives_changes_and_back_gives_pictures() {
 #[test]
 fn a_chat_not_yet_open_isnt_in_the_list() {
     let book = replay::load(&claude_live()).expect("the trace loads");
-    let steps = book.after(0);
-    let mut player = Player::new(Arc::clone(&book.base));
+    let mut player = Player::new(Arc::clone(&book));
     let mut copies = Copies::default();
     copies.take(player.past());
     assert!(copies.open.is_empty(), "nothing open before the first step");
-    player.go(1, &steps);
+    player.go(1);
     copies.take(player.past());
     assert_eq!(copies.open, [ChatId(1)]);
 }
@@ -240,6 +298,20 @@ fn a_recording_that_isnt_one_is_refused() {
     let header = std::fs::read_to_string(claude_live()).unwrap();
     let header = header.lines().next().unwrap();
     assert!(error(write("line.jsonl", &format!("{header}\nnot a step\n"))).contains("line 2"));
+    // An event this CAF doesn't know: a replay of it would be wrong from
+    // there on.
+    let text = std::fs::read_to_string(claude_live()).unwrap();
+    let (first, rest) = text.split_once('\n').unwrap();
+    let future = r#"{"now":{"wall":1,"mono":1},"event":{"type":"FromTheFuture","value":1}}"#;
+    let refused = error(write("future.jsonl", &format!("{first}\n{future}\n{rest}")));
+    assert!(refused.contains("line 2"), "{refused}");
+    // The last line cut off partway, as a recording copied while CAF
+    // wrote it ends: it replays up to there.
+    let cut = write("cut.jsonl", &format!("{text}{{\"now\":{{\"wall\":1,"));
+    assert_eq!(replay::load(&cut).expect("it loads").end(), 71);
+    // But a line cut off with more after it isn't the end.
+    let broken = format!("{first}\n{{\"now\":{{\"wall\":1,\n{rest}");
+    assert!(error(write("broken.jsonl", &broken)).contains("line 2"));
     // A recording cut short stops where it says so.
     let stopped = write(
         "stopped.jsonl",
@@ -262,13 +334,12 @@ fn seeking_further_forward_than_the_core_keeps_changes_gives_a_picture() {
     std::fs::write(&path, format!("{header}\n{rest}")).unwrap();
     let book = replay::load(&path).expect("it loads");
     std::fs::remove_dir_all(&dir).unwrap();
-    let steps = book.after(0);
-    let mut player = Player::new(Arc::clone(&book.base));
+    let mut player = Player::new(Arc::clone(&book));
     let mut copies = Copies::default();
-    player.go(1, &steps);
+    player.go(1);
     copies.take(player.past());
     assert_eq!(copies.pictures, 1);
-    player.go(book.end(), &steps);
+    player.go(book.end());
     copies.take(player.past());
     assert_eq!(
         (copies.pictures, copies.changes),

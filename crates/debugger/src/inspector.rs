@@ -23,10 +23,11 @@
 //!
 //! # A link, in order
 //!
-//! 1. The server sends [`ToInspector::Hello`]: live or replay, and which
-//!    file.
+//! 1. The server sends [`ToInspector::Hello`]: the channel's
+//!    [`PROTOCOL`], live or replay, and which file. An app built for
+//!    another protocol says it needs rebuilding, and goes no further.
 //! 2. Every step so far, in one or more [`ToInspector::Steps`], then
-//!    [`ToInspector::Position`]. If the replay check has failed already,
+//!    [`ToInspector::Position`]. If a check has failed already,
 //!    [`ToInspector::Diverged`] says where.
 //! 3. In replay, the chats as they are at the position, as
 //!    [`ToInspector::Past`].
@@ -56,6 +57,12 @@
 
 use caf_core::time::Now;
 use caf_core::viewer::ToViewer;
+
+/// The version of this channel, in [`ToInspector::Hello`]: one more each
+/// time it changes. The app is built apart from the server, from the
+/// same checkout, so after a pull one may be older than the other: an
+/// app that meets a protocol it wasn't built for asks to be rebuilt.
+pub const PROTOCOL: u32 = 1;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
@@ -66,14 +73,16 @@ use serde_json::value::RawValue;
 pub enum ToInspector {
     /// The first message: what the server is doing.
     Hello {
+        /// The channel's version, [`PROTOCOL`].
+        protocol: u32,
         /// Live or replaying.
         mode: Mode,
         /// Live, the recording this run is written to, which `GET
-        /// /recording` downloads: `None` if it couldn't be made. In
+        /// /recording` downloads, or null if it couldn't be made. In
         /// replay, the file being replayed.
         file: Option<String>,
-        /// Live, this run of CAF, as `/viewer`'s `Welcome` names it.
-        /// `None` in replay.
+        /// Live, this run of CAF, as `/viewer`'s `Welcome` names it. Null
+        /// in replay.
         run: Option<String>,
     },
     /// Steps, in order, with no gaps: the steps so far once the link
@@ -140,27 +149,47 @@ pub enum ToInspector {
         /// The message.
         message: ToViewer,
     },
-    /// The replay check failed. Live, the server gives a core of its own
-    /// every step's event, read back from JSON, as a replay would, and
-    /// checks it gives out exactly the directives CAF's own core did. At
-    /// step `at` it didn't, which is a bug in CAF: something CAF does
-    /// isn't decided by its events alone, or isn't in them.
+    /// A replay check failed: at step `at`, a core of the server's own,
+    /// given the step's event as a replay would give it, gave out other
+    /// directives than CAF's own core did. That's a bug in CAF: something
+    /// it does isn't decided by its events alone, or isn't in them, or
+    /// isn't in a recording of them. See [`Check`] for the two checks.
     ///
-    /// Only the first is sent, as the link starts or when it happens:
-    /// after it, the server's core is no longer a copy of CAF's, and
-    /// what it shows of later positions, as [`ToInspector::State`] and
-    /// [`ToInspector::Past`], may be wrong.
+    /// Each check sends only its first, as the link starts or when it
+    /// happens, and checks no more after it. After a [`Check::Steps`]
+    /// divergence, a replay of the steps no longer matches what CAF did,
+    /// so what the server shows of later positions, as
+    /// [`ToInspector::State`] and [`ToInspector::Past`], may be wrong.
     Diverged {
+        /// Which check.
+        check: Check,
         /// The step.
         at: u64,
         /// What CAF's core gave out.
         #[cfg_attr(feature = "ts", ts(as = "Vec<caf_core::Directive>"))]
         expected: Box<RawValue>,
-        /// What the server's core gave out, or `None` if the step's event
-        /// didn't read back from its JSON, so the core couldn't take it.
+        /// What the server's core gave out, or null if the event didn't
+        /// read back from its JSON, so the core couldn't take it.
         #[cfg_attr(feature = "ts", ts(as = "Option<Vec<caf_core::Directive>>"))]
         got: Option<Box<RawValue>>,
     },
+}
+
+/// The replay checks, live: each is a core of the server's own, given
+/// every step's event as some replay gives it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum Check {
+    /// The steps' own events, read back from JSON, as time travel replays
+    /// them: it must give out exactly CAF's directives.
+    Steps,
+    /// The recording's lines, read back, as a replay of a bug report
+    /// does. The recording hides secrets, so it must give out CAF's
+    /// directives but for what those are part of: the values of MCP
+    /// servers' variables and headers, in the messages that open and load
+    /// sessions. It runs only while CAF records.
+    Recording,
 }
 
 /// What the server is doing.
@@ -227,7 +256,7 @@ mod ts {
 
     use ts_rs::{Config, TS};
 
-    use super::{FromInspector, Mode, Step, ToInspector};
+    use super::{Check, FromInspector, Mode, Step, ToInspector};
 
     /// Where the app keeps them.
     fn dir() -> PathBuf {
@@ -278,12 +307,14 @@ mod ts {
         let ours: Vec<String> = vec![
             ToInspector::ident(&config),
             Mode::ident(&config),
+            Check::ident(&config),
             Step::ident(&config),
             FromInspector::ident(&config),
         ];
         let mut files = BTreeMap::new();
         files.insert("ToInspector.ts".into(), file::<ToInspector>(&config, &ours));
         files.insert("Mode.ts".into(), file::<Mode>(&config, &ours));
+        files.insert("Check.ts".into(), file::<Check>(&config, &ours));
         files.insert("Step.ts".into(), file::<Step>(&config, &ours));
         files.insert(
             "FromInspector.ts".into(),
@@ -296,7 +327,9 @@ mod ts {
             "index.ts".into(),
             format!(
                 "// The inspector channel's types, generated from caf-debugger's `inspector.rs`:\n\
-                 // don't edit. Regenerate them from the repository's root with\n\
+                 // don't edit. The channel is unstable: it changes with the app, and its\n\
+                 // version is `PROTOCOL`, in `Hello`. Regenerate them from the repository's\n\
+                 // root with\n\
                  // `CAF_BLESS=1 cargo test -p caf-debugger --features ts inspector_types`.\n{index}"
             ),
         );

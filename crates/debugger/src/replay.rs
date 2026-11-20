@@ -11,11 +11,15 @@
 //! - **both**, it shows the core and the chats as they were at any step
 //!   ([`Player`]).
 //!
-//! Moving back replays from the start into a fresh core, and moving
-//! forward gives the core the steps in between. The budget is
-//! [`BUDGET`] to replay a whole run: a seek that takes longer is logged.
-//! If real recordings ever break it, the core can be cloned at
-//! checkpoints along the way; until then, replaying is all there is.
+//! Moving to a step starts from the nearest copy of the core before it,
+//! kept every [`CHECKPOINT`](crate::steps::CHECKPOINT) steps, or from a fresh core, and gives it the
+//! steps in between; moving forward a little just gives it the next ones.
+//! So a move replays at most [`CHECKPOINT`](crate::steps::CHECKPOINT) steps, however long the run.
+//!
+//! **The budget** is [`BUDGET`] for any one move. A move replays at most
+//! [`CHECKPOINT`](crate::steps::CHECKPOINT) steps, so that holds while replaying keeps up a rate of
+//! [`PER_STEP`] or better. The first time a move, or loading a recording,
+//! is slower than that, it's logged, once a run.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -33,8 +37,12 @@ use serde_json::value::RawValue;
 use crate::inspector::{Mode, Step};
 use crate::steps::Book;
 
-/// How long replaying a whole run may take.
+/// How long one move to a step may take.
 pub const BUDGET: Duration = Duration::from_millis(50);
+
+/// How long replaying one step may take, on average: so the most a move
+/// replays, [`CHECKPOINT`](crate::steps::CHECKPOINT) steps, fits in [`BUDGET`].
+pub const PER_STEP: Duration = Duration::from_micros(50);
 
 /// The version of recordings the debugger reads.
 const VERSION: u32 = 2;
@@ -57,12 +65,16 @@ impl Base {
 }
 
 /// Gives a core one step's event, read back from its JSON, and returns
-/// what it gave out, or `None` if the event didn't read back.
-pub fn take(core: &mut Core, now: Now, event: &RawValue) -> Option<Vec<Directive>> {
-    let event: Event = serde_json::from_str(event.get()).ok()?;
+/// what it gave out.
+///
+/// # Errors
+///
+/// If the event doesn't read back, when the core is given nothing.
+pub fn take(core: &mut Core, now: Now, event: &RawValue) -> serde_json::Result<Vec<Directive>> {
+    let event: Event = serde_json::from_str(event.get())?;
     let mut out = Vec::new();
     core.handle(now, event, &mut out);
-    Some(out)
+    Ok(out)
 }
 
 /// The directives, as JSON.
@@ -111,31 +123,44 @@ impl std::error::Error for LoadError {}
 
 /// Reads a recording (see the tokio kit's `Config::record`) and replays
 /// it into a fresh core, for the directives it gives out: the steps of a
-/// replay. Logs if it took longer than [`BUDGET`].
+/// replay. A copy of the core is kept every [`CHECKPOINT`](crate::steps::CHECKPOINT) steps.
+///
+/// It stops where the recording says it stopped, and before a last line
+/// cut off partway, as a recording copied while CAF wrote it ends.
 ///
 /// # Errors
 ///
-/// If the file can't be read, or isn't a recording of version 2.
+/// If the file can't be read, isn't a recording of version 2, or has a
+/// line that isn't a step, or whose event isn't one this CAF knows: a
+/// replay of it would be wrong from there on.
 pub fn load(path: &Path) -> Result<Arc<Book>, LoadError> {
     let text = std::fs::read_to_string(path).map_err(LoadError::Io)?;
     let (base, lines) = read(&text)?;
-    let started = Instant::now();
-    let mut core = base.core();
-    let steps: Vec<Step> = (lines.into_iter().zip(1..))
-        .map(|(line, no)| {
-            let directives = take(&mut core, line.now, &line.event)
-                .map_or_else(|| to_json(&[]), |out| to_json(&out));
-            Step {
-                no,
-                now: line.now,
-                event: line.event,
-                directives,
-            }
-        })
-        .collect();
-    over_budget("replaying the recording", steps.len(), started.elapsed());
     let book = Book::new(Mode::Replay, Some(path.display().to_string()), None, base);
+    let started = Instant::now();
+    let mut core = book.base.core();
+    let mut steps = Vec::with_capacity(lines.len());
+    for ((file_line, line), no) in lines.into_iter().zip(1..) {
+        let out = take(&mut core, line.now, &line.event)
+            .map_err(|error| LoadError::Line(file_line, error))?;
+        steps.push(Step {
+            no,
+            now: line.now,
+            event: line.event,
+            directives: to_json(&out),
+        });
+        book.checkpoint(no, &core);
+    }
+    let budget = load_budget(steps.len());
+    slow(
+        &book,
+        "loading the recording",
+        steps.len(),
+        started.elapsed(),
+        budget,
+    );
     book.add(steps);
+    book.complete();
     Ok(Arc::new(book))
 }
 
@@ -146,9 +171,9 @@ struct Line {
     event: Box<RawValue>,
 }
 
-/// The header of a recording, and its steps, up to where it says it
-/// stopped.
-fn read(text: &str) -> Result<(Base, Vec<Line>), LoadError> {
+/// The header of a recording, and its steps, each with its line's number
+/// in the file, up to where it says it stopped.
+fn read(text: &str) -> Result<(Base, Vec<(usize, Line)>), LoadError> {
     #[derive(Deserialize)]
     struct Header {
         caf_recording: u32,
@@ -160,8 +185,10 @@ fn read(text: &str) -> Result<(Base, Vec<Line>), LoadError> {
         return Err(LoadError::Version(header.caf_recording));
     }
     let base: Base = serde_json::from_str(first).map_err(LoadError::NotARecording)?;
+    let whole = text.ends_with('\n');
+    let mut lines = lines.zip(2..).peekable();
     let mut steps = Vec::new();
-    for (line, no) in lines.zip(2..) {
+    while let Some((line, no)) = lines.next() {
         if line.trim().is_empty() {
             continue;
         }
@@ -169,18 +196,36 @@ fn read(text: &str) -> Result<(Base, Vec<Line>), LoadError> {
         if line.starts_with(r#"{"stopped":"#) {
             break;
         }
-        steps.push(serde_json::from_str(line).map_err(|error| LoadError::Line(no, error))?);
+        match serde_json::from_str(line) {
+            Ok(step) => steps.push((no, step)),
+            // The last line, with no end: CAF was still writing it.
+            Err(_) if !whole && lines.peek().is_none() => {
+                log::warn!("line {no} is cut off partway, so the replay ends before it");
+            }
+            Err(error) => return Err(LoadError::Line(no, error)),
+        }
     }
     Ok((base, steps))
 }
 
-/// Logs that something took longer than [`BUDGET`].
-pub fn over_budget(what: &str, steps: usize, took: Duration) {
-    if took > BUDGET {
+/// What loading `steps` may take: [`PER_STEP`] each, and never less than
+/// a move's [`BUDGET`].
+fn load_budget(steps: usize) -> Duration {
+    (PER_STEP.saturating_mul(u32::try_from(steps).unwrap_or(u32::MAX))).max(BUDGET)
+}
+
+/// Logs, the first time in a run, that replaying `steps` took longer than
+/// `budget`.
+fn slow(book: &Book, what: &str, steps: usize, took: Duration, budget: Duration) {
+    let over = took > budget;
+    if over && book.first_slow() {
+        let each = took.as_secs_f64() * 1e6 / steps.max(1) as f64;
         log::warn!(
-            "{what} took {} ms for {steps} steps, over the budget of {} ms: \
-             checkpoints of the core would make it quicker",
+            "{what} took {} ms for {steps} steps, {each:.1} µs a step, over the budget of {} µs \
+             a step and {} ms a move: is this a debug build? `cargo run --release` is quicker. \
+             Said once a run.",
             took.as_millis(),
+            PER_STEP.as_micros(),
             BUDGET.as_millis()
         );
     }
@@ -190,7 +235,7 @@ pub fn over_budget(what: &str, steps: usize, took: Duration) {
 /// were like then. Each socket has its own, as each may look at a
 /// different step.
 pub struct Player {
-    base: Arc<Base>,
+    book: Arc<Book>,
     core: Core,
     /// The position.
     at: u64,
@@ -200,12 +245,12 @@ pub struct Player {
 }
 
 impl Player {
-    /// A player at 0, the core fresh.
+    /// A player at 0, the core fresh, for the steps in `book`.
     #[must_use]
-    pub fn new(base: Arc<Base>) -> Self {
+    pub fn new(book: Arc<Book>) -> Self {
         Self {
-            core: base.core(),
-            base,
+            core: book.base.core(),
+            book,
             at: 0,
             sent: BTreeMap::new(),
         }
@@ -223,27 +268,46 @@ impl Player {
         self.core.inspect()
     }
 
-    /// Moves to `to`, given every step from the first up to at least
-    /// `to`. Moving back starts again from a fresh core.
-    pub fn go(&mut self, to: u64, steps: &[Arc<Step>]) {
+    /// Moves to `to`, or to the end if that's sooner: from the nearest
+    /// copy of the core before it, if that's nearer than the position, or
+    /// from a fresh core if moving back before the first copy. Returns
+    /// the position.
+    pub fn go(&mut self, to: u64) -> u64 {
         let started = Instant::now();
-        if to < self.at {
-            self.core = self.base.core();
-            self.at = 0;
+        let to = to.min(self.book.end());
+        let back = to < self.at;
+        match self.book.nearest(to) {
+            Some((at, copy)) if back || at > self.at => {
+                self.core = Core::clone(&copy);
+                self.at = at;
+            }
+            _ if back => {
+                self.core = self.book.base.core();
+                self.at = 0;
+            }
+            _ => {}
+        }
+        if back {
             // The app's copies are of a later position: each chat is
             // sent whole.
             self.sent.clear();
         }
-        let from = usize::try_from(self.at).unwrap_or(usize::MAX);
-        let count = usize::try_from(to - self.at).unwrap_or(usize::MAX);
-        for step in steps.iter().skip(from).take(count) {
-            debug_assert_eq!(step.no, self.at + 1, "steps in order, from the first");
+        let steps = self.book.range(self.at, to);
+        for step in &steps {
+            debug_assert_eq!(step.no, self.at + 1, "steps in order");
             // An event that doesn't read back is left out, as the live
-            // check reports.
+            // check reports, and a replay refuses.
             let _ = take(&mut self.core, step.now, &step.event);
             self.at = step.no;
         }
-        over_budget("moving to a step", count, started.elapsed());
+        slow(
+            &self.book,
+            "moving to a step",
+            steps.len(),
+            started.elapsed(),
+            BUDGET,
+        );
+        self.at
     }
 
     /// Forgets what the app was sent, so each chat is sent whole next.

@@ -153,3 +153,49 @@ fn a_live_claude_run_replays_to_its_end() {
     assert_eq!(outs_again, outs);
     assert_eq!(again.inspect(), core.inspect());
 }
+
+/// A copy of a core, taken partway through a replay, carries on as the
+/// original does: what debugging tools keep as checkpoints.
+#[cfg(feature = "inspect")]
+#[test]
+fn a_copy_of_the_core_carries_on_as_the_core_does() {
+    #[derive(serde::Deserialize)]
+    struct Header {
+        host: crate::host::Host,
+        agents: Vec<crate::agent::AgentSpec>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Step {
+        now: crate::time::Now,
+        event: crate::event::Event,
+    }
+    let mut lines = claude_live_lines();
+    let header: Header = serde_json::from_str(lines.remove(0)).expect("the header reads");
+    let mut core = Core::new(header.host, header.agents);
+    let half = lines.len() / 2;
+    let step = |line: &str| -> Step { serde_json::from_str(line).expect("a step reads") };
+    for line in &lines[..half] {
+        let step = step(line);
+        core.handle(step.now, step.event, &mut Vec::new());
+    }
+    let mut copy = core.clone();
+    assert_eq!(copy.inspect(), core.inspect());
+    for line in &lines[half..] {
+        let (one, two) = (step(line), step(line));
+        let (mut out, mut copied) = (Vec::new(), Vec::new());
+        core.handle(one.now, one.event, &mut out);
+        copy.handle(two.now, two.event, &mut copied);
+        let render =
+            |out: &[crate::directive::Directive]| out.iter().map(render).collect::<Vec<_>>();
+        assert_eq!(render(&copied), render(&out));
+    }
+    assert_eq!(copy.inspect(), core.inspect());
+}
+
+/// The live trace's lines, up to where it says it stopped, if it does.
+#[cfg(feature = "inspect")]
+fn claude_live_lines() -> Vec<&'static str> {
+    (CLAUDE_LIVE.lines())
+        .take_while(|line| !line.starts_with(r#"{"stopped":"#))
+        .collect()
+}

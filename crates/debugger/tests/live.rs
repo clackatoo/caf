@@ -295,7 +295,10 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
         matches!(message, ToInspector::Position { .. })
     })
     .await;
-    let ToInspector::Hello { mode, run, file } = &seen.others[0] else {
+    let ToInspector::Hello {
+        mode, run, file, ..
+    } = &seen.others[0]
+    else {
         panic!("Hello first");
     };
     assert_eq!(*mode, Mode::Live);
@@ -342,7 +345,7 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
     let end = running.book.end();
     seen.steps_to(&mut inspector, end).await;
     assert!(end > 10, "{end} steps");
-    assert!(running.book.diverged().is_none());
+    assert!(running.book.diverged().is_empty());
     assert!(!seen.diverged());
     let writes = (seen.steps.iter())
         .flat_map(|step| step["directives"].as_array().unwrap().clone())
@@ -384,6 +387,44 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
         Some(ToInspector::Position { live: true, .. })
     ));
 
+    // Closed, the chat is still in what looking back shows, as it ended.
+    send(
+        &mut viewer,
+        json!({"type": "Close", "value": {"request": 99, "chat": chat}}),
+    )
+    .await;
+    let ended = viewer_until(&mut viewer, |message| message["type"] == "Ended").await;
+    assert_eq!(ended["value"]["chat"], chat);
+    // The close's step may still be on its way into the book.
+    let started = Instant::now();
+    while !(running.book.after(0).iter()).any(|step| step.event.get().contains(r#""CloseChat""#)) {
+        assert!(started.elapsed() < PATIENCE, "the close's step comes");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    send(
+        &mut inspector,
+        json!({"type": "Seek", "value": {"step": u64::MAX}}),
+    )
+    .await;
+    let pasts = seen.others.len();
+    seen.until(&mut inspector, |message| matches!(message, ToInspector::Past { message, .. } if serde_json::to_value(message).unwrap()["type"] != "Chats")).await;
+    let past: Vec<Value> = (seen.others[pasts..].iter())
+        .filter_map(|message| match message {
+            ToInspector::Past { message, .. } => Some(serde_json::to_value(message).unwrap()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(past[0]["type"], "Chats");
+    assert_eq!(
+        past[0]["value"][0]["id"], chat,
+        "a closed chat is listed: {past:?}"
+    );
+    assert_eq!(
+        past[1]["type"], "Picture",
+        "first after following: {past:?}"
+    );
+    assert_eq!(past[1]["value"]["chat"]["state"]["type"], "Closed");
+
     // The recording so far, as `Save bug report` downloads it.
     let (status, body) = get(port, &format!("/recording?token={token}")).await;
     assert_eq!(status, 200);
@@ -397,14 +438,15 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
         live, dir: _dir, ..
     } = debugger;
     live.running.await;
+    live.book.all_in().await;
     let running = &live.book;
-    let ended = viewer_until(&mut viewer, |message| message["type"] == "Ended").await;
-    assert_eq!(ended["value"]["chat"], chat);
     assert_eq!(next(&mut viewer).await, Err(Some(1000)), "closed, normally");
+    // The recording check checked every step.
+    assert_eq!(running.recording_checked(), running.end());
 
     // The finished recording replays to the same directives, but for
     // what a recording hides: here, the fake's arguments, which name its
-    // script. Within budget, too.
+    // script. Within budget, too, even in a debug build.
     fn hidden(directives: &Value) -> Value {
         let mut directives = directives.clone();
         for directive in directives.as_array_mut().unwrap() {
@@ -429,12 +471,10 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
         );
     }
     let started = Instant::now();
-    let mut player = Player::new(Arc::clone(&replayed.base));
-    player.go(end, &replayed.after(0));
+    let mut player = Player::new(Arc::clone(&replayed));
+    player.go(end);
     let took = started.elapsed();
-    eprintln!(
-        "replaying {end} steps of the fake agent's run took {took:?}, against a budget of {BUDGET:?}"
-    );
+    assert!(took < BUDGET, "replaying {end} steps took {took:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -456,7 +496,7 @@ async fn stopping_the_fake_while_it_asks_ends_the_turn_and_it_answers_the_next()
         .await;
     let words = serde_json::to_value(&viewer.copy.chat().turns[1].items).unwrap();
     assert!(words.to_string().contains("fake agent"), "{words:#}");
-    assert!(debugger.live.book.diverged().is_none());
+    assert!(debugger.live.book.diverged().is_empty());
     debugger.live.caf.shutdown().await;
 }
 
@@ -477,7 +517,7 @@ async fn the_fake_fails_a_turn_once_and_answers_it_sent_again() {
     viewer
         .until(|chat| lives(chat) == ["Failed", "Finished"])
         .await;
-    assert!(debugger.live.book.diverged().is_none());
+    assert!(debugger.live.book.diverged().is_empty());
     debugger.live.caf.shutdown().await;
 }
 
@@ -511,6 +551,110 @@ async fn stopping_the_fake_while_it_asks_always_ends_the_turn_stopped() {
             "round {round}"
         );
     }
-    assert!(debugger.live.book.diverged().is_none());
+    assert!(debugger.live.book.diverged().is_empty());
     debugger.live.caf.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_recording_check_passes_with_secrets_the_recording_hides() {
+    use caf_core::agent::{EnvChange, McpServer};
+    use caf_core::chat::UserMessage;
+    let dir = Dir::new("secrets");
+    let steps = [
+        json!({"on": {"fallback": true, "do": [{"respond": {"error": {"code": -32601, "message": "Method not found"}}}]}}),
+        json!({"wait": {"method": "initialize"}}),
+        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"mcpCapabilities": {"http": true}}, "agentInfo": {"name": "fake", "version": "1.0.0"}}}}),
+        json!({"wait": {"method": "session/new"}}),
+        json!({"respond": {"result": {"sessionId": "s1"}}}),
+        json!({"notify": {"method": "_auth/status_update", "params": {"email": "me@example.com"}}}),
+        json!({"wait": {"method": "session/prompt"}}),
+        json!({"say": {"session": "s1", "text": "Hi."}}),
+        json!({"respond": {"result": {"stopReason": "end_turn"}}}),
+    ];
+    let script = dir.0.join("script.jsonl");
+    let text: Vec<String> = steps.iter().map(Value::to_string).collect();
+    std::fs::write(&script, text.join("\n") + "\n").unwrap();
+    let mut command = SpawnCommand::new(caf_fake_agent::binary());
+    command.args = vec![script.into_os_string()];
+    command.env = vec![EnvChange::Set("AGENT_SECRET".into(), "s3cret-agent".into())];
+    let agents = vec![AgentSpec::new("fake", command, ProfileChoice::Cautious)];
+    let recording = dir.0.join("run.jsonl");
+    let live = live::start(agents, Some(recording.clone()));
+    assert_eq!(live.recording.as_ref(), Some(&recording));
+
+    let mut open = caf_core::OpenChat::new("fake", &dir.0);
+    let mut tool = SpawnCommand::new("/bin/true");
+    tool.env = vec![EnvChange::Set("TOKEN".into(), "s3cret-env".into())];
+    open.mcp_servers = vec![
+        McpServer::Stdio {
+            name: "gh".into(),
+            command: tool,
+        },
+        McpServer::Http {
+            name: "maps".into(),
+            url: "http://127.0.0.1:9/mcp".into(),
+            headers: vec![("Authorization".into(), "Bearer s3cret-header".into())],
+        },
+    ];
+    let chat = live.caf.open_chat(open).await.unwrap();
+    let mut watch = chat.watch();
+    chat.send(UserMessage::text("Hello")).await.unwrap();
+    let mut seen: Option<Chat> = None;
+    while seen.as_ref().is_none_or(|chat| lives(chat) != ["Finished"]) {
+        let update = tokio::time::timeout(PATIENCE, watch.next()).await;
+        match update
+            .expect("the turn finishes")
+            .expect("the chat is open")
+        {
+            caf_driver_tokio::Update::Picture(whole) => seen = Some(whole),
+            caf_driver_tokio::Update::Changes(changes) => {
+                let chat = seen.as_mut().expect("a picture first");
+                for numbered in &changes {
+                    chat.apply(&numbered.change).expect("it fits");
+                }
+            }
+            _ => {}
+        }
+    }
+    live.caf.shutdown().await;
+    let Live { book, running, .. } = live;
+    running.await;
+    tokio::time::timeout(PATIENCE, book.all_in())
+        .await
+        .expect("every step is in");
+
+    // The secrets went to the agent: in the steps' events and directives.
+    let steps = serde_json::to_string(&book.after(0)).unwrap();
+    let holds = |text: &str, secret: &str| {
+        let bytes = serde_json::to_string(secret.as_bytes()).unwrap();
+        text.contains(secret) || text.contains(bytes.trim_matches(['[', ']']))
+    };
+    let recorded = std::fs::read_to_string(&recording).unwrap();
+    for secret in [
+        "s3cret-env",
+        "s3cret-header",
+        "me@example.com",
+        "s3cret-agent",
+    ] {
+        assert!(holds(&steps, secret), "the steps hold {secret}");
+        assert!(!holds(&recorded, secret), "the recording hides {secret}");
+    }
+    // And yet both replays agree with CAF, every step checked.
+    assert!(book.diverged().is_empty(), "{:?}", book.diverged());
+    assert_eq!(book.recording_checked(), book.end());
+    assert!(book.end() > 5);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_recording_that_couldnt_be_made_is_none() {
+    let dir = Dir::new("no-recording");
+    let script = fake::write(&dir.0).unwrap();
+    let mut command = SpawnCommand::new(caf_fake_agent::binary());
+    command.args = vec![script.into_os_string()];
+    let agents = vec![AgentSpec::new("fake", command, ProfileChoice::Cautious)];
+    let live = live::start(agents, Some(dir.0.join("no/such/folder/run.jsonl")));
+    assert!(live.recording.is_none());
+    assert!(live.book.file.is_none(), "Hello says there's none");
+    live.caf.shutdown().await;
+    live.running.await;
 }

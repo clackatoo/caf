@@ -17,7 +17,7 @@
 //!
 //! A Stop while the question waits must end the turn `cancelled`, never
 //! `end_turn`: the round makes sure of it with a request CAF refuses,
-//! which comes back only after any cancel (see [`asking`]).
+//! which comes back only after any cancel.
 //!
 //! A handler can't wait, and the fake's patterns match a prompt only
 //! whole, which is why the round that asks needs its exact word. Nor can

@@ -14,7 +14,8 @@
 //! [`Event::Host`] opening a chat and in the directive that starts its
 //! session, and the account's email, in Claude's sign-in status. So treat
 //! what a watcher sees as private, as the host's own, and never write it
-//! out as it is: hide those first, as a recording does.
+//! out as it is: hide those first, as a recording does. Only a step's
+//! [`line`](Step::line), the recording's own, has them hidden.
 //!
 //! **The cost.** With a watcher, each event is written as JSON and read
 //! back on CAF's task, since events can't be copied: that includes the
@@ -49,4 +50,17 @@ pub struct Step<'a, A: AppItem> {
     pub event: &'a Event<A>,
     /// The directives it gave out, in order.
     pub directives: &'a [Directive],
+    /// The step's line in the recording ([`Config::record`]), if CAF is
+    /// recording and the line went into it: `{"now": …, "event": …}`,
+    /// exactly as written, with no newline, the secrets hidden. `None`
+    /// once the recording has stopped, or if there's none.
+    ///
+    /// It lets a watcher check what a recording replays: a fresh core
+    /// given each line's event, read back, must give out the same
+    /// directives as [`Step::directives`], but for what the hidden
+    /// secrets are part of, such as the values of MCP servers' variables
+    /// in the message that opens a session.
+    ///
+    /// [`Config::record`]: crate::Config::record
+    pub line: Option<&'a str>,
 }
