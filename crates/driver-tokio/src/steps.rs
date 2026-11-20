@@ -50,10 +50,15 @@ pub struct Step<'a, A: AppItem> {
     pub event: &'a Event<A>,
     /// The directives it gave out, in order.
     pub directives: &'a [Directive],
-    /// The step's line in the recording ([`Config::record`]), if CAF is
-    /// recording and the line went into it: `{"now": …, "event": …}`,
-    /// exactly as written, with no newline, the secrets hidden. `None`
-    /// once the recording has stopped, or if there's none.
+    /// The step's line for the recording ([`Config::record`]), if CAF is
+    /// recording and the line was handed to the recording:
+    /// `{"now": …, "event": …}`, exactly as it's written, with no
+    /// newline, the secrets hidden. `None` once the recording has
+    /// stopped, or if there's none.
+    ///
+    /// The recording is written on a thread of its own, after the step:
+    /// if a write fails later, the file stops short, and may lack this
+    /// line and those after it, though the watcher had them.
     ///
     /// It lets a watcher check what a recording replays: a fresh core
     /// given each line's event, read back, must give out the same

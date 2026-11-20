@@ -1051,7 +1051,7 @@ impl<A: AppItem> Task<A> {
     /// Writes `event`, about to be given to the core at `now`, to the
     /// recording with its secrets hidden, and reads it back as it is for
     /// the watcher, if there are either. The watcher is also given the
-    /// line, if it went into the recording.
+    /// line, if it was handed to the recording.
     ///
     /// A driver's event is written before the core takes it, so one the
     /// core panics on is in the recording. A host's call is written after,
