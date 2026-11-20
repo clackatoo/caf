@@ -13,7 +13,7 @@ pid: number, } } | { "type": "StartFailed", "value": {
 /**
  * What the system said.
  */
-error: string, } } | { "type": "Frame", "value": Frame } | { "type": "Stderr", "value": Array<number> } | { "type": "OutputClosed" } | { "type": "WriteFailed", "value": { 
+error: string, } } | { "type": "Frame", "value": Frame } | { "type": "Stderr", "value": Array<number> | string } | { "type": "OutputClosed" } | { "type": "WriteFailed", "value": { 
 /**
  * What the system said.
  */

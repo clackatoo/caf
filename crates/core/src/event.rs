@@ -116,7 +116,11 @@ pub enum AgentEvent {
     ///
     /// It's written as an array of bytes, and read from one or from text,
     /// so a recording can hold it as text a person can read.
-    Stderr(#[serde(deserialize_with = "bytes_or_text")] Vec<u8>),
+    Stderr(
+        #[serde(deserialize_with = "bytes_or_text")]
+        #[cfg_attr(feature = "ts", ts(type = "Array<number> | string"))]
+        Vec<u8>,
+    ),
     /// Its output ended.
     OutputClosed,
     /// Writing to it failed: it's gone, though it may still be writing.
