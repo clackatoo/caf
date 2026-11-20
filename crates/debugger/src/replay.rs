@@ -278,8 +278,10 @@ impl Player {
     /// Moves to `to`, or to the end if that's sooner: from the nearest
     /// copy of the core before it, if that's nearer than the position, or
     /// from a fresh core if moving back before the first copy. Returns
-    /// the position.
-    pub fn go(&mut self, to: u64) -> u64 {
+    /// how many steps it replayed to get there: less than the copies'
+    /// spacing ([`Book::spacing`]), but for a move forward from a position
+    /// a copy isn't nearer than.
+    pub fn go(&mut self, to: u64) -> usize {
         let started = Instant::now();
         let to = to.min(self.book.end());
         let back = to < self.at;
@@ -314,7 +316,7 @@ impl Player {
             started.elapsed(),
             BUDGET,
         );
-        self.at
+        steps.len()
     }
 
     /// Forgets what the app was sent, so each chat is sent whole next.

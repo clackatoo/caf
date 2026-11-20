@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use caf_core::viewer::{ChatCopy, ToViewer};
 use caf_core::{Chat, ChatId};
@@ -96,7 +96,7 @@ fn long_run(dir: &Path, times: usize) -> PathBuf {
 }
 
 /// The core at `at`, replayed from the start with no copies.
-fn replayed(book: &caf_debugger::steps::Book, at: u64) -> Value {
+fn replayed_at(book: &caf_debugger::steps::Book, at: u64) -> Value {
     let mut core = book.base.core();
     for step in book.range(0, at) {
         replay::take(&mut core, step.now, &step.event).expect("it reads");
@@ -108,49 +108,65 @@ fn replayed(book: &caf_debugger::steps::Book, at: u64) -> Value {
 fn a_long_run_moves_within_budget_from_copies_of_the_core() {
     let dir = std::env::temp_dir().join(format!("caf-debugger-long-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let started = Instant::now();
     let book = replay::load(&long_run(&dir, 35_000)).expect("it loads");
     std::fs::remove_dir_all(&dir).unwrap();
     let end = book.end();
     assert!(end > 35_000);
-    eprintln!("loading {end} steps took {:?}", started.elapsed());
+    let spacing = book.spacing();
 
-    // Back from the end to near it, and to the start, even in a debug
-    // build, which is far slower than a release one.
+    // A replay of the whole run, for scale: a move takes a fraction of it
+    // however busy the machine is. The time a move may take is held only
+    // in a release build (CI runs this test so too), which the budget is
+    // for.
+    let steps = book.after(0);
+    let started = Instant::now();
+    let mut core = book.base.core();
+    for step in &steps {
+        replay::take(&mut core, step.now, &step.event).expect("it reads");
+    }
+    let whole = started.elapsed();
+    let check = |to: u64, replayed: usize, took: Duration| {
+        eprintln!(
+            "moving to {to} replayed {replayed} steps in {took:?}, of {whole:?} for them all"
+        );
+        assert!(
+            (replayed as u64) < spacing,
+            "moving to {to} replayed {replayed} steps"
+        );
+        assert!(
+            took < whole / 5,
+            "moving to {to} took {took:?}, of {whole:?} for them all"
+        );
+        if !cfg!(debug_assertions) {
+            assert!(took < BUDGET, "moving to {to} took {took:?}");
+        }
+    };
+    // The first move, from a fresh core, starts from the last copy too.
     let mut player = Player::new(Arc::clone(&book));
-    player.go(end);
+    let started = Instant::now();
+    let replayed = player.go(end);
+    check(end, replayed, started.elapsed());
     // The worst: just before a copy, so the whole spacing less one is
     // replayed from the copy before.
-    let spacing = book.spacing();
     let worst = (end / spacing) * spacing - 1;
     assert_eq!(worst % spacing, spacing - 1);
-    for to in [end - 10, worst, end - 1500, 2] {
+    for to in [end - 10, worst, end - 1500, 2, end - 10] {
         let started = Instant::now();
-        player.go(to);
-        let took = started.elapsed();
-        eprintln!("moving back to {to} took {took:?}");
-        assert!(took < BUDGET, "moving back to {to} took {took:?}");
+        let replayed = player.go(to);
+        check(to, replayed, started.elapsed());
     }
-    // Forward a long way, too.
-    let started = Instant::now();
-    player.go(end - 10);
-    assert!(
-        started.elapsed() < BUDGET,
-        "forward took {:?}",
-        started.elapsed()
-    );
 
     // From a copy or not, the core is as a replay from the start makes it.
     for at in [999, 1000, 1001, 17_500, end - 10, end] {
         let mut player = Player::new(Arc::clone(&book));
         player.go(at);
-        assert_eq!(player.state(), replayed(&book, at), "at {at}");
+        assert_eq!(player.state(), replayed_at(&book, at), "at {at}");
     }
     // And moving back and forth between copies too.
     let mut player = Player::new(Arc::clone(&book));
     for at in [30_001, 2500, 2499, 7000, 6999, 35_999] {
         player.go(at);
-        assert_eq!(player.state(), replayed(&book, at), "at {at}");
+        assert_eq!(player.state(), replayed_at(&book, at), "at {at}");
     }
 }
 

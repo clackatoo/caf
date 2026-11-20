@@ -205,10 +205,12 @@ nearest copy before the step:
   at most 1000;
 - after that, still at most 64 copies: each time there would be more,
   every other one goes and the spacing doubles, so a move replays at most
-  a 32nd of the run. The chat view gets those chats the way any viewer gets a
-chat: whole when moving back, and as numbered changes when moving forward.
-So moving through time also checks that the chat view's SDK and the core
-build the same chat.
+  a 32nd of the run.
+
+The chat view gets those chats the way any viewer gets a chat: whole when
+moving back, and as numbered changes when moving forward. So moving
+through time also checks that the chat view's SDK and the core build the
+same chat.
 
 A move should take less than 50 ms, which holds, up to 64,000 steps,
 while replaying runs at 50 µs a step or quicker. A release build replays
