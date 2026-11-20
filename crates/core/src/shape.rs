@@ -660,6 +660,14 @@ fn messagepack_is_written_with_names() {
 /// they hold: every event, every directive replaying them gives out, and
 /// each chat, its changes and its connections as they end.
 pub(crate) fn traces(s: &mut Samples) {
+    traces_with(s, LIVE);
+}
+
+/// The tokio kit's recording of a live run on claude-agent-acp 0.98.0.
+const LIVE: &str = include_str!("core/tests/traces/claude-0.98.0-live.jsonl");
+
+/// [`traces`], with `live` as the kit's recording.
+fn traces_with(s: &mut Samples, live: &str) {
     use crate::Core;
     use crate::change::Read;
     use crate::chat::NoAppItems;
@@ -722,7 +730,7 @@ pub(crate) fn traces(s: &mut Samples) {
 
     // The tokio kit's recording of a live run: a header, then a line for
     // each event.
-    let mut lines = include_str!("core/tests/traces/claude-0.98.0-live.jsonl").lines();
+    let mut lines = live.lines();
     let header = lines.next().expect("a header");
     s.raw(
         "{ caf_recording: 2, host: T.Host, agents: Array<T.AgentSpec> }",
@@ -731,6 +739,11 @@ pub(crate) fn traces(s: &mut Samples) {
     let header: Header = serde_json::from_str(header).expect("the header reads");
     let mut core = Core::new(header.host, header.agents);
     for line in lines {
+        // A recording cut short says why, and ends there.
+        if line.starts_with(r#"{"stopped":"#) {
+            s.raw("{ stopped: string }", line);
+            break;
+        }
         s.raw("{ now: T.Now, event: T.Event }", line);
         let line: Line = serde_json::from_str(line).expect("a line reads");
         let now: Now = serde_json::from_str(line.now.get()).expect("a time");
@@ -757,6 +770,23 @@ pub(crate) fn traces(s: &mut Samples) {
         feed(s, &mut core, now, step.event);
     }
     ending(s, &core, 1000);
+}
+
+#[test]
+fn a_recording_cut_short_is_read_as_far_as_it_goes() {
+    let mut whole = Samples::default();
+    traces_with(&mut whole, LIVE);
+    let stopped = r#"{"stopped":"the disk has fallen behind"}"#;
+    let mut cut = Samples::default();
+    traces_with(
+        &mut cut,
+        &format!("{LIVE}{stopped}\n{{\"not\":\"read\"}}\n"),
+    );
+    // The same, with the line that says why it stopped, and nothing after.
+    let why = ("{ stopped: string }".to_owned(), stopped.to_owned());
+    assert_eq!(cut.values.iter().filter(|value| **value == why).count(), 1);
+    cut.values.retain(|value| *value != why);
+    assert_eq!(cut.values, whole.values);
 }
 
 #[test]
