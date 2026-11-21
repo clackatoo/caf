@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 
 /// Starts the debugger live, with the agents it offers by itself (the
 /// fake agent, and Claude, installed by CAF), keeping its state and any
-/// installs in a folder of its own; sends it `signal` once it's serving; and
-/// returns how it exited and the last event its recording holds.
-fn stopped_by(signal: &str) -> (std::process::ExitStatus, serde_json::Value) {
+/// installs in a folder of its own; sends it `signal` the moment it says
+/// it's serving, straight from this process, as fast as a script could;
+/// and returns how it exited and the last event its recording holds.
+fn stopped_by(signal: libc::c_int) -> (std::process::ExitStatus, serde_json::Value) {
     let state =
         std::env::temp_dir().join(format!("caf-debugger-cli-{signal}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&state);
@@ -39,11 +40,10 @@ fn stopped_by(signal: &str) -> (std::process::ExitStatus, serde_json::Value) {
     // Nothing reads what it prints any more, as when its terminal closes:
     // printing then fails, and must not stop it shutting down cleanly.
     drop(lines);
-    let killed = Command::new("kill")
-        .args([signal, &child.id().to_string()])
-        .status()
-        .unwrap();
-    assert!(killed.success());
+    let pid = libc::pid_t::try_from(child.id()).unwrap();
+    // SAFETY: a plain syscall, to a child this test started and hasn't
+    // reaped.
+    assert_eq!(unsafe { libc::kill(pid, signal) }, 0);
     let started = Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
@@ -60,7 +60,9 @@ fn stopped_by(signal: &str) -> (std::process::ExitStatus, serde_json::Value) {
 
 #[test]
 fn sigterm_and_sighup_shut_caf_down_as_ctrl_c_does() {
-    for signal in ["-INT", "-TERM", "-HUP"] {
+    // Each a few times: the signal comes as it says it's serving, and
+    // must be heard however soon that is.
+    for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP].repeat(4) {
         let (status, last) = stopped_by(signal);
         assert!(status.success(), "{signal}: {status}");
         assert_eq!(

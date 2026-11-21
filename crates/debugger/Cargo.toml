@@ -46,6 +46,8 @@ ts-rs = { workspace = true, optional = true }
 [dev-dependencies]
 # A real WebSocket client, for the HTTP-level tests.
 tokio-tungstenite = "0.29"
+# Signals sent the moment the debugger says it's serving.
+libc.workspace = true
 
 [features]
 # TypeScript types for the inspector channel, written to
