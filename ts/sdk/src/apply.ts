@@ -32,6 +32,8 @@ export function apply(chat: RChat, change: Change): { chat: RChat } | { mismatch
   switch (change.type) {
     case "State":
       return { chat: { ...chat, state: change.value } };
+    case "Settings":
+      return { chat: { ...chat, settings: change.value } };
     case "TurnAdded":
       return { chat: { ...chat, turns: [...chat.turns, change.value] } };
     case "TurnInserted": {
@@ -43,6 +45,10 @@ export function apply(chat: RChat, change: Change): { chat: RChat } | { mismatch
     case "TurnLife": {
       const { turn, life, end } = change.value;
       return withTurn(chat, turn, (each) => ({ ...each, life, window: { ...each.window, end } }));
+    }
+    case "TurnModel": {
+      const { turn, model } = change.value;
+      return withTurn(chat, turn, (each) => ({ ...each, model }));
     }
     case "ItemAdded": {
       const { turn, item } = change.value;

@@ -9,10 +9,11 @@ import {
   type DeepReadonly,
   type Item,
   type SavedChat,
+  type Settings,
   type Turn,
   type WatchEvent,
 } from "../src/index.ts";
-import { busy, CHAT, chat, chatId, numbered, turn, words } from "./chats.ts";
+import { busy, CHAT, chat, chatId, model, numbered, turn, words } from "./chats.ts";
 import { agents, connected, FakeTransport, saved, welcome } from "./transport.ts";
 
 /** Waits for promises and microtasks to settle. */
@@ -262,6 +263,17 @@ describe("the agents", () => {
     expect(caf.agents).toStrictEqual(later);
   });
 
+  test("what's known of each agent's settings comes through as it is", async () => {
+    const { caf, link } = await connected();
+    const statuses = [
+      { ...agents.value[0], settings: { type: "Known", value: [model("default")] } },
+      { ...agents.value[1], settings: { type: "Failed", value: "It wouldn't start." } },
+    ];
+    link.deliver({ type: "Agents", value: statuses });
+    expect(link.closed).toBe(false);
+    expect(caf.agents).toStrictEqual(statuses);
+  });
+
   test("a listener that throws is reported, and the others still hear", async () => {
     const reported: unknown[] = [];
     vi.stubGlobal("reportError", (error: unknown) => reported.push(error));
@@ -400,6 +412,28 @@ describe("watching a chat", () => {
     expect(last.type === "Chat" && wordsOf(last.chat)).toStrictEqual({ type: "Words", value: "Hello a b" });
     expect(watch.copy?.latest).toBe(12);
     expect(link.take()).toStrictEqual([]);
+  });
+
+  test("follows its settings, whole each time, and asks again for settings it can't read", async () => {
+    const { caf, link } = await connected();
+    const { events, listener } = heard();
+    caf.watch(CHAT, listener);
+    link.deliver(picture(busy(), 10));
+    link.take();
+    // Sonnet chosen, and waiting: the agent still says Default.
+    const settings: Settings = {
+      offered: [model("default")],
+      chosen: [{ kind: { type: "Model" }, value: { type: "Choice", value: "sonnet" } }],
+    };
+    link.deliver(changes(numbered(11, { type: "Settings", value: settings })));
+    const last = events.at(-1)!;
+    expect(last.type === "Chat" && last.chat.settings).toStrictEqual(settings);
+    link.deliver(changes(numbered(12, { type: "Settings", value: null } as never)));
+    expect(link.closed).toBe(false);
+    expect(link.take()).toStrictEqual([
+      { type: "Unwatch", value: { chat: CHAT } },
+      { type: "Watch", value: { chat: CHAT, since: null } },
+    ]);
   });
 
   test("changes already had tell the listener nothing", async () => {
@@ -843,6 +877,39 @@ describe("requests", () => {
     await expect(Promise.all([stopping, answering, closing])).resolves.toStrictEqual([undefined, undefined, undefined]);
   });
 
+  test("setSetting chooses a setting of the chat's agent, and resolves when done", async () => {
+    const { caf, link } = await connected();
+    const sonnet = { kind: { type: "Model" }, value: { type: "Choice", value: "sonnet" } } as const;
+    const fast = { kind: { type: "Fast" }, value: { type: "Switch", value: true } } as const;
+    const choosing = [caf.setSetting(CHAT, sonnet), caf.setSetting(CHAT, fast)];
+    expect(link.take()).toStrictEqual([
+      { type: "Set", value: { request: 1, chat: CHAT, choice: sonnet } },
+      { type: "Set", value: { request: 2, chat: CHAT, choice: fast } },
+    ]);
+    for (const request of [2, 1]) link.deliver({ type: "Done", value: { request, outcome: { type: "Done" } } });
+    await expect(Promise.all(choosing)).resolves.toStrictEqual([undefined, undefined]);
+  });
+
+  test("setSetting may be refused, saying the agent doesn't offer it, or not allowed, and the link goes on", async () => {
+    const { caf, link } = await connected();
+    const opus = { kind: { type: "Model" }, value: { type: "Choice", value: "opus" } } as const;
+    const refused = held(caf.setSetting(CHAT, opus));
+    const notAllowed = held(caf.setSetting(CHAT, opus));
+    link.deliver({ type: "Done", value: { request: 1, outcome: { type: "Refused", value: { type: "NoSuchSetting" } } } });
+    link.deliver({ type: "Done", value: { request: 2, outcome: { type: "NotAllowed" } } });
+    expect(await rejection(refused)).toStrictEqual({ type: "Refused", value: { type: "NoSuchSetting" } });
+    expect(await rejection(notAllowed)).toStrictEqual({ type: "NotAllowed" });
+    expect(link.closed).toBe(false);
+  });
+
+  test("setSetting answered with an outcome that doesn't fit ends the link", async () => {
+    const { caf, link } = await connected();
+    const choosing = held(caf.setSetting(CHAT, { kind: { type: "Fast" }, value: { type: "Switch", value: false } }));
+    link.deliver({ type: "Done", value: { request: 1, outcome: { type: "Sent", value: 1200 } } });
+    expect(await rejection(choosing)).toStrictEqual({ type: "Disconnected" });
+    expect(link.closed).toBe(true);
+  });
+
   test("each agent action asks about its agent, and resolves when done", async () => {
     const { caf, link } = await connected();
     const acting = [
@@ -852,6 +919,7 @@ describe("requests", () => {
       caf.paste("claude", "code#123"),
       caf.stopSignIn("fake"),
       caf.signOut("claude"),
+      caf.learnSettings("claude"),
     ];
     expect(link.take()).toStrictEqual([
       { type: "Agent", value: { request: 1, agent: "claude", action: { type: "Install" } } },
@@ -860,8 +928,9 @@ describe("requests", () => {
       { type: "Agent", value: { request: 4, agent: "claude", action: { type: "Paste", value: "code#123" } } },
       { type: "Agent", value: { request: 5, agent: "fake", action: { type: "StopSignIn" } } },
       { type: "Agent", value: { request: 6, agent: "claude", action: { type: "SignOut" } } },
+      { type: "Agent", value: { request: 7, agent: "claude", action: { type: "LearnSettings" } } },
     ]);
-    for (const request of [6, 5, 4, 3, 2, 1]) {
+    for (const request of [7, 6, 5, 4, 3, 2, 1]) {
       link.deliver({ type: "Done", value: { request, outcome: { type: "Done" } } });
     }
     await expect(Promise.all(acting)).resolves.toStrictEqual(acting.map(() => undefined));
@@ -873,14 +942,17 @@ describe("requests", () => {
     const signing = held(caf.signIn("claude"));
     const pasting = held(caf.paste("claude", "x"));
     const signingOut = held(caf.signOut("claude"));
+    const learning = held(caf.learnSettings("claude"));
     link.deliver({ type: "Done", value: { request: 1, outcome: { type: "Refused", value: { type: "AlreadyInstalled" } } } });
     link.deliver({ type: "Done", value: { request: 2, outcome: { type: "NotAllowed" } } });
     link.deliver({ type: "Done", value: { request: 3, outcome: { type: "Gone" } } });
     link.deliver({ type: "Done", value: { request: 4, outcome: { type: "Retry" } } });
+    link.deliver({ type: "Done", value: { request: 5, outcome: { type: "Refused", value: { type: "OwnTools" } } } });
     expect(await rejection(installing)).toStrictEqual({ type: "Refused", value: { type: "AlreadyInstalled" } });
     expect(await rejection(signing)).toStrictEqual({ type: "NotAllowed" });
     expect(await rejection(pasting)).toStrictEqual({ type: "Gone" });
     expect(await rejection(signingOut)).toStrictEqual({ type: "Unknown", value: { outcome: "Retry" } });
+    expect(await rejection(learning)).toStrictEqual({ type: "Refused", value: { type: "OwnTools" } });
     expect(link.closed).toBe(false);
   });
 

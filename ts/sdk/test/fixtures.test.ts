@@ -53,6 +53,7 @@ function frozen<T>(value: T): T {
 function named(chat: DeepReadonly<Chat>, change: Change): { turn?: number; item?: number } {
   switch (change.type) {
     case "TurnLife":
+    case "TurnModel":
     case "ItemAdded":
       return { turn: change.value.turn };
     case "Appended":
@@ -70,7 +71,7 @@ function named(chat: DeepReadonly<Chat>, change: Change): { turn?: number; item?
 /** Checks that `after` shares with `before` everything `change` doesn't name. */
 function expectShared(before: DeepReadonly<Chat>, after: DeepReadonly<Chat>, change: Change, at: string): void {
   if (
-    !["TurnAdded", "TurnInserted", "TurnLife", "ItemAdded", "Appended", "ToolChanged", "ItemEnded"].includes(
+    !["TurnAdded", "TurnInserted", "TurnLife", "TurnModel", "ItemAdded", "Appended", "ToolChanged", "ItemEnded"].includes(
       change.type,
     )
   ) {
@@ -79,6 +80,7 @@ function expectShared(before: DeepReadonly<Chat>, after: DeepReadonly<Chat>, cha
   if (change.type !== "QuestionAsked" && change.type !== "QuestionGone") {
     expect(after.questions, `${at}: questions`).toBe(before.questions);
   }
+  if (change.type !== "Settings") expect(after.settings, `${at}: settings`).toBe(before.settings);
   const { turn, item } = named(before, change);
   const turns = new Map(before.turns.map((each) => [each.id, each]));
   for (const each of after.turns) {

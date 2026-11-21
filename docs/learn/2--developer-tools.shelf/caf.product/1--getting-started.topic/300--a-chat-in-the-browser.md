@@ -144,8 +144,8 @@ once it has, so `agents` is right from the start. `onChats` and `onAgents`
 each return a function that stops them.
 
 `caf.may` says what the host lets this page do: `act` on chats (send,
-stop, answer and close), and on `agents` (install them, and sign in and
-out). Offer only what it may: anything else is answered `NotAllowed`. A
+stop, answer, choose their settings and close), and on `agents` (install
+them, sign in and out, and learn their settings). Offer only what it may: anything else is answered `NotAllowed`. A
 page that may not act on agents gets no sign-in's link or code. Whether it
 may open chats, or restore saved ones, isn't said, as the host decides each
 request.
@@ -327,6 +327,52 @@ A chat with an agent that isn't installed yet is `WaitingForAgent`, and its
 messages wait. They're sent once the agent is installed. Stopping the chat
 stops them, and a note in the chat says so.
 
+### Choose the model
+
+A chat's `settings` say what its agent offers that the user may choose,
+and what was chosen. Its `offered` lists each `Setting` in the agent's
+order: what it's about (its `kind`: `Model`, `Effort` or `Fast`), what the
+agent calls it, its `form`, and what the agent says it is now (`current`).
+The form is `Choices`, each with the agent's own `id`, its `name`, and any
+`description` and `group`, or a `Switch`, on or off. Draw a setting by its
+form, so one of a kind a later CAF adds still shows. A choice such as
+Claude's `default`, which stands for whatever model the agent would pick,
+comes as the agent gives it. `offered` is empty until the chat's session
+first opens, and for an agent that offers none.
+
+```ts
+await caf.setSetting(chatId, { kind: { type: "Model" }, value: { type: "Choice", value: "sonnet" } });
+await caf.setSetting(chatId, { kind: { type: "Fast" }, value: { type: "Switch", value: true } });
+```
+
+Choices are by the agent's own ids, matched exactly. The chat's `chosen`
+holds them, and where one differs from its setting's `current`, the change
+is waiting. A change made while a turn runs waits for it to end, and
+applies from the next message; with none running, it's sent at once. One
+made before the session opens is applied as it opens, before any message
+goes, and if it can't be, the message fails, `SettingNotApplied`, offering
+Send again, and the setting goes back to what the agent uses. When the
+agent changes a setting by itself, such as falling back to another model,
+the chat follows it, and a note in the chat says so (`AgentChanged`); a
+choice it no longer offers is dropped, with a note (`NotOffered`). Each
+turn's `model` names the model that answered it, if the agent says.
+
+The core refuses `NoSuchSetting` for a setting, or a value of it, that the
+agent has said it doesn't offer.
+
+To offer them before any chat, each agent's status says what CAF knows of
+its settings: `Unknown`, `Learning`, `Known` with what a session with it
+last offered, or `Failed` with why. Every chat's session tells CAF. To
+learn them sooner, ask: CAF opens a session and sends nothing, so it costs
+nothing.
+
+```ts
+await caf.learnSettings("claude");
+```
+
+A chat can't be opened with its settings from the page: open it, then
+choose them, before anything is sent.
+
 ### When the link drops
 
 When the link ends, for any reason, every request still waiting rejects with
@@ -421,6 +467,8 @@ care where the chat came from:
     signIn: () => caf.signIn(chat.agent),
     paste: (text) => caf.paste(chat.agent, text),
     stopSignIn: () => caf.stopSignIn(chat.agent),
+    setSetting: (choice) => caf.setSetting(chat.id, choice),
+    learnSettings: () => caf.learnSettings(chat.agent),
   }}
 />
 ```
@@ -440,9 +488,24 @@ Send again: once signed in, the user sends it again, since CAF never does
 by itself. Sign in shows only while the agent's status says CAF can sign
 in to it now.
 
+Beside the composer, the view offers the agent's settings: its model and
+effort as menus of the agent's own choices, in its order and groups, each
+choice's description shown, and fast mode as a switch, saying it may cost
+more. A change waiting shows as such: "Sonnet, from your next message"
+while a turn runs or the session isn't open, and "Changing to Sonnet…"
+otherwise. Before the session first opens, it offers what the agent's
+status knows, or, with `act` and `agents`, to learn it. Each turn names
+the model that answered it.
+
 Given its `label`, from the chat's summary in `caf.chats`, the view heads
 the chat with it. Beside it, `ChatList` lists the open chats, by their
-labels where they have them, and `SavedList` lists `caf.saved`: each
+labels where they have them, and opens new ones. Given the agents'
+statuses, it offers choosing the model of an agent whose models are known,
+passing the choice to its `open(agent, cwd, settings)` action, for the
+page to choose once the chat is open. `openThenChoose` does both, and
+resolves once the chat is open even if its settings couldn't be chosen,
+so it's never opened twice: say why in the chat, with `ChatView`'s
+`notice`. `SavedList` lists `caf.saved`: each
 chat's label or first line, its agent, folder, when it last changed and its
 turns, whether it's loaded or why it can't be, and Restore. Its actions are
 `select(chat)`, to show a loaded one, and `restore(chat, shelf)`:

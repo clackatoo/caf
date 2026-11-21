@@ -99,6 +99,12 @@ describe('summaries', () => {
     ).toBe('Agent 1: session/update agent_message_chunk')
     expect(eventSummary({ type: 'Agent', value: { process: 1, event: { type: 'Stderr', value: bytes('bad\n') } } })).toBe('Agent 1: stderr: bad')
     expect(eventSummary({ type: 'Mystery' } as never)).toBe('Mystery')
+    const chat = '00000000-0000-0000-0000-000000000002'
+    const sonnet = { kind: { type: 'Model' as const }, value: { type: 'Choice' as const, value: 'sonnet' } }
+    expect(eventSummary({ type: 'Host', value: { type: 'SetSetting', value: { chat, choice: sonnet } } })).toBe(
+      `Host: set chat ${chat}'s Model to sonnet`,
+    )
+    expect(eventSummary({ type: 'Host', value: { type: 'LearnSettings', value: 'claude' } })).toBe("Host: learn claude's settings")
   })
 
   it('names requests by their id, whatever its type', () => {

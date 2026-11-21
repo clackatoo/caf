@@ -21,7 +21,7 @@
 //! 3. The viewer watches chats ([`FromViewer::Watch`]): it gets each one
 //!    whole ([`ToViewer::Picture`]), then its changes
 //!    ([`ToViewer::Changes`]). It may act on them: send, stop, answer,
-//!    close. Each act quotes a [`RequestNo`] the viewer chose, and
+//!    choose their settings, close. Each act quotes a [`RequestNo`] the viewer chose, and
 //!    [`ToViewer::Done`] says how it went.
 //!
 //! # Opening is the host's decision
@@ -321,10 +321,12 @@ pub struct ChatSummary {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Rights {
-    /// Whether it may send, stop, answer and close.
+    /// Whether it may send, stop, answer, choose a chat's settings
+    /// ([`FromViewer::Set`]) and close.
     pub act: bool,
-    /// Whether it may install agents, and sign in and out of them. A
-    /// viewer that may not gets no sign-in's link or code.
+    /// Whether it may install agents, sign in and out of them, and learn
+    /// their settings. A viewer that may not gets no sign-in's link or
+    /// code.
     pub agents: bool,
 }
 

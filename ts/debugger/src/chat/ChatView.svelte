@@ -14,6 +14,7 @@
   import { showsAgent } from './shows.ts'
   import Composer from './Composer.svelte'
   import Questions from './Questions.svelte'
+  import SettingsBar from './SettingsBar.svelte'
   import StateBanner from './StateBanner.svelte'
   import Turn from './Turn.svelte'
   import Usage from './Usage.svelte'
@@ -29,6 +30,7 @@
     readOnly = false,
     readOnlyWhy = 'As it was then: nothing can be done here.',
     appSummary = () => "An item of the app's own",
+    notice = null,
   }: {
     chat: DeepReadonly<Chat>
     /** The app's line for the chat, such as its title, from its `ChatSummary`, if it has one. */
@@ -51,6 +53,11 @@
     readOnlyWhy?: string
     /** The one-line summary of one of the app's own items, which only the app can write. */
     appSummary?: (app: unknown) => string
+    /**
+     * Something the host has to say about the chat, shown as a problem:
+     * such as why its settings couldn't be chosen as it opened.
+     */
+    notice?: string | null
   } = $props()
 
   /** The status of the chat's agent, if the host gave it, and it's this chat's agent's. */
@@ -59,6 +66,8 @@
   const closed = $derived(chat.state.type === 'Closed')
   /** Whether anything can be done in the chat: it isn't read-only, and the host lets this viewer act. */
   const acting = $derived(!readOnly && may.act)
+  /** Its settings: a chat from before CAF had them has none, as the core reads it. */
+  const settings = $derived(chat.settings ?? { offered: [], chosen: [] })
   let problem = $state<string | null>(null)
   // Follow the end of the chat as it grows, unless the user has scrolled up.
   let scroller = $state<HTMLElement>()
@@ -108,6 +117,7 @@
       <button type="button" class="close" disabled={readOnly} onclick={close}>Close</button>
     {/if}
   </header>
+  {#if notice !== null}<div class="problem" role="alert">{notice}</div>{/if}
   {#if problem !== null}<div class="problem" role="alert">{problem}</div>{/if}
   {#if readOnly}
     <div class="looking-back" role="status">{readOnlyWhy}</div>
@@ -148,6 +158,15 @@
   </div>
 
   <Questions questions={chat.questions} readOnly={!acting} answer={actions.answer} />
+  <SettingsBar
+    {settings}
+    known={closed ? undefined : status?.settings}
+    held={running !== undefined || chat.state.type !== 'Open'}
+    disabled={!acting || closed}
+    canLearn={acting && may.agents}
+    set={actions.setSetting}
+    learn={actions.learnSettings}
+  />
   <Composer
     running={running !== undefined}
     stopping={running?.life.type === 'Stopping'}

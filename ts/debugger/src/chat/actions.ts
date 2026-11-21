@@ -5,7 +5,17 @@
 // Each may return a promise: if it rejects, the view shows why (a
 // `CafError` in CAF's words), and the user can try again.
 
-import { CafError, type AgentName, type Answer, type ChatId, type DeepReadonly, type QuestionId, type Shelf, type UserMessage } from '@clackatoo/caf'
+import {
+  CafError,
+  type AgentName,
+  type Answer,
+  type ChatId,
+  type DeepReadonly,
+  type QuestionId,
+  type SettingChoice,
+  type Shelf,
+  type UserMessage,
+} from '@clackatoo/caf'
 
 /** What the user can do in one chat. */
 export interface ChatActions {
@@ -33,14 +43,32 @@ export interface ChatActions {
   paste(text: string): Promise<unknown> | void
   /** Stop signing in to the chat's agent. */
   stopSignIn(): Promise<unknown> | void
+  /**
+   * Choose a setting of the chat's agent, such as its model, by the
+   * agent's own id. The chat's settings show it waiting until the agent
+   * takes it.
+   */
+  setSetting(choice: SettingChoice): Promise<unknown> | void
+  /**
+   * Learn what settings the chat's agent offers, such as its models,
+   * before its session opens: they come in the agent's status. No
+   * message is sent.
+   */
+  learnSettings(): Promise<unknown> | void
 }
 
 /** What the user can do with the list of chats. */
 export interface ListActions {
   /** Show this chat. */
   select(chat: ChatId): void
-  /** Open a new chat with an agent, in a folder (a full path). */
-  open(agent: AgentName, cwd: string): Promise<unknown> | void
+  /**
+   * Open a new chat with an agent, in a folder (a full path), and choose
+   * `settings` for it, such as its model, if any are given. Opening can't
+   * carry them, so the host opens it, then chooses them: before its
+   * session opens, any choice is taken, and applied as it opens, before
+   * any message goes.
+   */
+  open(agent: AgentName, cwd: string, settings?: readonly SettingChoice[]): Promise<unknown> | void
 }
 
 /** What the user can do with the list of saved chats. */
@@ -70,6 +98,29 @@ export async function restoreOnceFree<T>(
       await new Promise((done) => setTimeout(done, wait))
     }
   }
+}
+
+/**
+ * Opens a chat with `open`, then chooses `settings` for it with `choose`,
+ * as a host's `ListActions.open` does: opening can't carry them. It
+ * tries every choice, one after another, and resolves once the chat is
+ * open, with each that couldn't be chosen and why, in order. It rejects
+ * only if the chat didn't open: a chat that opened is never opened again
+ * for want of its settings. The host says why in the chat (`ChatView`'s
+ * `notice`), where the user can choose them again.
+ */
+export async function openThenChoose<C>(
+  open: () => Promise<C>,
+  choose: (chat: C, choice: SettingChoice) => Promise<unknown>,
+  settings: readonly SettingChoice[],
+): Promise<{ chat: C; failed: { choice: SettingChoice; problem: unknown }[] }> {
+  const chat = await open()
+  const failed: { choice: SettingChoice; problem: unknown }[] = []
+  for (const choice of settings) {
+    const problem = await attempt(() => choose(chat, choice))
+    if (problem !== null) failed.push({ choice, problem })
+  }
+  return { chat, failed }
 }
 
 /**
