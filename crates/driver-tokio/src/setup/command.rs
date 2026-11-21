@@ -16,8 +16,8 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufRead
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::{mpsc, oneshot};
 
+use super::Reporter;
 use super::install::{POLL, kill_group, path_var};
-use super::{Reporter, hidden_name};
 use crate::agent::command_for;
 
 /// How long a command that isn't a sign-in may take.
@@ -509,10 +509,11 @@ impl Browser {
         }
     }
 
-    /// Writes one, in a new folder in `temp`.
+    /// Writes one, in a new folder in `temp`, first sweeping away those
+    /// that programs that have gone left.
     fn write(temp: &Path) -> io::Result<Self> {
-        let folder = temp.join(hidden_name("caf-browser", "sign-in").trim_start_matches('.'));
-        fs::DirBuilder::new().mode(0o700).create(&folder)?;
+        sweep(temp);
+        let folder = private_folder(temp, browser_names())?;
         let browser = Self { folder };
         let mut script = fs::OpenOptions::new()
             .write(true)
@@ -557,6 +558,82 @@ impl Browser {
         }
         links
     }
+}
+
+/// What a `BROWSER` folder's name starts with, before the number of the
+/// process that made it.
+const BROWSER_FOLDER: &str = "caf-browser-";
+
+/// Names for a `BROWSER` folder: `caf-browser-<pid>-<random>`, so another
+/// user of the machine can't take the next one first, as the temporary
+/// folder is everyone's.
+fn browser_names() -> impl Iterator<Item = String> {
+    let random = || {
+        use std::hash::{BuildHasher, Hasher};
+        // Each `RandomState` has keys of its own, random for the process.
+        std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish()
+    };
+    (0..16).map(move |_| format!("{BROWSER_FOLDER}{}-{:016x}", std::process::id(), random()))
+}
+
+/// Makes a new folder in `temp`, readable only by the user, under the
+/// first of `names` not taken.
+fn private_folder(temp: &Path, names: impl Iterator<Item = String>) -> io::Result<PathBuf> {
+    let mut taken = None;
+    for name in names {
+        let folder = temp.join(name);
+        match fs::DirBuilder::new().mode(0o700).create(&folder) {
+            Ok(()) => return Ok(folder),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => taken = Some(error),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(taken.unwrap_or_else(|| io::Error::other("no name to make a folder under")))
+}
+
+/// Removes the `BROWSER` folders in `temp` that this user's programs left
+/// as they went, without ending their sign-ins: those whose process is
+/// gone. Anyone else's are left alone.
+fn sweep(temp: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(entries) = fs::read_dir(temp) else {
+        return;
+    };
+    let me = rustix::process::getuid().as_raw();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(rest) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(BROWSER_FOLDER))
+        else {
+            continue;
+        };
+        // Older ones are `caf-browser-sign-in-<pid>-<n>`.
+        let rest = rest.strip_prefix("sign-in-").unwrap_or(rest);
+        let Some(pid) = rest
+            .split('-')
+            .next()
+            .and_then(|pid| pid.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        let ours = entry
+            .metadata()
+            .is_ok_and(|metadata| metadata.is_dir() && metadata.uid() == me);
+        if ours && pid > 0 && !running(pid) {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// Whether process `pid` is running.
+fn running(pid: i32) -> bool {
+    // SAFETY: `kill` with signal 0 sends nothing, and touches no memory.
+    #[allow(unsafe_code)]
+    let sent = unsafe { libc::kill(pid, 0) };
+    sent == 0 || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 /// A file's text, if it's small.
@@ -612,6 +689,53 @@ mod tests {
         );
         drop(browser);
         fs::remove_dir(&temp).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_browser_folder_is_the_users_alone_and_can_be_made_whatever_is_there() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = std::env::temp_dir().join(format!("caf-browser-names-{}", std::process::id()));
+        fs::create_dir_all(&temp).unwrap();
+        // Someone else's guess at the next name, and what a host that
+        // crashed left: a process that's gone.
+        let gone = {
+            let mut child = std::process::Command::new("/bin/true").spawn().unwrap();
+            let pid = child.id();
+            child.wait().unwrap();
+            pid
+        };
+        let left = temp.join(format!("caf-browser-{gone}-0123456789abcdef"));
+        fs::create_dir_all(&left).unwrap();
+        fs::write(left.join("link1"), "https://example.com").unwrap();
+        let ours_running = temp.join(format!("caf-browser-{}-ffff", std::process::id()));
+        fs::create_dir_all(&ours_running).unwrap();
+        let mut browsers = Vec::new();
+        for _ in 0..3 {
+            let browser = Browser::write(&temp).unwrap();
+            let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&browser.folder), 0o700, "the user's alone");
+            assert_eq!(mode(&browser.script()), 0o700);
+            browsers.push(browser);
+        }
+        let names: std::collections::HashSet<_> = browsers
+            .iter()
+            .map(|browser| browser.folder.clone())
+            .collect();
+        assert_eq!(names.len(), 3, "each a name of its own");
+        assert!(!left.exists(), "what a process that's gone left is swept");
+        assert!(ours_running.exists(), "a running process's is left");
+        drop(browsers);
+        fs::remove_dir_all(&temp).unwrap();
+    }
+
+    #[test]
+    fn a_browser_folder_takes_another_name_when_one_is_taken() {
+        let temp = std::env::temp_dir().join(format!("caf-browser-taken-{}", std::process::id()));
+        fs::create_dir_all(temp.join("taken")).unwrap();
+        let names = ["taken".to_owned(), "free".to_owned()];
+        let folder = private_folder(&temp, names.into_iter()).unwrap();
+        assert_eq!(folder, temp.join("free"));
+        fs::remove_dir_all(&temp).unwrap();
     }
 
     #[tokio::test]

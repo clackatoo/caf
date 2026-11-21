@@ -61,7 +61,9 @@
 //! **Sign-in links** come one of two ways ([`LinkFrom`]):
 //! - `Browser`: the command is given `BROWSER`, a small shell script in a
 //!   folder of the driver's own under the system's temporary folder,
-//!   readable only by the user. Run with a link, it writes its arguments
+//!   readable only by the user, with a random name, so another user can't
+//!   take it first. Folders the user's programs left as they ended are
+//!   swept away as a new one is made. Run with a link, it writes its arguments
 //!   to a file beside it and exits; the driver looks for such files every
 //!   tenth of a second, and reports each argument that's a link (with
 //!   `://`), exactly as it came, once: options some programs give a
