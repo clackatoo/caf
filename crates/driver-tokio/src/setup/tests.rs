@@ -286,7 +286,9 @@ async fn npm_installs_from_the_lockfile_into_place() {
     let program = dir.root().join("fake-1.0.0/node_modules/.bin/fake-adapter");
     assert!(program.exists(), "the package's program is linked");
     assert!(
-        !dir.path("installed-by-script").exists(),
+        // npm runs a package's install script in its folder,
+        // node_modules/fake-adapter: two up is the install itself.
+        !dir.root().join("fake-1.0.0/installed-by-script").exists(),
         "no install script runs"
     );
 }
