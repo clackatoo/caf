@@ -108,7 +108,41 @@ describe('the saved chats', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(text(rows(container)[0]!)).toContain('Restoring…')
     expect(button('Restore two').disabled).toBe(true)
+    // Another chat changing meanwhile changes nothing here.
+    await rerender({ saved: pair({ type: 'Saved' }, { type: 'Failed', value: { type: 'InUse' } }) })
+    expect(text(rows(container)[0]!)).toContain('Restoring…')
+    expect(button('Try again to restore two').disabled).toBe(true)
     await rerender({ saved: pair({ type: 'Loaded' }) })
+    expect(text(rows(container)[0]!)).toContain('Loaded')
+    expect(button('Restore two').disabled).toBe(false)
+  })
+
+  it('stops saying it is restoring once its own state moves on from what it was when CAF answered', async () => {
+    let finish = () => {}
+    const { container, rerender } = draw(pair({ type: 'Restoring' }), {
+      restore: () => new Promise<void>((done) => (finish = done)),
+    })
+    await rerender({ saved: pair() })
+    await fireEvent.click(button('Restore one'))
+    await rerender({ saved: pair({ type: 'Restoring' }) })
+    finish()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await rerender({ saved: pair({ type: 'Restoring' }) })
+    expect(text(rows(container)[0]!)).toContain('Restoring…')
+    // Closed at once, say: put away again.
+    await rerender({ saved: pair() })
+    expect(button('Restore one').disabled).toBe(false)
+  })
+
+  it('shows it loaded when the list says so before CAF answers', async () => {
+    let finish = () => {}
+    const { container, rerender } = draw(pair(), { restore: () => new Promise<void>((done) => (finish = done)) })
+    await fireEvent.click(button('Restore one'))
+    await rerender({ saved: pair({ type: 'Loaded' }) })
+    expect(text(rows(container)[0]!)).toContain('Loaded')
+    expect(button('Restore two').disabled).toBe(false)
+    finish()
+    await new Promise((resolve) => setTimeout(resolve, 0))
     expect(text(rows(container)[0]!)).toContain('Loaded')
     expect(button('Restore two').disabled).toBe(false)
   })
@@ -137,12 +171,23 @@ describe('the saved chats', () => {
     })
   }
 
-  it("offers no Try again after CAF says trying again can't help", async () => {
-    const error = new CafError({ type: 'CannotRestore', value: { type: 'Damaged', value: 'cut short' } })
-    draw(pair(), { restore: async () => Promise.reject(error) })
-    await fireEvent.click(button('Restore two'))
-    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('its save is damaged: cut short'))
-    expect(screen.queryByRole('button', { name: /two/ })).toBeNull()
+  const lasting: [CafError, string][] = [
+    [new CafError({ type: 'CannotRestore', value: { type: 'Damaged', value: 'cut short' } }), 'its save is damaged: cut short'],
+    [new CafError({ type: 'Gone' }), 'CAF has shut down'],
+    [new CafError({ type: 'Refused', value: { type: 'BadShelf' } }), "That shelf's name can't be used."],
+  ]
+  for (const [error, says] of lasting) {
+    it(`offers no Try again where trying again can't help: ${error.message}`, async () => {
+      draw(pair(), { restore: async () => Promise.reject(error) })
+      await fireEvent.click(button('Restore two'))
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toContain(says))
+      expect(screen.queryByRole('button', { name: /two/ })).toBeNull()
+    })
+  }
+
+  it("draws a time that isn't one a date can hold", () => {
+    const { container } = draw([saved(1, { changed: 1e20 })])
+    expect(container.querySelector('time')?.hasAttribute('datetime')).toBe(false)
   })
 
   it("forgets why it wasn't restored once the chat's state moves on, as when another viewer restores it", async () => {

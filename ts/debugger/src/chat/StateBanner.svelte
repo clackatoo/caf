@@ -35,7 +35,7 @@
 {:else if state.type === 'Closed'}
   <div class="banner closed" role="status">This chat is closed.</div>
 {:else if state.type === 'Idle'}
-  <div class="banner idle" role="status">Not running: sending a message continues it.</div>
+  <div class="banner idle" role="status">Not running: the next message starts it again, continuing where the agent can.</div>
 {:else if state.type !== 'Open' && state.type !== 'WaitingForAgent'}
   <div class="banner lost" role="status">The chat is in a state this viewer doesn't know ({tagOf(state)}).</div>
 {/if}

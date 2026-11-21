@@ -3,9 +3,9 @@
   // `Connection.saved`: open or not, each with Restore while it isn't.
   // The host decides each restore, as it does each open, so it's offered
   // whatever `Connection.may` says, and a refusal is shown under the chat.
-  import { CafError, type CannotRestore, type DeepReadonly, type SavedChat } from '@clackatoo/caf'
+  import { CafError, type DeepReadonly, type SavedChat } from '@clackatoo/caf'
   import { attempt, type SavedActions } from './actions.ts'
-  import { dayAndTime, fullTime } from './time.ts'
+  import { dayAndTime, fullTime, isoTime } from './time.ts'
   import { cannotRestoreText, errorText, folderName, mayRestoreAgain, savedStateLabel, turnCount } from './words.ts'
   import './theme.css'
 
@@ -28,16 +28,20 @@
 
   /**
    * The chat being restored from here. Once CAF has said it's open, it
-   * stays so until the list says it's loaded, or says anything new of it,
-   * so Restore doesn't come back for a moment between the two.
+   * stays so until the list says it's loaded, or says its state has moved
+   * on from what it was then, so Restore doesn't come back for a moment
+   * between the two.
    */
-  let restoring = $state.raw<{ key: string; answered: DeepReadonly<SavedChat[]> | null } | null>(null)
+  let restoring = $state.raw<{ key: string; answered: string | null } | null>(null)
+
+  /** A saved state, to tell whether it has changed: each list comes anew, whole. */
+  const stateKey = (chat: DeepReadonly<SavedChat>) => JSON.stringify(chat.state)
 
   /** Why restoring a chat from here failed, while its state is still what it was then. */
   interface Problem {
     text: string
-    /** Why it couldn't be restored, if CAF said. */
-    why: DeepReadonly<CannotRestore> | null
+    /** Whether trying again may help. */
+    again: boolean
     /** The chat's state when it failed. */
     state: string
   }
@@ -53,7 +57,7 @@
     if (restoring === null) return
     const row = rows.get(restoring.key)
     if (readOnly || row === undefined || row.state.type === 'Loaded') restoring = null
-    else if (restoring.answered !== null && saved !== restoring.answered) restoring = null
+    else if (restoring.answered !== null && stateKey(row) !== restoring.answered) restoring = null
   })
 
   async function restore(chat: DeepReadonly<SavedChat>) {
@@ -63,21 +67,29 @@
     delete problems[key]
     const error = await attempt(() => actions.restore(chat.header.chat, chat.shelf))
     if (restoring?.key !== key) return
+    const now = saved.find((each) => keyOf(each) === key) ?? chat
     if (error === null) {
-      restoring = { key, answered: saved }
+      restoring = { key, answered: stateKey(now) }
       return
     }
     restoring = null
-    const why = error instanceof CafError && error.why.type === 'CannotRestore' ? error.why.value : null
-    const now = saved.find((each) => keyOf(each) === key) ?? chat
-    problems[key] = { text: errorText(error), why, state: now.state.type }
+    problems[key] = { text: errorText(error), again: helps(error), state: now.state.type }
+  }
+
+  /** Whether trying again after `error` may help: not once CAF has gone, or for a reason that stays. */
+  function helps(error: unknown): boolean {
+    if (!(error instanceof CafError)) return true
+    const why = error.why
+    if (why.type === 'CannotRestore') return mayRestoreAgain(why.value)
+    if (why.type === 'Refused') return why.value.type !== 'BadShelf'
+    return why.type !== 'Gone'
   }
 
   /** Whether to offer Restore: not after a failure that trying again can't help. */
   function offered(chat: DeepReadonly<SavedChat>, problem: Problem | undefined): boolean {
     if (chat.state.type === 'Failed') return mayRestoreAgain(chat.state.value)
     if (chat.state.type !== 'Saved') return false
-    return problem?.why == null || mayRestoreAgain(problem.why)
+    return problem?.again ?? true
   }
 </script>
 
@@ -89,12 +101,12 @@
       {@const key = keyOf(chat)}
       {@const name = nameOf(chat)}
       {@const problem = problems[key]}
-      {@const again = state.type === 'Failed' || problem !== undefined}
+      {@const afterFailure = state.type === 'Failed' || problem !== undefined}
       <li data-state={state.type}>
         <span class="name" title={name}>{name}</span>
         <span class="meta" title={header.cwd}>{header.agent} · {folderName(header.cwd)}</span>
         <span class="meta">
-          <time datetime={new Date(header.changed).toISOString()} title="Last changed {fullTime(header.changed)}">
+          <time datetime={isoTime(header.changed)} title="Last changed {fullTime(header.changed)}">
             {dayAndTime(header.changed)}
           </time>
           · {turnCount(header.turns)}{#if header.closed}{' '}· closed{/if}
@@ -110,11 +122,11 @@
             {#if offered(chat, problem)}
               <button
                 type="button"
-                aria-label={again ? `Try again to restore ${name}` : `Restore ${name}`}
+                aria-label={afterFailure ? `Try again to restore ${name}` : `Restore ${name}`}
                 disabled={readOnly || restoring !== null}
                 onclick={() => restore(chat)}
               >
-                {again ? 'Try again' : 'Restore'}
+                {afterFailure ? 'Try again' : 'Restore'}
               </button>
             {/if}
           {/if}

@@ -3,7 +3,7 @@
   import type { DeepReadonly, Turn, UserMessage } from '@clackatoo/caf'
   import { attempt } from './actions.ts'
   import Item from './Item.svelte'
-  import { clock, fullTime, took } from './time.ts'
+  import { clock, fullTime, isoTime, took } from './time.ts'
   import { errorText, failureText, lifeHint, lifeLabel, remedyText, shortId, tagOf } from './words.ts'
 
   let {
@@ -77,7 +77,7 @@
     {#if turn.imported}<span class="history" title="Imported from the agent's own record: CAF didn't see it happen">History</span>{/if}
     <span class="life" title={lifeHint(turn.life)}>{lifeLabel(turn.life)}</span>
     {#if turn.window.start !== null}
-      <time class="when" datetime={new Date(turn.window.start).toISOString()} title={fullTime(turn.window.start)}>
+      <time class="when" datetime={isoTime(turn.window.start)} title={fullTime(turn.window.start)}>
         {clock(turn.window.start)}
       </time>
     {/if}

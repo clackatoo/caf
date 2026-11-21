@@ -31,6 +31,12 @@ export function dayAndTime(wall: Wall): string {
   return new Date(wall).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
+/** A calendar time for a `<time>`'s `datetime`, or none if it isn't one a `Date` can hold. */
+export function isoTime(wall: Wall): string | undefined {
+  const date = new Date(wall)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
+
 /** A calendar time in full, for a tooltip. */
 export function fullTime(wall: Wall): string {
   return new Date(wall).toLocaleString()

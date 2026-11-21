@@ -32,7 +32,7 @@ describe('the chat state', () => {
   it('says calmly that a chat with no session is continued by sending to it', () => {
     const { container } = draw(chat({ state: { type: 'Idle' } }))
     const banner = container.querySelector('[role=status]')!
-    expect(banner.textContent).toBe('Not running: sending a message continues it.')
+    expect(banner.textContent).toBe('Not running: the next message starts it again, continuing where the agent can.')
     expect(banner.classList.contains('lost')).toBe(false)
     expect(container.querySelector('header .state')?.textContent).toBe('Not running')
     expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).disabled).toBe(false)
