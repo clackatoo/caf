@@ -180,7 +180,7 @@ async fn installing(
     let done = match built {
         Ok(()) => {
             let (build, place) = (build.clone(), place.clone());
-            blocking(move || fs::rename(&build, &place))
+            blocking(move || into_place(&build, &place))
                 .await
                 .map_err(failure)
         }
@@ -249,6 +249,19 @@ async fn removing(root: &Path, folder: &str, unused_since: Wall) -> io::Result<b
             Ok(true)
         }
     }
+}
+
+/// Renames a built install into place, once all it holds is on the disk:
+/// a power cut must never leave an install that looks whole and isn't.
+/// Its folder is synced, the whole filesystem it's on with it, then
+/// renamed, and the folder it's renamed in synced so the rename lasts too.
+fn into_place(build: &Path, place: &Path) -> io::Result<()> {
+    rustix::fs::syncfs(File::open(build)?)?;
+    fs::rename(build, place)?;
+    if let Some(root) = place.parent() {
+        File::open(root)?.sync_all()?;
+    }
+    Ok(())
 }
 
 /// Whether `name` can be an install's folder: one plain name, not hidden,

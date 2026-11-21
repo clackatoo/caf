@@ -26,7 +26,7 @@
 //!
 //! | Name | What it is |
 //! |---|---|
-//! | `<profile>-<version>/` | An install, complete, named after its profile, such as `claude-agent-acp-0.98.0`: only ever renamed into place whole. Its `.used` file says when a process last started from it |
+//! | `<profile>-<version>/` | An install, complete, named after its profile, such as `claude-agent-acp-0.98.0`: only ever renamed into place whole, once all it holds is synced to the disk, so even a power cut never leaves one that looks whole and isn't. Its `.used` file says when a process last started from it |
 //! | `<profile>-private/` | An agent's private folder, which outlives its versions: made, readable only by the user, by an install whose directive names it; never listed, never removed. One that's a link is refused |
 //! | `.lock` | The lock every install and removal takes, so only one runs at a time on the machine |
 //! | `.build-…/` | An install being built. Any left when nothing holds `.lock` is a cut-off one, removed |
