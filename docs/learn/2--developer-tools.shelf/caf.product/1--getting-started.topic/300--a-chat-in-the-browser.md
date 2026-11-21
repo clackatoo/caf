@@ -333,9 +333,9 @@ care where the chat came from:
 ```svelte
 <script lang="ts">
   // Kept as it changes, so the view follows an install's progress and a
-  // sign-in's link as they come.
+  // sign-in's link as they come, until the component goes.
   let agents = $state.raw(caf.agents);
-  caf.onAgents((now) => (agents = now));
+  $effect(() => caf.onAgents((now) => (agents = now)));
 </script>
 
 <ChatView

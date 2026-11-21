@@ -147,9 +147,12 @@ debugger offers: whether it's installed, and whether it's signed in.
   shows only where CAF can sign in now: for an agent the debugger starts
   itself, once it has answered in a chat as the adapter its profile is
   for. It shows while signed in too, to switch accounts.
-  The panel then shows a link to open in a new tab, a code to type there if
-  the agent shows one, and a box to paste a code into, for when the sign-in
-  page gives you one instead. **Stop signing in** stops it.
+  The sign-in then shows a link to open in a new tab, a code to type there
+  if the agent shows one, and a box to paste a code into, for when the
+  sign-in page gives you one instead. **Stop signing in** stops it. It
+  shows in the chat beside the panel, if that chat is with the agent and
+  isn't closed, and the panel says "Signing in: see the chat."; otherwise
+  in the panel.
 - **Sign out** signs out of it.
 
 The debugger lets its page do all of this. Installs go where every CAF
