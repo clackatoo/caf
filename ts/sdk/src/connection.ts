@@ -13,12 +13,23 @@ import type {
   Outcome,
   QuestionId,
   Refused,
+  Rights,
   TurnId,
   UserMessage,
 } from "./types.ts";
 import { ChatCopy } from "./copy.ts";
 import type { DeepReadonly } from "./readonly.ts";
-import { isArrayOf, isChat, isNumber, isRecord, isStatus, isString, isSummary, isTagged } from "./shape.ts";
+import {
+  isArrayOf,
+  isChat,
+  isNumber,
+  isRecord,
+  isRights,
+  isStatus,
+  isString,
+  isSummary,
+  isTagged,
+} from "./shape.ts";
 
 /** The versions of the viewer wire this SDK speaks. */
 const VERSIONS = { min: 1, max: 1 } as const;
@@ -171,6 +182,7 @@ export class Connection {
   readonly #transport: Transport;
   #agents: readonly DeepReadonly<AgentStatus>[];
   readonly #run: string;
+  readonly #may: Readonly<Rights>;
   #chats: readonly Readonly<ChatSummary>[];
   readonly #chatListeners = new Set<(chats: readonly Readonly<ChatSummary>[]) => void>();
   readonly #agentListeners = new Set<(agents: readonly DeepReadonly<AgentStatus>[]) => void>();
@@ -187,11 +199,13 @@ export class Connection {
     agents: readonly AgentStatus[],
     chats: readonly ChatSummary[],
     run: string,
+    may: Rights,
   ) {
     this.#transport = transport;
     this.#agents = agents;
     this.#chats = chats;
     this.#run = run;
+    this.#may = { act: may.act, agents: may.agents };
   }
 
   /**
@@ -215,7 +229,7 @@ export class Connection {
       }
       let connection: Connection | null = null;
       /** What the Welcome said, while the agents' statuses are awaited. */
-      let welcomed: { chats: ChatSummary[]; run: string } | null = null;
+      let welcomed: { chats: ChatSummary[]; run: string; may: Rights } | null = null;
       let settled = false;
       const settle = () => {
         settled = true;
@@ -243,7 +257,7 @@ export class Connection {
             case "Agents": {
               if (!isArrayOf(value, isStatus)) return fail({ type: "Disconnected" });
               settle();
-              connection = new Connection(transport, value, welcomed.chats, welcomed.run);
+              connection = new Connection(transport, value, welcomed.chats, welcomed.run, welcomed.may);
               return resolve(connection);
             }
             default:
@@ -257,15 +271,15 @@ export class Connection {
         switch (message.type) {
           case "Welcome": {
             if (!isRecord(value)) return fail({ type: "Disconnected" });
-            const { version, agents, chats, run } = value;
+            const { version, agents, chats, run, may } = value;
             // CAF chooses one both speak, or it's broken.
             if (!isNumber(version) || version < VERSIONS.min || version > VERSIONS.max)
               return fail({ type: "Disconnected" });
-            if (!isArrayOf(agents, isString) || !isArrayOf(chats, isSummary) || !isString(run)) {
+            if (!isArrayOf(agents, isString) || !isArrayOf(chats, isSummary) || !isString(run) || !isRights(may)) {
               return fail({ type: "Disconnected" });
             }
             // Its agents' names come again, with their statuses, next.
-            welcomed = { chats, run };
+            welcomed = { chats, run, may };
             return;
           }
           case "NoCommonVersion": {
@@ -323,6 +337,17 @@ export class Connection {
    */
   get run(): string {
     return this.#run;
+  }
+
+  /**
+   * What the host lets this viewer do: `act` on chats (send, stop, answer
+   * and close), and on `agents` (install, and sign in and out). Offer only
+   * what it may: anything else is answered `NotAllowed`. A viewer that may
+   * not act on agents gets no sign-in's link or code. Whether it may open
+   * chats isn't said, as the host decides each request.
+   */
+  get may(): Readonly<Rights> {
+    return this.#may;
   }
 
   /** Calls `listener` with the open chats each time the list changes. Returns a function that stops it. */

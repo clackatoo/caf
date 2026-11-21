@@ -2,7 +2,7 @@
 // looks things up, lists where it adds to them, and the type of whatever
 // it reads. What it never reads is the app's to draw, so isn't checked.
 
-import type { AgentStatus, Chat, ChatSummary, Item, Turn } from "./types.ts";
+import type { AgentStatus, Chat, ChatSummary, Item, Rights, Turn } from "./types.ts";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -51,10 +51,22 @@ export function isSummary(value: unknown): value is ChatSummary {
 
 /**
  * An agent's status. Its states are only the app's to draw, so any of
- * them passes, even of a variant this SDK doesn't know.
+ * them passes, even of a variant this SDK doesn't know. `can_sign_in`
+ * decides whether an app offers Sign in, so it must be a boolean.
  */
 export function isStatus(value: unknown): value is AgentStatus {
-  return isRecord(value) && isString(value.name) && isTagged(value.install) && isTagged(value.sign_in);
+  return (
+    isRecord(value) &&
+    isString(value.name) &&
+    isTagged(value.install) &&
+    isTagged(value.sign_in) &&
+    typeof value.can_sign_in === "boolean"
+  );
+}
+
+/** What a viewer may do: an app offers what these say, so each must be a boolean. */
+export function isRights(value: unknown): value is Rights {
+  return isRecord(value) && typeof value.act === "boolean" && typeof value.agents === "boolean";
 }
 
 /**

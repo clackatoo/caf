@@ -80,7 +80,17 @@ describe("the handshake", () => {
     expect(caf.agents).toStrictEqual(agents.value);
     expect(caf.chats).toStrictEqual([{ id: 1000, agent: "claude", cwd: "/home/me/project" }]);
     expect(caf.run).toBe("run-1");
+    expect(caf.may).toStrictEqual({ act: true, agents: true });
     expect(link.closed).toBe(false);
+  });
+
+  test("says what the host lets this viewer do", async () => {
+    const link = new FakeTransport();
+    const opening = Connection.open(link);
+    link.deliver({ ...welcome, value: { ...welcome.value, may: { act: false, agents: false } } });
+    link.deliver(agents);
+    const caf = await opening;
+    expect(caf.may).toStrictEqual({ act: false, agents: false });
   });
 
   test("no common version rejects, and ends the link", async () => {
@@ -133,6 +143,11 @@ describe("the handshake", () => {
       "a Welcome of a version it doesn't speak",
       JSON.stringify({ ...welcome, value: { ...welcome.value, version: 2 } }),
     ],
+    ["a Welcome without what the viewer may do", JSON.stringify({ ...welcome, value: { ...welcome.value, may: undefined } })],
+    [
+      "a Welcome whose rights aren't booleans",
+      JSON.stringify({ ...welcome, value: { ...welcome.value, may: { act: "yes", agents: true } } }),
+    ],
     [
       "a Welcome with a broken chat",
       JSON.stringify({ type: "Welcome", value: { version: 1, agents: [], chats: [{}] } }),
@@ -163,6 +178,14 @@ describe("the handshake", () => {
       "an agent without its sign-in state",
       JSON.stringify({ type: "Agents", value: [{ name: "claude", install: { type: "Host" } }] }),
     ],
+    [
+      "an agent without whether it can be signed in to",
+      JSON.stringify({ type: "Agents", value: [{ ...agents.value[0], can_sign_in: undefined }] }),
+    ],
+    [
+      "an agent whose can_sign_in isn't a boolean",
+      JSON.stringify({ type: "Agents", value: [{ ...agents.value[0], can_sign_in: "true" }] }),
+    ],
     ["another message of version 1", JSON.stringify({ type: "Chats", value: [] })],
     ["a second Welcome", JSON.stringify(welcome)],
   ])("%s after the Welcome, in place of the agents, ends the link", async (_, text) => {
@@ -186,6 +209,7 @@ describe("the agents", () => {
         name: "claude",
         install: { type: "Installing", value: { done: 1_000_000, size: 626_797_331 } },
         sign_in: { type: "SignedOut" },
+        can_sign_in: false,
       },
     ];
     link.deliver({ type: "Agents", value: next });
@@ -215,6 +239,7 @@ describe("the agents", () => {
         name: "claude",
         install: { type: "Updating", value: { from: "0.98.0" } },
         sign_in: { type: "Expired" },
+        can_sign_in: true,
         extra: true,
       },
     ];
@@ -814,6 +839,8 @@ describe("the link ending", () => {
       held(caf.send(1000, { parts: [] })),
       held(caf.stop(1000)),
       held(caf.close(1000)),
+      held(caf.install("claude")),
+      held(caf.paste("claude", "code")),
     ];
     link.drop();
     for (const each of pending) expect(await rejection(each)).toStrictEqual({ type: "Disconnected" });

@@ -63,6 +63,7 @@ export const welcome = {
     agents: ["claude", "fake"],
     chats: [{ id: 1000, agent: "claude", cwd: "/home/me/project" }],
     run: "run-1",
+    may: { act: true, agents: true },
   },
 } satisfies ToViewer;
 
