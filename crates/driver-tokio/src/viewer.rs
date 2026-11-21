@@ -293,7 +293,10 @@ impl<A: AppItem, D: AppData> Link<A, D> {
                     None => self.gone = true,
                 },
                 message = self.watches.next() => room.send(message),
-                (request, outcome) = self.restores.next() => room.send(ToViewer::Done { request, outcome }),
+                (request, outcome) = self.restores.next() => {
+                    self.opened(&outcome);
+                    room.send(ToViewer::Done { request, outcome });
+                }
             }
         }
     }
@@ -374,7 +377,17 @@ impl<A: AppItem, D: AppData> Link<A, D> {
             // nothing to do.
             _ => return,
         };
+        self.opened(&outcome);
         room.send(ToViewer::Done { request, outcome });
+    }
+
+    /// A chat opened or restored is in the next [`ToViewer::Chats`], as
+    /// the wire promises: one is sent after, even if the list it holds
+    /// went out before the answer.
+    fn opened(&mut self, outcome: &Outcome) {
+        if matches!(outcome, Outcome::Opened(_)) {
+            self.chats.again();
+        }
     }
 }
 

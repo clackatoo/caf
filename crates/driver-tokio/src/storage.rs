@@ -74,8 +74,12 @@ impl<A: AppItem, D: AppData> StorageDriver<A, D> {
             None => directive,
         };
         if let Some(ticket) = ticket_of(&directive) {
-            let failed = StorageEvent::Failed("CAF has no store to keep chats in".into());
-            let _ = self.tell.send((ticket, failed));
+            let why = if self.work.is_some() {
+                "the store's thread has gone"
+            } else {
+                "CAF has no store to keep chats in"
+            };
+            let _ = self.tell.send((ticket, StorageEvent::Failed(why.into())));
         }
     }
 
@@ -106,11 +110,26 @@ fn keep<A: AppItem, D: AppData>(
 ) {
     while let Ok(directive) = inbox.recv() {
         let ticket = ticket_of(&directive);
+        // A load that panics may have taken the chat's lock: it's let go,
+        // unless the store held it already, as a failed load takes none.
+        let loading = match &directive {
+            StorageDirective::Load { shelf, chat, .. } if !store.holds(shelf, *chat) => {
+                Some((shelf.clone(), *chat))
+            }
+            _ => None,
+        };
         let done = std::panic::catch_unwind(AssertUnwindSafe(|| {
             caf_save::carry_out(&mut *store, directive)
         }));
         let answer = done.unwrap_or_else(|_| {
             log::warn!(target: "caf", "the store panicked: what it was doing failed");
+            if let Some((shelf, chat)) = &loading {
+                let released =
+                    std::panic::catch_unwind(AssertUnwindSafe(|| store.release(shelf, *chat)));
+                if released.is_err() {
+                    log::warn!(target: "caf", "the store panicked again, letting go of chat {chat}");
+                }
+            }
             ticket.map(|ticket| (ticket, StorageEvent::Failed("the store panicked".into())))
         });
         if let Some(answer) = answer {

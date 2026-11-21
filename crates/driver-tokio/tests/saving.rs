@@ -137,24 +137,20 @@ async fn relisted<D: AppData>(
     what: &str,
     done: impl Fn(&[SavedChat]) -> bool,
 ) -> Vec<SavedChat> {
-    let mut watch = caf.watch_saved();
-    let mut last = Vec::new();
-    let waited = tokio::time::timeout(PATIENCE, async {
-        loop {
-            caf.list_saved(shelf(on)).await.unwrap();
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            let saved = watch.next().await?;
-            if done(&saved) {
-                return Some(saved);
-            }
-            last = saved;
+    let started = std::time::Instant::now();
+    loop {
+        caf.list_saved(shelf(on)).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        // A new watch gives the list as it is at once.
+        let saved = caf.watch_saved().next().await;
+        let saved = saved.unwrap_or_else(|| panic!("CAF ended waiting for {what}"));
+        if done(&saved) {
+            return saved;
         }
-    })
-    .await;
-    match waited {
-        Ok(Some(saved)) => saved,
-        Ok(None) => panic!("CAF ended waiting for {what}"),
-        Err(_) => panic!("gave up waiting for {what}: {last:#?}"),
+        assert!(
+            started.elapsed() < PATIENCE,
+            "gave up waiting for {what}: {saved:#?}"
+        );
     }
 }
 
@@ -640,7 +636,8 @@ async fn shutting_down_writes_a_chat_mid_turn_whole_and_leaves_nothing_locked() 
         "slow.jsonl",
         &after_handshake(&[prompt(), say("s1", "Working on it"), "hang".into()]),
     );
-    let (caf, running) = start::<NoAppData>(&dir, &script);
+    let spy = Spy::default();
+    let (caf, running) = start_with::<NoAppData>(&dir, &script, Some(spy.store(&dir)), None);
     let chat = caf.open_chat(saved_open(&dir, SHELF)).await.unwrap();
     let mut watch = chat.watch();
     chat.send(UserMessage::text("Hi")).await.unwrap();
@@ -651,6 +648,7 @@ async fn shutting_down_writes_a_chat_mid_turn_whole_and_leaves_nothing_locked() 
     })
     .await;
     stop(&caf, running).await;
+    assert_eq!(spy.released(), [(shelf(SHELF), chat.id)], "let go, once");
     // Free for another program, and as CAF left it.
     let mut store = FileStore::new(root(&dir));
     let stored = store
@@ -661,18 +659,99 @@ async fn shutting_down_writes_a_chat_mid_turn_whole_and_leaves_nothing_locked() 
     store.release(&shelf(SHELF), chat.id);
 }
 
-/// A store that panics on its first write, then keeps chats in files.
-struct Panicky {
-    files: FileStore,
-    panicked: Arc<Mutex<bool>>,
+/// A store keeping chats in files that the test can see into and hold
+/// up, from outside CAF and after it has shut down: it notes each chat
+/// it lets go, and its next call of a kind may wait for the test, or
+/// panic.
+#[derive(Clone, Default)]
+struct Spy(Arc<Mutex<Spied>>);
+
+#[derive(Default)]
+struct Spied {
+    released: Vec<(Shelf, ChatId)>,
+    /// The kind of call that next panics: once.
+    panic: Option<&'static str>,
+    /// The kind of call that next waits until the test sends: once.
+    hold: Option<(&'static str, std::sync::mpsc::Receiver<()>)>,
+    /// A call is waiting for the test.
+    holding: bool,
 }
 
-impl Store for Panicky {
+impl Spy {
+    /// The store, keeping chats in the test's folder.
+    fn store(&self, dir: &Dir) -> Box<dyn Store> {
+        Box::new(Spying {
+            files: FileStore::new(root(dir)),
+            spy: self.clone(),
+        })
+    }
+
+    /// Has the next call of `kind` panic.
+    fn panic_on(&self, kind: &'static str) {
+        self.0.lock().unwrap().panic = Some(kind);
+    }
+
+    /// Has the next call of `kind` wait until the test sends.
+    fn hold(&self, kind: &'static str) -> std::sync::mpsc::Sender<()> {
+        let (go, wait) = std::sync::mpsc::channel();
+        self.0.lock().unwrap().hold = Some((kind, wait));
+        go
+    }
+
+    /// Waits until a call is held.
+    async fn held(&self) {
+        let held = tokio::time::timeout(PATIENCE, async {
+            while !self.0.lock().unwrap().holding {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(held.is_ok(), "the store is called");
+    }
+
+    fn released(&self) -> Vec<(Shelf, ChatId)> {
+        self.0.lock().unwrap().released.clone()
+    }
+
+    /// Waits here if the test holds calls of `kind`.
+    fn wait(&self, kind: &str) {
+        let mut spied = self.0.lock().unwrap();
+        if spied.hold.as_ref().is_none_or(|(held, _)| *held != kind) {
+            return;
+        }
+        let (_, wait) = spied.hold.take().unwrap();
+        spied.holding = true;
+        drop(spied);
+        let _ = wait.recv_timeout(PATIENCE);
+        self.0.lock().unwrap().holding = false;
+    }
+
+    /// Panics here if the test asked for one in calls of `kind`.
+    fn panic(&self, kind: &str) {
+        let mut spied = self.0.lock().unwrap();
+        if spied.panic == Some(kind) {
+            spied.panic = None;
+            drop(spied);
+            panic!("the app's store has a bug, in {kind}");
+        }
+    }
+}
+
+struct Spying {
+    files: FileStore,
+    spy: Spy,
+}
+
+impl Store for Spying {
     fn list(&mut self, shelf: &Shelf) -> Result<Vec<(ChatId, Vec<u8>)>, StoreError> {
         self.files.list(shelf)
     }
     fn load(&mut self, shelf: &Shelf, chat: ChatId) -> Result<Stored, StoreError> {
-        self.files.load(shelf, chat)
+        self.spy.wait("load");
+        let stored = self.files.load(shelf, chat);
+        // After taking the chat's lock.
+        self.spy.panic("load");
+        stored
     }
     fn snapshot(
         &mut self,
@@ -681,13 +760,7 @@ impl Store for Panicky {
         header: &[u8],
         snapshot: &[u8],
     ) -> Result<(), StoreError> {
-        let mut panicked = self.panicked.lock().unwrap();
-        if !*panicked {
-            *panicked = true;
-            drop(panicked);
-            panic!("the app's store has a bug");
-        }
-        drop(panicked);
+        self.spy.panic("snapshot");
         self.files.snapshot(shelf, chat, header, snapshot)
     }
     fn append(
@@ -700,7 +773,14 @@ impl Store for Panicky {
         self.files.append(shelf, chat, header, record)
     }
     fn release(&mut self, shelf: &Shelf, chat: ChatId) {
+        self.spy.wait("release");
         self.files.release(shelf, chat);
+        self.spy
+            .0
+            .lock()
+            .unwrap()
+            .released
+            .push((shelf.clone(), chat));
     }
     fn holds(&self, shelf: &Shelf, chat: ChatId) -> bool {
         self.files.holds(shelf, chat)
@@ -709,6 +789,7 @@ impl Store for Panicky {
         self.files.delete(shelf, chat)
     }
     fn move_shelf(&mut self, from: &Shelf, to: &Shelf) -> Result<(), StoreError> {
+        self.spy.wait("move");
         self.files.move_shelf(from, to)
     }
 }
@@ -716,82 +797,170 @@ impl Store for Panicky {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_store_that_panics_fails_that_write_and_the_chat_is_saved_after() {
     let dir = Dir::new();
-    let panicked = Arc::new(Mutex::new(false));
-    let store = Panicky {
-        files: FileStore::new(root(&dir)),
-        panicked: Arc::clone(&panicked),
-    };
+    let spy = Spy::default();
+    spy.panic_on("snapshot");
     let (caf, running) =
-        start_with::<NoAppData>(&dir, &first_script(&dir), Some(Box::new(store)), None);
+        start_with::<NoAppData>(&dir, &first_script(&dir), Some(spy.store(&dir)), None);
     let chat = caf.open_chat(saved_open(&dir, SHELF)).await.unwrap();
     let mut watch = chat.watch();
     chat.send(UserMessage::text("Hi")).await.unwrap();
     until(&chat, &mut watch, "the answer", finished).await;
     stop(&caf, running).await;
-    assert!(*panicked.lock().unwrap(), "the store panicked");
+    assert!(spy.0.lock().unwrap().panic.is_none(), "the store panicked");
+    assert!(spy.released().contains(&(shelf(SHELF), chat.id)));
     let mut store = FileStore::new(root(&dir));
     let stored = store.load(&shelf(SHELF), chat.id).expect("saved after all");
     let saved: caf_core::save::Saved = caf_save::decode(&stored.snapshot, &stored.journal).unwrap();
     assert_eq!(words(&saved.chat.turns[0]), "Hello there");
 }
 
-/// A store whose loads wait until the test lets them go.
-struct Slow {
-    files: FileStore,
-    go: Arc<Mutex<std::sync::mpsc::Receiver<()>>>,
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_store_that_panics_loading_a_chat_lets_it_go() {
+    let dir = Dir::new();
+    let id = a_chat_saved_by_another_run(&dir).await;
+    let spy = Spy::default();
+    spy.panic_on("load");
+    let (caf, running) =
+        start_with::<NoAppData>(&dir, &first_script(&dir), Some(spy.store(&dir)), None);
+    let restored = caf.restore(RestoreChat::new(id, shelf(SHELF))).await;
+    assert_eq!(
+        restored.map(|chat| chat.id),
+        Err(Error::CannotRestore(CannotRestore::Store(
+            "the store panicked".into()
+        )))
+    );
+    assert!(spy.released().contains(&(shelf(SHELF), id)), "let go");
+    // Free, for another program and for this one.
+    let mut other = FileStore::new(root(&dir));
+    other.load(&shelf(SHELF), id).expect("free for another");
+    other.release(&shelf(SHELF), id);
+    let chat = caf
+        .restore(RestoreChat::new(id, shelf(SHELF)))
+        .await
+        .unwrap();
+    assert_eq!(picture(&chat).await.turns.len(), 1);
+    stop(&caf, running).await;
 }
 
-impl Store for Slow {
-    fn list(&mut self, shelf: &Shelf) -> Result<Vec<(ChatId, Vec<u8>)>, StoreError> {
-        self.files.list(shelf)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutting_down_again_waits_for_the_first_to_let_the_store_go() {
+    let dir = Dir::new();
+    let spy = Spy::default();
+    let script = dir.script("idle.jsonl", &handshake("s1"));
+    let (caf, running) = start_with::<NoAppData>(&dir, &script, Some(spy.store(&dir)), None);
+    let chat = caf.open_chat(saved_open(&dir, SHELF)).await.unwrap();
+    chat.set_data(NoAppData).await.unwrap();
+    let go = spy.hold("release");
+    let first = tokio::spawn({
+        let caf = caf.clone();
+        async move { caf.shutdown().await }
+    });
+    spy.held().await;
+    let second = tokio::spawn({
+        let caf = caf.clone();
+        async move { caf.shutdown().await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(
+        !first.is_finished() && !second.is_finished(),
+        "the store holds the chat still"
+    );
+    go.send(()).unwrap();
+    tokio::time::timeout(PATIENCE, async {
+        first.await.unwrap();
+        second.await.unwrap();
+        // Called once it has all ended, it returns at once.
+        caf.shutdown().await;
+        running.await;
+    })
+    .await
+    .expect("shut down");
+    assert_eq!(spy.released(), [(shelf(SHELF), chat.id)]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_chat_closed_while_a_move_of_its_shelf_waits_is_shown_as_it_was_left() {
+    let dir = Dir::new();
+    let spy = Spy::default();
+    let script = dir.script("idle.jsonl", &handshake("s1"));
+    let (caf, running) = start_with::<NoAppData>(&dir, &script, Some(spy.store(&dir)), None);
+    let mut saved = caf.watch_saved();
+    caf.list_saved(shelf("a")).await.unwrap();
+    let chat = caf.open_chat(saved_open(&dir, "a")).await.unwrap();
+    let id = chat.id;
+    chat.set_data(NoAppData).await.unwrap();
+    listed(&mut saved, "the chat, written", |saved| {
+        state_of(saved, id) == Some(&SavedState::Loaded)
+    })
+    .await;
+    let mut watch = chat.watch();
+    assert!(matches!(
+        watch.next().await,
+        Some(caf_driver_tokio::Update::Picture(_))
+    ));
+    let go = spy.hold("move");
+    caf.move_shelf(shelf("a"), shelf("b")).await.unwrap();
+    spy.held().await;
+    // Its last write waits for the move: it's shown as it was left all
+    // the same.
+    chat.close().await.unwrap();
+    let last = tokio::time::timeout(PATIENCE, async {
+        let mut last = None;
+        while let Some(update) = watch.next().await {
+            last = Some(update);
+        }
+        last
+    })
+    .await
+    .expect("the watch ends");
+    match last {
+        Some(caf_driver_tokio::Update::Picture(left)) => {
+            assert_eq!(left.state, ChatState::Closed);
+        }
+        other => panic!("the chat as it was left, not {other:?}"),
     }
-    fn load(&mut self, shelf: &Shelf, chat: ChatId) -> Result<Stored, StoreError> {
-        let _ = (self.go.lock().unwrap()).recv_timeout(PATIENCE);
-        self.files.load(shelf, chat)
-    }
-    fn snapshot(
-        &mut self,
-        shelf: &Shelf,
-        chat: ChatId,
-        header: &[u8],
-        snapshot: &[u8],
-    ) -> Result<(), StoreError> {
-        self.files.snapshot(shelf, chat, header, snapshot)
-    }
-    fn append(
-        &mut self,
-        shelf: &Shelf,
-        chat: ChatId,
-        header: &[u8],
-        record: &[u8],
-    ) -> Result<(), StoreError> {
-        self.files.append(shelf, chat, header, record)
-    }
-    fn release(&mut self, shelf: &Shelf, chat: ChatId) {
-        self.files.release(shelf, chat);
-    }
-    fn delete(&mut self, shelf: &Shelf, chat: ChatId) -> Result<(), StoreError> {
-        self.files.delete(shelf, chat)
-    }
-    fn move_shelf(&mut self, from: &Shelf, to: &Shelf) -> Result<(), StoreError> {
-        self.files.move_shelf(from, to)
-    }
+    // A watch made since isn't shown it.
+    assert!(caf.chat(id).watch().next().await.is_none());
+    go.send(()).unwrap();
+    stop(&caf, running).await;
+    assert!(
+        spy.released().contains(&(shelf("b"), id)),
+        "let go, where it moved"
+    );
+    let mut store = FileStore::new(root(&dir));
+    let heads = store.list(&shelf("b")).unwrap();
+    assert!(caf_save::decode_header(&heads[0].1).unwrap().closed);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn saved_chats_are_listed_in_the_order_they_were_made_whatever_their_shelf() {
+    let dir = Dir::new();
+    let script = dir.script("idle.jsonl", &handshake("s1"));
+    let (caf, running) = start::<NoAppData>(&dir, &script);
+    let mut saved = caf.watch_saved();
+    caf.list_saved(shelf("b")).await.unwrap();
+    caf.list_saved(shelf("a")).await.unwrap();
+    let older = caf.open_chat(saved_open(&dir, "a")).await.unwrap();
+    let newer = caf.open_chat(saved_open(&dir, "b")).await.unwrap();
+    older.set_data(NoAppData).await.unwrap();
+    newer.set_data(NoAppData).await.unwrap();
+    let list = listed(&mut saved, "both chats", |saved| saved.len() == 2).await;
+    let order: Vec<ChatId> = list.iter().map(|each| each.header.chat).collect();
+    assert_eq!(order, [older.id, newer.id], "{list:#?}");
+    stop(&caf, running).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_slow_store_holds_up_nothing_but_its_own_work() {
     let dir = Dir::new();
     let id = a_chat_saved_by_another_run(&dir).await;
-    let (go, wait) = std::sync::mpsc::channel();
-    let store = Slow {
-        files: FileStore::new(root(&dir)),
-        go: Arc::new(Mutex::new(wait)),
-    };
+    let spy = Spy::default();
+    let go = spy.hold("load");
     let script = dir.script(
         "second.jsonl",
         &after_handshake(&[prompt(), say("s1", "Quick"), end_turn()]),
     );
-    let (caf, running) = start_with::<NoAppData>(&dir, &script, Some(Box::new(store)), None);
+    let (caf, running) = start_with::<NoAppData>(&dir, &script, Some(spy.store(&dir)), None);
     let restoring = tokio::spawn({
         let caf = caf.clone();
         async move {
@@ -995,8 +1164,9 @@ async fn a_viewer_sees_saved_chats_and_restores_one_as_the_host_allows() {
     })
     .await
     .unwrap();
-    // Answered, with the chat in the list of open chats and loaded in the
-    // list of saved ones, in whatever order they come.
+    // Answered, then a list of open chats with it comes, as the wire
+    // promises, whatever came before; and it's loaded in the list of
+    // saved ones.
     let (mut opened, mut open, mut loaded) = (None, false, false);
     while opened.is_none() || !open || !loaded {
         let message = heard(&mut from, Some).await;
@@ -1006,7 +1176,8 @@ async fn a_viewer_sees_saved_chats_and_restores_one_as_the_host_allows() {
                 outcome,
             } => opened = Some(outcome),
             ToViewer::Chats(chats) => {
-                open = (chats.iter()).any(|each| each.id == id && each.shelf == Some(shelf(SHELF)));
+                open = opened.is_some()
+                    && (chats.iter()).any(|each| each.id == id && each.shelf == Some(shelf(SHELF)));
             }
             ToViewer::Saved(saved) => {
                 loaded = state_of(&saved, id) == Some(&SavedState::Loaded);
@@ -1053,16 +1224,13 @@ async fn a_viewer_sees_saved_chats_and_restores_one_as_the_host_allows() {
 async fn a_viewers_restore_holds_up_nothing_else_on_its_link() {
     let dir = Dir::new();
     let id = a_chat_saved_by_another_run(&dir).await;
-    let (go, wait) = std::sync::mpsc::channel();
-    let store = Slow {
-        files: FileStore::new(root(&dir)),
-        go: Arc::new(Mutex::new(wait)),
-    };
+    let spy = Spy::default();
+    let go = spy.hold("load");
     let script = dir.script(
         "second.jsonl",
         &after_handshake(&[prompt(), say("s1", "Quick"), end_turn()]),
     );
-    let (caf, running) = start_with::<NoAppData>(&dir, &script, Some(Box::new(store)), None);
+    let (caf, running) = start_with::<NoAppData>(&dir, &script, Some(spy.store(&dir)), None);
     let mut rules = ViewerRules::default();
     rules.restore = Box::new(|chat, on| Some(RestoreChat::new(chat, on.clone())));
     let (to, mut from) = viewer(&caf, rules).await;
@@ -1089,5 +1257,12 @@ async fn a_viewers_restore_holds_up_nothing_else_on_its_link() {
     .await;
     go.send(()).unwrap();
     assert_eq!(outcome(&mut from, 1).await, Outcome::Opened(id));
+    // A list of open chats with it comes after the answer, though the
+    // list changed before it.
+    heard(&mut from, |message| match message {
+        ToViewer::Chats(chats) => chats.iter().any(|each| each.id == id).then_some(()),
+        _ => None,
+    })
+    .await;
     stop(&caf, running).await;
 }

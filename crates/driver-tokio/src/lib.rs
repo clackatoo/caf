@@ -144,7 +144,9 @@
 //! host that wires the core up itself: [`AgentDriver`] runs adapter
 //! processes, [`TimerDriver`] wakes the core, [`SetupDriver`] installs
 //! agents and signs in to them, and a [`Policy`] answers permission
-//! requests.
+//! requests. The storage driver's work is `caf_save::carry_out`, which
+//! does one directive to a store, on any thread, with no runtime: the kit
+//! runs it on a thread of its own.
 
 mod agent;
 mod caf;
