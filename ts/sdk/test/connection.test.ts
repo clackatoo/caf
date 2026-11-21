@@ -84,13 +84,17 @@ describe("the handshake", () => {
     expect(link.closed).toBe(false);
   });
 
-  test("says what the host lets this viewer do", async () => {
+  test.each([
+    [{ act: false, agents: false }],
+    [{ act: true, agents: false }],
+    [{ act: false, agents: true }],
+  ])("says what the host lets this viewer do: %j", async (may) => {
     const link = new FakeTransport();
     const opening = Connection.open(link);
-    link.deliver({ ...welcome, value: { ...welcome.value, may: { act: false, agents: false } } });
+    link.deliver({ ...welcome, value: { ...welcome.value, may } });
     link.deliver(agents);
     const caf = await opening;
-    expect(caf.may).toStrictEqual({ act: false, agents: false });
+    expect(caf.may).toStrictEqual(may);
   });
 
   test("no common version rejects, and ends the link", async () => {
@@ -145,8 +149,12 @@ describe("the handshake", () => {
     ],
     ["a Welcome without what the viewer may do", JSON.stringify({ ...welcome, value: { ...welcome.value, may: undefined } })],
     [
-      "a Welcome whose rights aren't booleans",
+      "a Welcome whose act isn't a boolean",
       JSON.stringify({ ...welcome, value: { ...welcome.value, may: { act: "yes", agents: true } } }),
+    ],
+    [
+      "a Welcome whose agents isn't a boolean",
+      JSON.stringify({ ...welcome, value: { ...welcome.value, may: { act: true, agents: "yes" } } }),
     ],
     [
       "a Welcome with a broken chat",
