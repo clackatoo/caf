@@ -25,8 +25,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use caf_core::directive::StorageDirective;
+use caf_core::event::StorageEvent;
 use caf_core::save::{Entry, Header, Saved};
-use caf_core::{AppData, AppItem, ChatId, ItemKind, NoAppData, NoAppItems, Shelf};
+use caf_core::{AppData, AppItem, ChatId, ItemKind, NoAppData, NoAppItems, Shelf, Ticket};
 use caf_save::{
     FileStore, Squeeze, Store, VERSION, decode, decode_header, encode_header, encode_record,
     encode_snapshot,
@@ -744,5 +746,188 @@ fn this_version_keeps_files_as_its_sample_has_them() {
             inside(&made) == inside(&pinned)
         };
         assert!(same, "{name}: {SHAPE_CHANGED}");
+    }
+}
+
+/// A copy of version `version`'s sample's `files/`, in a scratch folder
+/// of its own.
+fn copy_files(version: u32, name: &str) -> Scratch {
+    let copy = Scratch::new(name);
+    fs::create_dir_all(copy.0.join("work")).expect("a copy");
+    let kept = folder(version).join("files/work");
+    for entry in fs::read_dir(&kept).expect("the sample's files") {
+        let entry = entry.expect("a file");
+        fs::copy(entry.path(), copy.0.join("work").join(entry.file_name())).expect("copied");
+    }
+    copy
+}
+
+/// The version a header or snapshot is in.
+fn version_of(bytes: &[u8]) -> u32 {
+    u32::from_le_bytes(bytes[3..7].try_into().expect("a version"))
+}
+
+/// Loads the sample's first chat with `carry_out`, as the storage driver
+/// does.
+fn carry_load(store: &mut dyn Store) -> Option<(Ticket, StorageEvent<Pin, Notes>)> {
+    let load = StorageDirective::Load {
+        ticket: Ticket(1),
+        shelf: shelf(),
+        chat: id(),
+    };
+    caf_save::carry_out(store, load)
+}
+
+#[test]
+fn an_older_versions_save_is_written_in_this_one_as_its_loaded() {
+    for version in 1..VERSION {
+        let copy = copy_files(version, &format!("upgrade-v{version}"));
+        let values = sample(version);
+        let mut store = FileStore::new(&copy.0);
+        // Loaded as it was saved.
+        match carry_load(&mut store) {
+            Some((Ticket(1), StorageEvent::Loaded(saved))) => {
+                assert_eq!(*saved, values.after, "v{version}");
+            }
+            other => panic!("v{version}: loaded, not {other:?}"),
+        }
+        // Its files are now this version's: its journal folded into its
+        // snapshot, under its newest header.
+        let mut upgraded = values.after.clone();
+        upgraded.header = values.header.clone();
+        let listed = store.list(&shelf()).expect("it lists");
+        let (_, header) = (listed.iter())
+            .find(|(chat, _)| *chat == id())
+            .expect("listed");
+        assert_eq!(version_of(header), VERSION);
+        assert_eq!(decode_header(header), Ok(values.header.clone()));
+        store.release(&shelf(), id());
+        let stored = FileStore::new(&copy.0)
+            .load(&shelf(), id())
+            .expect("it loads");
+        assert_eq!(version_of(&stored.snapshot), VERSION);
+        assert!(
+            stored.journal.is_empty(),
+            "v{version}: its journal is folded in"
+        );
+        assert_eq!(
+            decode(&stored.snapshot, &stored.journal),
+            Ok(upgraded.clone())
+        );
+
+        // So adding to it works at once, with no failed write.
+        let mut store = FileStore::new(&copy.0);
+        assert!(matches!(
+            carry_load(&mut store),
+            Some((_, StorageEvent::Loaded(_)))
+        ));
+        let entries: Vec<Entry<Pin, Notes>> = from(json!([{ "type": "Session", "value": "s3" }]));
+        let append = StorageDirective::Append {
+            ticket: Ticket(2),
+            shelf: shelf(),
+            header: values.header.clone(),
+            entries,
+        };
+        match caf_save::carry_out(&mut store, append) {
+            Some((Ticket(2), StorageEvent::Done { written })) => assert!(written > 0),
+            other => panic!("v{version}: added to, not {other:?}"),
+        }
+        store.release(&shelf(), id());
+        let stored = FileStore::new(&copy.0)
+            .load(&shelf(), id())
+            .expect("it loads");
+        upgraded.session = Some(caf_core::ids::AgentSessionId("s3".to_owned()));
+        assert_eq!(decode(&stored.snapshot, &stored.journal), Ok(upgraded));
+    }
+}
+
+/// A file store that can't write a snapshot, as on a disk that's full.
+struct Full(FileStore);
+
+impl Store for Full {
+    fn list(&mut self, shelf: &Shelf) -> Result<Vec<(ChatId, Vec<u8>)>, caf_save::StoreError> {
+        self.0.list(shelf)
+    }
+
+    fn load(
+        &mut self,
+        shelf: &Shelf,
+        chat: ChatId,
+    ) -> Result<caf_save::Stored, caf_save::StoreError> {
+        self.0.load(shelf, chat)
+    }
+
+    fn snapshot(
+        &mut self,
+        _: &Shelf,
+        _: ChatId,
+        _: &[u8],
+        _: &[u8],
+    ) -> Result<(), caf_save::StoreError> {
+        Err(caf_save::StoreError::Io(std::io::Error::other(
+            "the disk is full",
+        )))
+    }
+
+    fn append(
+        &mut self,
+        shelf: &Shelf,
+        chat: ChatId,
+        header: &[u8],
+        record: &[u8],
+    ) -> Result<(), caf_save::StoreError> {
+        self.0.append(shelf, chat, header, record)
+    }
+
+    fn release(&mut self, shelf: &Shelf, chat: ChatId) {
+        self.0.release(shelf, chat);
+    }
+
+    fn holds(&self, shelf: &Shelf, chat: ChatId) -> bool {
+        self.0.holds(shelf, chat)
+    }
+
+    fn delete(&mut self, shelf: &Shelf, chat: ChatId) -> Result<(), caf_save::StoreError> {
+        self.0.delete(shelf, chat)
+    }
+
+    fn move_shelf(&mut self, from: &Shelf, to: &Shelf) -> Result<(), caf_save::StoreError> {
+        self.0.move_shelf(from, to)
+    }
+}
+
+/// The files in `folder` but its locks, by name, with what they hold.
+fn files_in(folder: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut files: Vec<(String, Vec<u8>)> = (fs::read_dir(folder).expect("files"))
+        .map(|entry| entry.expect("a file").path())
+        .filter(|path| path.extension().is_none_or(|extension| extension != "lock"))
+        .map(|path| {
+            let name = path
+                .file_name()
+                .expect("a name")
+                .to_string_lossy()
+                .into_owned();
+            (name, fs::read(&path).expect("read"))
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+#[test]
+fn an_older_versions_save_that_cant_be_written_again_still_loads_as_it_was() {
+    for version in 1..VERSION {
+        let copy = copy_files(version, &format!("upgrade-full-v{version}"));
+        let before = files_in(&copy.0.join("work"));
+        let mut store = Full(FileStore::new(&copy.0));
+        match carry_load(&mut store) {
+            Some((_, StorageEvent::Loaded(saved))) => {
+                assert_eq!(*saved, sample(version).after, "v{version}");
+            }
+            other => panic!("v{version}: loaded, not {other:?}"),
+        }
+        store.release(&shelf(), id());
+        let after = files_in(&copy.0.join("work"));
+        assert_eq!(after, before, "v{version}: its save is left as it was");
     }
 }
