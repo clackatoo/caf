@@ -915,7 +915,6 @@ fn deleting_a_chat_closes_it_lets_it_go_and_removes_it() {
     script.at(1000);
     store.take(&script.woken());
     script.serve(&mut store, false);
-    script.list_saved(SHELF).1;
     store.take(&script.list_saved(SHELF).1);
     script.serve(&mut store, false);
     assert_eq!(
