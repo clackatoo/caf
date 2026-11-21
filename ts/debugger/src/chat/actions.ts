@@ -19,6 +19,20 @@ export interface ChatActions {
   sendAgain(message: DeepReadonly<UserMessage>): Promise<unknown> | void
   /** Close the chat. */
   close(): Promise<unknown> | void
+  /** Install the chat's agent. */
+  install(): Promise<unknown> | void
+  /** Stop installing the chat's agent. */
+  stopInstall(): Promise<unknown> | void
+  /**
+   * Start signing in to the chat's agent: the Sign in remedy of a turn
+   * that failed for want of it. The link to open then comes in the
+   * agent's status.
+   */
+  signIn(): Promise<unknown> | void
+  /** Give the agent's sign-in the code the user pasted. */
+  paste(text: string): Promise<unknown> | void
+  /** Stop signing in to the chat's agent. */
+  stopSignIn(): Promise<unknown> | void
 }
 
 /** What the user can do with the list of chats. */

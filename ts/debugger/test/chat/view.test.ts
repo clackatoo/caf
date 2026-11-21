@@ -165,12 +165,11 @@ describe('turns', () => {
   })
 
   it('says the other remedies, and names one it doesn\'t know', () => {
-    const remedies = ['SignIn', 'NewChat', 'Pray'].map((type) =>
+    const remedies = ['NewChat', 'Pray'].map((type) =>
       turn({ life: life('Failed', { reason: { type: 'Other' }, agent_said: null, remedy: { type } }) }),
     )
     const { container } = draw(chat({ turns: remedies }))
     const all = text(container)
-    expect(all).toContain('Sign in to the agent, then send again.')
     expect(all).toContain('Start a new chat with the same agent and folder.')
     expect(all).toContain("a remedy this viewer doesn't know (Pray)")
     expect(screen.queryByRole('button', { name: 'Send again' })).toBeNull()

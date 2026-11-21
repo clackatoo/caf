@@ -10,11 +10,14 @@
     turn,
     readOnly,
     sendAgain,
+    signIn,
     appSummary,
   }: {
     turn: DeepReadonly<Turn>
     readOnly: boolean
     sendAgain: (message: DeepReadonly<UserMessage>) => Promise<unknown> | void
+    /** The Sign in remedy: start signing in to the chat's agent. */
+    signIn: () => Promise<unknown> | void
     appSummary: (app: unknown) => string
   } = $props()
 
@@ -34,11 +37,11 @@
   let sending = $state(false)
   let problem = $state<string | null>(null)
 
-  async function again(message: DeepReadonly<UserMessage>) {
+  async function act(action: () => Promise<unknown> | void) {
     if (readOnly || sending) return
     sending = true
     problem = null
-    const error = await attempt(() => sendAgain(message))
+    const error = await attempt(action)
     sending = false
     if (error !== null) problem = errorText(error)
   }
@@ -103,8 +106,18 @@
       {#if failure.remedy !== null}
         {#if failure.remedy.type === 'SendAgain'}
           {#if message !== null}
-            <button type="button" disabled={readOnly || sending} onclick={() => again(message)}>Send again</button>
+            <button type="button" disabled={readOnly || sending} onclick={() => act(() => sendAgain(message))}>Send again</button>
           {/if}
+        {:else if failure.remedy.type === 'SignIn'}
+          <!-- Signing in doesn't send it again: once signed in, the user does. -->
+          <div class="remedies">
+            <button type="button" disabled={readOnly || sending} onclick={() => act(signIn)}>Sign in</button>
+            {#if message !== null}
+              <button type="button" class="quiet" disabled={readOnly || sending} onclick={() => act(() => sendAgain(message))}>
+                Send again
+              </button>
+            {/if}
+          </div>
         {:else}
           <div class="remedy">{remedyText(failure.remedy)}</div>
         {/if}
@@ -255,6 +268,15 @@
     background: var(--caf-accent);
     color: var(--caf-accent-text);
     cursor: pointer;
+  }
+  .remedies {
+    display: flex;
+    gap: 0.5em;
+  }
+  button.quiet {
+    background: var(--caf-bg);
+    color: var(--caf-text);
+    border-color: var(--caf-border);
   }
   button:disabled {
     opacity: 0.5;

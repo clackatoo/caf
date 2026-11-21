@@ -7,9 +7,10 @@
   // so the same view draws a live chat or one played back from a
   // recording. With `readOnly` (such as while looking back in time), it
   // draws the chat as it was, and nothing can be done in it.
-  import type { Chat, DeepReadonly } from '@clackatoo/caf'
+  import type { AgentStatus, Chat, DeepReadonly } from '@clackatoo/caf'
   import { untrack } from 'svelte'
   import { attempt, type ChatActions } from './actions.ts'
+  import AgentBanner from './AgentBanner.svelte'
   import Composer from './Composer.svelte'
   import Questions from './Questions.svelte'
   import StateBanner from './StateBanner.svelte'
@@ -20,12 +21,19 @@
 
   let {
     chat,
+    agent,
     actions,
     readOnly = false,
     readOnlyWhy = 'As it was then: nothing can be done here.',
     appSummary = () => "An item of the app's own",
   }: {
     chat: DeepReadonly<Chat>
+    /**
+     * The status of the chat's agent, from `Connection.agents`: whether
+     * it's installed and signed in. Without it, a chat waiting for its
+     * agent says only that it waits.
+     */
+    agent?: DeepReadonly<AgentStatus> | undefined
     actions: ChatActions
     readOnly?: boolean
     /** Why nothing can be done, said while `readOnly`. */
@@ -87,10 +95,23 @@
   {#if problem !== null}<div class="problem" role="alert">{problem}</div>{/if}
   {#if readOnly}<div class="looking-back" role="status">{readOnlyWhy}</div>{/if}
   <StateBanner state={chat.state} />
+  {#if !closed}
+    <AgentBanner
+      name={chat.agent}
+      agent={agent?.name === chat.agent ? agent : undefined}
+      waiting={chat.state.type === 'WaitingForAgent'}
+      {readOnly}
+      install={actions.install}
+      stopInstall={actions.stopInstall}
+      notNow={actions.stop}
+      paste={actions.paste}
+      stopSignIn={actions.stopSignIn}
+    />
+  {/if}
 
   <div class="turns" bind:this={scroller} {onscroll}>
     {#each chat.turns as turn (turn.id)}
-      <Turn {turn} {readOnly} sendAgain={actions.sendAgain} {appSummary} />
+      <Turn {turn} {readOnly} sendAgain={actions.sendAgain} signIn={actions.signIn} {appSummary} />
     {:else}
       <p class="empty">Nothing said yet.</p>
     {/each}
