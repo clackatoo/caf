@@ -319,6 +319,10 @@ pub(crate) fn list(root: &Path, shelf: &Shelf) -> Result<Vec<(ChatId, Vec<u8>)>,
         let Some((chat, "head")) = chat_of(name) else {
             continue;
         };
+        // Not the store's.
+        if matches!(entry.file_type(), FileType::Directory | FileType::Symlink) {
+            continue;
+        }
         match read(&folder, name) {
             Ok(Some(head)) => heads.push((chat, head)),
             // Deleted meanwhile.
@@ -424,6 +428,11 @@ pub(crate) fn append(
         return Err(StoreError::NotFound);
     }
     hold(held, &folder, shelf, chat)?;
+    // The header first: one a save ahead of the journal is harmless, but a
+    // record written and then said to have failed would be written twice
+    // when the core tries again.
+    let head = file(chat, "head");
+    replace(&folder, &new_file(chat, "head"), &head, &[header])?;
     let generation = generation(&folder, &file(chat, "caf"))?.to_le_bytes();
     let name = file(chat, "journal");
     let mut journal = open(&folder, &name, OFlags::RDWR | OFlags::CREATE)?;
@@ -456,8 +465,6 @@ pub(crate) fn append(
         let _ = journal.set_len(end);
         return Err(error.into());
     }
-    let head = file(chat, "head");
-    replace(&folder, &new_file(chat, "head"), &head, &[header])?;
     Ok(())
 }
 

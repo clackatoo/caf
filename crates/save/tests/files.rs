@@ -212,6 +212,26 @@ fn a_record_cut_off_by_a_crash_is_cut_off_the_file() {
 }
 
 #[test]
+fn an_append_that_fails_adds_nothing() {
+    let folder = Folder::new("failed");
+    let root = folder.path();
+    let (work, chat) = (shelf("work"), ChatId::from_number(1));
+    let mut store = FileStore::new(root);
+    save(&mut store, &work, 1);
+    let journal = file(root, "work", 1, "journal");
+    let before = fs::read(&journal).expect("one");
+    // Its header can't be written: the record isn't either, so trying
+    // again doesn't add it twice.
+    fs::create_dir(root.join(format!("work/{chat}.head.new"))).expect("in the way");
+    let added = store.append(&work, chat, &head(1), &written_records()[0]);
+    assert!(matches!(added, Err(StoreError::Io(_))));
+    assert_eq!(fs::read(&journal).expect("one"), before);
+    // A folder named as a header isn't listed.
+    fs::create_dir(file(root, "work", 2, "head")).expect("a folder");
+    assert_eq!(store.list(&work).expect("it lists").len(), 1);
+}
+
+#[test]
 fn a_chat_deleted_is_gone_whole() {
     let folder = Folder::new("delete");
     let root = folder.path();
