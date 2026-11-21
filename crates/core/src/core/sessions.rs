@@ -76,6 +76,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.data.insert(chat, D::default());
         self.call_off_shutdown(now);
         let conn = self.conn_for(chat, &open.agent);
+        let (chosen, defaults) = self.first_choices(&open.agent, &open.settings);
         self.chats.insert(
             chat,
             Chat {
@@ -86,7 +87,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 turns: Vec::new(),
                 usage: None,
                 questions: Vec::new(),
-                settings: crate::settings::Settings::default(),
+                settings: crate::settings::Settings {
+                    offered: Vec::new(),
+                    chosen,
+                },
             },
         );
         self.logs.insert(chat, Log::new(self.ids.first));
@@ -117,6 +121,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 note: None,
                 resent: None,
                 restored: false,
+                choosing: super::settings::Choosing {
+                    defaults,
+                    ..Default::default()
+                },
             },
         );
         if let Some(shelf) = open.shelf {
@@ -151,6 +159,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                         profile: None,
                         stderr: super::clean::Tail::default(),
                         sign_in: false,
+                        learn: None,
                     },
                 );
                 conn
@@ -363,7 +372,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     .map(|id| AgentSessionId(id.to_owned()));
                 let session = made.or(asked).filter(|session| keepable(&session.0));
                 match (waiting, session) {
-                    (true, Some(session)) => self.session_open(now, chat, proc, session, out),
+                    (true, Some(session)) => {
+                        self.session_open(now, chat, proc, session, &result, out);
+                    }
                     (true, None) => {
                         report(
                             out,
@@ -416,13 +427,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
     }
 
-    /// `chat`'s session is open, as `session` on `proc`.
+    /// `chat`'s session is open, as `session` on `proc`, the agent having
+    /// answered `result`.
     fn session_open(
         &mut self,
         now: Now,
         chat: ChatId,
         proc: Ticket,
         session: AgentSessionId,
+        result: &Value,
         out: &mut Vec<Directive<A, D>>,
     ) {
         let Some(run) = self.runs.get_mut(&chat) else {
@@ -441,6 +454,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if let Some(note) = note {
             self.say(now, chat, note);
         }
+        // What it offers, and the choices to send before any message.
+        self.settings_opened(chat, result);
         self.pump(now, chat, out);
     }
 
@@ -877,6 +892,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 },
             );
         }
+        let learning: Vec<ConnectionId> = (self.conns.iter())
+            .filter(|(_, each)| each.learn.is_some())
+            .map(|(&conn, _)| conn)
+            .collect();
+        for conn in learning {
+            self.learn_failed(conn, "CAF shut down");
+        }
         // Closing an adapter's input ends every session it has, so they
         // aren't closed one by one first.
         let procs: Vec<Ticket> = self
@@ -930,7 +952,7 @@ pub(super) fn check_instructions(instructions: Option<&str>) -> Result<(), Refus
 
 /// Whether CAF keeps `session` as a session id: at most 256 bytes, with
 /// no control characters.
-fn keepable(session: &str) -> bool {
+pub(super) fn keepable(session: &str) -> bool {
     !session.is_empty()
         && session.len() <= MOST_SESSION_ID
         && !session.chars().any(char::is_control)

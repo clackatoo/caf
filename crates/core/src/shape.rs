@@ -986,7 +986,8 @@ fn enums_are_type_then_value() {
                 "parent": null,
                 "kind": { "type": "Words", "value": "On it." }
             }],
-            "imported": false
+            "imported": false,
+            "model": { "id": "sonnet", "name": "Sonnet 4.6" }
         } })
     );
     assert_eq!(

@@ -10,6 +10,7 @@ mod procs;
 mod record;
 mod saving;
 mod sessions;
+mod settings;
 mod setup;
 mod state;
 mod timers;
@@ -970,7 +971,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             HostCommand::Delete { chat, shelf } => self.delete_chat(now, chat, shelf, out),
             HostCommand::MoveShelf { from, to } => self.move_chats(from, to),
             HostCommand::SetData { chat, data } => self.set_chat_data(chat, data),
-            HostCommand::SetSetting { .. } | HostCommand::LearnSettings(_) => todo!(),
+            HostCommand::SetSetting { chat, choice } => self.set_setting_as(now, chat, choice, out),
+            HostCommand::LearnSettings(agent) => self.learn_as(now, &agent, out),
             HostCommand::AddAppItem(_) => {
                 report(
                     out,

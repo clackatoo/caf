@@ -222,6 +222,29 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     self.lose_process(now, proc, Cause::Restarted, out);
                 }
             }
+            Purpose::Set { chat, ref choice } => {
+                let choice = choice.clone();
+                self.pending.remove(&(proc, id));
+                self.set_overdue(now, (proc, id), chat, &choice, out);
+            }
+            // As an abandoned open: a session it opens even so is closed.
+            Purpose::Learn { conn } => {
+                self.pending.remove(&(proc, id));
+                if let Some(each) = self.procs.get_mut(&proc) {
+                    each.given_up.insert(id, None);
+                }
+                report(
+                    out,
+                    Level::Warn,
+                    format!(
+                        "process {} didn't open a session to learn its settings",
+                        proc.0
+                    ),
+                );
+                self.learn_failed(conn, "the agent didn't open a session in time");
+                self.advance(now, conn, out);
+                self.tidy(conn);
+            }
             // These have no watchdog of their own.
             Purpose::Initialize | Purpose::Prompt { .. } => {}
         }

@@ -32,7 +32,7 @@ use crate::question::{
     SlowToOpen,
 };
 use crate::save::{CannotRestore, Header, SavedChat, SavedState};
-use crate::settings::{KnownSettings, SettingChoice};
+use crate::settings::{KnownSettings, ModelUsed, SettingChoice};
 use crate::time::{End, Wall, Window};
 use crate::viewer::{
     AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
@@ -371,6 +371,13 @@ fn changes() -> Vec<Change> {
             .map(ending),
     );
     changes.extend([
+        Change::TurnModel {
+            turn: TurnId(19),
+            model: ModelUsed {
+                id: "opus[1m]".into(),
+                name: Some("Opus (1M context)".into()),
+            },
+        },
         Change::ItemAdded {
             turn: TurnId(19),
             item: item(

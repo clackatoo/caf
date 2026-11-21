@@ -3,6 +3,7 @@ import type { ChatState } from "./ChatState.ts";
 import type { End } from "./End.ts";
 import type { Item } from "./Item.ts";
 import type { ItemId } from "./ItemId.ts";
+import type { ModelUsed } from "./ModelUsed.ts";
 import type { Question } from "./Question.ts";
 import type { QuestionId } from "./QuestionId.ts";
 import type { Settings } from "./Settings.ts";
@@ -35,7 +36,15 @@ life: TurnLife,
 /**
  * Whether it has ended.
  */
-end: End, } } | { "type": "ItemAdded", "value": { 
+end: End, } } | { "type": "TurnModel", "value": { 
+/**
+ * The turn.
+ */
+turn: TurnId, 
+/**
+ * The model.
+ */
+model: ModelUsed, } } | { "type": "ItemAdded", "value": { 
 /**
  * The turn.
  */

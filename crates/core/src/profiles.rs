@@ -100,9 +100,11 @@
 //!
 //! Its **settings** ([`settings`](crate::settings)) are ACP's session
 //! config options: `model` (category `model`), `effort` (category
-//! `thought_level`, its levels depending on the model) and fast mode, set
-//! with `session/set_config_option`; it declares that it takes on/off
-//! options (`session.configOptions.boolean`). The rest it offers (its
+//! `thought_level`, its levels depending on the model) and fast mode (the
+//! option `fast`, offered only while the model supports it), set with
+//! `session/set_config_option`; it declares that it takes on/off options
+//! (`session.configOptions.boolean`), and an on/off option offered as a
+//! choice of `on` and `off` is read as a switch all the same. The rest it offers (its
 //! modes, `ultracode`, `agent`) stay hidden, as it set them. It reads the
 //! user's own `settings.model` even with no settings sources, and on
 //! resume prefers it to the session's own model, so CAF always applies the
@@ -137,6 +139,12 @@
 //! version, keeps it: its scripts may say any version they like. One
 //! that names itself otherwise falls to the cautious profile, and its
 //! chats get no session, as any other adapter's.
+//!
+//! The fake, and the test agents but one, list their settings as Claude
+//! does, as ACP's session config options, with fast mode the option
+//! `fast`; the fake declares it takes on/off options. The made-up
+//! `models-acp` lists only its models, the older way, as Gemini's adapter
+//! did: in the unstable `models` field, set with `session/set_model`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -195,6 +203,12 @@ pub enum Builtin {
     #[cfg(test)]
     #[cfg_attr(feature = "ts", ts(skip))]
     TestPlain,
+    /// A made-up plain ACP adapter that lists its models the older way,
+    /// as Gemini's did: the unstable `models` field, set with
+    /// `session/set_model`, and no config options. For tests only.
+    #[cfg(test)]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    TestModels,
     /// CAF's fake agent, `caf-fake-agent`, for trying installs and
     /// sign-ins with no real agent: its install always fails at once, as
     /// offline, and it signs in, out and says whether it's signed in
@@ -218,6 +232,8 @@ impl Builtin {
             Self::TestDownload => "test-download",
             #[cfg(test)]
             Self::TestPlain => "test-plain",
+            #[cfg(test)]
+            Self::TestModels => "test-models",
             #[cfg(feature = "fake")]
             Self::Fake => "caf-fake-agent",
         }
@@ -233,6 +249,8 @@ impl Builtin {
             Self::TestDownload => "test-download-acp",
             #[cfg(test)]
             Self::TestPlain => "plain-acp",
+            #[cfg(test)]
+            Self::TestModels => "models-acp",
             #[cfg(feature = "fake")]
             Self::Fake => FAKE_NAME,
         }
@@ -248,6 +266,8 @@ impl Builtin {
             Self::TestDownload => [1, 4, 0],
             #[cfg(test)]
             Self::TestPlain => [1, 0, 0],
+            #[cfg(test)]
+            Self::TestModels => [1, 0, 0],
             #[cfg(feature = "fake")]
             Self::Fake => [0, 0, 0],
         }
@@ -262,7 +282,7 @@ impl Builtin {
             #[cfg(test)]
             Self::TestDownload => tests::download_recipe(),
             #[cfg(test)]
-            Self::TestPlain => tests::plain_recipe(),
+            Self::TestPlain | Self::TestModels => tests::plain_recipe(),
             #[cfg(feature = "fake")]
             Self::Fake => fake_recipe(),
         }
@@ -467,13 +487,18 @@ impl ProfileChoice {
         });
         match self {
             Self::Builtin(Builtin::ClaudeAgentAcp) => {
-                declared["session"] = json!({ "notices": {} });
+                declared["session"] = json!({ "notices": {}, "configOptions": { "boolean": {} } });
                 declared["elicitation"] = json!({ "form": {}, "url": {} });
             }
             #[cfg(test)]
-            Self::Builtin(Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain) => {}
+            Self::Builtin(
+                Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain | Builtin::TestModels,
+            ) => {}
+            // It offers its settings as its script says, on/off ones too.
             #[cfg(feature = "fake")]
-            Self::Builtin(Builtin::Fake) => {}
+            Self::Builtin(Builtin::Fake) => {
+                declared["session"] = json!({ "configOptions": { "boolean": {} } });
+            }
             Self::Cautious => {}
         }
         declared
@@ -533,7 +558,9 @@ impl ProfileChoice {
             Self::Builtin(Builtin::ClaudeAgentAcp) => Some(claude_stripped(own, instructions)),
             // Made-up agents, with no tools.
             #[cfg(test)]
-            Self::Builtin(Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain) => None,
+            Self::Builtin(
+                Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain | Builtin::TestModels,
+            ) => None,
             // CAF's fake agent does only what its script says: it has no
             // tools.
             #[cfg(feature = "fake")]
@@ -552,7 +579,9 @@ impl ProfileChoice {
             #[cfg(test)]
             Self::Builtin(Builtin::TestNpm) => true,
             #[cfg(test)]
-            Self::Builtin(Builtin::TestDownload | Builtin::TestPlain) => false,
+            Self::Builtin(Builtin::TestDownload | Builtin::TestPlain | Builtin::TestModels) => {
+                false
+            }
             #[cfg(feature = "fake")]
             Self::Builtin(Builtin::Fake) => false,
             Self::Cautious => false,
@@ -599,7 +628,9 @@ impl ProfileChoice {
                 words(error).is_some_and(|words| words.contains("Session not found"))
             }
             #[cfg(test)]
-            Self::Builtin(Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain) => false,
+            Self::Builtin(
+                Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain | Builtin::TestModels,
+            ) => false,
             #[cfg(feature = "fake")]
             Self::Builtin(Builtin::Fake) => false,
             Self::Cautious => false,
@@ -616,12 +647,64 @@ impl ProfileChoice {
                     || line.contains("Not logged in")
             }
             #[cfg(test)]
-            Self::Builtin(Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain) => false,
+            Self::Builtin(
+                Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain | Builtin::TestModels,
+            ) => false,
             #[cfg(feature = "fake")]
             Self::Builtin(Builtin::Fake) => false,
             Self::Cautious => false,
         }
     }
+}
+
+impl ProfileChoice {
+    /// How an adapter with this profile lists its settings
+    /// ([`settings`](crate::settings)), and which of them CAF supports.
+    pub(crate) fn settings(&self) -> SettingsStyle {
+        // ACP's session config options, or, from an agent that doesn't
+        // list them, the older `models` field: never both.
+        let options = SettingsStyle {
+            options: true,
+            models: true,
+            fast: Some("fast"),
+        };
+        match self {
+            // Its fast mode is the option `fast`, in the category
+            // `model_config` with `ultracode`.
+            Self::Builtin(Builtin::ClaudeAgentAcp) => options,
+            #[cfg(test)]
+            Self::Builtin(Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain) => options,
+            #[cfg(test)]
+            Self::Builtin(Builtin::TestModels) => SettingsStyle {
+                options: false,
+                models: true,
+                fast: None,
+            },
+            #[cfg(feature = "fake")]
+            Self::Builtin(Builtin::Fake) => options,
+            // Never run, as CAF can't strip it.
+            Self::Cautious => SettingsStyle {
+                options: false,
+                models: false,
+                fast: None,
+            },
+        }
+    }
+}
+
+/// How an adapter lists its settings, as its profile says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SettingsStyle {
+    /// It lists ACP's session config options (`configOptions`), set with
+    /// `session/set_config_option`: the one in the category `model` is
+    /// its model, and the one in `thought_level` its effort.
+    pub(crate) options: bool,
+    /// It lists its models in the older, unstable `models` field, set with
+    /// `session/set_model`. Read only if it lists no config options.
+    pub(crate) models: bool,
+    /// The id of its config option for fast mode, if it has one: ACP has
+    /// no category for it.
+    pub(crate) fast: Option<&'static str>,
 }
 
 /// CAF's own instructions to every agent, `host` being the app's name:
@@ -917,6 +1000,7 @@ pub(crate) mod tests {
             Builtin::TestNpm,
             Builtin::TestDownload,
             Builtin::TestPlain,
+            Builtin::TestModels,
             #[cfg(feature = "fake")]
             Builtin::Fake,
         ] {
@@ -933,6 +1017,7 @@ pub(crate) mod tests {
             Builtin::TestNpm,
             Builtin::TestDownload,
             Builtin::TestPlain,
+            Builtin::TestModels,
             #[cfg(feature = "fake")]
             Builtin::Fake,
         ] {
@@ -957,7 +1042,10 @@ pub(crate) mod tests {
     fn the_claude_profile_declares_forms_and_notices_but_no_air() {
         let declared = claude().declarations();
         assert_eq!(declared["elicitation"], json!({ "form": {}, "url": {} }));
-        assert_eq!(declared["session"], json!({ "notices": {} }));
+        assert_eq!(
+            declared["session"],
+            json!({ "notices": {}, "configOptions": { "boolean": {} } })
+        );
         assert_eq!(declared["terminal"], json!(false));
         assert!(declared.get("_meta").is_none(), "no AIR");
         let cautious = ProfileChoice::Cautious.declarations();

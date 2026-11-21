@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use super::clean::agent_text;
 use super::frames::Reply;
-use super::state::{Caps, Conn, Ending, Gone, Group, Init, Open, Proc, Purpose, Step};
+use super::state::{Caps, Conn, Ending, Gone, Group, Init, Learn, Open, Proc, Purpose, Step};
 use super::{Core, report};
 use crate::agent::Launch;
 use crate::chat::AppData;
@@ -85,8 +85,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Makes progress for a connection: asks for the sessions its chats
-    /// want, starting a process for them if it must, or stops its process
-    /// if no chat needs it.
+    /// want, and one to learn its agent's settings from if that's wanted,
+    /// starting a process for them if it must, or stops its process if
+    /// nothing needs it.
     pub(super) fn advance(&mut self, now: Now, conn: ConnectionId, out: &mut Vec<Directive<A, D>>) {
         let Some(each) = self.conns.get(&conn) else {
             return;
@@ -99,7 +100,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             })
             .collect();
         let current = each.current;
-        if each.chats.is_empty() {
+        let learning = each.learn == Some(Learn::Wanted);
+        if each.chats.is_empty() && each.learn.is_none() {
             if let Some(proc) = current {
                 self.retire(proc);
                 self.end_proc(now, proc, false, out);
@@ -115,7 +117,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         {
             return self.still_slow(now, proc, &wanted, out);
         }
-        if wanted.is_empty() {
+        if wanted.is_empty() && !learning {
             return;
         }
         match current {
@@ -128,13 +130,17 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     for chat in wanted {
                         self.ask_session(now, chat, proc, out);
                     }
+                    if learning {
+                        self.ask_learn(now, conn, proc, out);
+                    }
                 }
             }
             // A process of its own that's still around goes first.
             None if !self.shutting_down && !self.procs.values().any(|each| each.conn == conn) => {
                 // An agent not installed yet, or being signed in to, is
                 // waited for.
-                let ready = self.agent_ready(&each.agent);
+                let agent = each.agent.clone();
+                let ready = self.agent_ready(&agent);
                 let state = if ready {
                     ChatState::Opening
                 } else {
@@ -149,6 +155,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 }
                 if ready {
                     self.start_process(now, conn, out);
+                } else if learning {
+                    // Unlike a chat, learning doesn't wait for it.
+                    let why = if self.signing_in(&agent).is_some() {
+                        "the agent is being signed in to"
+                    } else {
+                        "the agent isn't installed"
+                    };
+                    self.learn_failed(conn, why);
+                    self.tidy(conn);
                 }
             }
             None => {}
@@ -613,6 +628,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             } || run.running.as_ref().is_some_and(|running| running.proc == proc))
             .map(|(&chat, _)| chat)
             .collect();
+        let learning = self.conns.get(&conn).and_then(|each| each.learn);
+        let learned_on = match learning {
+            Some(Learn::Asked { proc: on, .. }) => on == proc,
+            Some(Learn::Wanted) => was_current,
+            None => false,
+        };
         // Every request to it ends: what each was for is settled through
         // its chat below.
         self.pending.retain(|&(on, _), _| on != proc);
@@ -637,6 +658,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         for chat in chats {
             self.session_lost(now, chat, lost.clone(), reopen, out);
         }
+        if learned_on {
+            self.learn_failed(conn, &super::settings::lost_why(&lost));
+        }
         self.advance(now, conn, out);
     }
 
@@ -653,10 +677,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// Lets go of a connection nothing uses.
     pub(super) fn tidy(&mut self, conn: ConnectionId) {
-        let unused = self
-            .conns
-            .get(&conn)
-            .is_some_and(|each| each.chats.is_empty() && each.current.is_none());
+        let unused = self.conns.get(&conn).is_some_and(|each| {
+            each.chats.is_empty() && each.current.is_none() && each.learn.is_none()
+        });
         if unused && !self.procs.values().any(|each| each.conn == conn) {
             self.conns.remove(&conn);
         }

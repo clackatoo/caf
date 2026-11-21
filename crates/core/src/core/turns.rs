@@ -90,7 +90,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Sends `chat`'s next waiting turn, if its session is open and no
-    /// turn is running.
+    /// turn is running: once what's chosen of its settings is sent, and
+    /// answered.
     pub(super) fn pump(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
         let Some(run) = self.runs.get(&chat) else {
             return;
@@ -100,6 +101,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return;
         };
         let (proc, session) = (*proc, session.clone());
+        if !self.send_settings(now, chat, proc, &session, out) {
+            return;
+        }
         let Some(turn) = self.waiting_turns(chat).first().copied() else {
             return;
         };
@@ -132,6 +136,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             });
         }
         self.set_life(now, chat, turn, TurnLife::Running);
+        if let Some(model) = self.model_used(chat) {
+            self.record(chat, crate::change::Change::TurnModel { turn, model });
+        }
     }
 
     /// The agent answered the prompt of `chat`'s turn `turn`.
