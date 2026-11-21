@@ -1026,6 +1026,8 @@ impl<A: AppItem> Watch<A> {
     /// gets that as one last [`Update::Picture`], even if it never read
     /// before. So does a watch of a chat put away, or closed and so put
     /// away, as it's let go from memory: the chat as it was written whole.
+    /// That copy is kept while any watch of the chat is, so drop a watch
+    /// once it has ended.
     ///
     /// Cancel-safe: dropped before it resolves, it loses nothing.
     pub async fn next(&mut self) -> Option<Update<A>> {
@@ -1976,10 +1978,13 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 }
                 Directive::Setup(setup) => self.setup.apply(setup),
                 Directive::Storage(storage) => {
-                    // A watched chat put away, written whole as it's let go.
+                    // A watched chat put away, written whole as it's let go:
+                    // watched by any watch, read from yet or not.
                     if let StorageDirective::Snapshot { saved, .. } = &storage
-                        && self.feeds.contains_key(&saved.header.chat)
                         && self.core.chat(saved.header.chat).is_none()
+                        && (self.last.lock().unwrap_or_else(PoisonError::into_inner))
+                            .watched
+                            .contains_key(&saved.header.chat)
                     {
                         (self.put_away).insert(saved.header.chat, saved.chat.clone());
                     }
