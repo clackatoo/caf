@@ -655,8 +655,29 @@ async fn nothing_in_a_download_reaches_outside_its_install() {
     let absolute: &[(&str, Option<&str>)] = &[("passwd", Some("/etc/passwd"))];
     let up: &[(&str, Option<&str>)] = &[("up", Some("../../outside"))];
     let nowhere: &[(&str, Option<&str>)] = &[("gone", Some("missing/file"))];
+    // A link whose own folder is reached through the chain: making that
+    // folder would make one outside.
+    let folder_in_root: &[(&str, Option<&str>)] = &[
+        ("a/l1", Some("..")),
+        ("l2", Some("a/l1/..")),
+        ("l2/made-in-root/x", Some("y")),
+    ];
+    let folder_above: &[(&str, Option<&str>)] = &[
+        ("a/l1", Some("..")),
+        ("l2", Some("a/l1/..")),
+        ("l3", Some("l2/..")),
+        ("l3/made-above-root/x", Some("y")),
+    ];
     let mut n = 0;
-    for entries in [chain, links_out, absolute, up, nowhere] {
+    for entries in [
+        chain,
+        links_out,
+        absolute,
+        up,
+        nowhere,
+        folder_in_root,
+        folder_above,
+    ] {
         for (body, unpack) in [
             (zip_of(entries), Unpack::Zip),
             (tar_of(entries), Unpack::TarGz),
@@ -685,6 +706,8 @@ async fn nothing_in_a_download_reaches_outside_its_install() {
             for escaped in [
                 dir.root().join("escaped-into-root"),
                 dir.0.join("escaped-above-root"),
+                dir.root().join("made-in-root"),
+                dir.0.join("made-above-root"),
             ] {
                 assert!(
                     !escaped.exists(),

@@ -988,7 +988,18 @@ impl Placing {
 
     /// Makes the folder `path` goes in, and checks it's inside.
     fn folder_for(&self, path: &Path, name: &Path) -> Result<(), InstallFailure> {
-        let folder = path.parent().unwrap_or(&self.build);
+        self.make_folder(path.parent().unwrap_or(&self.build), name)
+    }
+
+    /// Makes `folder`, and what leads to it, all inside: the deepest part
+    /// of its path already there is checked first, followed through any
+    /// link, so no folder is ever made outside, empty or not.
+    fn make_folder(&self, folder: &Path, name: &Path) -> Result<(), InstallFailure> {
+        let there = folder
+            .ancestors()
+            .find(|ancestor| ancestor.exists())
+            .unwrap_or(&self.build);
+        self.inside(there, name)?;
         fs::create_dir_all(folder).map_err(|error| io_failure(&error, false))?;
         self.inside(folder, name)
     }
@@ -1007,8 +1018,7 @@ impl Placing {
 
     fn folder(&self, name: &Path) -> Result<(), InstallFailure> {
         let path = self.path(name)?;
-        fs::create_dir_all(&path).map_err(|error| io_failure(&error, false))?;
-        self.inside(&path, name)
+        self.make_folder(&path, name)
     }
 
     /// Writes a file, with `mode`'s permissions alone.
