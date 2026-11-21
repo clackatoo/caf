@@ -364,6 +364,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         {
             pending.deadline = Some(now.mono.after(self.host.timers.session_open));
         }
+        // A restored chat has its record: what's replayed is only for the
+        // agent to continue from.
+        if self.runs.get(&chat).is_some_and(|run| run.restored) {
+            return;
+        }
         let kind = match said {
             Said::User(text) => return self.replayed_user(chat, text),
             Said::Text { thinking: true, .. } if !self.host.shows.thinking => return,

@@ -24,7 +24,7 @@ use crate::chat::{
 };
 use crate::directive::{Directive, Level};
 use crate::host::Grouping;
-use crate::ids::{AgentSessionId, ChatId, ConnectionId, QuestionId, Ticket};
+use crate::ids::{AgentName, AgentSessionId, ChatId, ConnectionId, QuestionId, Ticket};
 use crate::profiles::AUTH_REQUIRED;
 use crate::question::{QuestionKind, SlowChoice, SlowToOpen};
 use crate::time::{Now, Window};
@@ -54,14 +54,22 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
             .ok_or(Refused::Unsendable)?;
+        if let Some(shelf) = &open.shelf {
+            super::saving::check_shelf(shelf)?;
+        }
         if self.chats.contains_key(&chat) {
             report(out, Level::Warn, format!("chat {} is already open", chat.0));
             return Ok(());
         }
-        self.saving.made += 1;
+        // A numbered id, as recordings made before chats had UUIDs hold,
+        // came from the counter every other id does.
+        if let Ok(number) = u64::try_from(chat.0.as_u128()) {
+            self.ids.seen(number);
+        }
+        self.made_chat(chat);
         self.data.insert(chat, D::default());
-        self.shutting_down = false;
-        let conn = self.conn_for(chat, &open);
+        self.call_off_shutdown(now);
+        let conn = self.conn_for(chat, &open.agent);
         self.chats.insert(
             chat,
             Chat {
@@ -100,8 +108,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 held_by: None,
                 note: None,
                 resent: None,
+                restored: false,
             },
         );
+        if let Some(shelf) = open.shelf {
+            self.keep_new(now, chat, shelf);
+        }
         // Its first picture shows it waiting for its agent, if it must.
         let state = self.wanting(chat);
         if let Some(whole) = self.chats.get_mut(&chat) {
@@ -111,11 +123,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         Ok(())
     }
 
-    /// The connection a new chat joins, as the host's grouping says.
-    fn conn_for(&mut self, chat: ChatId, open: &OpenChat) -> ConnectionId {
+    /// The connection a new chat with `agent` joins, as the host's
+    /// grouping says.
+    pub(super) fn conn_for(&mut self, chat: ChatId, agent: &AgentName) -> ConnectionId {
         let per_chat = self.host.grouping == Grouping::PerChat;
         let shared = (self.conns.iter())
-            .find(|(_, each)| !per_chat && each.only.is_none() && each.agent == open.agent);
+            .find(|(_, each)| !per_chat && each.only.is_none() && each.agent == *agent);
         let conn = match shared {
             Some((&conn, _)) => conn,
             None => {
@@ -123,7 +136,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 self.conns.insert(
                     conn,
                     Conn {
-                        agent: open.agent.clone(),
+                        agent: agent.clone(),
                         only: per_chat.then_some(chat),
                         chats: std::collections::BTreeSet::new(),
                         current: None,
@@ -213,6 +226,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         if how == How::New && run.session.take().is_some() {
             run.note = Some(Note::CannotContinue);
+        }
+        if how == How::Load && run.restored {
+            report(
+                out,
+                Level::Debug,
+                format!(
+                    "chat {}: what the agent replays of its session is thrown away, as CAF has its record",
+                    chat.0
+                ),
+            );
         }
         let mut params = json!({
             "cwd": run.cwd,
@@ -703,7 +726,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
     }
 
-    /// Closes `chat` for good.
+    /// Closes `chat`: the user is done with it. A saved chat is then put
+    /// away, marked closed.
     pub(super) fn close(
         &mut self,
         now: Now,
@@ -714,10 +738,33 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if whole.state == ChatState::Closed {
             return Ok(());
         }
+        self.close_session(now, chat, out);
+        if self.saving.kept.contains_key(&chat) {
+            self.put_away_now(now, chat, out);
+        }
+        Ok(())
+    }
+
+    /// Winds `chat` down, closes its session and marks it closed.
+    pub(super) fn close_session(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
         self.wind_down(now, chat, TurnLife::Stopped, out);
-        let Some(run) = self.runs.get_mut(&chat) else {
-            return Ok(());
-        };
+        let conn = self.let_go(now, chat, out);
+        self.set_state(chat, ChatState::Closed);
+        if let Some(conn) = conn {
+            self.advance(now, conn, out);
+        }
+    }
+
+    /// Lets `chat`, wound down, go of its session and connection: the
+    /// session is closed if its adapter goes on serving others, and the
+    /// connection, which the caller advances, stops its adapter if not.
+    pub(super) fn let_go(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        out: &mut Vec<Directive<A, D>>,
+    ) -> Option<ConnectionId> {
+        let run = self.runs.get_mut(&chat)?;
         let conn = run.conn;
         let live = match run.open {
             Open::Live { proc } => Some(proc),
@@ -752,15 +799,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 out,
             );
         }
-        self.set_state(chat, ChatState::Closed);
-        self.advance(now, conn, out);
-        Ok(())
+        Some(conn)
     }
 
     /// Ends what `chat` has going: its questions, its running turn (as
     /// `life`, telling the agent to stop), its waiting turns (as stopped)
     /// and any session it's opening.
-    fn wind_down(
+    pub(super) fn wind_down(
         &mut self,
         now: Now,
         chat: ChatId,
@@ -790,8 +835,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     pub(super) fn shut_down(&mut self, now: Now, out: &mut Vec<Directive<A, D>>) {
         self.shutting_down = true;
         self.stop_setup(out);
+        // An idle chat has nothing going, and stays idle.
         let chats: Vec<ChatId> = (self.chats.iter())
-            .filter(|(_, whole)| whole.state != ChatState::Closed)
+            .filter(|(_, whole)| !matches!(whole.state, ChatState::Closed | ChatState::Idle))
             .map(|(&chat, _)| chat)
             .collect();
         for chat in chats {
@@ -822,6 +868,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         for each in self.conns.values_mut() {
             each.current = None;
         }
+        self.save_all(now);
     }
 }
 
@@ -858,7 +905,7 @@ fn keepable(session: &str) -> bool {
 /// An MCP server as ACP sends it: `None` if it can't be sent exactly.
 /// ACP can only set a server's variables, and has no folder to start it
 /// in.
-fn mcp_server(server: &McpServer) -> Option<Value> {
+pub(super) fn mcp_server(server: &McpServer) -> Option<Value> {
     let pair = |name: &str, value: &str| json!({ "name": name, "value": value });
     Some(match server {
         McpServer::Stdio { name, command } => {

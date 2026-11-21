@@ -211,7 +211,14 @@ pub enum ViewerDirective {
 ///   one in one step, with its journal.
 /// - **A save it can't read is never overwritten or removed**, unless the
 ///   core deletes it.
-#[non_exhaustive]
+/// - **Every directive with a ticket is answered**, once. A
+///   [`Release`](StorageDirective::Release) has none: it's done as it's
+///   given, before any work given after it.
+///
+/// And the core's: **while a shelf is being moved, no work for a chat on
+/// it, or on the shelf it goes to, is given**, and a move is given only
+/// once all work for chats on both is answered. So a store needn't order
+/// a move against other work.
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[cfg_attr(
@@ -248,6 +255,13 @@ pub enum StorageDirective<A: AppItem = NoAppItems, D: AppData = NoAppData> {
         saved: Box<Saved<A, D>>,
     },
     /// Add to a chat's journal, and replace its header.
+    ///
+    /// Only to a chat the store holds on that shelf, locked by this
+    /// program: one it doesn't isn't added to, and the write fails
+    /// ([`StorageEvent::Failed`](crate::event::StorageEvent::Failed)). The
+    /// core never asks for one: a chat's first write, and its first after
+    /// a write failed or it was let go, is a
+    /// [`Snapshot`](StorageDirective::Snapshot).
     Append {
         /// Its ticket.
         ticket: Ticket,
@@ -258,7 +272,11 @@ pub enum StorageDirective<A: AppItem = NoAppItems, D: AppData = NoAppData> {
         /// What changed, in order.
         entries: Vec<Entry<A, D>>,
     },
-    /// Unlock a chat: it's put away, and written whole already.
+    /// Unlock a chat: it's put away, or CAF is shutting down, and it's
+    /// written whole already. Or the core has no use for its lock left,
+    /// and it's let go as the store has it: a restore found it damaged, it
+    /// couldn't be deleted, or it was deleted while its load was under
+    /// way and the deletion failed.
     Release {
         /// Where it's kept.
         shelf: Shelf,
@@ -276,7 +294,11 @@ pub enum StorageDirective<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     },
     /// Move every chat on a shelf to another, such as when framewright
     /// saves a project under a new name. Chats that are loaded move with
-    /// their locks.
+    /// their locks. All of the shelf moves, or none of it: a move that
+    /// fails leaves every chat where it was. A store refuses a move onto a
+    /// shelf that already has chats, as merging shelves isn't supported,
+    /// and one chat on `from` open in another program stops the whole
+    /// move; either way, it fails and nothing moves.
     MoveShelf {
         /// Its ticket.
         ticket: Ticket,

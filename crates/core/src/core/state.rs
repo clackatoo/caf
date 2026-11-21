@@ -340,6 +340,9 @@ pub(super) struct Run<A: AppItem> {
     /// A turn sent again after its session was dropped: it isn't sent a
     /// third time.
     pub(super) resent: Option<TurnId>,
+    /// It was restored, so it has its record already: what a
+    /// `session/load` replays is thrown away, not imported.
+    pub(super) restored: bool,
 }
 
 /// Where a chat is with its session.

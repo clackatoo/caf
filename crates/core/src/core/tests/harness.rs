@@ -27,24 +27,25 @@ use serde_json::{Value, json};
 
 use crate::acp::{Frame, Message, RequestId, RpcError};
 use crate::agent::{AgentSpec, EnvChange, SpawnCommand};
-use crate::chat::UserMessage;
+use crate::chat::{NoAppData, UserMessage};
 use crate::core::{Core, OpenChat, Refused};
 use crate::directive::{
     AgentDirective, Directive, PolicyDirective, SetupDirective, TimerDirective, ViewerDirective,
 };
-use crate::event::{AgentEvent, Event, HostCommand, PolicyAnswer, SetupEvent};
+use crate::event::{AgentEvent, Event, HostCommand, PolicyAnswer, SetupEvent, StorageEvent};
 use crate::fixtures::{self, After};
 use crate::host::Host;
-use crate::ids::{AgentName, ChatId, QuestionId, Ticket, TurnId};
+use crate::ids::{AgentName, ChatId, QuestionId, Shelf, Ticket, TurnId};
 use crate::profiles::{Builtin, ProfileChoice};
 use crate::question::Answer;
+use crate::save::RestoreChat;
 use crate::time::{Mono, Now, Wall};
 
 /// The first id a test's core gives out.
 pub(crate) const FIRST: u64 = 1000;
 
 /// The wall clock when a script starts.
-const EPOCH: i64 = 1_800_000_000_000;
+pub(crate) const EPOCH: i64 = 1_800_000_000_000;
 
 /// A script being run.
 pub(crate) struct Script {
@@ -52,6 +53,8 @@ pub(crate) struct Script {
     pub(crate) core: Core,
     /// The host it was made for.
     host: Host,
+    /// The agents it offers.
+    agents: Vec<AgentSpec>,
     /// The time now, in milliseconds since the start.
     ms: u64,
     /// Every event given so far, as JSON, with its time.
@@ -123,9 +126,15 @@ pub(crate) fn host() -> Host {
 impl Script {
     /// A script for a core made for `host`, offering [`agents`].
     pub(crate) fn new(host: Host) -> Self {
+        Self::offering(host, agents())
+    }
+
+    /// A script for a core made for `host`, offering `agents`.
+    pub(crate) fn offering(host: Host, agents: Vec<AgentSpec>) -> Self {
         Self {
-            core: Core::starting_ids_at(host.clone(), agents(), FIRST),
+            core: Core::starting_ids_at(host.clone(), agents.clone(), FIRST),
             host,
+            agents,
             ms: 0,
             trace: Vec::new(),
             outs: Vec::new(),
@@ -305,6 +314,82 @@ impl Script {
         out
     }
 
+    /// Lists `shelf`'s saved chats.
+    pub(crate) fn list_saved(&mut self, shelf: &str) -> (Result<(), Refused>, Vec<Value>) {
+        let shelf = Shelf(shelf.to_owned());
+        let recorded = shelf.clone();
+        self.host_call(
+            |core, now, out| core.list_saved(now, shelf, out),
+            |()| HostCommand::ListSaved(recorded),
+        )
+    }
+
+    /// Restores a saved chat.
+    pub(crate) fn restore(&mut self, restore: RestoreChat) -> (Result<(), Refused>, Vec<Value>) {
+        let recorded = restore.clone();
+        self.host_call(
+            |core, now, out| core.restore(now, restore, out),
+            |()| HostCommand::Restore(recorded),
+        )
+    }
+
+    /// Puts `chat` away.
+    pub(crate) fn put_away(&mut self, chat: ChatId) -> (Result<(), Refused>, Vec<Value>) {
+        self.host_call(
+            |core, now, out| core.put_away(now, chat, out),
+            |()| HostCommand::PutAway { chat },
+        )
+    }
+
+    /// Deletes `chat`, kept on `shelf`.
+    pub(crate) fn delete(
+        &mut self,
+        chat: ChatId,
+        shelf: &str,
+    ) -> (Result<(), Refused>, Vec<Value>) {
+        let shelf = Shelf(shelf.to_owned());
+        let recorded = shelf.clone();
+        self.host_call(
+            |core, now, out| core.delete(now, chat, shelf, out),
+            |()| HostCommand::Delete {
+                chat,
+                shelf: recorded,
+            },
+        )
+    }
+
+    /// Moves every chat on `from` to `to`.
+    pub(crate) fn move_shelf(&mut self, from: &str, to: &str) -> (Result<(), Refused>, Vec<Value>) {
+        let (from, to) = (Shelf(from.to_owned()), Shelf(to.to_owned()));
+        let recorded = (from.clone(), to.clone());
+        self.host_call(
+            |core, now, out| core.move_shelf(now, from, to, out),
+            |()| HostCommand::MoveShelf {
+                from: recorded.0,
+                to: recorded.1,
+            },
+        )
+    }
+
+    /// Sets `chat`'s data slot.
+    pub(crate) fn set_data(&mut self, chat: ChatId) -> (Result<(), Refused>, Vec<Value>) {
+        self.host_call(
+            |core, now, out| core.set_data(now, chat, NoAppData, out),
+            |()| HostCommand::SetData {
+                chat,
+                data: NoAppData,
+            },
+        )
+    }
+
+    /// The storage driver reports `event` on `ticket`.
+    pub(crate) fn storage(&mut self, ticket: u64, event: StorageEvent) -> Vec<Value> {
+        self.event(Event::Storage {
+            ticket: Ticket(ticket),
+            event,
+        })
+    }
+
     /// Looks at what's installed.
     pub(crate) fn check_agents(&mut self) -> Vec<Value> {
         let (_, out) = self.host_call(
@@ -467,7 +552,7 @@ impl Script {
     /// A core of its own, as this one is now: a fresh one given every
     /// event so far. What's done to it changes nothing here.
     pub(crate) fn copy(&self) -> Core {
-        let mut core = Core::starting_ids_at(self.host.clone(), agents(), FIRST);
+        let mut core = Core::starting_ids_at(self.host.clone(), self.agents.clone(), FIRST);
         for (ms, json) in &self.trace {
             let event: Event = serde_json::from_str(json).expect("recorded events read back");
             let now = Now {
@@ -482,7 +567,7 @@ impl Script {
     /// Feeds the recording to a fresh core, checking it gives the same
     /// directives at every step and ends in the same state.
     pub(crate) fn replay(&self) {
-        let mut core = Core::starting_ids_at(self.host.clone(), agents(), FIRST);
+        let mut core = Core::starting_ids_at(self.host.clone(), self.agents.clone(), FIRST);
         for (step, ((ms, json), expected)) in self.trace.iter().zip(&self.outs).enumerate() {
             let event: Event = serde_json::from_str(json).expect("recorded events read back");
             let now = Now {

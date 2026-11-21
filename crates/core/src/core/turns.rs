@@ -35,6 +35,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if whole.state == ChatState::Closed {
             return Err(Refused::Closed);
         }
+        // A restored chat whose agent the host no longer offers.
+        if !self.agents.contains_key(&whole.agent) {
+            return Err(Refused::NoSuchAgent);
+        }
         if message.parts.is_empty() {
             return Err(Refused::Unsupported);
         }
@@ -47,7 +51,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return Err(Refused::QueueFull);
         }
         self.ids.seen(turn.0);
-        self.shutting_down = false;
+        self.call_off_shutdown(now);
         self.end_agent_turn(now, chat);
         self.add_turn(
             chat,

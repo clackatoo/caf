@@ -474,7 +474,9 @@ pub(crate) fn every_type(s: &mut Samples) {
     s.both(&Answer::SlowToOpen(SlowChoice::Retry));
     s.both(&SlowChoice::KeepWaiting);
     // host
-    let host = Host::new("caf", "1.0.0");
+    let mut host = Host::new("caf", "1.0.0");
+    // Its seed is fresh each run: the samples stay the same.
+    host.seed = 42;
     s.both(&host);
     s.both(&Shows::default());
     s.both(&Grouping::PerChat);
@@ -872,9 +874,12 @@ fn enums_are_type_then_value() {
         both(&EnvChange::Set("A".into(), "b".into())),
         json!({ "type": "Set", "value": [{ "Unix": [65] }, { "Unix": [98] }] })
     );
-    // Ids are plain numbers and strings, and std's Duration and Option
-    // keep their shapes.
-    assert_eq!(both(&ChatId::from_number(5)), json!(5));
+    // Ids are plain numbers and strings, a chat's a UUID's text, and
+    // std's Duration and Option keep their shapes.
+    assert_eq!(
+        both(&ChatId::from_number(5)),
+        json!("00000000-0000-0000-0000-000000000005")
+    );
     assert_eq!(both(&AgentName("claude".into())), json!("claude"));
     assert_eq!(
         both(&Timers::default())["group_poll"],

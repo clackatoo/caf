@@ -40,6 +40,10 @@ enum Due {
     Held(ChatId),
     /// A sign-in nobody finished in time.
     SignIn(Ticket),
+    /// A saved chat's changes are due to be written.
+    Save(ChatId),
+    /// A chat put away is due to be written again, after a write failed.
+    Away(ChatId),
 }
 
 impl<A: AppItem, D: AppData> Core<A, D> {
@@ -83,12 +87,18 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let sign_ins = (self.setup.jobs.iter())
             .filter(|(_, job)| !job.stopped)
             .filter_map(|(&ticket, job)| Some((job.deadline?, Due::SignIn(ticket))));
+        let saves = (self.saving.kept.keys())
+            .filter_map(|&chat| Some((self.save_at(chat)?, Due::Save(chat))));
+        let away = (self.saving.away.keys())
+            .filter_map(|&chat| Some((self.away_at(chat)?, Due::Away(chat))));
         procs
             .chain(requests)
             .chain(stops)
             .chain(quiet)
             .chain(held)
             .chain(sign_ins)
+            .chain(saves)
+            .chain(away)
     }
 
     /// The timer driver woke the core: whatever is due is done.
@@ -123,6 +133,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Due::Stop(chat) => self.stop_overdue(now, chat, out),
             Due::Quiet(chat) => self.quiet(now, chat),
             Due::SignIn(ticket) => self.sign_in_overdue(ticket, out),
+            Due::Save(chat) => self.write(now, chat, out),
+            Due::Away(chat) => self.write_away(chat, out),
             Due::Held(chat) => {
                 if let Some(run) = self.runs.get_mut(&chat) {
                     run.held_by = None;

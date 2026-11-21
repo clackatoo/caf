@@ -47,7 +47,7 @@ fn the_live_claude_trace_replays_to_the_state_the_core_tests_expect() {
         has(
             chat,
             &json!({
-                "id": 1,
+                "id": "00000000-0000-0000-0000-000000000001",
                 "state": { "type": "Lost", "value": { "reason": { "type": "ShutDown" } } },
                 "turns": [
                     { "starter": { "type": "User", "value": { "parts": [{ "type": "Text", "value": "Reply with exactly the word pong." }] } }, "life": { "type": "Finished" }, "items": [{ "kind": { "type": "Words", "value": "pong" } }] },

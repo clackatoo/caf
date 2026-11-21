@@ -114,6 +114,11 @@ pub struct Core<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     /// What tests saw of each chat's record, change by change.
     #[cfg(test)]
     applied: BTreeMap<ChatId, record::Applied<A>>,
+    /// Chats get numbered ids ([`ChatId::from_number`]), from the same
+    /// counter as every other id, rather than UUIDs: so tests' ids are
+    /// 1000, 1003…
+    #[cfg(test)]
+    numbered: bool,
 }
 
 /// What to open a chat with.
@@ -293,6 +298,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             misfits: Vec::new(),
             #[cfg(test)]
             applied: BTreeMap::new(),
+            #[cfg(test)]
+            numbered: true,
         }
     }
 
@@ -470,12 +477,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// Opens a chat, and returns its id. Its agent is started, or its
     /// running adapter shared, as the host's grouping says; messages sent
-    /// before the session is open wait for it.
+    /// before the session is open wait for it. It calls a shutdown off
+    /// ([`Core::shutdown`]).
     ///
     /// # Errors
     ///
-    /// [`Refused::NoSuchAgent`], [`Refused::RelativeFolder`] or
-    /// [`Refused::Unsendable`].
+    /// [`Refused::NoSuchAgent`], [`Refused::RelativeFolder`],
+    /// [`Refused::Unsendable`], or [`Refused::BadShelf`] for its shelf.
     pub fn open_chat(
         &mut self,
         now: Now,
@@ -493,7 +501,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// If another turn is running, or the session isn't open yet, the new
     /// turn waits, in order: messages are never dropped. If the chat's
     /// session was lost, sending opens it again, continuing it where the
-    /// agent can.
+    /// agent can. It calls a shutdown off ([`Core::shutdown`]).
     ///
     /// # Errors
     ///
@@ -661,10 +669,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// Deletes a chat for good, loaded or not: a loaded one is closed
     /// first, and let go from memory.
     ///
+    /// That happens as the deletion is sent to the store, which may wait
+    /// for a move of its shelf ([`Core::move_shelf`]): meanwhile, the chat
+    /// stays loaded, and isn't listed. A restore of it on that shelf asked
+    /// for before is dropped.
+    ///
     /// # Errors
     ///
-    /// [`Refused::BadShelf`], or [`Refused::NoSuchChat`] if it's loaded on
-    /// another shelf.
+    /// [`Refused::BadShelf`], or [`Refused::NoSuchChat`] if it's loaded,
+    /// or put away and not yet written, on another shelf.
     pub fn delete(
         &mut self,
         now: Now,
@@ -679,6 +692,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// Moves every chat on one shelf to another, loaded or not, such as
     /// when framewright saves a project under a new name.
+    ///
+    /// The store is asked once nothing for a chat on either shelf is under
+    /// way, and until it answers, nothing more for them is: a chat on one
+    /// that changes, or is opened on one, is written once the move is
+    /// done, on the shelf it's on then; restores, deletions and lists of
+    /// them wait too. A chat is on its new shelf, as [`Core::summaries`]
+    /// says, once the store says it moved.
     ///
     /// # Errors
     ///
@@ -720,21 +740,40 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Stops everything: closes every session, stops every adapter
-    /// gently, then firmly, and saves every saved chat whole. Done once
-    /// [`Core::is_idle`] is true.
+    /// gently, then firmly, and saves every saved chat whole, letting it
+    /// go in the store. Done once [`Core::is_idle`] is true.
+    ///
+    /// Saved chats stay loaded. One that changes after, as when the app
+    /// sets its data, is written whole at once and let go again, so
+    /// [`Core::is_idle`] may go from true back to false until it is.
+    /// Sending a message or opening a chat calls the shutdown off: chats
+    /// already let go are written whole at once, which locks them again.
+    /// Restoring, setting data, closing and the rest don't call it off.
+    ///
+    /// If another program takes a chat's lock between its being let go and
+    /// the shutdown being called off, writing it fails, and is tried again,
+    /// with a report each time, until the lock is free.
     pub fn shutdown(&mut self, now: Now, out: &mut Vec<Directive<A, D>>) {
         // Shutting down is never refused.
         let _ = self.command(now, HostCommand::Shutdown, out);
         self.finish(now, out);
     }
 
-    /// Whether nothing is running: no adapters, nothing waiting.
+    /// Whether nothing is running: no adapter processes, no requests or
+    /// questions waiting, no turn running; and nothing waiting on the
+    /// store: no chat being put away, restored, deleted or moved, nor
+    /// saved as CAF shuts down and not yet let go, nor, while it's shutting
+    /// down, any saved chat with a change not yet written, nor any lock
+    /// this run has no use for left. Shut down, it goes back to false if a
+    /// saved chat changes, until that's written and let go.
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.procs.is_empty()
             && self.pending.is_empty()
             && self.asks.is_empty()
             && self.runs.values().all(|run| run.running.is_none())
+            && self.saving.settled()
+            && (!self.shutting_down || self.saving.all_written())
     }
 
     /// A chat, by id.
@@ -752,7 +791,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// app's label for each, and its shelf if it's saved.
     #[must_use]
     pub fn summaries(&self) -> Vec<crate::viewer::ChatSummary> {
-        todo!()
+        (self.chats.values())
+            .map(|whole| {
+                let mut summary = crate::viewer::ChatSummary::of(whole);
+                summary.label = self.data.get(&whole.id).and_then(AppData::label);
+                summary.shelf = (self.saving.kept.get(&whole.id)).map(|kept| kept.shelf.clone());
+                summary
+            })
+            .collect()
     }
 
     /// A chat's changes after `since`, or the whole chat if `since` is
@@ -811,12 +857,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             HostCommand::Paste { agent, text } => self.paste_to(&agent, &text, out),
             HostCommand::StopSignIn(agent) => self.stop_signing_in(&agent, out),
             HostCommand::SignOut(agent) => self.start_sign_out(&agent, out),
-            HostCommand::ListSaved(shelf) => self.list_shelf(shelf, out),
-            HostCommand::Restore(restore) => self.start_restore(restore, out),
+            HostCommand::ListSaved(shelf) => self.list_shelf(now, shelf, out),
+            HostCommand::Restore(restore) => self.start_restore(now, restore, out),
             HostCommand::PutAway { chat } => self.put_chat_away(now, chat, out),
             HostCommand::Delete { chat, shelf } => self.delete_chat(now, chat, shelf, out),
-            HostCommand::MoveShelf { from, to } => self.move_chats(from, to, out),
-            HostCommand::SetData { chat, data } => self.set_chat_data(now, chat, data),
+            HostCommand::MoveShelf { from, to } => self.move_chats(from, to),
+            HostCommand::SetData { chat, data } => self.set_chat_data(chat, data),
             HostCommand::AddAppItem(_) => {
                 report(
                     out,
@@ -833,6 +879,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// when to wake the core next.
     fn finish(&mut self, now: Now, out: &mut Vec<Directive<A, D>>) {
         self.advance_all(now, out);
+        self.save_due(now, out);
         for (chat, change, mismatch) in std::mem::take(&mut self.misfits) {
             // What it said may be the agent's, and long.
             let change = clean::agent_text(&format!("{change:?}"), MOST_MISFIT);

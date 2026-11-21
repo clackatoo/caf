@@ -35,9 +35,10 @@ pub struct Host {
     pub timers: Timers,
     /// Where the random part of each new chat's id comes from: the core
     /// makes no randomness of its own, so replaying a run gives out the
-    /// same ids. [`Host::new`] draws a fresh one, different in every run;
-    /// set it only in tests. Two runs given the same seed may give two
-    /// chats the same id, which a restore then refuses
+    /// same ids. [`Host::new`] draws a fresh one, different in every run,
+    /// below 2^53 as every number CAF writes is; set it only in tests.
+    /// Two runs given the same seed may give two chats the same id, which
+    /// a restore then refuses
     /// ([`Refused::Loaded`](crate::Refused::Loaded)).
     ///
     /// Recordings made before it was added don't have it: they read as 0,
@@ -201,7 +202,8 @@ impl Host {
             grouping: Grouping::PerAgent,
             limits: Limits::default(),
             timers: Timers::default(),
-            seed: std::hash::RandomState::new().hash_one(0_u8),
+            // 53 bits, as every number CAF writes is below 2^53.
+            seed: std::hash::RandomState::new().hash_one(0_u8) >> 11,
         }
     }
 }
