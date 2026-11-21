@@ -6,8 +6,11 @@ embedded in your own program.
 
 CAF speaks the [Agent Client Protocol](https://agentclientprotocol.com)
 to the agent, absorbs each agent's quirks, and keeps its own record of
-every conversation. Your program describes what it can show, and draws
-the chat from CAF's record. CAF itself draws nothing.
+every conversation. It installs agents and signs the user in to them,
+saves chats so they carry on in the next run, and lets the user choose
+each agent's model, how hard it thinks and fast mode, in one shape for
+every agent. Your program describes what it can show, and draws the chat
+from CAF's record. CAF itself draws nothing.
 
 It grows out of the agent backend of
 [clackatoo](https://github.com/clackatoo/clackatoo), and clackatoo is its
@@ -24,8 +27,8 @@ first user.
   store that keeps chats in files.
 - `ts/sdk` (`@clackatoo/caf`): the TypeScript caf-sdk.
 - `crates/debugger` and `ts/debugger` (`caf-debugger`): a reference chat
-  view beside an inspector of every step CAF takes, with saved chats,
-  recordings and time travel.
+  view beside an inspector of every step CAF takes, with saved chats, a
+  picker for the agent's model, recordings and time travel.
 - `crates/fake-agent`: a scriptable fake adapter for tests.
 
 CAF is built a feature at a time, each feature's API designed in full

@@ -123,7 +123,9 @@ caf.learn_settings(&AgentName("claude".into())).await?;
 ```
 
 CAF starts the agent if it isn't running, opens a session with none of
-the agent's tools, reads what it offers, and closes it. No message is
+the agent's tools, reads what it offers, and closes it. The session is in
+CAF's installs' folder if CAF has installed anything there, and otherwise
+in `/`, as no chat gives it a folder. No message is
 sent, so it costs nothing. Where it stands is in the agent's status from
 `watch_agents`, as `settings`: `Unknown`, `Learning`, `Known(settings)`
 or `Failed(why)`. What was learned before stays shown while it's learned
