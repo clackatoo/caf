@@ -1,8 +1,9 @@
-//! The agents a host offers, and how to start them.
+//! The agents a host offers, how to start them, and where each stands:
+//! installed or not, signed in or not.
 //!
-//! In feature 1 the host says how to start each agent's adapter. Later,
-//! CAF installs adapters itself and reads the user's own agents and
-//! profiles from its shared folder.
+//! A host offers an agent CAF installs itself ([`Launch::Installed`]), or
+//! says how to start one of its own ([`Launch::Command`]). Later, CAF also
+//! reads the user's own agents and profiles from its shared folder.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -10,7 +11,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::AgentName;
-use crate::profiles::ProfileChoice;
+use crate::install::SignedInAs;
+use crate::profiles::{Builtin, ProfileChoice};
 
 /// An agent the host offers.
 #[non_exhaustive]
@@ -20,7 +22,7 @@ pub struct AgentSpec {
     /// The name chats ask for it by.
     pub name: AgentName,
     /// How to start its adapter.
-    pub command: SpawnCommand,
+    pub launch: Launch,
     /// Which profile it should be. The adapter's own name and version
     /// confirm it once it answers `initialize`; a mismatch falls back to
     /// the cautious profile and is reported.
@@ -28,15 +30,44 @@ pub struct AgentSpec {
 }
 
 impl AgentSpec {
-    /// An agent called `name`, started by `command`, with `profile`.
+    /// An agent called `name` that CAF installs itself, as its built-in
+    /// profile says, and signs in to.
     #[must_use]
-    pub fn new(name: impl Into<String>, command: SpawnCommand, profile: ProfileChoice) -> Self {
+    pub fn installed(name: impl Into<String>, builtin: Builtin) -> Self {
         Self {
             name: AgentName(name.into()),
-            command,
+            launch: Launch::Installed,
+            profile: ProfileChoice::Builtin(builtin),
+        }
+    }
+
+    /// An agent called `name`, started by the host's own `command`, with
+    /// `profile`. CAF doesn't install it, and signs in to it only if its
+    /// profile says how.
+    #[must_use]
+    pub fn command(name: impl Into<String>, command: SpawnCommand, profile: ProfileChoice) -> Self {
+        Self {
+            name: AgentName(name.into()),
+            launch: Launch::Command(command),
             profile,
         }
     }
+}
+
+/// How an agent's adapter is started.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum Launch {
+    /// From CAF's own install of it, at the version its profile was checked
+    /// at. A chat that needs it before it's installed waits
+    /// ([`ChatState::WaitingForAgent`]), and the user is asked.
+    ///
+    /// [`ChatState::WaitingForAgent`]: crate::chat::ChatState::WaitingForAgent
+    Installed,
+    /// By the host's own command.
+    Command(SpawnCommand),
 }
 
 /// How to start a program.
@@ -117,4 +148,123 @@ pub enum McpServer {
         /// Headers to send with every request.
         headers: Vec<(String, String)>,
     },
+}
+
+/// Where an agent stands: installed or not, signed in or not. It's the
+/// agent's, not a chat's: every chat with the agent shares one install and
+/// one sign-in.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AgentStatus {
+    /// The agent.
+    pub name: AgentName,
+    /// Whether it's installed.
+    pub install: InstallState,
+    /// Whether it's signed in.
+    pub sign_in: SignInState,
+}
+
+/// Whether an agent is installed.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum InstallState {
+    /// The host starts it with its own command: CAF doesn't install it.
+    Host,
+    /// CAF hasn't looked yet.
+    Unknown,
+    /// Not installed. It can be, taking about `size` bytes.
+    Missing {
+        /// About how many bytes it takes.
+        size: u64,
+    },
+    /// Being installed.
+    Installing {
+        /// Bytes done so far, as far as the setup driver can tell.
+        done: u64,
+        /// About how many bytes in all.
+        size: u64,
+    },
+    /// Installed, at this version.
+    Installed {
+        /// The version.
+        version: String,
+    },
+    /// It can't be installed.
+    Cannot(CannotInstall),
+}
+
+/// Why an agent can't be installed.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum CannotInstall {
+    /// The machine has no Node, or one older than it needs.
+    Node {
+        /// The major version it needs.
+        needs: u32,
+        /// The one it has, if any.
+        has: Option<u32>,
+    },
+    /// The machine has no npm.
+    Npm,
+    /// There's no build of it for this machine.
+    Platform,
+    /// CAF has no recipe for installing it: its profile isn't one CAF
+    /// installs, such as the cautious one.
+    NoRecipe,
+    /// The last try failed, saying this. Installing again tries again.
+    Failed(InstallFailure),
+}
+
+/// Why an install failed.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum InstallFailure {
+    /// It couldn't reach the network.
+    Offline,
+    /// A download didn't match its checksum: it was thrown away.
+    Corrupt,
+    /// There wasn't room on the disk.
+    NoSpace,
+    /// The user stopped it.
+    Stopped,
+    /// Anything else, in the installer's words, cleaned and capped.
+    Other(String),
+}
+
+/// Whether an agent is signed in.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum SignInState {
+    /// CAF can't tell yet: nothing has said.
+    Unknown,
+    /// Signed out.
+    SignedOut,
+    /// Signing in: the user has something to do.
+    SigningIn(SignInLink),
+    /// Signed in.
+    SignedIn(SignedInAs),
+}
+
+/// What the user must do to finish signing in.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SignInLink {
+    /// The link to open, checked against the profile's sites. `None` until
+    /// the sign-in command has given it.
+    pub url: Option<String>,
+    /// A code to type on the site, if the agent shows one.
+    pub code: Option<String>,
+    /// Whether the user may paste a code back here, such as when their
+    /// browser is on another machine.
+    pub paste: bool,
 }

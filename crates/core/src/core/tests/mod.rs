@@ -11,6 +11,7 @@ mod guarantees;
 mod holding;
 mod permissions;
 mod process;
+mod setup;
 mod shared;
 mod stop;
 mod traces;

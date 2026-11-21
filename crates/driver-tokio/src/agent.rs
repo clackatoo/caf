@@ -28,10 +28,13 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
+use std::fs::File;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -47,6 +50,8 @@ use tokio::net::unix::pipe;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+
+use crate::setup::{Lock, lock_file};
 
 /// Limits for the agent driver.
 #[non_exhaustive]
@@ -128,7 +133,9 @@ impl Default for AgentLimits {
 ///   exited and something it started holds its output open with nothing
 ///   coming through for [`AgentLimits::drain`]: its output isn't waited
 ///   for any more. Something that goes on writing is read until the core
-///   forgets the process.
+///   forgets the process. "Nothing coming through" is checked by reading
+///   when the time comes, so output waiting in a pipe is never given up
+///   on, even when the driver's task runs late.
 /// - **Writes after [`AgentDirective::CloseInput`]**, or after
 ///   [`AgentEvent::WriteFailed`], are dropped without a word: nothing more
 ///   is written.
@@ -144,6 +151,19 @@ impl Default for AgentLimits {
 ///   its group and reaps it. Dropping the driver kills every group it
 ///   started, and reaps what's left. If the tokio runtime shuts down
 ///   first, a thread of its own reaps each process left.
+/// - **Installs in use:** a process started with a `hold` folder, CAF's
+///   install of an agent, holds a shared `flock` on that folder from
+///   before it starts until it's reaped, so no CAF program removes the
+///   install meanwhile
+///   ([`SetupDirective::Remove`](caf_core::directive::SetupDirective::Remove)). If the folder can't
+///   be opened, or a removal holds it for over two seconds, the start
+///   fails. Something the process started that outlives it doesn't hold
+///   the install. Once held, the install is marked used: its `.used`
+///   file's time is set to now, for the setup driver's survey to report.
+/// - **A program open for writing** can't be run ("text file busy"). One
+///   just written, such as one CAF just installed, can be, for a moment,
+///   in a process another thread is starting. So starting one waits up to
+///   two seconds for it.
 /// - **SIGPIPE:** writing to a process that has gone raises it. Rust
 ///   programs ignore it; a host whose `main` isn't Rust's must too.
 /// - **A process another thread starts** holds every pipe open in this
@@ -210,7 +230,11 @@ impl AgentDriver {
     /// its I/O and time drivers enabled.
     pub fn apply(&mut self, directive: AgentDirective) {
         let (process, order) = match directive {
-            AgentDirective::Start { process, command } => {
+            AgentDirective::Start {
+                process,
+                command,
+                hold,
+            } => {
                 debug_assert!(
                     !self.processes.contains_key(&process),
                     "a ticket was used twice"
@@ -223,6 +247,7 @@ impl AgentDriver {
                 tokio::spawn(run(
                     process,
                     command,
+                    hold,
                     self.limits.clone(),
                     inbox,
                     self.sender.clone(),
@@ -282,11 +307,20 @@ enum Order {
 async fn run(
     ticket: Ticket,
     command: SpawnCommand,
+    hold: Option<PathBuf>,
     limits: AgentLimits,
     mut orders: mpsc::UnboundedReceiver<Order>,
     events: mpsc::Sender<(Ticket, AgentEvent)>,
 ) {
-    let mut process = match Process::start(&command, limits) {
+    let held = match hold {
+        Some(folder) => hold_folder(&folder).await.map(Some),
+        None => Ok(None),
+    };
+    let started = match held {
+        Ok(held) => start_when_written(&command, held, limits).await,
+        Err(error) => Err(error),
+    };
+    let mut process = match started {
         Ok(process) => process,
         Err(error) => {
             let event = AgentEvent::StartFailed {
@@ -332,11 +366,37 @@ async fn run(
                 };
             },
             status = exit(&process.leader.pidfd), if process.leader.watched() => process.exited(status),
-            () = until(process.drain), if room => process.stop_draining(),
+            () = until(process.drain), if room => process.drain_due(),
             () = until(process.stuck_since.map(|since| since + process.limits.stuck.min(LONGEST))) => process.stuck(),
         }
         if stepped {
             tokio::task::yield_now().await;
+        }
+    }
+}
+
+/// How long starting a program waits while it's open for writing.
+const BUSY_WAIT: Duration = Duration::from_secs(2);
+
+/// Starts `command`, waiting briefly while its program is open for
+/// writing ("text file busy"). A program just written, such as one CAF
+/// just installed, stays open for writing for a moment in every process
+/// another thread started meanwhile, until that process starts its own
+/// program.
+async fn start_when_written(
+    command: &SpawnCommand,
+    mut held: Option<File>,
+    limits: AgentLimits,
+) -> io::Result<Process> {
+    let give_up = Instant::now() + BUSY_WAIT;
+    loop {
+        match Process::start(command, &mut held, limits.clone()) {
+            Err(error)
+                if error.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < give_up =>
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            started => return started,
         }
     }
 }
@@ -385,9 +445,15 @@ enum Queued {
 }
 
 impl Process {
-    /// Starts `command`.
-    fn start(command: &SpawnCommand, limits: AgentLimits) -> io::Result<Self> {
-        let (leader, stdin, stdout, stderr) = spawn(command)?;
+    /// Starts `command`, taking `held`'s lock to hold until it's reaped.
+    /// If it fails, `held` is left as it was.
+    fn start(
+        command: &SpawnCommand,
+        held: &mut Option<File>,
+        limits: AgentLimits,
+    ) -> io::Result<Self> {
+        let (mut leader, stdin, stdout, stderr) = spawn(command)?;
+        leader.held = held.take();
         let mut process = Self {
             framer: Framer::new(limits.biggest_line),
             limits,
@@ -635,6 +701,7 @@ impl Process {
             return;
         };
         self.leader.reaped = true;
+        self.leader.held = None;
         self.read_output();
         self.read_errors();
         let exit = match status.map(|status| (status.exit_status(), status.terminating_signal())) {
@@ -647,6 +714,24 @@ impl Process {
         if self.stdout.is_some() || self.stderr.is_some() {
             self.drain = Some(later(self.limits.drain));
         }
+    }
+
+    /// Its drain time has come. Its task may have run late, as on a loaded
+    /// machine, so what's in its pipes is read first: anything there, or no
+    /// room to read it, means it isn't done, and the wait goes on. Only
+    /// pipes found empty are given up on.
+    fn drain_due(&mut self) {
+        let due = self.drain;
+        if self.stdout.is_some() {
+            self.read_output();
+        }
+        if self.stderr.is_some() {
+            self.read_errors();
+        }
+        if self.drain != due || !self.room() {
+            return;
+        }
+        self.stop_draining();
     }
 
     /// Nothing has come through its pipes for long enough since it exited:
@@ -725,6 +810,7 @@ impl Process {
             // dropped.
             if exit(&self.leader.pidfd).await.is_ok() {
                 self.leader.reaped = true;
+                self.leader.held = None;
             }
         }
     }
@@ -798,6 +884,10 @@ struct Leader {
     reaped: bool,
     /// Whether waiting for its exit failed, as when the runtime is going.
     unwatchable: bool,
+    /// The shared lock on the install it runs from, if it's CAF's install
+    /// of an agent: let go of once it's reaped, and not before, so the
+    /// install isn't removed while it runs.
+    held: Option<File>,
 }
 
 /// `pidfd_send_signal`'s flag to signal the pidfd's process group, from
@@ -851,9 +941,17 @@ impl Drop for Leader {
         };
         match self.pidfd.get_ref().try_clone() {
             Ok(pidfd) => {
+                // The lock goes with the thread, and is let go of once it
+                // has reaped the process. If the thread can't be started,
+                // it's let go of as this is dropped, after the reaping
+                // below.
+                let held = self.held.take();
                 let spawned = std::thread::Builder::new()
                     .name("caf-reap".to_owned())
-                    .spawn(move || reap(pidfd.as_fd()));
+                    .spawn(move || {
+                        reap(pidfd.as_fd());
+                        drop(held);
+                    });
                 if spawned.is_err() {
                     reap(self.pidfd.get_ref().as_fd());
                 }
@@ -941,6 +1039,7 @@ fn spawn(
         pidfd,
         reaped: false,
         unwatchable: false,
+        held: None,
     };
     let stdin = pipe::Sender::from_owned_fd(OwnedFd::from(stdin))?;
     let stdout = pipe::Receiver::from_owned_fd(OwnedFd::from(stdout))?;
@@ -948,11 +1047,56 @@ fn spawn(
     Ok((leader, stdin, stdout, stderr))
 }
 
+/// How long starting a process waits for a shared lock on its install,
+/// while a removal looks whether anything runs from it.
+const HOLD_WAIT: Duration = Duration::from_secs(2);
+
+/// Takes a shared lock on `folder`, an install, for a process about to run
+/// from it. A removal holds it exclusively only for a moment, while it
+/// moves the folder away, so that's waited for, briefly.
+async fn hold_folder(folder: &Path) -> io::Result<File> {
+    let give_up = Instant::now() + HOLD_WAIT;
+    loop {
+        let file = File::open(folder).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("its install, {}, can't be held: {error}", folder.display()),
+            )
+        })?;
+        if let Some(held) = lock_file(file, Lock::SharedNow)? {
+            mark_used(folder);
+            return Ok(held);
+        }
+        if Instant::now() >= give_up {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("its install, {}, is being removed", folder.display()),
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Marks `folder`, an install, as used now: its `.used` file is made if
+/// it isn't there, and its time set to now, for a survey to report. If it
+/// can't be marked, the process starts anyway.
+fn mark_used(folder: &Path) {
+    let marked = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(folder.join(".used"))
+        .and_then(|used| used.set_modified(std::time::SystemTime::now()));
+    if let Err(error) = marked {
+        log::debug!(target: "caf", "can't mark {} as used: {error}", folder.display());
+    }
+}
+
 /// What runs `command`, with `path` as the `PATH` it inherits. Its
 /// environment changes go on top of the inherited one, then `PATH` keeps
 /// only its absolute directories, so a project folder can't put programs
 /// on it. No `pre_exec` hook, so it can be started with `posix_spawn`.
-fn command_for(command: &SpawnCommand, mut path: Option<OsString>) -> Command {
+pub(crate) fn command_for(command: &SpawnCommand, mut path: Option<OsString>) -> Command {
     let mut process = Command::new(&command.program);
     process.args(&command.args);
     for change in &command.env {
@@ -985,7 +1129,7 @@ fn command_for(command: &SpawnCommand, mut path: Option<OsString>) -> Command {
 
 /// The absolute directories of `path`, a `PATH`, or [`SAFE_PATH`] if
 /// there are none.
-fn absolute_only(path: &OsStr) -> OsString {
+pub(crate) fn absolute_only(path: &OsStr) -> OsString {
     let kept: Vec<&[u8]> = (path.as_bytes().split(|&byte| byte == b':'))
         .filter(|dir| dir.starts_with(b"/"))
         .collect();
@@ -1060,6 +1204,42 @@ async fn until(at: Option<Instant>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn output_left_when_the_drain_comes_due_is_still_read() {
+        // Its drain time passes while its task isn't run, as on a loaded
+        // machine, with output it wrote still in the pipe: that's read,
+        // not given up on.
+        let limits = AgentLimits {
+            read_step: 64,
+            ..AgentLimits::default()
+        };
+        let mut command = SpawnCommand::new("/bin/sh");
+        command.args = vec![
+            "-c".into(),
+            r#"i=0; while [ $i -lt 100 ]; do printf '{"jsonrpc":"2.0","method":"m"}\n'; i=$((i+1)); done"#.into(),
+        ];
+        let mut process = Process::start(&command, &mut None, limits).unwrap();
+        let status = exit(&process.leader.pidfd).await;
+        process.exited(status);
+        assert!(process.drain.is_some(), "its pipes are waited for");
+        process.drain = Some(Instant::now());
+        process.drain_due();
+        while process.stdout.is_some() {
+            if !process.read_output() {
+                process.close_output();
+            }
+        }
+        let lines = (process.queue.iter())
+            .filter(|queued| {
+                matches!(
+                    queued,
+                    Queued::Ready(AgentEvent::Frame(Frame::Message(_)), _)
+                )
+            })
+            .count();
+        assert_eq!(lines, 100, "every line it wrote");
+    }
 
     #[test]
     fn path_keeps_only_absolute_directories() {

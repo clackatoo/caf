@@ -1,9 +1,11 @@
-//! `caf-fake-agent SCRIPT [--record RECORD]`: see the library's docs.
+//! `caf-fake-agent SCRIPT [--record RECORD]`, or
+//! `caf-fake-agent [--cli] auth login|status|logout`: see the library's
+//! docs.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use caf_fake_agent::{EXIT_BAD_SCRIPT, RECORD_VAR, SCRIPT_VAR, Script, run};
+use caf_fake_agent::{EXIT_BAD_SCRIPT, RECORD_VAR, SCRIPT_VAR, Script, auth, run};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -15,6 +17,11 @@ fn main() {
             hold_pipes(secs, pid_file.first().map(Path::new));
             0
         }
+        // A sign-in, sign-out or status command, run as an adapter's own
+        // command line: before the script, as it's run with the adapter's
+        // environment, which names one.
+        [cli, word, rest @ ..] if cli == "--cli" && word == "auth" => auth(rest),
+        [word, rest @ ..] if word == "auth" => auth(rest),
         // Started by a driver, which may add arguments of its own.
         _ if std::env::var_os(SCRIPT_VAR).is_some() => {
             let script = std::env::var_os(SCRIPT_VAR).map(PathBuf::from);

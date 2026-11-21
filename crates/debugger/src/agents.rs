@@ -81,7 +81,7 @@ fn parse(text: &str, path: Option<&std::ffi::OsStr>) -> Result<Vec<AgentSpec>, S
             Profile::ClaudeAgentAcp => ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
             Profile::Cautious => ProfileChoice::Cautious,
         };
-        agents.push(AgentSpec::new(agent.name, command, profile));
+        agents.push(AgentSpec::command(agent.name, command, profile));
     }
     if agents.is_empty() {
         return Err("it names no agents".into());
@@ -97,7 +97,7 @@ pub fn found(fake: Option<&Path>, script: &Path) -> Vec<AgentSpec> {
     let mut agents = Vec::new();
     let path = std::env::var_os("PATH");
     if let Some(claude) = locate(Path::new(CLAUDE_ADAPTER), path.as_deref()) {
-        agents.push(AgentSpec::new(
+        agents.push(AgentSpec::command(
             "claude",
             SpawnCommand::new(claude),
             ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
@@ -106,7 +106,7 @@ pub fn found(fake: Option<&Path>, script: &Path) -> Vec<AgentSpec> {
     if let Some(fake) = fake {
         let mut command = SpawnCommand::new(fake);
         command.args = vec![script.as_os_str().to_owned()];
-        agents.push(AgentSpec::new("fake", command, ProfileChoice::Cautious));
+        agents.push(AgentSpec::command("fake", command, ProfileChoice::Cautious));
     }
     agents
 }
@@ -129,6 +129,7 @@ fn locate(program: &Path, path: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use caf_core::agent::Launch;
     use caf_core::profiles::{Builtin, ProfileChoice};
 
     use super::parse;
@@ -154,9 +155,13 @@ mod tests {
         .expect("it reads");
         assert_eq!(agents.len(), 2);
         assert_eq!(agents[0].name.0, "sh");
-        assert!(agents[0].command.program.is_absolute());
+        let command = |at: usize| match &agents[at].launch {
+            Launch::Command(command) => command.clone(),
+            other => panic!("started by a command, not {other:?}"),
+        };
+        assert!(command(0).program.is_absolute());
         assert_eq!(agents[0].profile, ProfileChoice::Cautious);
-        assert_eq!(agents[1].command.args, ["-c", "true"]);
+        assert_eq!(command(1).args, ["-c", "true"]);
         assert_eq!(
             agents[1].profile,
             ProfileChoice::Builtin(Builtin::ClaudeAgentAcp)

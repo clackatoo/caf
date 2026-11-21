@@ -3,13 +3,18 @@
 //! Each event is handed to [`Core::handle`](crate::Core::handle) with the
 //! time it happened. The list is closed: drivers report only these.
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::acp::Frame;
+use crate::agent::InstallFailure;
 use crate::chat::{AppItem, NoAppItems, UserMessage};
 use crate::core::OpenChat;
-use crate::ids::{ChatId, QuestionId, Ticket, TurnId};
+use crate::ids::{AgentName, ChatId, QuestionId, Ticket, TurnId};
+use crate::install::{Platform, SignedInAs};
 use crate::question::Answer;
+use crate::time::Wall;
 
 /// Something that happened.
 #[non_exhaustive]
@@ -43,6 +48,13 @@ pub enum Event<A: AppItem = NoAppItems> {
     },
     /// The storage driver's report. *Later.*
     Storage(StorageEvent),
+    /// The setup driver's report.
+    Setup {
+        /// The directive's ticket.
+        ticket: Ticket,
+        /// What happened.
+        event: SetupEvent,
+    },
 }
 
 /// What the host asked for.
@@ -88,6 +100,27 @@ pub enum HostCommand<A: AppItem = NoAppItems> {
     },
     /// Stop everything: close every session and stop every adapter.
     Shutdown,
+    /// Look at what's installed and what the machine has.
+    CheckAgents,
+    /// Install an agent.
+    Install(AgentName),
+    /// Stop installing an agent.
+    StopInstall(AgentName),
+    /// Sign in to an agent.
+    SignIn(AgentName),
+    /// Give a sign-in what the user pasted.
+    Paste {
+        /// The agent.
+        agent: AgentName,
+        /// What they pasted. It's a one-time code, so recordings write it
+        /// as `null`, which reads back as empty.
+        #[serde(deserialize_with = "null_as_empty")]
+        text: String,
+    },
+    /// Stop a sign-in.
+    StopSignIn(AgentName),
+    /// Sign out of an agent.
+    SignOut(AgentName),
     /// Add an app item. *Later.*
     AddAppItem(A),
 }
@@ -185,4 +218,67 @@ fn bytes_or_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, 
         Either::Text(text) => text.into_bytes(),
         Either::Bytes(bytes) => bytes,
     })
+}
+
+/// Text, read as empty from `null`.
+fn null_as_empty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+/// What the setup driver reports.
+#[non_exhaustive]
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum SetupEvent {
+    /// What's installed, and what the machine has.
+    Surveyed {
+        /// The folder installs live in.
+        root: PathBuf,
+        /// The install folders there, by name, complete ones only.
+        installed: Vec<String>,
+        /// The machine's Node major version, if it has Node.
+        node: Option<u32>,
+        /// Whether it has npm.
+        npm: bool,
+        /// The machine's platform.
+        platform: Platform,
+        /// When each complete install folder was last used, by name: the
+        /// time its `.used` file was last changed, which happens each time
+        /// a process starts from it (see
+        /// [`AgentDirective::Start`](crate::directive::AgentDirective::Start)),
+        /// or, if it has none, the folder's own, so when it was installed.
+        /// The core never removes a folder missing here.
+        #[serde(default)]
+        used: Vec<(String, Wall)>,
+    },
+    /// An install moved on.
+    Progress {
+        /// Bytes done so far.
+        done: u64,
+    },
+    /// An install finished.
+    Installed,
+    /// An install failed. Nothing is left behind.
+    InstallFailed(InstallFailure),
+    /// A folder was removed, or wasn't because something runs from it.
+    Removed {
+        /// Whether it was.
+        removed: bool,
+    },
+    /// A sign-in command gave its link.
+    Link(String),
+    /// A sign-in command gave a code to type on the site.
+    Code(String),
+    /// A status command answered: whether signed in, and how.
+    Status(Option<SignedInAs>),
+    /// A sign-in or other command ended.
+    Ended {
+        /// Whether it succeeded.
+        ok: bool,
+    },
+    /// It couldn't be started or run, saying why in the driver's own words,
+    /// such as "no such file". Never anything the command printed, which
+    /// may hold a sign-in link, a code or an email: the core logs this.
+    Failed(String),
 }

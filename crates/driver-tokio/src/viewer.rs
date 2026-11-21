@@ -23,12 +23,14 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use caf_core::OpenChat;
+use caf_core::agent::{AgentStatus, SignInState};
 use caf_core::chat::AppItem;
+use caf_core::ids::AgentName;
 use caf_core::ids::{ChangeNo, ChatId};
-use caf_core::viewer::{FromViewer, OpenRequest, Outcome, ToViewer, VERSIONS};
+use caf_core::viewer::{AgentAction, FromViewer, OpenRequest, Outcome, ToViewer, VERSIONS};
 use tokio::sync::mpsc;
 
-use crate::caf::{Caf, ChatsWatch, Error, Update, Watch, WeakCaf};
+use crate::caf::{AgentsWatch, Caf, ChatsWatch, Error, Update, Watch, WeakCaf};
 
 /// Turns a viewer's request to open a chat into one, or refuses it: see
 /// [`ViewerRules::open`].
@@ -59,6 +61,13 @@ pub struct ViewerRules {
     /// Watching a chat over again doesn't count, and a chat that has
     /// ended, or was unwatched, makes room for another.
     pub max_watches: usize,
+    /// Whether viewers may install agents, and sign in and out of them.
+    /// `false` by default: an install is hundreds of megabytes, and a
+    /// sign-in decides whose account the agent uses, so a host opts in.
+    /// Refused requests get [`Outcome::NotAllowed`].
+    ///
+    /// [`Outcome::NotAllowed`]: caf_core::viewer::Outcome::NotAllowed
+    pub agents: bool,
 }
 
 impl Default for ViewerRules {
@@ -67,6 +76,7 @@ impl Default for ViewerRules {
             open: Box::new(|_| None),
             act: true,
             max_watches: 256,
+            agents: false,
         }
     }
 }
@@ -91,6 +101,15 @@ impl Default for ViewerRules {
 /// `to`'s receiver. A closed `from` is noticed only once the message
 /// already taken from it, if any, has been answered, so a host whose
 /// transport breaks should drop `to`'s receiver too.
+///
+/// Right after the welcome comes [`ToViewer::Agents`], every agent's
+/// status, and again each time any of it changes: only the latest, if it
+/// changes faster than the viewer reads. A request to install an agent,
+/// or sign in or out of one ([`FromViewer::Agent`]), is done only if
+/// [`ViewerRules::agents`] allows it, and otherwise answered
+/// [`Outcome::NotAllowed`]. A viewer it doesn't allow sees a sign-in under
+/// way without its link or code: whoever opens the link, or types the
+/// code, chooses whose account the agent signs in to.
 ///
 /// Every request gets exactly one [`ToViewer::Done`], unless the link
 /// ends first: one made while CAF shuts down is answered
@@ -118,19 +137,25 @@ pub async fn serve<A: AppItem>(
     let Some(open) = chats.next().await else {
         return;
     };
+    let mut agents = caf.watch_agents();
+    let Some(statuses) = agents.next().await else {
+        return;
+    };
     let welcome = ToViewer::Welcome {
         version,
         agents: caf.agents().to_vec(),
         chats: open,
         run: caf.run().to_owned(),
     };
-    if to.send(welcome).await.is_err() {
+    let statuses = ToViewer::Agents(for_viewer(statuses, &rules));
+    if to.send(welcome).await.is_err() || to.send(statuses).await.is_err() {
         return;
     }
     let link = Link {
         caf,
         rules,
         chats,
+        agents,
         gone: false,
         watches: Watches::default(),
     };
@@ -169,6 +194,7 @@ struct Link<A: AppItem> {
     caf: WeakCaf<A>,
     rules: Arc<ViewerRules>,
     chats: ChatsWatch,
+    agents: AgentsWatch,
     /// CAF has shut down: the link ends once every watch has.
     gone: bool,
     watches: Watches<A>,
@@ -216,6 +242,10 @@ impl<A: AppItem> Link<A> {
                 },
                 chats = self.chats.next(), if !self.gone => match chats {
                     Some(chats) => room.send(ToViewer::Chats(chats)),
+                    None => self.gone = true,
+                },
+                statuses = self.agents.next(), if !self.gone => match statuses {
+                    Some(statuses) => room.send(ToViewer::Agents(for_viewer(statuses, &self.rules))),
                     None => self.gone = true,
                 },
                 message = self.watches.next() => room.send(message),
@@ -279,6 +309,11 @@ impl<A: AppItem> Link<A> {
                 .await;
                 (request, outcome)
             }
+            FromViewer::Agent {
+                request,
+                agent,
+                action,
+            } => (request, about(caf, rules, &agent, action).await),
             // A second Hello, or a message of a later version: there's
             // nothing to do.
             _ => return,
@@ -325,6 +360,33 @@ async fn act<A: AppItem, F: Future<Output = Result<Outcome, Error>>>(
         return Outcome::Gone;
     };
     outcome(act(caf).await)
+}
+
+/// Installs an agent, or signs in or out of it, if viewers may.
+async fn about<A: AppItem>(
+    caf: &WeakCaf<A>,
+    rules: &ViewerRules,
+    agent: &AgentName,
+    action: AgentAction,
+) -> Outcome {
+    if !rules.agents {
+        return Outcome::NotAllowed;
+    }
+    let Some(caf) = caf.upgrade() else {
+        return Outcome::Gone;
+    };
+    let done = match action {
+        AgentAction::Install => caf.install(agent).await,
+        AgentAction::StopInstall => caf.stop_install(agent).await,
+        AgentAction::SignIn => caf.sign_in(agent).await,
+        AgentAction::Paste(text) => caf.paste(agent, text).await,
+        AgentAction::StopSignIn => caf.stop_sign_in(agent).await,
+        AgentAction::SignOut => caf.sign_out(agent).await,
+        // One added in a later version of the wire, which this CAF can't
+        // do.
+        _ => return Outcome::NotAllowed,
+    };
+    outcome(done.map(|()| Outcome::Done))
 }
 
 /// How a request went, as the wire says it.
@@ -448,4 +510,20 @@ impl<A: AppItem> Watches<A> {
         })
         .await
     }
+}
+
+/// Agents' statuses as a viewer sees them: a sign-in's link and code only
+/// if the viewer may act on agents. Whoever opens the link, or types the
+/// code on the provider's site, chooses whose account the agent signs in
+/// to.
+fn for_viewer(mut statuses: Vec<AgentStatus>, rules: &ViewerRules) -> Vec<AgentStatus> {
+    if !rules.agents {
+        for status in &mut statuses {
+            if let SignInState::SigningIn(link) = &mut status.sign_in {
+                link.url = None;
+                link.code = None;
+            }
+        }
+    }
+    statuses
 }

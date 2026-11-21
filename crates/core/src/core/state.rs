@@ -3,19 +3,21 @@
 //! each chat's place in all that.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 use serde::Serialize;
 
 use super::clean::Tail;
 use crate::acp::RequestId;
-use crate::agent::McpServer;
+use crate::agent::{InstallState, McpServer, SignInState};
 use crate::chat::{AppItem, Note, Turn};
 use crate::ids::{
     AgentName, AgentSessionId, ChatId, ConnectionId, ItemId, QuestionId, Ticket, TurnId,
 };
+use crate::install::Platform;
 use crate::profiles::ProfileReport;
 use crate::question::PermissionOption;
-use crate::time::Mono;
+use crate::time::{Mono, Wall};
 
 /// Gives out ids, in order, from one counter, so no two things of any
 /// kind share a number.
@@ -95,6 +97,9 @@ pub(super) struct Proc {
     /// The sessions it has had open: until it's let go, no other process
     /// opens them.
     pub(super) sessions: BTreeSet<String>,
+    /// The install folder it runs from, if it's CAF's install of its
+    /// agent.
+    pub(super) folder: Option<String>,
     /// Requests to open a session CAF gave up waiting for, with the
     /// session each asked for, if not a new one. Until one answers, its
     /// session is held, as it may still be replaying; one that answers
@@ -372,4 +377,97 @@ pub(super) struct Running {
     /// Stop was asked for: when to give up waiting for the agent to
     /// stop.
     pub(super) stop_by: Option<Mono>,
+}
+
+/// Where the core is with installing agents and signing in to them.
+#[derive(Debug, Default, Serialize)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
+pub(super) struct Setup {
+    /// Every agent, in the order the host offered them.
+    pub(super) order: Vec<AgentName>,
+    /// Where each agent stands.
+    pub(super) agents: BTreeMap<AgentName, Standing>,
+    /// What the last survey found, once one answered.
+    pub(super) machine: Option<Machine>,
+    /// The survey waited for: an answer to any other is stale.
+    pub(super) survey: Option<Ticket>,
+    /// Folders installed while that survey was out, which it may have
+    /// looked too early to find.
+    pub(super) fresh: BTreeSet<String>,
+    /// Work the setup driver is doing, by ticket.
+    pub(super) jobs: BTreeMap<Ticket, Job>,
+}
+
+/// Where one agent stands.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
+pub(super) struct Standing {
+    /// Whether it's installed.
+    pub(super) install: InstallState,
+    /// Whether it's signed in.
+    pub(super) sign_in: SignInState,
+    /// A process of the host's own command for it said, in `initialize`,
+    /// that it's the adapter its profile is for: commands of its recipe
+    /// that run the adapter may run it.
+    pub(super) checked: bool,
+}
+
+/// What a survey found: where installs live, what's there, and what the
+/// machine has.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
+pub(super) struct Machine {
+    /// The folder installs live in.
+    pub(super) root: PathBuf,
+    /// The complete install folders there, by name.
+    pub(super) installed: BTreeSet<String>,
+    /// Node's major version, if there's Node.
+    pub(super) node: Option<u32>,
+    /// Whether there's npm.
+    pub(super) npm: bool,
+    /// The platform.
+    pub(super) platform: Platform,
+    /// When each install folder was last used, by name.
+    pub(super) used: BTreeMap<String, Wall>,
+}
+
+/// A directive the setup driver is carrying out.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
+pub(super) struct Job {
+    /// The agent it's for.
+    pub(super) agent: AgentName,
+    /// What it is.
+    pub(super) work: Work,
+    /// It was stopped, or is being: what it reports changes nothing,
+    /// except an install that finished anyway.
+    pub(super) stopped: bool,
+    /// When it's stopped if it hasn't ended: a sign-in nobody finishes.
+    pub(super) deadline: Option<Mono>,
+}
+
+/// What a setup job is.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", content = "value")]
+pub(super) enum Work {
+    /// Installing into this folder.
+    Install {
+        /// The folder.
+        folder: String,
+    },
+    /// Removing this folder.
+    Remove {
+        /// The folder.
+        folder: String,
+    },
+    /// Signing in. If it doesn't end signed in, the agent's sign-in state
+    /// goes back to `before`.
+    SignIn {
+        /// The state before it started, kept up to date by reports.
+        before: SignInState,
+    },
+    /// Signing out.
+    SignOut,
+    /// Running a status command.
+    Status,
 }

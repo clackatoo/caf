@@ -52,4 +52,12 @@ kill_after: Duration,
  * How often CAF checks whether an old adapter's processes have all
  * gone, before starting a new one on the same session. 50 ms.
  */
-group_poll: Duration, };
+group_poll: Duration, 
+/**
+ * How long a sign-in may wait for the user to finish it before CAF
+ * stops it, so one nobody finishes doesn't hold chats waiting on it.
+ * 10 min.
+ * Recordings made before it was added don't have it: they read as
+ * the default.
+ */
+sign_in?: Duration, };

@@ -2,6 +2,8 @@
 
 /**
  * What the user can do about a failure. CAF does the remedy itself, so
- * every host offers the same ones. *Later*, except `SendAgain`.
+ * every host offers the same ones: `SendAgain` is sending the message
+ * again, and `SignIn` is [`Core::sign_in`](crate::Core::sign_in).
+ * `NewChat` is *later*.
  */
 export type Remedy = { "type": "SendAgain" } | { "type": "SignIn" } | { "type": "NewChat" };

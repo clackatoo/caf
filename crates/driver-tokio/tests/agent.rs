@@ -23,7 +23,11 @@ fn sh(script: &str) -> SpawnCommand {
 }
 
 fn start(driver: &mut AgentDriver, process: Ticket, command: SpawnCommand) {
-    driver.apply(AgentDirective::Start { process, command });
+    driver.apply(AgentDirective::Start {
+        process,
+        command,
+        hold: None,
+    });
 }
 
 fn write(driver: &mut AgentDriver, process: Ticket, bytes: impl Into<Vec<u8>>) {

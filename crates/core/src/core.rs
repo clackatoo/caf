@@ -9,6 +9,7 @@ mod frames;
 mod procs;
 mod record;
 mod sessions;
+mod setup;
 mod state;
 mod timers;
 mod turns;
@@ -24,8 +25,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use self::record::Log;
-use self::state::{Ask, Conn, Ids, Pending, Proc, Run};
-use crate::agent::{AgentSpec, McpServer};
+use self::state::{Ask, Conn, Ids, Pending, Proc, Run, Setup};
+use crate::agent::{AgentSpec, AgentStatus, McpServer};
 use crate::change::{Change, Mismatch, Read};
 use crate::chat::{AppItem, Chat, NoAppItems, UserMessage};
 use crate::directive::{Directive, Level, Report};
@@ -34,6 +35,7 @@ use crate::host::Host;
 use crate::ids::{
     AgentName, AgentSessionId, ChangeNo, ChatId, ConnectionId, QuestionId, Ticket, TurnId,
 };
+use crate::install::Recipe;
 use crate::profiles::ProfileReport;
 use crate::question::Answer;
 use crate::time::{Mono, Now};
@@ -64,6 +66,13 @@ const MOST_MISFIT: usize = 1024;
 pub struct Core<A: AppItem = NoAppItems> {
     host: Host,
     agents: BTreeMap<AgentName, AgentSpec>,
+    /// Each agent's recipe, from its profile, if it has one.
+    recipes: BTreeMap<AgentName, Recipe>,
+    /// The name of each agent's built-in profile that never changes, which
+    /// its installs are named after.
+    slugs: BTreeMap<AgentName, &'static str>,
+    /// Where each agent stands, and the setup driver's work.
+    setup: Setup,
     chats: BTreeMap<ChatId, Chat<A>>,
     /// Gives out every id.
     ids: Ids,
@@ -173,6 +182,19 @@ pub enum Refused {
     WrongAnswer,
     /// There's nothing to stop.
     NothingToStop,
+    /// CAF can't install this agent: the host starts it itself, or it
+    /// can't be installed on this machine.
+    NotInstallable,
+    /// It's installed already.
+    AlreadyInstalled,
+    /// CAF can't sign in to this agent: its profile has no sign-in, the
+    /// sign-in needs a file from CAF's install and it isn't installed yet,
+    /// or it runs the adapter, which is the host's own command, and no
+    /// process of that has yet said, in `initialize`, that it's the
+    /// adapter the profile is for.
+    CannotSignIn,
+    /// No sign-in is under way for this agent.
+    NotSigningIn,
 }
 
 /// What the host can see of a connection: one adapter process.
@@ -202,12 +224,36 @@ impl<A: AppItem> Core<A> {
     /// A core whose ids start at `first`: tests start them at 1000, so
     /// an id mixed up with a position shows.
     pub(crate) fn starting_ids_at(host: Host, agents: Vec<AgentSpec>, first: u64) -> Self {
+        let mut setup = Setup::default();
+        let mut recipes = BTreeMap::new();
+        let mut slugs = BTreeMap::new();
+        for agent in &agents {
+            match &agent.profile {
+                crate::profiles::ProfileChoice::Builtin(builtin) => {
+                    slugs.insert(agent.name.clone(), builtin.slug())
+                }
+                _ => slugs.remove(&agent.name),
+            };
+            if !setup.agents.contains_key(&agent.name) {
+                setup.order.push(agent.name.clone());
+            }
+            setup
+                .agents
+                .insert(agent.name.clone(), setup::standing(&agent.launch));
+            match agent.profile.recipe() {
+                Some(recipe) => recipes.insert(agent.name.clone(), recipe),
+                None => recipes.remove(&agent.name),
+            };
+        }
         Self {
             host,
             agents: agents
                 .into_iter()
                 .map(|agent| (agent.name.clone(), agent))
                 .collect(),
+            recipes,
+            slugs,
+            setup,
             chats: BTreeMap::new(),
             ids: Ids { next: first, first },
             runs: BTreeMap::new(),
@@ -242,8 +288,159 @@ impl<A: AppItem> Core<A> {
             Event::Woken => self.woken(now, out),
             Event::Policy { ticket, answer } => self.policy_answered(now, ticket, answer, out),
             Event::Storage(storage) => match storage {},
+            Event::Setup { ticket, event } => self.setup_event(now, ticket, event, out),
         }
         self.finish(now, out);
+    }
+
+    /// Looks at what's installed and what the machine has (Node, npm, its
+    /// platform). Call it when CAF starts, and again whenever the user may
+    /// have changed something, such as installing Node. Until the first
+    /// answer comes, every installed-by-CAF agent's state is
+    /// [`InstallState::Unknown`](crate::agent::InstallState::Unknown);
+    /// a later look keeps what's known until it answers. Agents whose
+    /// recipe has a status command are then asked whether they're signed
+    /// in, where the command can run.
+    pub fn check_agents(&mut self, now: Now, out: &mut Vec<Directive>) {
+        // Looking is never refused.
+        let _ = self.command(now, HostCommand::CheckAgents, out);
+        self.finish(now, out);
+    }
+
+    /// Where every agent stands: installed or not, signed in or not, in
+    /// the order the host offered them.
+    #[must_use]
+    pub fn agents(&self) -> Vec<AgentStatus> {
+        self.statuses()
+    }
+
+    /// Installs an agent CAF installs itself, at the version its profile
+    /// was checked at. Chats waiting for it start once it's done, or are
+    /// told why it failed. Installing one already being installed does
+    /// nothing more.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::NoSuchAgent`]; [`Refused::NotInstallable`] if the host
+    /// starts it itself, or it can't be installed on this machine;
+    /// [`Refused::AlreadyInstalled`].
+    pub fn install(
+        &mut self,
+        now: Now,
+        agent: &AgentName,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
+        self.command(now, HostCommand::Install(agent.clone()), out)?;
+        self.finish(now, out);
+        Ok(())
+    }
+
+    /// Stops installing an agent. Chats waiting for it have their waiting
+    /// messages stopped, with a note saying it wasn't installed, and go on
+    /// waiting for it.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::NoSuchAgent`], or [`Refused::NothingToStop`].
+    pub fn stop_install(
+        &mut self,
+        now: Now,
+        agent: &AgentName,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
+        self.command(now, HostCommand::StopInstall(agent.clone()), out)?;
+        self.finish(now, out);
+        Ok(())
+    }
+
+    /// Starts signing in to an agent, with its profile's own sign-in,
+    /// never one the agent suggests. Its state becomes
+    /// [`SignInState::SigningIn`](crate::agent::SignInState::SigningIn),
+    /// with the link once the command gives it. What a failed turn's
+    /// [`Remedy::SignIn`](crate::chat::Remedy::SignIn) does.
+    ///
+    /// For an agent the host starts with its own command, the command is
+    /// that, with its arguments and variables, and the recipe's arguments
+    /// after them. If the agent was signed out, new chats with it wait
+    /// until the sign-in ends. One nobody finishes is stopped after
+    /// [`Timers::sign_in`](crate::host::Timers::sign_in).
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::NoSuchAgent`]; [`Refused::CannotSignIn`] if its profile
+    /// has no sign-in, or its sign-in can't run yet (see
+    /// [`Refused::CannotSignIn`]).
+    pub fn sign_in(
+        &mut self,
+        now: Now,
+        agent: &AgentName,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
+        self.command(now, HostCommand::SignIn(agent.clone()), out)?;
+        self.finish(now, out);
+        Ok(())
+    }
+
+    /// Gives a sign-in under way what the user pasted, such as the code a
+    /// sign-in page on another machine showed them. It's passed on trimmed,
+    /// as one line.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::NoSuchAgent`]; [`Refused::NotSigningIn`]; or
+    /// [`Refused::Unsupported`] if the sign-in takes no paste, or the text
+    /// is empty, more than one line, or longer than 4 KiB.
+    pub fn paste(
+        &mut self,
+        now: Now,
+        agent: &AgentName,
+        text: String,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
+        // Refused here, not as a command, so a recording's paste, written
+        // without its text, still replays.
+        if text.trim().is_empty() {
+            return Err(Refused::Unsupported);
+        }
+        let agent = agent.clone();
+        self.command(now, HostCommand::Paste { agent, text }, out)?;
+        self.finish(now, out);
+        Ok(())
+    }
+
+    /// Stops a sign-in under way.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::NoSuchAgent`], or [`Refused::NotSigningIn`].
+    pub fn stop_sign_in(
+        &mut self,
+        now: Now,
+        agent: &AgentName,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
+        self.command(now, HostCommand::StopSignIn(agent.clone()), out)?;
+        self.finish(now, out);
+        Ok(())
+    }
+
+    /// Signs out of an agent, with its profile's own command, stopping any
+    /// sign-in to it first. It's signed out once the command succeeds.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::NoSuchAgent`], or [`Refused::CannotSignIn`] if its
+    /// profile has no way to sign out, or it can't run yet, as for
+    /// signing in.
+    pub fn sign_out(
+        &mut self,
+        now: Now,
+        agent: &AgentName,
+        out: &mut Vec<Directive>,
+    ) -> Result<(), Refused> {
+        self.command(now, HostCommand::SignOut(agent.clone()), out)?;
+        self.finish(now, out);
+        Ok(())
     }
 
     /// Opens a chat, and returns its id. Its agent is started, or its
@@ -436,6 +633,16 @@ impl<A: AppItem> Core<A> {
                 self.shut_down(now, out);
                 Ok(())
             }
+            HostCommand::CheckAgents => {
+                self.survey(out);
+                Ok(())
+            }
+            HostCommand::Install(agent) => self.install_agent(&agent, out),
+            HostCommand::StopInstall(agent) => self.stop_installing(now, &agent, out),
+            HostCommand::SignIn(agent) => self.start_sign_in(now, &agent, out),
+            HostCommand::Paste { agent, text } => self.paste_to(&agent, &text, out),
+            HostCommand::StopSignIn(agent) => self.stop_signing_in(&agent, out),
+            HostCommand::SignOut(agent) => self.start_sign_out(&agent, out),
             HostCommand::AddAppItem(_) => {
                 report(
                     out,
@@ -522,6 +729,7 @@ impl<A: AppItem> Core<A> {
             "shutting_down": self.shutting_down,
             "host": self.host,
             "agents": self.agents,
+            "setup": self.setup,
         })
     }
 }

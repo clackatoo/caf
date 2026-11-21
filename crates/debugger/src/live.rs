@@ -296,7 +296,7 @@ mod tests {
     use crate::replay::{Base, take, to_json};
 
     fn agents() -> Vec<AgentSpec> {
-        vec![AgentSpec::new(
+        vec![AgentSpec::command(
             "fake",
             SpawnCommand::new("/bin/true"),
             ProfileChoice::Cautious,

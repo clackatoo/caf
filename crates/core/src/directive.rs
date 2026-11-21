@@ -6,9 +6,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use std::path::PathBuf;
+
 use crate::agent::SpawnCommand;
 use crate::ids::{ChangeNo, ChatId, Ticket};
-use crate::time::Mono;
+use crate::install::{Install, LinkFrom, SignedInAs};
+use crate::time::{Mono, Wall};
 
 /// Work for a driver.
 #[non_exhaustive]
@@ -26,6 +29,8 @@ pub enum Directive {
     Viewer(ViewerDirective),
     /// For the storage driver. *Later.*
     Storage(StorageDirective),
+    /// For the setup driver: installing agents and signing in to them.
+    Setup(SetupDirective),
     /// For the host's log.
     Report(Report),
 }
@@ -61,6 +66,13 @@ pub enum AgentDirective {
         process: Ticket,
         /// How to start it.
         command: SpawnCommand,
+        /// The install folder it runs from, if it's CAF's install of an
+        /// agent. The driver holds a shared lock on it while the process
+        /// runs, so no CAF program on the machine removes it meanwhile, and
+        /// as it starts the process it touches the folder's `.used` file
+        /// (making it if need be), so a survey can say when the folder was
+        /// last used ([`SetupEvent::Surveyed`](crate::event::SetupEvent::Surveyed)).
+        hold: Option<PathBuf>,
     },
     /// Write these bytes to its standard input: whole messages, each
     /// ending in a newline.
@@ -211,4 +223,122 @@ pub enum Level {
     /// Something wasn't as it should be, such as an answer to a request
     /// CAF never sent.
     Warn,
+}
+
+/// Work for the setup driver: installing agents and signing in to them.
+///
+/// The driver's side of the contract:
+/// - **Installs go under one folder every CAF program shares**
+///   (`$XDG_DATA_HOME/caf/agents/`), each built in a hidden folder and
+///   renamed into place whole, so a cut-off install leaves nothing that
+///   looks installed. Half-built folders left by earlier runs are removed.
+/// - **One install of a folder at a time**, across every CAF program on the
+///   machine: a lock.
+/// - **Nothing in use is removed:** removing takes the folder's lock
+///   exclusively, and gives up if any process holds it
+///   ([`AgentDirective::Start`]'s `hold`).
+/// - **Downloads are `https` only, and checked** against their SHA-256
+///   before anything is unpacked.
+/// - **A sign-in command's output never reaches the core**, except the
+///   link and code its recipe names, and a status command's fields only as
+///   its recipe names them: so no email or token is ever recorded.
+#[non_exhaustive]
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum SetupDirective {
+    /// Say what's installed, and what the machine has: the answer is
+    /// [`SetupEvent::Surveyed`](crate::event::SetupEvent::Surveyed).
+    Survey {
+        /// Its ticket.
+        ticket: Ticket,
+    },
+    /// Install into the folder `folder`, reporting progress, then done or
+    /// failed.
+    Install {
+        /// Its ticket.
+        ticket: Ticket,
+        /// The folder's name, such as `claude-agent-acp-0.98.0`.
+        folder: String,
+        /// What to install.
+        install: Install,
+        /// The agent's private folder, such as `claude-agent-acp-private`, if its
+        /// recipe gives it one
+        /// ([`EnvValue::PrivateFolder`](crate::install::EnvValue::PrivateFolder)):
+        /// made beside the installs, readable only by the user, if it isn't
+        /// there, and never removed. One that's a link is refused, and the
+        /// install fails.
+        private: Option<String>,
+    },
+    /// Remove the folder `folder`, unless something runs from it.
+    Remove {
+        /// Its ticket.
+        ticket: Ticket,
+        /// The folder's name.
+        folder: String,
+        /// Remove it only if it hasn't been used since: if its `.used`
+        /// file, or the folder itself if it has none, changed later, a
+        /// process started from it since the survey the core decided on,
+        /// and it stays (`Removed { removed: false }`). Checked holding the
+        /// installs' lock, as it's removed.
+        unused_since: Wall,
+    },
+    /// Run a sign-in command, handing back its link and code as it gives
+    /// them, until it ends or is stopped.
+    SignIn {
+        /// Its ticket.
+        ticket: Ticket,
+        /// The command, resolved: the adapter as the agent is started, or
+        /// a file in its install.
+        command: SpawnCommand,
+        /// Where its link comes from.
+        link: LinkFrom,
+        /// What comes before the code it shows, if it shows one.
+        code_after: Option<String>,
+        /// Whether the user may paste something back to it. Only then is it
+        /// given a standard input; otherwise it reads nothing there.
+        paste: bool,
+    },
+    /// Give a running sign-in what the user pasted, with a newline.
+    Paste {
+        /// The sign-in's ticket.
+        ticket: Ticket,
+        /// What they pasted.
+        text: String,
+    },
+    /// Run a command and say whether it succeeded, such as signing out.
+    Run {
+        /// Its ticket.
+        ticket: Ticket,
+        /// The command, resolved.
+        command: SpawnCommand,
+    },
+    /// Run a status command, and hand back only the fields its recipe
+    /// names.
+    Status {
+        /// Its ticket.
+        ticket: Ticket,
+        /// The command, resolved.
+        command: SpawnCommand,
+        /// The JSON pointer of the field that's `true` when signed in.
+        signed_in: String,
+        /// The JSON pointer of the field naming how, and what its values
+        /// mean.
+        how: Option<(String, Vec<(String, SignedInAs)>)>,
+    },
+    /// Stop an install, sign-in or command under way, within about a
+    /// second, killing what it runs. Its last report says it was stopped:
+    /// - an install's is
+    ///   [`InstallFailed(Stopped)`](crate::agent::InstallFailure::Stopped),
+    ///   once what it had built is gone;
+    /// - a sign-in's, a status command's or another command's is
+    ///   [`Ended { ok: false }`](crate::event::SetupEvent::Ended).
+    ///
+    /// A survey or a removal isn't stopped: it ends by itself, soon. Nor is
+    /// work that has ended already, or a ticket the driver never had:
+    /// those get no report.
+    Stop {
+        /// Its ticket.
+        ticket: Ticket,
+    },
 }

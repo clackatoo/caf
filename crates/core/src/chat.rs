@@ -126,6 +126,13 @@ pub enum ChatState {
     },
     /// Closed by the host. Nothing more happens to it.
     Closed,
+    /// Waiting for its agent: to be installed, or signed in to, when a
+    /// sign-in to it was started while it was signed out. Where the agent
+    /// stands is in its [`AgentStatus`](crate::agent::AgentStatus); a view
+    /// shows that, with Install, or the sign-in's link. Messages sent now
+    /// wait, and stopping the chat stops them, with a note if the agent
+    /// isn't installed.
+    WaitingForAgent,
 }
 
 /// Why a chat lost its session.
@@ -340,7 +347,9 @@ pub enum FailureReason {
 }
 
 /// What the user can do about a failure. CAF does the remedy itself, so
-/// every host offers the same ones. *Later*, except `SendAgain`.
+/// every host offers the same ones: `SendAgain` is sending the message
+/// again, and `SignIn` is [`Core::sign_in`](crate::Core::sign_in).
+/// `NewChat` is *later*.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -348,8 +357,13 @@ pub enum FailureReason {
 pub enum Remedy {
     /// Send the same message again.
     SendAgain,
-    /// Sign in, with CAF's own command for this agent: never one the agent
-    /// suggested.
+    /// Sign in, with CAF's own command for this agent, from its profile:
+    /// never one the agent suggested. Offered only where CAF can run that
+    /// command now ([`Core::sign_in`](crate::Core::sign_in) wouldn't
+    /// refuse); elsewhere a failure for want of signing in offers what it
+    /// did before, if anything. Once the user has signed in, the chat says
+    /// so ([`Note::SignedIn`]), and the message can be sent again: CAF
+    /// never sends it again by itself.
     SignIn,
     /// Start a new chat with the same agent and folder.
     NewChat,
@@ -488,6 +502,15 @@ pub enum Note {
     /// was opened rather than continue it: it remembers nothing from
     /// before.
     SessionStuck,
+    /// The agent isn't installed, and the user chose not to install it now,
+    /// so the message that waited for it was stopped.
+    NotInstalled,
+    /// The agent's install failed, so the message that waited for it was
+    /// stopped. Why is in the agent's status.
+    InstallFailed,
+    /// The user signed in to the agent. A turn that failed for want of it
+    /// can be sent again.
+    SignedIn,
 }
 
 /// Something the agent sent that CAF couldn't read.

@@ -4,9 +4,10 @@
 //! # How it works
 //!
 //! [`Caf::start`] spawns one task that owns the [`Core`], the
-//! [`AgentDriver`], the [`TimerDriver`] and the [`Policy`]. Handles talk to
-//! it through a queue, and it waits on four things at once: a handle's
-//! command, an adapter's event, the timer, and a policy's answer. Each
+//! [`AgentDriver`], the [`TimerDriver`], the [`SetupDriver`] and the
+//! [`Policy`]. Handles talk to it through a queue, and it waits on five
+//! things at once: a handle's command, an adapter's event, the timer, the
+//! setup driver's report, and a policy's answer. Each
 //! goes into the core with the time from [`TimerDriver::now`], and every
 //! directive that comes out goes to its driver:
 //!
@@ -17,10 +18,18 @@
 //! | `Policy(Decide)` | [`Policy::decide`], whose future runs as a task of its own; its answer comes back as [`Event::Policy`] |
 //! | `Policy(Withdrawn)` | Stops that decision's task. An answer it gave already is still handed in, and the core ignores it |
 //! | `Viewer(Changed)` | Wakes the chat's watches, which read with [`Core::read`] |
+//! | `Setup` | [`SetupDriver::apply`]; its reports come back as [`Event::Setup`] |
 //! | `Report` | The [`log`] facade, target `caf` |
 //!
 //! A [`Steps`] given to [`Caf::start_watching`] sees each event once the
 //! core has it, with its directives, before they go to their drivers.
+//!
+//! As it starts, before the task runs, CAF calls [`Core::check_agents`],
+//! recorded as [`HostCommand::CheckAgents`], so the setup driver's survey
+//! is under way by the time anything else happens. After each event, the
+//! [`AgentsWatch`]es are told if any agent's status changed: they read
+//! [`Core::agents`] through a `watch` channel, so a slow one only ever
+//! misses statuses that were replaced.
 //!
 //! Watches pull rather than being pushed to: a watch asks for what
 //! changed since it last read, so the only changes held for it are the
@@ -39,7 +48,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use caf_core::acp::{Frame, Message};
-use caf_core::agent::{AgentSpec, EnvChange, McpServer};
+use caf_core::agent::AgentStatus;
+use caf_core::agent::{AgentSpec, EnvChange, Launch, McpServer};
 use caf_core::chat::{ChatState, UserMessage};
 use caf_core::directive::{Level, PolicyDirective, TimerDirective, ViewerDirective};
 use caf_core::event::{AgentEvent, HostCommand, PolicyAnswer};
@@ -51,11 +61,13 @@ use caf_core::{
     QuestionId, Read, Refused, Report, Ticket, TurnId,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{AbortHandle, JoinHandle, JoinSet};
 
 use crate::agent::{AgentDriver, AgentLimits};
 use crate::policy::{AlwaysAsk, Policy};
+use crate::setup::SetupDriver;
 use crate::steps::{Step, Steps};
 use crate::timer::TimerDriver;
 
@@ -87,7 +99,13 @@ pub struct Config {
     ///
     /// **What's hidden.** None of it changes what the core does:
     /// - Claude's sign-in status (`_auth/status_update`) holds the
-    ///   account's email: its params are written as `null`.
+    ///   account's email: its params are written as the kind of sign-in
+    ///   alone, `{"authStatus": {"kind": "account"}}`, which is all the
+    ///   core reads, or `{}` if they have none.
+    /// - What the user pastes into a sign-in ([`Caf::paste`]) is a
+    ///   one-time code: it's written as `{"agent": …, "text": null}`. A
+    ///   reader replaying the file takes that `null` as text it doesn't
+    ///   have, such as an empty string.
     /// - Each agent's arguments are left out, and its environment
     ///   variables are written with their names but not their values.
     /// - Each MCP server's environment variables and HTTP headers are
@@ -97,8 +115,10 @@ pub struct Config {
     /// folder and profile; what the user sent; everything the agent said;
     /// its error output, exactly, as text where a piece of it is UTF-8 and
     /// as bytes where it isn't, such as one that ends partway through a
-    /// character; folders; and each MCP server's name, program, arguments
-    /// and URL. So don't put secrets in MCP arguments or URLs, and treat a
+    /// character; folders; each MCP server's name, program, arguments and
+    /// URL; and what the setup driver reported, with the folder installs
+    /// live in, and a sign-in's link and code (each good for one sign-in
+    /// only, and of no use without the command that asked for it). So don't put secrets in MCP arguments or URLs, and treat a
     /// recording as private: read it through before sharing it. Names of
     /// variables and arguments are written as arrays of bytes, as Rust
     /// writes them.
@@ -113,6 +133,10 @@ pub struct Config {
     /// the file with `{"stopped": …}`. Either way, what's in the file still
     /// replays, as far as it goes.
     pub record: Option<PathBuf>,
+    /// The folder agents CAF installs live in, shared by every CAF program
+    /// on the machine. `None` (the default) means
+    /// [`SetupDriver::default_root`](crate::SetupDriver::default_root).
+    pub installs: Option<PathBuf>,
 }
 
 impl Config {
@@ -126,6 +150,7 @@ impl Config {
             policy: Box::new(AlwaysAsk),
             agent_limits: AgentLimits::default(),
             record: None,
+            installs: None,
         }
     }
 }
@@ -163,6 +188,8 @@ struct Common<A: AppItem> {
     agents: Arc<[AgentName]>,
     /// The open chats, in the order they were opened.
     chats: watch::Receiver<Vec<ChatSummary>>,
+    /// Where every agent stands, in the order they were offered.
+    statuses: watch::Receiver<Vec<AgentStatus>>,
     /// See [`Caf::run`].
     run: Arc<str>,
 }
@@ -174,6 +201,7 @@ impl<A: AppItem> Clone for Common<A> {
             ended: self.ended.clone(),
             agents: Arc::clone(&self.agents),
             chats: self.chats.clone(),
+            statuses: self.statuses.clone(),
             run: Arc::clone(&self.run),
         }
     }
@@ -211,6 +239,14 @@ impl<A: AppItem> WeakCaf<A> {
     pub(crate) fn watch_chats(&self) -> ChatsWatch {
         ChatsWatch {
             list: self.shared.chats.clone(),
+            first: true,
+        }
+    }
+
+    /// See [`Caf::watch_agents`].
+    pub(crate) fn watch_agents(&self) -> AgentsWatch {
+        AgentsWatch {
+            list: self.shared.statuses.clone(),
             first: true,
         }
     }
@@ -357,10 +393,25 @@ impl<A: AppItem> Caf<A> {
             .map(|agent| agent.name.clone())
             .collect();
         let (open, chats) = watch::channel(Vec::new());
-        let task = Task {
-            core: Core::new(config.host, config.agents),
+        let root = config
+            .installs
+            .or_else(SetupDriver::default_root)
+            .unwrap_or_else(|| {
+                let root = std::env::temp_dir().join("caf/agents");
+                log::warn!(
+                    target: "caf",
+                    "there's no home folder for installs: using {}, which may not last",
+                    root.display()
+                );
+                root
+            });
+        let core = Core::new(config.host, config.agents);
+        let (told, statuses) = watch::channel(core.agents());
+        let mut task = Task {
+            core,
             agents: AgentDriver::new(config.agent_limits),
             timers: TimerDriver::new(),
+            setup: SetupDriver::new(root),
             policy: config.policy,
             deciding: JoinSet::new(),
             tickets: HashMap::new(),
@@ -371,6 +422,7 @@ impl<A: AppItem> Caf<A> {
             recorder,
             steps,
             open,
+            statuses: told,
             inbox,
             listening: true,
             reads: reading,
@@ -379,6 +431,7 @@ impl<A: AppItem> Caf<A> {
             waiting: Vec::new(),
             out: Vec::new(),
         };
+        task.check_agents();
         let task = tokio::spawn(task.run());
         let caf = Self {
             commands,
@@ -388,6 +441,7 @@ impl<A: AppItem> Caf<A> {
                 ended,
                 agents,
                 chats,
+                statuses,
                 run: new_run().into(),
             },
         };
@@ -406,6 +460,100 @@ impl<A: AppItem> Caf<A> {
     #[must_use]
     pub fn run(&self) -> &str {
         &self.shared.run
+    }
+
+    /// Follows where every agent stands, installed or not and signed in or
+    /// not: the whole list at once, then again each time any of it
+    /// changes. CAF looks at what's installed as it starts.
+    #[must_use]
+    pub fn watch_agents(&self) -> AgentsWatch {
+        self.downgrade().watch_agents()
+    }
+
+    /// Looks again at what's installed and what the machine has, such as
+    /// after the user installed Node. See [`Core::check_agents`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Gone`].
+    ///
+    /// [`Core::check_agents`]: caf_core::Core::check_agents
+    pub async fn check_agents(&self) -> Result<(), Error> {
+        self.ask(|reply| Command::CheckAgents { reply }).await
+    }
+
+    /// Installs an agent. See [`Core::install`]; progress shows in
+    /// [`Caf::watch_agents`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::install`]: caf_core::Core::install
+    pub async fn install(&self, agent: &AgentName) -> Result<(), Error> {
+        self.about(agent, AgentCall::Install).await
+    }
+
+    /// Stops installing an agent. See [`Core::stop_install`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::stop_install`]: caf_core::Core::stop_install
+    pub async fn stop_install(&self, agent: &AgentName) -> Result<(), Error> {
+        self.about(agent, AgentCall::StopInstall).await
+    }
+
+    /// Starts signing in to an agent. See [`Core::sign_in`]; the link to
+    /// show shows in [`Caf::watch_agents`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::sign_in`]: caf_core::Core::sign_in
+    pub async fn sign_in(&self, agent: &AgentName) -> Result<(), Error> {
+        self.about(agent, AgentCall::SignIn).await
+    }
+
+    /// Gives a sign-in what the user pasted. See [`Core::paste`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::paste`]: caf_core::Core::paste
+    pub async fn paste(&self, agent: &AgentName, text: String) -> Result<(), Error> {
+        self.about(agent, AgentCall::Paste(text)).await
+    }
+
+    /// Asks the task to do `call` about `agent`.
+    async fn about(&self, agent: &AgentName, call: AgentCall) -> Result<(), Error> {
+        let agent = agent.clone();
+        (self.ask(|reply| Command::Agent { agent, call, reply })).await
+    }
+
+    /// Stops a sign-in. See [`Core::stop_sign_in`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::stop_sign_in`]: caf_core::Core::stop_sign_in
+    pub async fn stop_sign_in(&self, agent: &AgentName) -> Result<(), Error> {
+        self.about(agent, AgentCall::StopSignIn).await
+    }
+
+    /// Signs out of an agent. See [`Core::sign_out`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::sign_out`]: caf_core::Core::sign_out
+    pub async fn sign_out(&self, agent: &AgentName) -> Result<(), Error> {
+        self.about(agent, AgentCall::SignOut).await
     }
 
     /// Follows which chats are open, with each one's agent and folder.
@@ -594,6 +742,33 @@ impl<A: AppItem> Drop for Watch<A> {
     }
 }
 
+/// Follows where every agent stands. Like [`Watch`], it doesn't keep CAF
+/// running.
+pub struct AgentsWatch {
+    list: watch::Receiver<Vec<AgentStatus>>,
+    /// It hasn't given the list yet.
+    first: bool,
+}
+
+impl AgentsWatch {
+    /// Every agent's status, in the order they were offered: at once the
+    /// first time, then each time any changes. If they change more than
+    /// once between calls, only the latest is given. `None` once CAF has
+    /// shut down.
+    ///
+    /// Cancel-safe: dropped before it resolves, it loses nothing.
+    pub async fn next(&mut self) -> Option<Vec<AgentStatus>> {
+        if self.first {
+            // The task drops the list's sender as it ends.
+            self.list.has_changed().ok()?;
+            self.first = false;
+        } else {
+            self.list.changed().await.ok()?;
+        }
+        Some(self.list.borrow_and_update().clone())
+    }
+}
+
 /// Follows which chats are open: opened by the host, by any viewer, or
 /// closed. Like [`Watch`], it doesn't keep CAF running.
 pub struct ChatsWatch {
@@ -764,6 +939,24 @@ enum Command {
     Shutdown {
         reply: oneshot::Sender<()>,
     },
+    CheckAgents {
+        reply: oneshot::Sender<Result<(), Refused>>,
+    },
+    Agent {
+        agent: AgentName,
+        call: AgentCall,
+        reply: oneshot::Sender<Result<(), Refused>>,
+    },
+}
+
+/// Something a handle asks the task to do about an agent.
+enum AgentCall {
+    Install,
+    StopInstall,
+    SignIn,
+    Paste(String),
+    StopSignIn,
+    SignOut,
 }
 
 /// A watch's read: what changed in `chat` since `since`, and a way to
@@ -832,6 +1025,7 @@ struct Task<A: AppItem> {
     core: Core<A>,
     agents: AgentDriver,
     timers: TimerDriver,
+    setup: SetupDriver,
     policy: Box<dyn Policy>,
     /// The policy's decisions under way.
     deciding: JoinSet<PolicyAnswer>,
@@ -849,6 +1043,9 @@ struct Task<A: AppItem> {
     steps: Option<Box<dyn Steps<A>>>,
     /// The open chats, for [`ChatsWatch`]es. Dropped as the task ends.
     open: watch::Sender<Vec<ChatSummary>>,
+    /// Every agent's status, for [`AgentsWatch`]es. Dropped as the task
+    /// ends.
+    statuses: watch::Sender<Vec<AgentStatus>>,
     inbox: mpsc::Receiver<Command>,
     /// Whether any handle is left to send commands.
     listening: bool,
@@ -884,6 +1081,7 @@ impl<A: AppItem> Task<A> {
                     }
                 },
                 (process, event) = self.agents.next() => self.give(Event::Agent { process, event }),
+                (ticket, event) = self.setup.next() => self.give(Event::Setup { ticket, event }),
                 () = self.timers.woken() => self.give(Event::Woken),
                 Some(decided) = self.deciding.join_next_with_id() => self.decided(decided),
             }
@@ -991,6 +1189,65 @@ impl<A: AppItem> Task<A> {
                 }
                 let _ = reply.send(result);
             }
+            Command::CheckAgents { reply } => {
+                self.check_agents();
+                let _ = reply.send(Ok(()));
+            }
+            Command::Agent { agent, call, reply } => {
+                let result = self.agent(&agent, call);
+                let _ = reply.send(result);
+            }
+        }
+    }
+
+    /// Looks at what's installed and what the machine has.
+    fn check_agents(&mut self) {
+        self.host(
+            |core, now, out| {
+                core.check_agents(now, out);
+                Ok(())
+            },
+            |()| Some(HostCommand::CheckAgents),
+        )
+        .unwrap_or_default();
+    }
+
+    /// Does `call` about `agent`.
+    fn agent(&mut self, agent: &AgentName, call: AgentCall) -> Result<(), Refused> {
+        let named = || agent.clone();
+        match call {
+            AgentCall::Install => self.host(
+                |core, now, out| core.install(now, agent, out),
+                |()| Some(HostCommand::Install(named())),
+            ),
+            AgentCall::StopInstall => self.host(
+                |core, now, out| core.stop_install(now, agent, out),
+                |()| Some(HostCommand::StopInstall(named())),
+            ),
+            AgentCall::SignIn => self.host(
+                |core, now, out| core.sign_in(now, agent, out),
+                |()| Some(HostCommand::SignIn(named())),
+            ),
+            AgentCall::Paste(text) => {
+                let recorded = self.keeping().then(|| text.clone());
+                self.host(
+                    |core, now, out| core.paste(now, agent, text, out),
+                    |()| {
+                        recorded.map(|text| HostCommand::Paste {
+                            agent: named(),
+                            text,
+                        })
+                    },
+                )
+            }
+            AgentCall::StopSignIn => self.host(
+                |core, now, out| core.stop_sign_in(now, agent, out),
+                |()| Some(HostCommand::StopSignIn(named())),
+            ),
+            AgentCall::SignOut => self.host(
+                |core, now, out| core.sign_out(now, agent, out),
+                |()| Some(HostCommand::SignOut(named())),
+            ),
         }
     }
 
@@ -1216,12 +1473,27 @@ impl<A: AppItem> Task<A> {
                         self.feeds.remove(&chat);
                     }
                 }
+                Directive::Setup(setup) => self.setup.apply(setup),
                 Directive::Report(report) => log_report(&report),
                 // Storage comes in a later feature, and none are made yet.
                 _ => {}
             }
         }
         self.out = out;
+        self.tell_agents();
+    }
+
+    /// Tells the [`AgentsWatch`]es where every agent stands, if that
+    /// changed.
+    fn tell_agents(&self) {
+        let now = self.core.agents();
+        self.statuses.send_if_modified(|was| {
+            let changed = *was != now;
+            if changed {
+                *was = now;
+            }
+            changed
+        });
     }
 
     /// Whether `chat` is closed, or was never there.
@@ -1315,6 +1587,28 @@ const RECORDING_BEHIND: usize = 256 << 20;
 /// Claude's sign-in status, which holds the account's email.
 const SIGN_IN_STATUS: &str = "_auth/status_update";
 
+/// Where the kind of sign-in is in [`SIGN_IN_STATUS`]'s params, as Claude's
+/// adapter sends them: `{"authStatus": {"kind": "account", …}}`.
+const SIGN_IN_KIND: &str = "/authStatus/kind";
+
+/// [`SIGN_IN_STATUS`]'s params, as recorded: the kind of sign-in alone,
+/// where the adapter put it, or nothing. Never the email, or anything else
+/// beside it.
+fn sign_in_status_params(params: Option<&RawValue>) -> Option<Box<RawValue>> {
+    let kind = params
+        .and_then(|params| serde_json::from_str::<serde_json::Value>(params.get()).ok())
+        .and_then(|params| {
+            params
+                .pointer(SIGN_IN_KIND)
+                .and_then(|kind| kind.as_str().map(str::to_owned))
+        });
+    let kept = match kind {
+        Some(kind) => serde_json::json!({ "authStatus": { "kind": kind } }),
+        None => serde_json::json!({}),
+    };
+    serde_json::value::to_raw_value(&kept).ok()
+}
+
 /// Writes a recording, on a thread of its own.
 struct Recorder {
     lines: std::sync::mpsc::Sender<String>,
@@ -1375,8 +1669,10 @@ impl Recorder {
         let agents = (agents.iter())
             .map(|agent| {
                 let mut agent = agent.clone();
-                agent.command.args.clear();
-                hide_values(&mut agent.command.env);
+                if let Launch::Command(command) = &mut agent.launch {
+                    command.args.clear();
+                    hide_values(&mut command.env);
+                }
                 agent
             })
             .collect();
@@ -1478,9 +1774,9 @@ impl Recorder {
     }
 }
 
-/// `event` at `now`, as a recording's line: with MCP servers' secrets
-/// and Claude's sign-in status hidden, and error output as text where
-/// it's UTF-8.
+/// `event` at `now`, as a recording's line: with MCP servers' secrets,
+/// pasted codes and all of Claude's sign-in status but its kind hidden,
+/// and error output as text where it's UTF-8.
 fn line<A: AppItem>(now: Now, event: &Event<A>) -> serde_json::Result<String> {
     let (process, agent) = match event {
         Event::Agent { process, event } => (process, event),
@@ -1490,6 +1786,14 @@ fn line<A: AppItem>(now: Now, event: &Event<A>) -> serde_json::Result<String> {
                 open: hide_mcp_secrets(open),
             });
             return serde_json::to_string(&Line { now, event: &event });
+        }
+        // A one-time code: it's never written, so a replay can't use it.
+        Event::Host(HostCommand::Paste { agent, .. }) => {
+            let event = serde_json::json!({
+                "type": "Host",
+                "value": { "type": "Paste", "value": { "agent": agent, "text": null } },
+            });
+            return serde_json::to_string(&serde_json::json!({ "now": now, "event": event }));
         }
         _ => return serde_json::to_string(&Line { now, event }),
     };
@@ -1507,21 +1811,21 @@ fn line<A: AppItem>(now: Now, event: &Event<A>) -> serde_json::Result<String> {
             });
             return serde_json::to_string(&serde_json::json!({ "now": now, "event": event }));
         }
-        AgentEvent::Frame(Frame::Message(Message::Notification { method, .. }))
+        AgentEvent::Frame(Frame::Message(Message::Notification { method, params }))
             if method == SIGN_IN_STATUS =>
         {
             Message::Notification {
                 method: method.clone(),
-                params: None,
+                params: sign_in_status_params(params.as_deref()),
             }
         }
-        AgentEvent::Frame(Frame::Message(Message::Request { id, method, .. }))
+        AgentEvent::Frame(Frame::Message(Message::Request { id, method, params }))
             if method == SIGN_IN_STATUS =>
         {
             Message::Request {
                 id: id.clone(),
                 method: method.clone(),
-                params: None,
+                params: sign_in_status_params(params.as_deref()),
             }
         }
         _ => return serde_json::to_string(&Line { now, event }),
@@ -1632,7 +1936,7 @@ mod tests {
         use caf_core::agent::SpawnCommand;
         use caf_core::directive::AgentDirective;
         use caf_core::profiles::ProfileChoice;
-        let agents = vec![AgentSpec::new(
+        let agents = vec![AgentSpec::command(
             "plain",
             SpawnCommand::new("/opt/plain"),
             ProfileChoice::Cautious,
@@ -1694,6 +1998,97 @@ mod tests {
                 .unwrap()
                 .contains(r#"{"type":"Stderr","value":"café\n"}"#)
         );
+    }
+
+    /// The event `line` writes, read back as JSON.
+    fn written(event: &Event<NoAppItems>) -> serde_json::Value {
+        let now = Now {
+            wall: Wall(0),
+            mono: Mono(0),
+        };
+        let line = line(now, event).unwrap();
+        let read: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(read["now"], serde_json::json!({ "wall": 0, "mono": 0 }));
+        read["event"].clone()
+    }
+
+    #[test]
+    fn a_pasted_code_is_never_recorded() {
+        let event = Event::<NoAppItems>::Host(HostCommand::Paste {
+            agent: AgentName("claude".into()),
+            text: "one-time-code-1234".into(),
+        });
+        assert_eq!(
+            written(&event),
+            serde_json::json!({
+                "type": "Host",
+                "value": { "type": "Paste", "value": { "agent": "claude", "text": null } },
+            })
+        );
+    }
+
+    #[test]
+    fn only_the_kind_of_a_sign_in_status_is_recorded() {
+        use caf_core::acp::RequestId;
+        let raw = |json: &str| Some(serde_json::value::RawValue::from_string(json.into()).unwrap());
+        let notification = |params| Event::<NoAppItems>::Agent {
+            process: Ticket(1000),
+            event: AgentEvent::Frame(Frame::Message(Message::Notification {
+                method: SIGN_IN_STATUS.into(),
+                params,
+            })),
+        };
+        let params = |event: serde_json::Value| {
+            event["value"]["event"]["value"]["value"]["value"]["params"].clone()
+        };
+        let claude = r#"{"authStatus": {"kind": "account", "label": "Claude Max", "email": "me@example.com", "organization": "Me"}}"#;
+        assert_eq!(
+            params(written(&notification(raw(claude)))),
+            serde_json::json!({ "authStatus": { "kind": "account" } })
+        );
+        // Anything without a kind where Claude's adapter puts it keeps
+        // nothing.
+        for other in [
+            r#"{"email": "me@example.com"}"#,
+            r#"{"authStatus": {"kind": 7}}"#,
+            "[1]",
+            "null",
+        ] {
+            assert_eq!(
+                params(written(&notification(raw(other)))),
+                serde_json::json!({}),
+                "{other}"
+            );
+        }
+        assert_eq!(params(written(&notification(None))), serde_json::json!({}));
+        let request = Event::<NoAppItems>::Agent {
+            process: Ticket(1000),
+            event: AgentEvent::Frame(Frame::Message(Message::Request {
+                id: RequestId::Number(5),
+                method: SIGN_IN_STATUS.into(),
+                params: raw(claude),
+            })),
+        };
+        assert_eq!(
+            params(written(&request)),
+            serde_json::json!({ "authStatus": { "kind": "account" } })
+        );
+    }
+
+    #[test]
+    fn a_sign_ins_link_and_code_are_recorded_as_they_came() {
+        use caf_core::event::SetupEvent;
+        for event in [
+            SetupEvent::Link("https://claude.ai/oauth?state=abc".into()),
+            SetupEvent::Code("ABCD-1234".into()),
+        ] {
+            let expected = serde_json::to_value(&event).unwrap();
+            let event = Event::<NoAppItems>::Setup {
+                ticket: Ticket(1000),
+                event,
+            };
+            assert_eq!(written(&event)["value"]["event"], expected);
+        }
     }
 
     #[tokio::test]

@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 use std::time::Duration;
 
-use caf_core::agent::{AgentSpec, EnvChange, McpServer, SpawnCommand};
+use caf_core::agent::{AgentSpec, EnvChange, Launch, McpServer, SpawnCommand};
 use caf_core::change::Change;
 use caf_core::chat::{ChatState, FailureReason, ItemKind, Lost, Turn, TurnLife, UserMessage};
 use caf_core::directive::PermissionRequest;
@@ -76,7 +76,7 @@ fn fake(dir: &Dir, script: &Path) -> AgentSpec {
             dir.path("record.jsonl").into(),
         ),
     ];
-    AgentSpec::new("fake", command, ProfileChoice::Cautious)
+    AgentSpec::command("fake", command, ProfileChoice::Cautious)
 }
 
 /// The fake started by a shell that runs it as it is told: for tests
@@ -88,7 +88,7 @@ fn fake_by_shell(dir: &Dir, shell: &str) -> AgentSpec {
         EnvChange::Set("FAKE".into(), caf_fake_agent::binary().into()),
         EnvChange::Set("DIR".into(), dir.0.clone().into()),
     ];
-    AgentSpec::new("fake", command, ProfileChoice::Cautious)
+    AgentSpec::command("fake", command, ProfileChoice::Cautious)
 }
 
 /// A host for tests: an adapter that has gone is waited for briefly.
@@ -713,7 +713,7 @@ async fn a_recorded_run_replays_to_the_same_state() {
         "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}]
     }}});
     let script = dir.script("script.jsonl", &after_handshake(&[
-        json!({"notify": {"method": "_auth/status_update", "params": {"email": "someone@example.com"}}}),
+        json!({"notify": {"method": "_auth/status_update", "params": {"authStatus": {"kind": "account", "label": "Claude Max", "email": "someone@example.com"}}}}),
         json!({"stderr": "warming up"}),
         prompt(),
         say("s1", "Looking."),
@@ -728,11 +728,14 @@ async fn a_recorded_run_replays_to_the_same_state() {
     ]));
     let recording = dir.path("run.jsonl");
     let mut agent = fake(&dir, &script);
-    agent.command.env.push(EnvChange::Set(
+    let Launch::Command(command) = &mut agent.launch else {
+        unreachable!("the fake is the host's own command")
+    };
+    command.env.push(EnvChange::Set(
         "SECRET_KEY".into(),
         "sk-do-not-record".into(),
     ));
-    agent.command.args = vec!["--key".into(), "sk-arg-do-not-record".into()];
+    command.args = vec!["--key".into(), "sk-arg-do-not-record".into()];
     let mut config = Config::new(host(), vec![agent]);
     config.record = Some(recording.clone());
     let (caf, running) = start(config);
@@ -775,9 +778,9 @@ async fn a_recorded_run_replays_to_the_same_state() {
     );
     assert!(
         text.contains(
-            r#"{"type":"Notification","value":{"method":"_auth/status_update","params":null}}"#
+            r#"{"type":"Notification","value":{"method":"_auth/status_update","params":{"authStatus":{"kind":"account"}}}}"#
         ),
-        "the sign-in status is recorded, without its params"
+        "the sign-in status is recorded with its kind alone"
     );
     assert!(
         !holds(&text, "sk-do-not-record"),
@@ -788,7 +791,9 @@ async fn a_recorded_run_replays_to_the_same_state() {
         "agents' arguments aren't recorded"
     );
     let header: Header = serde_json::from_str(text.lines().next().unwrap()).unwrap();
-    let command = &header.agents[0].command;
+    let Launch::Command(command) = &header.agents[0].launch else {
+        panic!("the fake is recorded as the host's own command")
+    };
     assert!(command.args.is_empty());
     assert!(
         command

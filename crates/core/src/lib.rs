@@ -12,7 +12,8 @@
 //! Drivers are small and do one kind of job each: the agent driver starts
 //! adapter programs and carries their bytes, the timer driver wakes the
 //! core, the policy driver answers "is this allowed?", the viewer driver
-//! shows chats, and the storage driver saves them. Drivers never hear each
+//! shows chats, the storage driver saves them, and the setup driver
+//! installs agents and signs in to them. Drivers never hear each
 //! other; only the core listens to them, and only the core gives them
 //! work. `caf-driver-tokio` has ready-made ones; a host with its own event
 //! loop, such as clackatoo, writes its own against [`Event`] and
@@ -22,14 +23,19 @@
 //! ends in the same state, so any session can be recorded and replayed as
 //! a test.
 //!
-//! # What's in this feature
+//! # What's in it so far
 //!
-//! This is feature 1, *talking to one agent*:
+//! Feature 1, *talking to one agent*:
 //! - start an adapter;
 //! - open a session, or continue one the agent knows;
 //! - send messages and see the reply stream in;
 //! - stop a turn;
 //! - survive the adapter dying or hanging.
+//!
+//! Feature 2 added the [`viewer`] wire. Feature 3 adds installing the
+//! agents CAF has profiles for, and signing in to them, each from its
+//! profile's recipe ([`install`]): [`Core::install`], [`Core::sign_in`]
+//! and the rest, with where each agent stands in [`Core::agents`].
 //!
 //! The types already hold everything the architecture fixed, so later
 //! features add behaviour without reshaping them. Items and variants
@@ -115,8 +121,9 @@
 //!    opens a turn: anything else said outside one, such as a notice, is
 //!    reported, with what it says, as are updates about the whole chat
 //!    (its plan, commands, mode, settings and title) until the features
-//!    that keep them. The one thing CAF drops on purpose is Claude's
-//!    sign-in status, which holds the account's email.
+//!    that keep them. The one thing CAF drops on purpose is all but the
+//!    kind of an adapter's own sign-in status (`_auth/status_update`):
+//!    the rest holds the account's email, which CAF never keeps.
 //! 4. **Every event names what it belongs to**: a turn, an item, a session,
 //!    a process. A late update lands on its own row, never on whatever is
 //!    current.
@@ -143,6 +150,7 @@ pub mod event;
 mod fixtures;
 pub mod host;
 pub mod ids;
+pub mod install;
 #[cfg(test)]
 mod kinds;
 pub mod profiles;

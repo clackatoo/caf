@@ -37,6 +37,8 @@ enum Due {
     Quiet(ChatId),
     /// A chat has waited a while for its session to be let go.
     Held(ChatId),
+    /// A sign-in nobody finished in time.
+    SignIn(Ticket),
 }
 
 impl<A: AppItem> Core<A> {
@@ -77,7 +79,15 @@ impl<A: AppItem> Core<A> {
         let held = (self.runs.iter())
             .filter(|(_, run)| run.open == Open::Wanted)
             .filter_map(|(&chat, run)| Some((run.held_by?, Due::Held(chat))));
-        procs.chain(requests).chain(stops).chain(quiet).chain(held)
+        let sign_ins = (self.setup.jobs.iter())
+            .filter(|(_, job)| !job.stopped)
+            .filter_map(|(&ticket, job)| Some((job.deadline?, Due::SignIn(ticket))));
+        procs
+            .chain(requests)
+            .chain(stops)
+            .chain(quiet)
+            .chain(held)
+            .chain(sign_ins)
     }
 
     /// The timer driver woke the core: whatever is due is done.
@@ -111,6 +121,7 @@ impl<A: AppItem> Core<A> {
             Due::Request(proc, id) => self.overdue(now, proc, id, out),
             Due::Stop(chat) => self.stop_overdue(now, chat, out),
             Due::Quiet(chat) => self.quiet(now, chat),
+            Due::SignIn(ticket) => self.sign_in_overdue(ticket, out),
             Due::Held(chat) => {
                 if let Some(run) = self.runs.get_mut(&chat) {
                     run.held_by = None;

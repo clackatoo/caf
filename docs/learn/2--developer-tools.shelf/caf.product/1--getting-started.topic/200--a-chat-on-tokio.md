@@ -4,6 +4,7 @@ type: how
 description: Run CAF in a tokio program with caf-driver-tokio. Start it, open a chat, watch it change, send messages, answer questions, stop a turn, shut down, and record a run to replay as a test.
 related:
   - caf/getting-started/what-is-caf
+  - caf/getting-started/installing-and-signing-in
   - caf/concepts/the-core
   - caf/concepts/chats-turns-and-items
 ---
@@ -18,9 +19,9 @@ Describe your program with a `Host`, list the agents it offers, and start
 CAF. It runs in a task of its own on the current tokio runtime.
 
 ```rust
-let claude = AgentSpec::new(
+let claude = AgentSpec::command(
     "claude",
-    SpawnCommand::new("/home/me/.local/share/caf/agents/claude-0.98.0/bin/claude-agent-acp"),
+    SpawnCommand::new("/opt/claude-agent-acp/bin/claude-agent-acp"),
     ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
 );
 let (caf, running) = Caf::<NoAppItems>::start(Config::new(Host::new("eyespy", "0.4.0"), vec![claude]));
@@ -29,6 +30,10 @@ let chat = caf.open_chat(OpenChat::new("claude", "/home/me/project")).await?;
 
 A chat takes messages at once. Messages sent before its session is open wait
 for it.
+
+Here your program says how to start the agent's adapter. CAF can also
+install it, and sign in to it, itself: see
+[Installing and signing in](~caf/getting-started/installing-and-signing-in).
 
 ## Watch it
 
@@ -131,7 +136,10 @@ recording cut short ends with a `stopped` line (see below): stop there.
 None of this changes what the core does with the recording:
 
 - **Claude's sign-in status** (`_auth/status_update`) holds the account's
-  email. It's written with its params as `null`.
+  email. It's written with its params as the kind of sign-in alone, such as
+  `{"authStatus": {"kind": "account"}}`, which is all the core reads.
+- **A code the user pasted** into a sign-in (`Caf::paste`) is written as
+  `null`. A replay takes it as text it doesn't have.
 - **Each agent's arguments** are left out, and **its environment variables**
   are written with their names but not their values.
 - **Each MCP server's environment variables and HTTP headers** are written
@@ -147,7 +155,9 @@ Everything else goes in as it came:
   and as bytes where it isn't, such as one that ends partway through a
   character;
 - folders;
-- each MCP server's name, program, arguments and URL.
+- each MCP server's name, program, arguments and URL;
+- what the setup driver reported, with the folder installs live in, and a
+  sign-in's link and code, each good for one sign-in only.
 
 So don't put secrets in MCP arguments or URLs. Names of variables and
 arguments are written as arrays of bytes, as Rust writes them. Treat a
@@ -183,7 +193,8 @@ gives goes to its driver:
 | Policy: decide | The policy, whose answer comes back to the core |
 | Policy: withdrawn | Stops that decision |
 | Viewer | Wakes the chat's watches |
+| Setup | `SetupDriver::apply`, whose reports come back to the core |
 | Report | The `log` facade |
 
-A program with its own event loop can use `AgentDriver`, `TimerDriver` and a
-`Policy` on their own, and wire them to the core itself.
+A program with its own event loop can use `AgentDriver`, `TimerDriver`,
+`SetupDriver` and a `Policy` on their own, and wire them to the core itself.

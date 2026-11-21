@@ -68,6 +68,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent::AgentStatus;
 use crate::change::Numbered;
 use crate::chat::{AppItem, Chat, NoAppItems, UserMessage};
 use crate::core::{Refused, SessionChoice};
@@ -145,6 +146,37 @@ pub enum FromViewer {
         /// The chat.
         chat: ChatId,
     },
+    /// Do something about an agent: install it, sign in or out. The host
+    /// decides whether viewers may.
+    Agent {
+        /// The viewer's number for this request.
+        request: RequestNo,
+        /// The agent.
+        agent: AgentName,
+        /// What to do.
+        action: AgentAction,
+    },
+}
+
+/// Something a viewer may ask CAF to do about an agent. See the core's
+/// methods of the same names, such as [`Core::install`](crate::Core::install).
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum AgentAction {
+    /// Install it.
+    Install,
+    /// Stop installing it.
+    StopInstall,
+    /// Start signing in to it.
+    SignIn,
+    /// Give its sign-in what the user pasted.
+    Paste(String),
+    /// Stop signing in to it.
+    StopSignIn,
+    /// Sign out of it.
+    SignOut,
 }
 
 /// A message from CAF to a viewer.
@@ -201,6 +233,18 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
         /// The chat.
         chat: ChatId,
     },
+    /// Where every agent stands, installed or not and signed in or not:
+    /// after `Welcome`, and again whenever any of it changes. The whole
+    /// list, each time.
+    ///
+    /// It goes to every viewer, but a sign-in's link and code only to
+    /// viewers the host lets act on agents (in `caf-driver-tokio`,
+    /// `ViewerRules::agents`); the rest get them as `null`. Whoever opens the link and approves it, or types
+    /// the code on the provider's site, chooses whose account the agent
+    /// signs in to: with a device-code sign-in, a viewer that may only
+    /// watch could sign CAF's agent in to its own account, and see the
+    /// user's prompts go there.
+    Agents(Vec<AgentStatus>),
     /// How a request went.
     Done {
         /// The viewer's number for it.
