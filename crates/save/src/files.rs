@@ -42,7 +42,7 @@ use std::time::{Duration, SystemTime};
 
 use caf_core::save::CannotRestore;
 use caf_core::{ChatId, Shelf};
-use rustix::fs::{AtFlags, FileType, FlockOperation, Mode, OFlags, RenameFlags, Stat, Timestamps};
+use rustix::fs::{AtFlags, FileType, FlockOperation, Mode, OFlags, Stat, Timestamps};
 use rustix::io::Errno;
 use sha2::{Digest, Sha256};
 
@@ -669,21 +669,31 @@ pub(crate) fn snapshot(
     }
     let folder = &place.folder;
     let (caf, journal) = (file(chat, "caf"), file(chat, "journal"));
-    // Never over a newer CAF's, which this one can't read. An older
-    // version's is written over: a chat loaded from one is written whole
-    // in this one's before anything's added to it.
-    if let Some(start) = read_start(folder, &caf, CAF_PREFIX as u64 + 7)?
-        && start.len() >= CAF_PREFIX
-        && (start[8] & !SQUEEZED != 0
-            || matches!(
-                format::version(&start[CAF_PREFIX..]),
-                Err(CannotRestore::Newer { .. })
-            ))
-    {
-        if taken {
-            held.remove(&key);
+    // Never over a save this CAF can't read: a newer CAF's, ever, or one
+    // that's damaged, unless this store had the chat before, from loading
+    // or writing it, which the core then had whole. An older version's is
+    // written over: a chat loaded from one is written whole in this one's
+    // before anything's added to it.
+    if let Some(start) = read_start(folder, &caf, CAF_PREFIX as u64 + 7)? {
+        let refused = if start.len() >= CAF_PREFIX && start[8] & !SQUEEZED != 0 {
+            Some(newer(&start[CAF_PREFIX..]))
+        } else if start.len() < CAF_PREFIX + 7 {
+            Some(damaged("its snapshot's file is cut off"))
+        } else {
+            match format::version(&start[CAF_PREFIX..]) {
+                Err(CannotRestore::Newer { version }) => Some(StoreError::Newer { version }),
+                Err(CannotRestore::Damaged(why)) => Some(StoreError::Damaged(why)),
+                _ => None,
+            }
+        };
+        if let Some(refused) = refused
+            && (taken || matches!(refused, StoreError::Newer { .. }))
+        {
+            if taken {
+                held.remove(&key);
+            }
+            return Err(refused);
         }
-        return Err(newer(&start[CAF_PREFIX..]));
     }
     let was = generation(folder, &caf)?;
     // Past any journal too, as one may be left of a chat deleted halfway.
@@ -902,47 +912,76 @@ pub(crate) fn move_shelf(
     let Some(root) = root(path)? else {
         return Ok(());
     };
-    let Some(from_folder) = subfolder(&root, &from_name, false)? else {
-        return Ok(());
-    };
+    for _ in 0..=AGAIN {
+        let Some(from_folder) = subfolder(&root, &from_name, false)? else {
+            return Ok(());
+        };
+        match move_folder(
+            &root,
+            held,
+            (from, &from_name),
+            (to, &to_name),
+            &from_folder,
+        ) {
+            // Gone, or moved, as it was looked at: looked for again.
+            Err(error) if gone(&error) => {}
+            Ok(false) => {}
+            done => return done.map(|_| ()),
+        }
+    }
+    Err(StoreError::InUse)
+}
+
+/// Moves the shelf `from`, whose folder is `from_folder`, to `to`, if
+/// the folder is still the shelf's: whether it was.
+fn move_folder(
+    root: &OwnedFd,
+    held: &mut Held,
+    (from, from_name): (&Shelf, &str),
+    (to, to_name): (&Shelf, &str),
+    from_folder: &OwnedFd,
+) -> Result<bool, StoreError> {
     // No chat comes to it, or starts to, while it moves.
-    let _from_lock = take(&from_folder, SHELF_LOCK, true, true, true)?;
-    let chats = chats(&from_folder)?;
+    let _from_lock = take(from_folder, SHELF_LOCK, true, true, true)?;
+    if !still_there(root, from_name, from_folder)? {
+        return Ok(false);
+    }
+    let chats = chats(from_folder)?;
     // Every chat on it locked, so none moves from under a program that
     // has it open: its next write would be to where it was.
     let mut _taken = Vec::new();
     for &chat in &chats {
-        if !held.contains_key(&(from.clone(), chat)) {
-            _taken.push(lock(&from_folder, chat, true)?);
+        match held.get(&(from.clone(), chat)) {
+            Some(hold) if !is_at(&hold.lock, from_folder, &file(chat, "lock"))? => {
+                return Err(StoreError::InUse);
+            }
+            Some(_) => {}
+            None => _taken.push(lock(from_folder, chat, true)?),
         }
-    }
-    if !still_there(&root, &from_name, &from_folder)? {
-        return Err(StoreError::InUse);
     }
     // A shelf there already with chats on it is never moved onto: only one
     // with none, which goes first.
-    if let Some(to_folder) = subfolder(&root, &to_name, false)? {
-        let _to_lock = take(&to_folder, SHELF_LOCK, true, true, true)?;
-        if !still_there(&root, &to_name, &to_folder)? {
+    if let Some(to_folder) = subfolder(root, to_name, false)? {
+        // Refused before its lock's taken, which would make one.
+        if !only_locks(&to_folder)? {
             return Err(StoreError::InUse);
         }
-        remove_empty(&root, &to_name, &to_folder)?;
+        // Held until its folder's gone: the one renamed in takes its place,
+        // with its own lock.
+        let _to_lock = take(&to_folder, SHELF_LOCK, true, true, true)?;
+        if !still_there(root, to_name, &to_folder)? {
+            return Err(StoreError::InUse);
+        }
+        remove_empty(root, to_name, &to_folder)?;
     }
     // The folder renamed in one step: never half moved.
-    let renamed =
-        match rustix::fs::renameat_with(&root, &from_name, &root, &to_name, RenameFlags::NOREPLACE)
-        {
-            // A system that can't refuse to replace: a folder is only ever
-            // renamed over an empty one, which is fine.
-            Err(Errno::INVAL) => rustix::fs::renameat(&root, &from_name, &root, &to_name),
-            renamed => renamed,
-        };
-    match renamed {
+    match rename(root, from_name, to_name) {
         Ok(()) => {}
         // Made meanwhile, with something in it.
         Err(Errno::EXIST | Errno::NOTEMPTY) => return Err(StoreError::InUse),
         Err(error) => return Err(StoreError::Io(error.into())),
     }
+    // Moved now, whatever follows.
     for &chat in &chats {
         if let Some(mut hold) = held.remove(&(from.clone(), chat)) {
             // Found again where it went, before it's next added to.
@@ -950,23 +989,60 @@ pub(crate) fn move_shelf(
             held.insert((to.clone(), chat), hold);
         }
     }
-    Ok(sync(&root)?)
+    // Synced, so it lasts through a crash; if the system won't, once
+    // more. A move a crash undid is still `from`, whole, and moving it
+    // again moves it: never reported as failed once it's happened.
+    if sync(root).is_err() {
+        let _ = sync(root);
+    }
+    Ok(true)
+}
+
+/// Renames the folder `from` in `root` to `to`, refusing to replace one
+/// there, where the system can.
+fn rename(root: &OwnedFd, from: &str, to: &str) -> Result<(), Errno> {
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    match rustix::fs::renameat_with(root, from, root, to, rustix::fs::RenameFlags::NOREPLACE) {
+        // A file system that can't refuse to replace: renamed plainly
+        // below.
+        Err(Errno::INVAL | Errno::NOSYS | Errno::PERM | Errno::NOTSUP) => {}
+        renamed => return renamed,
+    }
+    // A folder is only ever renamed over an empty one, never one with
+    // something in it, which is all that `to` can be here.
+    rustix::fs::renameat(root, from, root, to)
+}
+
+/// Whether a folder has nothing in it but locks: chats' and its shelf's.
+fn only_locks(folder: impl AsFd) -> io::Result<bool> {
+    Ok(names(folder)?.iter().all(|name| {
+        name == SHELF_LOCK || chat_of(name).is_some_and(|(_, extension)| extension == "lock")
+    }))
 }
 
 /// Removes the folder `name` in `root`, whose shelf's lock is held, if
 /// it has no chats: nothing in it but locks nobody else holds. One with
-/// anything else, or a lock that's held, is [`StoreError::InUse`].
+/// anything else, or a lock that's held, is [`StoreError::InUse`], and
+/// nothing is removed.
 fn remove_empty(root: impl AsFd, name: &str, folder: impl AsFd) -> Result<(), StoreError> {
+    if !only_locks(&folder)? {
+        return Err(StoreError::InUse);
+    }
     let names = names(&folder)?;
     let locks: Vec<&String> = (names.iter())
         .filter(|name| chat_of(name).is_some_and(|(_, extension)| extension == "lock"))
         .collect();
-    if names.len() != locks.len() + usize::from(names.iter().any(|name| name == SHELF_LOCK)) {
-        return Err(StoreError::InUse);
+    let mut taken = Vec::new();
+    for name in &locks {
+        match take(&folder, name, true, false, false) {
+            Ok(lock) => taken.push(lock),
+            // Gone meanwhile: as good as removed.
+            Err(error) if gone(&error) => {}
+            // Held: a program making a chat there.
+            Err(error) => return Err(error),
+        }
     }
     for name in locks {
-        // Held: a program making a chat there.
-        let _lock = take(&folder, name, true, false, false)?;
         remove(&folder, name)?;
     }
     remove(&folder, SHELF_LOCK)?;

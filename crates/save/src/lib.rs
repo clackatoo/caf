@@ -299,8 +299,9 @@ pub trait Store: Send + 'static {
     /// # Errors
     ///
     /// [`StoreError::InUse`], [`StoreError::Newer`] if it keeps the chat
-    /// from a newer CAF, which it never writes over, or
-    /// [`StoreError::Io`].
+    /// from a newer CAF, or [`StoreError::Damaged`] if it keeps one it
+    /// can't read that it hasn't loaded or written itself, neither of
+    /// which it writes over, or [`StoreError::Io`].
     fn snapshot(
         &mut self,
         shelf: &Shelf,
@@ -551,7 +552,9 @@ fn answer<A: AppItem, D: AppData>(done: Result<(), StoreError>) -> StorageEvent<
 /// first. Moving onto a shelf with chats on it isn't supported, and is
 /// [`StoreError::InUse`], as is moving a shelf with a chat another
 /// program has open. The store's own chats on it stay locked, where they
-/// went.
+/// went. Once renamed, a shelf is moved, and the move is never said to
+/// have failed: if the system then fails to sync it, a crash may undo
+/// it, leaving the shelf whole where it was, to be moved again.
 ///
 /// Its locks are `flock`s, so its root must be on a local file system:
 /// on a network one, such as NFS, they may not hold between machines.

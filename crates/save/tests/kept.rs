@@ -357,3 +357,30 @@ fn an_app_item_in_a_tool_call_added_by_the_journal_is_checked_too() {
         assert!(decode::<Nested, Json>(&snapshot, &record(&fine)).is_ok());
     }
 }
+
+/// An app item whose count was a whole number, and is a float now.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct WidenedItem {
+    count: f64,
+}
+app!(WidenedItem);
+
+#[test]
+fn an_app_item_s_whole_number_read_as_a_float_stays_the_app_s() {
+    let snapshot = saved(&json!({ "count": 3 }));
+    let read = decode::<WidenedItem, Json>(&snapshot, &[]).expect("it reads");
+    let kind = &read.chat.turns[0].items[0].kind;
+    assert_eq!(kind, &ItemKind::App(WidenedItem { count: 3.0 }));
+    // Not back the other way.
+    let snapshot = saved(&json!({ "count": 3.5 }));
+    #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+    struct Narrowed {
+        count: u32,
+    }
+    app!(Narrowed);
+    let read = decode::<Narrowed, Json>(&snapshot, &[]).expect("it reads");
+    assert!(matches!(
+        read.chat.turns[0].items[0].kind,
+        ItemKind::Unknown(_)
+    ));
+}

@@ -876,3 +876,107 @@ fn looking_whether_a_chat_is_free_makes_no_lock() {
         "one with chats keeps it"
     );
 }
+
+/// Every file in a shelf's folder, with what it holds, if it's there.
+fn contents(root: &Path, name: &str) -> Option<Vec<(PathBuf, Vec<u8>)>> {
+    let mut files: Vec<_> = (fs::read_dir(root.join(name)).ok()?)
+        .map(|entry| {
+            let path = entry.expect("a file").path();
+            let bytes = fs::read(&path).expect("it reads");
+            (path, bytes)
+        })
+        .collect();
+    files.sort();
+    Some(files)
+}
+
+#[test]
+fn a_move_that_cannot_happen_changes_nothing() {
+    let folder = Folder::new("blocked");
+    let root = folder.path();
+    let (work, done) = (shelf("work"), shelf("done"));
+    let mut store = FileStore::new(root);
+    save(&mut store, &work, 1);
+    let both = || (contents(root, "work"), contents(root, "done"));
+
+    // A chat on it another program has open.
+    let mut other = FileStore::new(root);
+    other.load(&work, ChatId::from_number(1)).expect("it loads");
+    fs::create_dir(root.join("done")).expect("a shelf");
+    fs::write(file(root, "done", 3, "lock"), b"").expect("a lock left");
+    let before = both();
+    assert!(in_use(store.move_shelf(&work, &done)));
+    assert_eq!(both(), before);
+    other.release(&work, ChatId::from_number(1));
+
+    // Something left there that isn't a lock.
+    fs::write(root.join("done/notes.txt"), b"mine").expect("a stray");
+    let before = both();
+    assert!(in_use(store.move_shelf(&work, &done)));
+    assert_eq!(both(), before, "not even its locks are removed");
+    fs::remove_file(root.join("done/notes.txt")).expect("removed");
+
+    // Its shelf's lock held, shared, by a program making a chat there.
+    let making = flock(&root.join("done/.shelf.lock"), false);
+    let before = both();
+    assert!(in_use(store.move_shelf(&work, &done)));
+    assert_eq!(both(), before);
+    drop(making);
+
+    store.move_shelf(&work, &done).expect("it moves");
+    assert_eq!(contents(root, "work"), None);
+}
+
+#[test]
+fn a_store_still_has_its_chats_where_they_moved() {
+    let folder = Folder::new("moved-holds");
+    let root = folder.path();
+    let (work, done) = (shelf("work"), shelf("done"));
+    let mut store = FileStore::new(root);
+    save(&mut store, &work, 1);
+    let chat = ChatId::from_number(1);
+    store.load(&work, chat).expect("it loads");
+    store.move_shelf(&work, &done).expect("it moves");
+    assert!(store.holds(&done, chat));
+    assert!(!store.holds(&work, chat));
+    // Moving a shelf that isn't there is done already.
+    store
+        .move_shelf(&work, &shelf("elsewhere"))
+        .expect("nothing to move");
+    store
+        .move_shelf(&shelf("never"), &shelf("elsewhere"))
+        .expect("nothing to move");
+    assert!(!root.join("elsewhere").exists());
+}
+
+#[test]
+fn a_snapshot_is_never_written_over_a_save_it_cannot_read() {
+    let folder = Folder::new("unreadable-over");
+    let root = folder.path();
+    let (work, chat) = (shelf("work"), ChatId::from_number(1));
+    let mut store = FileStore::new(root);
+    save(&mut store, &work, 1);
+    let caf = file(root, "work", 1, "caf");
+    for wrong in [
+        &b"\x01\0\0\0\0\0\0\0\0CA"[..],
+        b"\x01\0\0\0\0\0\0\0\0PNG\x01\0\0\0junk",
+    ] {
+        fs::write(&caf, wrong).expect("damaged");
+        let wrote = store.snapshot(&work, chat, &head(1), &snap(1));
+        assert!(matches!(wrote, Err(StoreError::Damaged(_))), "{wrote:?}");
+        assert!(!store.holds(&work, chat), "let go of again");
+        assert_eq!(fs::read(&caf).expect("there"), wrong);
+    }
+    // One it had already, from writing it, it writes over.
+    let mut writer = FileStore::new(root);
+    fs::remove_file(&caf).expect("removed");
+    writer
+        .snapshot(&work, chat, &head(1), &snap(1))
+        .expect("a new one");
+    fs::write(&caf, b"\x01\0\0\0\0\0\0\0\0CA").expect("damaged since");
+    writer
+        .snapshot(&work, chat, &head(1), &snap(1))
+        .expect("its own, written over");
+    let stored = writer.load(&work, chat).expect("it loads");
+    assert_eq!(decode(&stored.snapshot, &stored.journal), Ok(small(1)));
+}
