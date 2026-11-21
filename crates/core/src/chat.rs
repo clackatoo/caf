@@ -31,6 +31,12 @@ use crate::time::Window;
 /// in 64 bits: what JSON holds. So one CAF can't read is kept, unchanged,
 /// as an [`Unknown`] item. Read old items leniently, with `#[serde(default)]`
 /// on fields added later.
+///
+/// One the type reads but wouldn't write all of back, as an older version
+/// of the app reading what a newer one added, is kept unchanged as an
+/// [`Unknown`] item too: an item is the app's again only if every key in
+/// it as saved, however deep, is in it written again. So never skip
+/// writing a field the type read, such as with `skip_serializing_if`.
 pub trait AppItem:
     Clone + Debug + PartialEq + Serialize + DeserializeOwned + Send + 'static
 {
@@ -67,7 +73,10 @@ impl AppItem for NoAppItems {
 /// `#[serde(default)]` on fields added later: a chat whose data can't be
 /// read isn't restored, and its save is left as it was
 /// ([`CannotRestore::AppData`](crate::save::CannotRestore::AppData)), for
-/// a version of the app that can.
+/// a version of the app that can. Nor is one the type reads but wouldn't
+/// write all of back, as an older version of the app reading what a newer
+/// one added: every key in it as saved, however deep, must be in it
+/// written again. So never skip writing a field the type read.
 pub trait AppData:
     Clone + Debug + Default + PartialEq + Serialize + DeserializeOwned + Send + 'static
 {

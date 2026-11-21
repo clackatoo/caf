@@ -69,7 +69,14 @@
 //! program that doesn't know the app's type at all, such as a debugger,
 //! reads them all as unknown items, with their summaries. Through JSON,
 //! an app item keeps what serde writes with text keys and no raw bytes,
-//! as [`AppItem`] asks. The app's item in a tool call
+//! as [`AppItem`] asks. One the app's type reads but wouldn't write all
+//! of back, as an older version of the app reading what a newer one
+//! added, stays unknown, and so unchanged: it's the app's item again only
+//! if every key in it as saved, however deep, through maps and lists as
+//! long as each other, is in it written again. Keys the type adds are
+//! fine. The app's data is checked the same way, and data the app would
+//! lose some of stops the chat restoring ([`CannotRestore::AppData`]),
+//! its save left as it was. The app's item in a tool call
 //! ([`ToolCall::app`](caf_core::chat::ToolCall::app)) has no envelope,
 //! as the chat's type leaves it none: one the app can't read stops the
 //! chat restoring, as data it can't read does ([`CannotRestore::AppData`]).
@@ -92,6 +99,11 @@ use caf_core::{AppData, AppItem, ChatId, Shelf, Ticket};
 
 mod files;
 mod format;
+
+/// What the integration tests share, for the unit tests too.
+#[cfg(test)]
+#[path = "../tests/common/mod.rs"]
+mod common;
 
 /// The version of the format this CAF writes.
 pub const VERSION: u32 = 1;
@@ -210,6 +222,13 @@ pub enum StoreError {
     /// it, such as a file missing: what's wrong, in its words. A load
     /// that meets it is [`CannotRestore::Damaged`].
     Damaged(String),
+    /// A newer CAF kept it, in a way this one can't read, and it's left
+    /// as it is: [`CannotRestore::Newer`].
+    Newer {
+        /// The format's version, as far as the store can tell: at least
+        /// the one after this CAF's.
+        version: u32,
+    },
 }
 
 impl From<io::Error> for StoreError {
@@ -226,6 +245,7 @@ impl StoreError {
             Self::InUse => "another program has the chat open".into(),
             Self::Io(error) => error.to_string(),
             Self::Damaged(why) => format!("it's damaged: {why}"),
+            Self::Newer { version } => format!("a newer CAF saved it, in version {version}"),
         }
     }
 }
@@ -253,15 +273,18 @@ pub trait Store: Send + 'static {
     ///
     /// # Errors
     ///
-    /// [`StoreError::Io`].
+    /// [`StoreError::Io`]. A chat it can't read the header of is listed
+    /// with what it has, which [`carry_out`] finds unreadable.
     fn list(&mut self, shelf: &Shelf) -> Result<Vec<(ChatId, Vec<u8>)>, StoreError>;
 
     /// Locks a chat and reads it.
     ///
     /// # Errors
     ///
-    /// [`StoreError::NotFound`], [`StoreError::InUse`] or
-    /// [`StoreError::Io`].
+    /// [`StoreError::NotFound`], [`StoreError::InUse`],
+    /// [`StoreError::Damaged`] or [`StoreError::Newer`] for what it keeps
+    /// that it can't read, or [`StoreError::Io`]. A chat it can't read is
+    /// left as it was, and not locked.
     fn load(&mut self, shelf: &Shelf, chat: ChatId) -> Result<Stored, StoreError>;
 
     /// Writes a chat's header and snapshot, emptying its journal, and
@@ -282,7 +305,10 @@ pub trait Store: Send + 'static {
     ///
     /// # Errors
     ///
-    /// [`StoreError::Io`].
+    /// [`StoreError::NotFound`] if it has no snapshot, [`StoreError::InUse`]
+    /// if it isn't locked and another has it, [`StoreError::Damaged`] or
+    /// [`StoreError::Newer`] if what it keeps can't take the record, or
+    /// [`StoreError::Io`]. A failed append adds nothing.
     fn append(
         &mut self,
         shelf: &Shelf,
@@ -307,7 +333,8 @@ pub trait Store: Send + 'static {
     /// # Errors
     ///
     /// [`StoreError::InUse`] if `to` has a chat already that `from` has
-    /// too, or [`StoreError::Io`]. What moved before a failure stays moved.
+    /// too, or another program has one of them locked, or
+    /// [`StoreError::Io`]. What moved before a failure stays moved.
     fn move_shelf(&mut self, from: &Shelf, to: &Shelf) -> Result<(), StoreError>;
 }
 
@@ -347,6 +374,9 @@ pub fn carry_out<A: AppItem, D: AppData>(
                 }
                 Err(StoreError::Damaged(why)) => {
                     StorageEvent::NotLoaded(CannotRestore::Damaged(why))
+                }
+                Err(StoreError::Newer { version }) => {
+                    StorageEvent::NotLoaded(CannotRestore::Newer { version })
                 }
             };
             (ticket, event)
@@ -476,10 +506,19 @@ fn answer<A: AppItem, D: AppData>(done: Result<(), StoreError>) -> StorageEvent<
 /// cut off; it takes the chat's lock if it isn't held, and refuses a
 /// snapshot of another version than this CAF's.
 ///
-/// A chat a crash left with a snapshot and no header is listed with an
-/// empty header, which reads as damaged, so it can be seen and deleted.
+/// A chat a crash left with a snapshot and no header is listed with the
+/// header its snapshot holds, which may be behind its journal; one whose
+/// snapshot can't be read is listed with an empty header, which reads as
+/// damaged, so it can be seen and deleted.
 /// Deleting removes the snapshot first and the header last, so a chat
 /// half deleted is still listed.
+///
+/// Each shelf's folder has a lock of its own, `.shelf.lock`: shared while
+/// a chat's lock is taken, and a new chat's first files made, exclusive
+/// while the shelf moves, so no chat comes to it, or starts to, unseen.
+/// The store checks a chat's lock it holds is still the chat's before it
+/// writes. A snapshot it marked in a way this CAF doesn't know is
+/// [`StoreError::Newer`].
 ///
 /// Moving a shelf to a new one renames its folder. Moving it to one in
 /// use moves a chat at a time, linking each file where it goes before

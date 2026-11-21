@@ -270,10 +270,64 @@ fn a_save_this_caf_cannot_read_is_left_byte_for_byte() {
         matches!(&loaded, Some((_, StorageEvent::NotLoaded(why))) if *why == newer),
         "{loaded:?}"
     );
+    let newer = StoreError::Newer {
+        version: VERSION + 1,
+    };
     let added = store.append(&work, chat, &head(1), &written_records()[0]);
-    assert!(matches!(added, Err(StoreError::Io(_))), "{added:?}");
+    assert_eq!(format!("{added:?}"), format!("{:?}", Err::<(), _>(newer)));
+    // Not held after: it let go of what it took to refuse, so another
+    // finds it newer, not in use.
+    store.release(&work, chat);
+    let mut taker = FileStore::new(root);
+    let added = taker.append(&work, chat, &head(1), &written_records()[0]);
+    assert!(matches!(added, Err(StoreError::Newer { .. })), "{added:?}");
+    let mut other = FileStore::new(root);
+    let loaded = carry_out::<Pin, Notes>(
+        &mut other,
+        StorageDirective::Load {
+            ticket: Ticket(2),
+            shelf: work.clone(),
+            chat,
+        },
+    );
+    assert!(
+        matches!(
+            &loaded,
+            Some((_, StorageEvent::NotLoaded(CannotRestore::Newer { .. })))
+        ),
+        "{loaded:?}"
+    );
+    // Squeezing leaves it too.
+    age(root, 1);
+    other.squeeze(Duration::ZERO).expect("it squeezes");
     store.release(&work, chat);
     assert_eq!(files(), before);
+    // Marked by a newer store in a way this one doesn't know.
+    let mut bytes = fs::read(&caf).expect("one");
+    bytes[12..16].copy_from_slice(&VERSION.to_le_bytes());
+    bytes[8] = 0x80;
+    fs::write(&caf, bytes).expect("marked");
+    age(root, 1);
+    let before = files();
+    let loaded = other.load(&work, chat);
+    assert!(
+        matches!(loaded, Err(StoreError::Newer { version }) if version > VERSION),
+        "{loaded:?}"
+    );
+    other.squeeze(Duration::ZERO).expect("it squeezes");
+    assert_eq!(files(), before);
+}
+
+/// Chat `id`'s files on `work`, made long since.
+fn age(root: &Path, id: u64) {
+    let long_ago = std::time::SystemTime::now() - Duration::from_secs(7200);
+    for extension in ["caf", "journal"] {
+        let opened = fs::File::options()
+            .write(true)
+            .open(file(root, "work", id, extension))
+            .expect("it opens");
+        opened.set_modified(long_ago).expect("it's aged");
+    }
 }
 
 #[test]
@@ -587,103 +641,6 @@ fn chats_left_alone_are_squeezed_once() {
     );
 }
 
-/// How a chat reads from `shelf` with a store of its own: whole, or not
-/// at all, but never with less than it had.
-fn reads_whole_or_not_at_all(root: &Path, on: &Shelf, id: u64) -> bool {
-    let mut store = FileStore::new(root);
-    let loaded = carry_out::<Pin, Notes>(
-        &mut store,
-        StorageDirective::Load {
-            ticket: Ticket(1),
-            shelf: on.clone(),
-            chat: ChatId::from_number(id),
-        },
-    );
-    match loaded {
-        Some((_, StorageEvent::Loaded(read))) => *read == saved(id),
-        Some((_, StorageEvent::NotLoaded(CannotRestore::NotFound | CannotRestore::Damaged(_)))) => {
-            true
-        }
-        other => panic!("{other:?}"),
-    }
-}
-
-/// Whether a chat is listed on `shelf`.
-fn listed(root: &Path, on: &Shelf, id: u64) -> bool {
-    let listed = FileStore::new(root).list(on).expect("it lists");
-    listed
-        .iter()
-        .any(|(chat, _)| *chat == ChatId::from_number(id))
-}
-
-#[test]
-fn a_move_cut_off_at_any_step_loses_nothing() {
-    let (work, done) = (shelf("work"), shelf("done"));
-    let name = |extension| format!("{}.{extension}", ChatId::from_number(1));
-    // The steps of a move to a shelf in use, as the store takes them.
-    let mut steps: Vec<(bool, String)> = ["lock", "caf", "journal", "head"]
-        .map(|extension| (true, name(extension)))
-        .to_vec();
-    steps.extend(["caf", "journal", "head", "lock"].map(|extension| (false, name(extension))));
-    for cut in 0..=steps.len() {
-        let folder = Folder::new("moving");
-        let root = folder.path();
-        let mut store = FileStore::new(root);
-        save(&mut store, &work, 1);
-        save(&mut store, &done, 2);
-        drop(store);
-        for (link, name) in &steps[..cut] {
-            let (here, there) = (root.join("work").join(name), root.join("done").join(name));
-            if *link {
-                fs::hard_link(&here, &there).expect("linked");
-            } else {
-                fs::remove_file(&here).expect("removed");
-            }
-        }
-        for on in [&work, &done] {
-            assert!(reads_whole_or_not_at_all(root, on, 1), "cut at {cut}");
-        }
-        assert!(
-            listed(root, &work, 1) || listed(root, &done, 1),
-            "cut at {cut}: it's listed somewhere"
-        );
-        FileStore::new(root)
-            .move_shelf(&work, &done)
-            .unwrap_or_else(|error| panic!("cut at {cut}, moving again: {error:?}"));
-        let stored = FileStore::new(root)
-            .load(&done, ChatId::from_number(1))
-            .expect("it's moved");
-        assert_eq!(decode(&stored.snapshot, &stored.journal), Ok(saved(1)));
-        assert!(!root.join("work").exists(), "cut at {cut}");
-    }
-}
-
-#[test]
-fn a_deletion_cut_off_at_any_step_is_seen_and_finished() {
-    let work = shelf("work");
-    let chat = ChatId::from_number(1);
-    let steps = ["caf", "journal", "head", "lock"];
-    for cut in 0..=steps.len() {
-        let folder = Folder::new("deleting");
-        let root = folder.path();
-        let mut store = FileStore::new(root);
-        save(&mut store, &work, 1);
-        for extension in &steps[..cut] {
-            fs::remove_file(file(root, "work", 1, extension)).expect("removed");
-        }
-        assert!(reads_whole_or_not_at_all(root, &work, 1), "cut at {cut}");
-        let anything = ["caf", "journal", "head"]
-            .iter()
-            .any(|extension| file(root, "work", 1, extension).exists());
-        assert_eq!(listed(root, &work, 1), anything, "cut at {cut}");
-        store.delete(&work, chat).expect("it's deleted");
-        assert_eq!(
-            fs::read_dir(root.join("work")).expect("the shelf").count(),
-            0
-        );
-    }
-}
-
 #[test]
 fn a_chat_left_without_a_header_is_listed() {
     let folder = Folder::new("headless");
@@ -691,6 +648,11 @@ fn a_chat_left_without_a_header_is_listed() {
     let mut store = FileStore::new(root);
     save(&mut store, &shelf("work"), 1);
     fs::remove_file(file(root, "work", 1, "head")).expect("removed");
+    // With the header its snapshot has.
+    let listed = store.list(&shelf("work")).expect("it lists");
+    assert_eq!(listed, vec![(ChatId::from_number(1), head(1))]);
+    // Or, if its snapshot can't be read, none.
+    fs::write(file(root, "work", 1, "caf"), b"cut").expect("damaged");
     let listed = store.list(&shelf("work")).expect("it lists");
     assert_eq!(listed, vec![(ChatId::from_number(1), vec![])]);
 }
@@ -772,4 +734,118 @@ fn a_chat_added_to_lately_is_not_left_alone() {
     age("journal", long_ago);
     store.squeeze(hour).expect("it squeezes");
     assert_eq!(fs::read(file(root, "work", 1, "caf")).expect("one")[8], 1);
+}
+
+#[test]
+fn an_append_after_a_snapshot_that_failed_counts() {
+    let folder = Folder::new("half");
+    let root = folder.path();
+    let (work, chat) = (shelf("work"), ChatId::from_number(1));
+    let mut store = FileStore::new(root);
+    save(&mut store, &work, 1);
+    store.load(&work, chat).expect("it loads");
+    // Added to, so where its journal ends is known.
+    let first = &written_records()[0];
+    store
+        .append(&work, chat, &head(1), first)
+        .expect("it's added");
+    // The new snapshot goes in, but its journal can't be emptied.
+    let snapshot = encode_snapshot(&saved(1), Squeeze::Fast);
+    let blocked = root.join(format!("work/{chat}.journal.new"));
+    fs::create_dir(&blocked).expect("in the way");
+    let wrote = store.snapshot(&work, chat, &head(1), &snapshot);
+    assert!(matches!(wrote, Err(StoreError::Io(_))), "{wrote:?}");
+    fs::remove_dir(&blocked).expect("out of the way");
+    let record = &written_records()[2];
+    store
+        .append(&work, chat, &head(1), record)
+        .expect("it's added");
+    store.release(&work, chat);
+    let stored = store.load(&work, chat).expect("it loads");
+    assert_eq!(stored.journal, *record, "after the snapshot that went in");
+    let mut expected = saved(1);
+    expected.chat.state = caf_core::chat::ChatState::Closed;
+    expected.data.title = "Docs too".into();
+    expected.data.tags = vec![];
+    assert_eq!(decode(&stored.snapshot, &stored.journal), Ok(expected));
+}
+
+/// Takes the lock that's `path`, as another program would.
+fn flock(path: &Path, exclusive: bool) -> fs::File {
+    let file = fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .expect("it opens");
+    let operation = if exclusive {
+        rustix::fs::FlockOperation::NonBlockingLockExclusive
+    } else {
+        rustix::fs::FlockOperation::NonBlockingLockShared
+    };
+    rustix::fs::flock(&file, operation).expect("it's locked");
+    file
+}
+
+#[test]
+fn no_chat_comes_to_a_shelf_while_it_moves() {
+    let folder = Folder::new("shelf-lock");
+    let root = folder.path();
+    let (work, done) = (shelf("work"), shelf("done"));
+    let mut store = FileStore::new(root);
+    save(&mut store, &work, 1);
+    let shelf_lock = root.join("work/.shelf.lock");
+    // Moving: no new chat starts on it.
+    let moving = flock(&shelf_lock, true);
+    let wrote = store.snapshot(&work, ChatId::from_number(2), &head(2), &snap(2));
+    assert!(in_use(wrote));
+    assert!(in_use(store.load(&work, ChatId::from_number(1))));
+    drop(moving);
+    // A chat's lock being taken: the shelf doesn't move.
+    let taking = flock(&shelf_lock, false);
+    assert!(in_use(store.move_shelf(&work, &done)));
+    drop(taking);
+    store.move_shelf(&work, &done).expect("it moves");
+}
+
+#[test]
+fn a_lock_taken_from_under_a_store_is_not_written_through() {
+    let folder = Folder::new("taken");
+    let root = folder.path();
+    let (work, chat) = (shelf("work"), ChatId::from_number(1));
+    let mut store = FileStore::new(root);
+    save(&mut store, &work, 1);
+    store.load(&work, chat).expect("it loads");
+    let lock = file(root, "work", 1, "lock");
+    fs::remove_file(&lock).expect("removed");
+    let _other = flock(&lock, true);
+    let journal = fs::read(file(root, "work", 1, "journal")).expect("one");
+    let added = store.append(&work, chat, &head(1), &written_records()[0]);
+    assert!(in_use(added));
+    assert_eq!(
+        fs::read(file(root, "work", 1, "journal")).expect("one"),
+        journal
+    );
+}
+
+#[test]
+fn a_squeeze_never_writes_over_another_s_new_file() {
+    let folder = Folder::new("exclusive");
+    let root = folder.path();
+    let mut store = FileStore::new(root);
+    save(&mut store, &shelf("work"), 1);
+    store.release(&shelf("work"), ChatId::from_number(1));
+    age(root, 1);
+    // Every name a squeeze in this program could take, taken.
+    let chat = ChatId::from_number(1);
+    for count in 0..1000 {
+        let name = format!("work/{chat}.caf.squeeze-{}-{count}.new", std::process::id());
+        fs::write(root.join(name), b"another's").expect("written");
+    }
+    let caf = fs::read(file(root, "work", 1, "caf")).expect("one");
+    assert_eq!(store.squeeze(Duration::ZERO).expect("it squeezes"), 0);
+    assert_eq!(fs::read(file(root, "work", 1, "caf")).expect("one"), caf);
+    let name = format!("work/{chat}.caf.squeeze-{}-0.new", std::process::id());
+    assert_eq!(fs::read(root.join(name)).expect("there"), b"another's");
 }

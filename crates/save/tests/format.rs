@@ -138,9 +138,7 @@ fn damage_anywhere_but_a_cut_off_end_is_damage() {
         assert!(damaged(decode(&snapshot, &wrong)), "the record at {start}");
         start += record.len();
     }
-    // Zeros before a record.
-    let zeros = [&encoded[0][..], &[0; 8], &encoded[1]].concat();
-    assert!(damaged(decode(&snapshot, &zeros)));
+
     let mut wrong = snapshot.clone();
     let middle = wrong.len() / 2;
     wrong[middle] ^= 0x40;
@@ -163,8 +161,37 @@ fn damage_anywhere_but_a_cut_off_end_is_damage() {
         &[short, encoded[1].clone()].concat()
     )));
 
-    // An empty record.
-    assert!(damaged(decode(&snapshot, &[0, 0, 0, 0, 7])));
+    // An empty record, or zeros, with a whole record after.
+    let zeros = [&[0; 4][..], &encoded[1]].concat();
+    assert!(damaged(decode(&snapshot, &zeros)));
+    let zeros = [&encoded[0][..], &[0; 30], &encoded[1]].concat();
+    assert!(damaged(decode(&snapshot, &zeros)));
+    // A length gone wrong, longer than what's left, with whole records
+    // after it: never dropped as a cut-off end.
+    let mut long = journal.clone();
+    long[..4].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(damaged(decode(&snapshot, &long)));
+}
+
+#[test]
+fn an_end_a_crash_left_with_nothing_whole_after_is_left_out() {
+    let saved = small(1);
+    let snapshot = encode_snapshot(&saved, Squeeze::Fast);
+    let records = records();
+    let first = encode_record(&records[0]);
+    let expected = Ok(applied(saved, &records[0]));
+    let mut garbage = encode_record(&records[1]);
+    let middle = garbage.len() / 2;
+    garbage[middle] ^= 0x40;
+    // Zeros, then data that isn't a whole record; garbage, then zeros.
+    for tail in [
+        [&[0; 12][..], &[7, 1, 2, 3]].concat(),
+        [&[0; 4][..], &garbage].concat(),
+        [&garbage[..], &[0; 40]].concat(),
+    ] {
+        let read = decode::<Pin, Notes>(&snapshot, &[&first[..], &tail].concat());
+        assert_eq!(read, expected);
+    }
 }
 
 #[test]
@@ -373,4 +400,107 @@ fn compressing_again_keeps_what_it_holds() {
     assert_eq!(decode::<Pin, Notes>(&squeezed, &[]), Ok(small(1)));
     let damaged = recompress(&snapshot[..snapshot.len() - 1], Squeeze::Hardest);
     assert!(matches!(damaged, Err(CannotRestore::Damaged(_))));
+}
+
+/// The app's item as an older version of it had it: without `zoom`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct OldPin {
+    place: String,
+}
+
+impl caf_core::AppItem for OldPin {
+    fn summary(&self) -> String {
+        self.place.clone()
+    }
+}
+
+/// The app's item as a newer version has it: with `tags` too.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct NewerPin {
+    place: String,
+    zoom: u8,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+impl caf_core::AppItem for NewerPin {
+    fn summary(&self) -> String {
+        self.place.clone()
+    }
+}
+
+/// The app's data as an older version had it: without `tags`.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+struct OldNotes {
+    title: String,
+}
+
+impl caf_core::AppData for OldNotes {
+    fn label(&self) -> Option<String> {
+        None
+    }
+}
+
+/// The app's data as a newer version has it: with `pinned` too.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+struct NewerNotes {
+    title: String,
+    tags: Vec<String>,
+    #[serde(default)]
+    pinned: bool,
+}
+
+impl caf_core::AppData for NewerNotes {
+    fn label(&self) -> Option<String> {
+        None
+    }
+}
+
+#[test]
+fn an_app_item_an_older_app_would_lose_some_of_stays_unknown() {
+    let snapshot = encode_snapshot(&small(1), Squeeze::Fast);
+    let old = decode::<OldPin, Notes>(&snapshot, &[]).expect("it reads");
+    let ItemKind::Unknown(unknown) = item(&old.chat, 5) else {
+        panic!("{:?}", item(&old.chat, 5));
+    };
+    assert_eq!(unknown.raw, json!({ "place": "Kyiv", "zoom": 9 }));
+    // Saved again by it, it's whole for the version that wrote it.
+    let again = encode_snapshot(&old, Squeeze::Fast);
+    assert_eq!(decode::<Pin, Notes>(&again, &[]), Ok(small(1)));
+    // A newer version, which adds a field, reads it.
+    let newer = decode::<NewerPin, Notes>(&snapshot, &[]).expect("it reads");
+    let place = NewerPin {
+        place: "Kyiv".into(),
+        zoom: 9,
+        tags: vec![],
+    };
+    assert_eq!(item(&newer.chat, 5), &ItemKind::App(place));
+}
+
+#[test]
+fn data_an_older_app_would_lose_some_of_is_not_restored() {
+    let snapshot = encode_snapshot(&small(1), Squeeze::Fast);
+    let lost = CannotRestore::AppData("this version of the app can't keep all of it".into());
+    assert_eq!(decode::<Pin, OldNotes>(&snapshot, &[]), Err(lost.clone()));
+    let newer = decode::<Pin, NewerNotes>(&snapshot, &[]).expect("a newer app reads it");
+    assert_eq!(newer.data.tags, ["work"]);
+
+    // What counts is the data last set: in the journal, it's checked; and
+    // once set again whole, the snapshot's is gone.
+    let old: Saved<Pin, OldNotes> = from(json!({
+        "header": common::header(1),
+        "chat": serde_json::to_value(&small(1).chat).expect("JSON"),
+        "session": null,
+        "data": { "title": "Old" },
+    }));
+    let snapshot = encode_snapshot(&old, Squeeze::Fast);
+    let set: Vec<Entry<Pin, Notes>> =
+        from(json!([{ "type": "Data", "value": { "title": "New", "tags": ["a"] } }]));
+    let record = encode_record(&set);
+    assert_eq!(decode::<Pin, OldNotes>(&snapshot, &record), Err(lost));
+    let again: Vec<Entry<Pin, OldNotes>> =
+        from(json!([{ "type": "Data", "value": { "title": "Again" } }]));
+    let journal = [record, encode_record(&again)].concat();
+    let read = decode::<Pin, OldNotes>(&snapshot, &journal).expect("it reads");
+    assert_eq!(read.data.title, "Again");
 }

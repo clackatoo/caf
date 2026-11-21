@@ -3,12 +3,14 @@
 //! docs say.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::fmt;
 use std::io::{Cursor, Read};
 
 use caf_core::chat::{Item, ItemKind, Turn, Unknown};
 use caf_core::save::{CannotRestore, Entry, Header, Saved};
 use caf_core::{AppData, AppItem, Change};
-use serde::de::{DeserializeOwned, IgnoredAny};
+use serde::de::{DeserializeOwned, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{Squeeze, VERSION};
@@ -80,11 +82,20 @@ pub(crate) fn read<A: AppItem, D: AppData>(
     let inside = unpack(frame).map_err(|why| damaged("its snapshot", &why))?;
     let mut saved: Saved<A, D> =
         parse_app::<_, Saved<Anything, Anything>>(&inside, "its snapshot")?;
+    // The data as it was saved, last set: to check the app's type keeps
+    // all of it.
+    let mut data = parse::<DataOf>(&inside)
+        .map_err(|why| damaged("its snapshot", &why))?
+        .data;
     let (records, _) = records(journal)?;
     for (no, inside) in records.into_iter().enumerate() {
         let what = format!("its journal's record {}", no + 1);
         let entries: Vec<Entry<A, D>> =
             parse_app::<_, Vec<Entry<Anything, Anything>>>(&inside, &what)?;
+        let raw: Vec<RawEntry> = parse(&inside).map_err(|why| damaged(&what, &why))?;
+        if let Some(last) = raw.into_iter().rev().find(|entry| entry.kind == "Data") {
+            data = last.value;
+        }
         for entry in entries {
             match entry {
                 Entry::Change(change) => saved
@@ -97,12 +108,32 @@ pub(crate) fn read<A: AppItem, D: AppData>(
             }
         }
     }
+    let kept = named(&saved.data).and_then(|bytes| parse::<Keys>(&bytes));
+    if !kept.is_ok_and(|kept| data.kept_in(&kept)) {
+        return Err(CannotRestore::AppData(
+            "this version of the app can't keep all of it".into(),
+        ));
+    }
     for turn in &mut saved.chat.turns {
         for item in &mut turn.items {
             open_envelope(item);
         }
     }
     Ok(saved)
+}
+
+/// The header a snapshot holds, written as a header: what lists show of
+/// a chat whose own header a crash took.
+pub(crate) fn snapshot_header(snapshot: &[u8]) -> Result<Vec<u8>, CannotRestore> {
+    /// A snapshot, but only its header.
+    #[derive(Deserialize)]
+    struct HeaderOf {
+        header: Header,
+    }
+    let (_, frame) = open(snapshot)?;
+    let inside = unpack(frame).map_err(|why| damaged("its snapshot", &why))?;
+    let of: HeaderOf = parse(&inside).map_err(|why| damaged("its snapshot", &why))?;
+    header(&of.header).map_err(|why| damaged("its header", &why))
 }
 
 /// Compresses a header or snapshot again, keeping what it holds.
@@ -125,42 +156,69 @@ pub(crate) fn kept(journal: &[u8]) -> Result<usize, CannotRestore> {
 }
 
 /// What a journal's records hold, in order, and how many of its bytes
-/// they take, leaving out a last one cut off by a crash.
+/// they take, leaving out an end a crash cut off.
 ///
-/// Each record is synced before the next is written, so only the last
-/// can be cut off. A crash may leave it short of its length, or, on a
-/// file system that writes a file's size before its data, as long as it
-/// should be but zeros or garbage. So a last record that's short, that
-/// fails its checksum or doesn't decompress, or a run of zeros at the
-/// end, is a record cut off, and left out. The same anywhere else is
-/// damage.
+/// Each record is synced before the next is written, so a crash can cut
+/// off only the last: short of its length, or, on a file system that
+/// writes a file's size before its data, as long as it should be but
+/// zeros or garbage. So the first place a record can't be read is the
+/// end, cut off, unless a whole record that reads can be found after it:
+/// then it's damage, such as a length gone wrong in the middle, and
+/// nothing after it is ever dropped.
 fn records(journal: &[u8]) -> Result<(Vec<Vec<u8>>, usize), CannotRestore> {
     let mut records = Vec::new();
     let mut at = 0;
-    loop {
-        let rest = &journal[at..];
-        if rest.iter().all(|&byte| byte == 0) {
-            break;
+    while at < journal.len() {
+        match record_at(journal, at) {
+            Ok((inside, next)) => {
+                records.push(inside);
+                at = next;
+            }
+            Err(why) => {
+                if let Some(whole) = whole_record_after(journal, at) {
+                    let what = format!("its journal's record {}", records.len() + 1);
+                    let why = format!("{why}, with a whole record after it, at byte {whole}");
+                    return Err(damaged(&what, &why));
+                }
+                break;
+            }
         }
-        let what = || format!("its journal's record {}", records.len() + 1);
-        let Some((length, rest)) = rest.split_first_chunk::<4>() else {
-            break;
-        };
-        let length = u32::from_le_bytes(*length) as usize;
-        if length == 0 {
-            return Err(damaged(&what(), "it's empty"));
-        }
-        let Some(frame) = rest.get(..length) else {
-            break;
-        };
-        match unpack(frame) {
-            Ok(inside) => records.push(inside),
-            Err(_) if rest.len() == length => break,
-            Err(why) => return Err(damaged(&what(), &why)),
-        }
-        at += 4 + length;
     }
     Ok((records, at))
+}
+
+/// The record at `at`: what it holds, and where the next starts.
+fn record_at(journal: &[u8], at: usize) -> Result<(Vec<u8>, usize), String> {
+    let Some((length, rest)) = journal[at..].split_first_chunk::<4>() else {
+        return Err("it's cut off".into());
+    };
+    let length = u32::from_le_bytes(*length) as usize;
+    if length == 0 {
+        return Err("it's empty".into());
+    }
+    let Some(frame) = rest.get(..length) else {
+        return Err("it's cut off".into());
+    };
+    unpack(frame).map(|inside| (inside, at + 4 + length))
+}
+
+/// Where a whole record that reads starts after a record at `bad` that
+/// doesn't, if anywhere: each place a zstd frame starts is tried, with
+/// the length before it.
+fn whole_record_after(journal: &[u8], bad: usize) -> Option<usize> {
+    let mut from = bad + 5;
+    while let Some(found) = journal
+        .get(from..)?
+        .windows(4)
+        .position(|at| at == ZSTD_MAGIC)
+    {
+        let start = from + found - 4;
+        if record_at(journal, start).is_ok() {
+            return Some(start);
+        }
+        from += found + 1;
+    }
+    None
 }
 
 /// `value` as MessagePack, with field names.
@@ -346,7 +404,9 @@ fn envelop<A: AppItem>(item: &mut Item<A>) -> Result<(), String> {
 }
 
 /// An app item saved in its envelope, as the app item again, if the
-/// app's type reads it.
+/// app's type reads it and keeps all of it: an older version of the app
+/// that would drop what a newer one added leaves it unknown, and so
+/// unchanged.
 fn open_envelope<A: AppItem>(item: &mut Item<A>) {
     // An envelope always has a summary, and an agent's unknown item never
     // has: that, not `what`, which is the agent's to say, tells them apart.
@@ -354,7 +414,166 @@ fn open_envelope<A: AppItem>(item: &mut Item<A>) {
         && unknown.what == APP
         && unknown.summary.is_some()
         && let Ok(app) = A::deserialize(&unknown.raw)
+        && let Ok(saved) = Keys::deserialize(&unknown.raw)
+        && serde_json::to_value(&app)
+            .ok()
+            .and_then(|back| Keys::deserialize(back).ok())
+            .is_some_and(|back| saved.kept_in(&back))
     {
         item.kind = ItemKind::App(app);
+    }
+}
+
+/// A snapshot, but only its data.
+#[derive(Deserialize)]
+struct DataOf {
+    data: Keys,
+}
+
+/// A journal entry, but only its kind, and its keys.
+#[derive(Deserialize)]
+struct RawEntry {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    value: Keys,
+}
+
+/// The keys of what's saved, however deep, and nothing else: what tells
+/// whether the app's type keeps all of it.
+#[derive(Debug, Default)]
+enum Keys {
+    /// Anything but a map or list.
+    #[default]
+    Leaf,
+    /// A map, by its keys, written as text.
+    Map(BTreeMap<String, Keys>),
+    /// A list.
+    List(Vec<Keys>),
+}
+
+impl Keys {
+    /// Whether every key here is in `back`, as deep as it goes: through
+    /// maps, and lists as long as each other. Keys `back` has that this
+    /// hasn't, as a newer version adds, are fine.
+    fn kept_in(&self, back: &Keys) -> bool {
+        match (self, back) {
+            (Keys::Map(saved), Keys::Map(back)) => (saved.iter())
+                .all(|(key, saved)| back.get(key).is_some_and(|back| saved.kept_in(back))),
+            (Keys::Map(saved), _) => saved.is_empty(),
+            (Keys::List(saved), Keys::List(back)) if saved.len() == back.len() => saved
+                .iter()
+                .zip(back)
+                .all(|(saved, back)| saved.kept_in(back)),
+            _ => true,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Keys {
+    fn deserialize<De: Deserializer<'de>>(deserializer: De) -> Result<Self, De::Error> {
+        deserializer.deserialize_any(KeysVisitor)
+    }
+}
+
+/// Reads [`Keys`] from anything.
+struct KeysVisitor;
+
+impl<'de> Visitor<'de> for KeysVisitor {
+    type Value = Keys;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("anything")
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<Keys, E> {
+        Ok(Keys::Leaf)
+    }
+
+    fn visit_i64<E>(self, _: i64) -> Result<Keys, E> {
+        Ok(Keys::Leaf)
+    }
+
+    fn visit_u64<E>(self, _: u64) -> Result<Keys, E> {
+        Ok(Keys::Leaf)
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<Keys, E> {
+        Ok(Keys::Leaf)
+    }
+
+    fn visit_str<E>(self, _: &str) -> Result<Keys, E> {
+        Ok(Keys::Leaf)
+    }
+
+    fn visit_bytes<E>(self, _: &[u8]) -> Result<Keys, E> {
+        Ok(Keys::Leaf)
+    }
+
+    fn visit_none<E>(self) -> Result<Keys, E> {
+        Ok(Keys::Leaf)
+    }
+
+    fn visit_unit<E>(self) -> Result<Keys, E> {
+        Ok(Keys::Leaf)
+    }
+
+    fn visit_some<De: Deserializer<'de>>(self, inner: De) -> Result<Keys, De::Error> {
+        Keys::deserialize(inner)
+    }
+
+    fn visit_newtype_struct<De: Deserializer<'de>>(self, inner: De) -> Result<Keys, De::Error> {
+        Keys::deserialize(inner)
+    }
+
+    fn visit_seq<S: SeqAccess<'de>>(self, mut seq: S) -> Result<Keys, S::Error> {
+        let mut list = Vec::new();
+        while let Some(each) = seq.next_element()? {
+            list.push(each);
+        }
+        Ok(Keys::List(list))
+    }
+
+    fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Keys, M::Error> {
+        let mut keys = BTreeMap::new();
+        while let Some((key, value)) = map.next_entry::<KeyName, Keys>()? {
+            keys.insert(key.0, value);
+        }
+        Ok(Keys::Map(keys))
+    }
+}
+
+/// A map's key, written as text, whatever it was.
+struct KeyName(String);
+
+impl<'de> Deserialize<'de> for KeyName {
+    fn deserialize<De: Deserializer<'de>>(deserializer: De) -> Result<Self, De::Error> {
+        /// Reads a key.
+        struct Name;
+        impl Visitor<'_> for Name {
+            type Value = KeyName;
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a key")
+            }
+            fn visit_str<E>(self, key: &str) -> Result<KeyName, E> {
+                Ok(KeyName(key.to_owned()))
+            }
+            fn visit_bytes<E>(self, key: &[u8]) -> Result<KeyName, E> {
+                Ok(KeyName(format!("{key:?}")))
+            }
+            fn visit_i64<E>(self, key: i64) -> Result<KeyName, E> {
+                Ok(KeyName(key.to_string()))
+            }
+            fn visit_u64<E>(self, key: u64) -> Result<KeyName, E> {
+                Ok(KeyName(key.to_string()))
+            }
+            fn visit_f64<E>(self, key: f64) -> Result<KeyName, E> {
+                Ok(KeyName(key.to_string()))
+            }
+            fn visit_bool<E>(self, key: bool) -> Result<KeyName, E> {
+                Ok(KeyName(key.to_string()))
+            }
+        }
+        deserializer.deserialize_any(Name)
     }
 }

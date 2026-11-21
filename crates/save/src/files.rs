@@ -36,6 +36,7 @@ use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -69,6 +70,17 @@ const AGAIN: u32 = 3;
 const STALE: Duration = Duration::from_secs(3600);
 /// The files a chat has.
 const EXTENSIONS: [&str; 4] = ["head", "caf", "journal", "lock"];
+/// A shelf's lock: shared while a chat's lock is taken, and a new chat's
+/// first files made; exclusive while the shelf moves, so no chat comes to
+/// it unseen.
+const SHELF_LOCK: &str = ".shelf.lock";
+/// Moving a chat to a shelf in use: its files linked there, in this order,
+/// then removed where they were, in this.
+pub(crate) const MOVE_LINKS: [&str; 4] = ["lock", "caf", "journal", "head"];
+pub(crate) const MOVE_REMOVES: [&str; 4] = ["caf", "journal", "head", "lock"];
+/// Deleting a chat: its files removed in this order, any new files a
+/// crash left before the header.
+pub(crate) const DELETES: [&str; 4] = ["caf", "journal", "head", "lock"];
 
 /// The locks a store holds, by chat.
 pub(crate) type Held = HashMap<(Shelf, ChatId), Hold>;
@@ -77,7 +89,7 @@ pub(crate) type Held = HashMap<(Shelf, ChatId), Hold>;
 #[derive(Debug)]
 pub(crate) struct Hold {
     /// Its lock file, `flock`ed.
-    _lock: File,
+    lock: File,
     /// Where its journal's records that count end, once known: where the
     /// next append goes.
     end: Option<u64>,
@@ -209,6 +221,8 @@ struct Place {
     root: OwnedFd,
     name: String,
     folder: OwnedFd,
+    /// Its shelf's lock, shared, if it's held for what's being done.
+    _shelf: Option<File>,
 }
 
 impl Place {
@@ -224,7 +238,12 @@ impl Place {
             };
             root
         };
-        Ok(subfolder(&root, &name, make)?.map(|folder| Self { root, name, folder }))
+        Ok(subfolder(&root, &name, make)?.map(|folder| Self {
+            root,
+            name,
+            folder,
+            _shelf: None,
+        }))
     }
 
     /// Whether its folder is still where it was.
@@ -285,18 +304,21 @@ fn generation(folder: impl AsFd, name: &str) -> io::Result<Option<u64>> {
 }
 
 /// Writes `parts` to the new file `new`, synced, with `times` if given.
+/// If `exclusive`, it must be made now: one there already is another's.
 fn write_new(
     folder: impl AsFd,
     new: &str,
     parts: &[&[u8]],
     times: Option<&Timestamps>,
+    exclusive: bool,
 ) -> io::Result<()> {
+    let flags = if exclusive {
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL
+    } else {
+        OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC
+    };
+    let mut file = open(&folder, new, flags)?;
     let written = (|| -> io::Result<()> {
-        let mut file = open(
-            &folder,
-            new,
-            OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC,
-        )?;
         parts.iter().try_for_each(|part| file.write_all(part))?;
         if let Some(times) = times {
             rustix::fs::futimens(&file, times)?;
@@ -312,7 +334,7 @@ fn write_new(
 /// Writes `parts` to the new file `new`, synced, and renames it to
 /// `name`. The folder isn't synced.
 fn replace(folder: impl AsFd, new: &str, name: &str, parts: &[&[u8]]) -> io::Result<()> {
-    write_new(&folder, new, parts, None)?;
+    write_new(&folder, new, parts, None, false)?;
     rustix::fs::renameat(&folder, new, &folder, name).map_err(|error| {
         let _ = remove(&folder, new);
         error.into()
@@ -377,16 +399,20 @@ fn damaged(why: &str) -> StoreError {
     StoreError::Damaged(why.into())
 }
 
-/// Takes a chat's lock in `folder`, trying a while if another holds it,
-/// or once if not `patient`. Whether `folder` is still its shelf's is the
-/// caller's to check.
-fn lock(folder: impl AsFd, chat: ChatId, patient: bool) -> Result<File, StoreError> {
-    let name = file(chat, "lock");
+/// Takes the lock that's the file `name` in `folder`, exclusive or
+/// shared, trying a while if another holds it, or once if not `patient`.
+/// Whether `folder` is still where it was is the caller's to check.
+fn take(folder: impl AsFd, name: &str, exclusive: bool, patient: bool) -> Result<File, StoreError> {
+    let operation = if exclusive {
+        FlockOperation::NonBlockingLockExclusive
+    } else {
+        FlockOperation::NonBlockingLockShared
+    };
     let tries = if patient { TRIES } else { 1 };
     let (mut tried, mut again) = (0, 0);
     while tried < tries && again <= AGAIN {
-        let lock = open(&folder, &name, OFlags::RDWR | OFlags::CREATE)?;
-        match rustix::fs::flock(&lock, FlockOperation::NonBlockingLockExclusive) {
+        let lock = open(&folder, name, OFlags::RDWR | OFlags::CREATE)?;
+        match rustix::fs::flock(&lock, operation) {
             Ok(()) => {}
             Err(Errno::WOULDBLOCK) => {
                 tried += 1;
@@ -399,8 +425,7 @@ fn lock(folder: impl AsFd, chat: ChatId, patient: bool) -> Result<File, StoreErr
         }
         // Held, but maybe of a file a deletion removed meanwhile, and
         // another made since: then it's the other that counts.
-        let held = rustix::fs::fstat(&lock).map_err(io::Error::from)?;
-        if look(&folder, &name)?.is_some_and(|now| same(&now, &held)) {
+        if is_at(&lock, &folder, name)? {
             return Ok(lock);
         }
         again += 1;
@@ -408,8 +433,21 @@ fn lock(folder: impl AsFd, chat: ChatId, patient: bool) -> Result<File, StoreErr
     Err(StoreError::InUse)
 }
 
+/// Whether an open file is still the one named `name` in `folder`.
+fn is_at(file: &File, folder: impl AsFd, name: &str) -> io::Result<bool> {
+    let opened = rustix::fs::fstat(file)?;
+    Ok(look(folder, name)?.is_some_and(|now| same(&now, &opened)))
+}
+
+/// Takes a chat's lock in `folder`, as [`take`] does.
+fn lock(folder: impl AsFd, chat: ChatId, patient: bool) -> Result<File, StoreError> {
+    take(folder, &file(chat, "lock"), true, patient)
+}
+
 /// A chat's shelf's folder, with the chat's lock held for `held`, taken
-/// now if it isn't yet: `None` if the shelf isn't there and not `make`.
+/// now if it isn't yet, holding the shelf's lock shared as it's taken and
+/// until the folder is let go: `None` if the shelf isn't there and not
+/// `make`.
 fn hold(
     path: &Path,
     held: &mut Held,
@@ -419,22 +457,23 @@ fn hold(
 ) -> Result<Option<(Place, bool)>, StoreError> {
     let key = (shelf.clone(), chat);
     for _ in 0..=AGAIN {
-        let Some(place) = Place::open(path, shelf, make)? else {
+        let Some(mut place) = Place::open(path, shelf, make)? else {
             return Ok(None);
         };
-        if held.contains_key(&key) {
+        if let Some(hold) = held.get(&key) {
+            // Still its lock, where the chat is, or it isn't held at all.
+            if !is_at(&hold.lock, &place.folder, &file(chat, "lock"))? {
+                held.remove(&key);
+                return Err(StoreError::InUse);
+            }
             return Ok(Some((place, false)));
         }
+        let shelf_lock = take(&place.folder, SHELF_LOCK, false, true)?;
         let lock = lock(&place.folder, chat, true)?;
         // Its shelf moved meanwhile: the chat's where it went.
         if place.still_there()? {
-            held.insert(
-                key,
-                Hold {
-                    _lock: lock,
-                    end: None,
-                },
-            );
+            place._shelf = Some(shelf_lock);
+            held.insert(key, Hold { lock, end: None });
             return Ok(Some((place, true)));
         }
     }
@@ -473,16 +512,28 @@ pub(crate) fn list(path: &Path, shelf: &Shelf) -> Result<Vec<(ChatId, Vec<u8>)>,
             Err(error) => return Err(error.into()),
         }
     }
-    // A chat a crash left with no header is listed, so it can be seen and
-    // deleted: with none, it reads as damaged.
+    // A chat a crash left with no header is listed, so it can be seen: with
+    // the header its snapshot has, if it's whole; with none, which reads as
+    // damaged, if not.
     for (chat, _) in of("caf") {
-        if !heads.iter().any(|(listed, _)| *listed == chat)
-            && !exists(&place.folder, &file(chat, "head"))?
-            && look(&place.folder, &file(chat, "caf"))?
-                .is_some_and(|stat| FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile)
+        if heads.iter().any(|(listed, _)| *listed == chat)
+            || exists(&place.folder, &file(chat, "head"))?
         {
-            heads.push((chat, Vec::new()));
+            continue;
         }
+        let caf = match read(&place.folder, &file(chat, "caf")) {
+            Ok(Some(caf)) => caf,
+            Ok(None) => continue,
+            Err(error) if not_ours(&error) => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let whole = caf.len() >= CAF_PREFIX
+            && caf[8] & !SQUEEZED == 0
+            && exists(&place.folder, &file(chat, "journal"))?;
+        let head = (whole.then(|| format::snapshot_header(&caf[CAF_PREFIX..]).ok()))
+            .flatten()
+            .unwrap_or_default();
+        heads.push((chat, head));
     }
     Ok(heads)
 }
@@ -513,6 +564,9 @@ fn read_chat(folder: impl AsFd, chat: ChatId) -> Result<Stored, StoreError> {
     if snapshot.len() < CAF_PREFIX {
         return Err(damaged("its snapshot's file is cut off"));
     }
+    if snapshot[8] & !SQUEEZED != 0 {
+        return Err(newer(&snapshot[CAF_PREFIX..]));
+    }
     let mut journal =
         read(&folder, &file(chat, "journal"))?.ok_or_else(|| damaged("its journal is missing"))?;
     if journal.len() < JOURNAL_PREFIX {
@@ -530,6 +584,17 @@ fn read_chat(folder: impl AsFd, chat: ChatId) -> Result<Stored, StoreError> {
     Ok(Stored::new(snapshot, journal))
 }
 
+/// A snapshot a newer CAF's store marked in a way this one doesn't know:
+/// of its version, if that's newer, or at least the next.
+fn newer(snapshot: &[u8]) -> StoreError {
+    let version = format::version(snapshot)
+        .ok()
+        .filter(|version| *version > VERSION);
+    StoreError::Newer {
+        version: version.unwrap_or(VERSION + 1),
+    }
+}
+
 /// The generation a file's bytes start with.
 fn generation_of(bytes: &[u8]) -> u64 {
     u64::from_le_bytes(bytes[..8].try_into().expect("eight bytes"))
@@ -545,6 +610,12 @@ pub(crate) fn snapshot(
     snapshot: &[u8],
 ) -> Result<(), StoreError> {
     let (place, _) = hold(path, held, shelf, chat, true)?.expect("made");
+    let key = (shelf.clone(), chat);
+    // Not known again until it's done: a snapshot that fails partway may
+    // leave the journal from before it, which counts for nothing.
+    if let Some(hold) = held.get_mut(&key) {
+        hold.end = None;
+    }
     let folder = &place.folder;
     let (caf, journal) = (file(chat, "caf"), file(chat, "journal"));
     let was = generation(folder, &caf)?;
@@ -577,14 +648,14 @@ pub(crate) fn snapshot(
         &[header],
     )?;
     sync(folder)?;
-    if let Some(hold) = held.get_mut(&(shelf.clone(), chat)) {
+    if let Some(hold) = held.get_mut(&key) {
         hold.end = Some(JOURNAL_PREFIX as u64);
     }
     Ok(())
 }
 
 /// [`Store::append`](crate::Store::append), taking the chat's lock if it
-/// isn't held.
+/// isn't held, and letting it go again if it then can't add the record.
 pub(crate) fn append(
     path: &Path,
     held: &mut Held,
@@ -597,47 +668,61 @@ pub(crate) fn append(
     if !exists(&place.folder, &file(chat, "caf"))? {
         return Err(StoreError::NotFound);
     }
-    let (place, _) = hold(path, held, shelf, chat, false)?.ok_or(StoreError::NotFound)?;
-    let folder = &place.folder;
+    let (place, taken) = hold(path, held, shelf, chat, false)?.ok_or(StoreError::NotFound)?;
+    let added = add(&place.folder, held, shelf, chat, header, record);
+    if taken && added.is_err() {
+        held.remove(&(shelf.clone(), chat));
+    }
+    added
+}
+
+/// Adds a record to a locked chat's journal, and replaces its header.
+fn add(
+    folder: impl AsFd,
+    held: &mut Held,
+    shelf: &Shelf,
+    chat: ChatId,
+    header: &[u8],
+    record: &[u8],
+) -> Result<(), StoreError> {
     // The snapshot it follows: a record is in its version, so it's this
     // CAF's, or the record isn't added.
-    let caf = read_start(folder, &file(chat, "caf"), CAF_PREFIX as u64 + 7)?
+    let caf = read_start(&folder, &file(chat, "caf"), CAF_PREFIX as u64 + 7)?
         .ok_or(StoreError::NotFound)?;
     if caf.len() < CAF_PREFIX + 7 {
         return Err(damaged("its snapshot's file is cut off"));
     }
+    if caf[8] & !SQUEEZED != 0 {
+        return Err(newer(&caf[CAF_PREFIX..]));
+    }
     match format::version(&caf[CAF_PREFIX..]) {
         Ok(VERSION) => {}
         Ok(version) => {
-            return Err(StoreError::Io(io::Error::other(format!(
-                "its snapshot is of version {version}: write one of version {VERSION} first"
-            ))));
+            return Err(damaged(&format!(
+                "its snapshot is of version {version}: a snapshot of version {VERSION} is \
+                 written before anything's added to its journal"
+            )));
         }
-        Err(CannotRestore::Newer { version }) => {
-            return Err(StoreError::Io(io::Error::other(format!(
-                "its snapshot is of version {version}, newer than this CAF's"
-            ))));
-        }
+        Err(CannotRestore::Newer { version }) => return Err(StoreError::Newer { version }),
         Err(CannotRestore::Damaged(why)) => return Err(StoreError::Damaged(why)),
         Err(other) => return Err(damaged(&format!("{other:?}"))),
     }
-    // The header first: one a save ahead of the journal is harmless, but a
-    // record written and then said to have failed would be written twice
-    // when the core tries again.
-    replace(
-        folder,
-        &new_file(chat, "head"),
-        &file(chat, "head"),
-        &[header],
-    )?;
     let key = (shelf.clone(), chat);
     let known = held.get(&key).and_then(|hold| hold.end);
     let end = match known {
         Some(end) => end,
-        None => end_of_journal(folder, chat, &caf[..8])?,
+        None => end_of_journal(&folder, chat, &caf[..8])?,
     };
-    let name = file(chat, "journal");
-    let journal = open(folder, &name, OFlags::RDWR)?;
+    // The header before the record: one a save ahead of the journal is
+    // harmless, but a record written and then said to have failed would be
+    // written twice when the core tries again.
+    replace(
+        &folder,
+        &new_file(chat, "head"),
+        &file(chat, "head"),
+        &[header],
+    )?;
+    let journal = open(&folder, &file(chat, "journal"), OFlags::RDWR)?;
     let length = journal.metadata()?.len();
     if length < end {
         return Err(StoreError::Io(io::Error::other("its journal shrank")));
@@ -718,14 +803,15 @@ pub(crate) fn delete(
     // snapshot that reads as having nothing to add; then new files a crash
     // left; its header after them, so it's listed until nothing's left,
     // and the lock last.
-    let mut order = vec![file(chat, "caf"), file(chat, "journal")];
+    let [first, second, header, lock] = DELETES.map(|extension| file(chat, extension));
+    let mut order = vec![first, second];
     let removed = names(&place.folder).and_then(|names| {
         order.extend(names.into_iter().filter(|name| {
             chat_of(name)
                 .is_some_and(|(of, extension)| of == chat && !EXTENSIONS.contains(&extension))
         }));
-        order.push(file(chat, "head"));
-        order.push(file(chat, "lock"));
+        order.push(header);
+        order.push(lock);
         order
             .iter()
             .try_for_each(|name| remove(&place.folder, name))
@@ -752,6 +838,8 @@ pub(crate) fn move_shelf(
     let Some(from_folder) = subfolder(&root, &from_name, false)? else {
         return Ok(());
     };
+    // No chat comes to it, or starts to, while it moves.
+    let from_lock = take(&from_folder, SHELF_LOCK, true, true)?;
     let chats = chats(&from_folder)?;
     // Every chat on it locked, so none moves from under a program that
     // has it open: its next write would be to where it was.
@@ -779,11 +867,19 @@ pub(crate) fn move_shelf(
         Err(error) => return Err(StoreError::Io(error.into())),
     }
     let to_folder = subfolder(&root, &to_name, true)?.expect("made");
+    let to_lock = take(&to_folder, SHELF_LOCK, true, true)?;
+    if !still_there(&root, &to_name, &to_folder)? {
+        return Err(StoreError::InUse);
+    }
     for &chat in &chats {
         move_chat(&from_folder, &to_folder, chat)?;
         rekey(held, chat);
     }
-    drop(taken);
+    drop((taken, to_lock));
+    // Its lock goes before the folder, held: anyone waiting on it finds
+    // it gone, and looks again.
+    remove(&from_folder, SHELF_LOCK)?;
+    drop(from_lock);
     match rustix::fs::unlinkat(&root, &from_name, AtFlags::REMOVEDIR) {
         Ok(()) => Ok(sync(&root)?),
         // Something not a chat's is in it: it's left.
@@ -800,7 +896,7 @@ pub(crate) fn move_shelf(
 fn move_chat(from: impl AsFd, to: impl AsFd, chat: ChatId) -> Result<(), StoreError> {
     let mut link = Vec::new();
     let mut there_lock = None;
-    for extension in ["lock", "caf", "journal", "head"] {
+    for extension in MOVE_LINKS {
         let name = file(chat, extension);
         let Some(here) = look(&from, &name)? else {
             continue;
@@ -826,7 +922,7 @@ fn move_chat(from: impl AsFd, to: impl AsFd, chat: ChatId) -> Result<(), StoreEr
     }
     sync(&to)?;
     drop(there_lock);
-    for extension in ["caf", "journal", "head", "lock"] {
+    for extension in MOVE_REMOVES {
         remove(&from, &file(chat, extension))?;
     }
     Ok(sync(&from)?)
@@ -882,6 +978,9 @@ fn tidy(folder: impl AsFd) -> io::Result<()> {
                         .is_some_and(|(of, extension)| of == chat && extension != "journal")
             })
             && let Ok(_lock) = lock(&folder, chat, false)
+            // Made meanwhile, by whoever had the lock before.
+            && !exists(&folder, &file(chat, "caf"))?
+            && !exists(&folder, &file(chat, "head"))?
         {
             // Held, so nobody's making the chat: it was given up, maybe
             // after its journal, before its snapshot.
@@ -921,7 +1020,8 @@ fn squeeze_chat(
     let Some(bytes) = read(&folder, &caf)? else {
         return Ok(0);
     };
-    if bytes.len() < CAF_PREFIX || bytes[8] & SQUEEZED != 0 {
+    // Squeezed already, or marked in a way this CAF doesn't know.
+    if bytes.len() < CAF_PREFIX || bytes[8] != 0 {
         return Ok(0);
     }
     let squeezed = format::squeeze(&bytes[CAF_PREFIX..], crate::Squeeze::Hardest)
@@ -937,7 +1037,13 @@ fn squeeze_chat(
     // Written and synced first, then put in place holding the lock, if
     // it's still the same file, so a program loading it waits only for a
     // rename.
-    let new = format!("{chat}.caf.squeeze-{}.new", std::process::id());
+    // Its own, never another squeeze's: made now, by this one.
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    let new = format!(
+        "{chat}.caf.squeeze-{}-{}.new",
+        std::process::id(),
+        COUNT.fetch_add(1, AtomicOrdering::Relaxed)
+    );
     let times = Timestamps {
         last_access: rustix::fs::Timespec {
             tv_sec: was.st_atime,
@@ -948,7 +1054,7 @@ fn squeeze_chat(
             tv_nsec: was.st_mtime_nsec as _,
         },
     };
-    write_new(&folder, &new, &parts, Some(&times))?;
+    write_new(&folder, &new, &parts, Some(&times), true)?;
     let placed = (|| -> io::Result<()> {
         let _lock = lock(&folder, chat, false).map_err(|_| io::ErrorKind::ResourceBusy)?;
         let unchanged = still_there(&root, name, &folder)?
@@ -969,3 +1075,6 @@ fn squeeze_chat(
     sync(&folder)?;
     Ok((bytes.len() - CAF_PREFIX - snapshot.len()) as u64)
 }
+
+#[cfg(test)]
+mod tests;

@@ -140,7 +140,7 @@ fn a_shelf_lists_in_the_order_its_chats_were_made() {
     let folder = Folder::new("list");
     let mut store = FileStore::new(folder.path());
     let work = Shelf("work".into());
-    for id in [3, 1, 2, 4, 6] {
+    for id in [3, 1, 2, 4, 6, 7] {
         written(carry(&mut store, snapshot(&work, small(id))));
     }
     let head = |id: u64| {
@@ -151,7 +151,13 @@ fn a_shelf_lists_in_the_order_its_chats_were_made() {
     fs::write(head(2), b"CAF\x01\0\0\0garbage").expect("damaged");
     fs::write(head(4), encode_header(&from::<Header>(common::header(5)))).expect("another's");
     fs::write(folder.path().join("work/notes.txt"), b"not a chat").expect("a stray");
+    // Headers a crash took: one whole, one whose snapshot isn't.
     fs::remove_file(head(6)).expect("a header a crash took");
+    fs::remove_file(head(7)).expect("a header a crash took");
+    let caf = folder
+        .path()
+        .join(format!("work/{}.caf", ChatId::from_number(7)));
+    fs::write(&caf, b"\x01\0\0\0\0\0\0\0\0CAF\x01\0\0\0garbage").expect("damaged");
     let Some((Ticket(7), StorageEvent::Listed { chats, unreadable })) = carry(
         &mut store,
         StorageDirective::List {
@@ -162,9 +168,10 @@ fn a_shelf_lists_in_the_order_its_chats_were_made() {
         panic!("not listed");
     };
     let made: Vec<_> = chats.iter().map(|header| header.chat).collect();
-    assert_eq!(made, [1, 3].map(ChatId::from_number));
+    assert_eq!(made, [1, 3, 6].map(ChatId::from_number));
+    assert_eq!(chats[2], small(6).header, "from its snapshot");
     let ids: Vec<_> = unreadable.iter().map(|(chat, _)| *chat).collect();
-    assert_eq!(ids, [2, 4, 6].map(ChatId::from_number));
+    assert_eq!(ids, [2, 4, 7].map(ChatId::from_number));
     assert_eq!(
         unreadable[2].1,
         CannotRestore::Damaged("its header is missing".into())
