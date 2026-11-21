@@ -436,42 +436,59 @@ fn a_shelf_moves_whole_to_a_new_one() {
 }
 
 #[test]
-fn a_shelf_moves_chat_by_chat_to_one_in_use() {
-    let folder = Folder::new("merge");
+fn a_shelf_never_moves_onto_one_with_chats() {
+    let folder = Folder::new("onto");
     let root = folder.path();
     let (work, done) = (shelf("work"), shelf("done"));
     let mut store = FileStore::new(root);
     save(&mut store, &work, 1);
-    save(&mut store, &work, 2);
-    save(&mut store, &done, 3);
+    save(&mut store, &done, 2);
     let chat = ChatId::from_number(1);
     store.load(&work, chat).expect("it loads");
+    let files = |name: &str| {
+        let mut files: Vec<_> = (fs::read_dir(root.join(name)).expect("a shelf"))
+            .map(|entry| {
+                let path = entry.expect("a file").path();
+                let bytes = fs::read(&path).expect("it reads");
+                (path, bytes)
+            })
+            .collect();
+        files.sort();
+        files
+    };
+    let before = (files("work"), files("done"));
+    assert!(in_use(store.move_shelf(&work, &done)));
+    assert_eq!((files("work"), files("done")), before, "nothing changed");
+    // Still where it was, and still its.
+    store
+        .append(&work, chat, &head(1), &written_records()[0])
+        .expect("it's added");
+
+    // One with nothing on it but locks left behind is replaced, if
+    // nobody holds them.
+    store
+        .delete(&done, ChatId::from_number(2))
+        .expect("deleted");
+    fs::write(file(root, "done", 3, "lock"), b"").expect("a lock left");
+    let held = file(root, "done", 4, "lock");
+    let holder = flock(&held, true);
+    assert!(in_use(store.move_shelf(&work, &done)), "a lock that's held");
+    drop(holder);
     store.move_shelf(&work, &done).expect("it moves");
     assert!(!root.join("work").exists());
-    let mut listed: Vec<ChatId> = (store.list(&done).expect("it lists").into_iter())
-        .map(|(chat, _)| chat)
+    let names: Vec<_> = (fs::read_dir(root.join("done")).expect("the shelf"))
+        .map(|entry| entry.expect("a file").file_name())
         .collect();
-    listed.sort();
-    assert_eq!(listed, [1, 2, 3].map(ChatId::from_number));
-    let mut other = FileStore::new(root);
-    assert!(in_use(other.load(&done, chat)), "its lock moved with it");
+    assert!(
+        !names
+            .iter()
+            .any(|name| name.to_string_lossy().contains("-000000000003"))
+    );
     store
         .append(&done, chat, &head(1), &written_records()[0])
-        .expect("it's added");
-    store.release(&done, chat);
-    let stored = other.load(&done, chat).expect("it loads");
-    assert_eq!(
-        stored.journal,
-        [written_records().concat(), written_records()[0].clone()].concat()
-    );
-    other.release(&done, chat);
-
-    // A chat on both is a clash: what moved before it stays moved.
-    save(&mut store, &work, 1);
-    save(&mut store, &work, 0);
-    assert!(in_use(store.move_shelf(&work, &done)));
-    assert!(file(root, "done", 0, "caf").exists());
-    assert!(file(root, "work", 1, "caf").exists());
+        .expect("its lock moved with it");
+    let mut other = FileStore::new(root);
+    assert!(in_use(other.load(&done, chat)));
 }
 
 #[test]

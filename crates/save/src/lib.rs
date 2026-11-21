@@ -220,7 +220,7 @@ pub enum StoreError {
     /// It has no such chat on that shelf.
     NotFound,
     /// Another program has the chat locked; or, moving a shelf, the shelf
-    /// it goes to has one of its chats already.
+    /// it goes to has chats already.
     InUse,
     /// The system failed.
     Io(io::Error),
@@ -343,13 +343,15 @@ pub trait Store: Send + 'static {
     /// [`StoreError::Io`]. One that isn't there is already removed.
     fn delete(&mut self, shelf: &Shelf, chat: ChatId) -> Result<(), StoreError>;
 
-    /// Moves every chat on `from` to `to`, keeping the locks it holds.
+    /// Moves every chat on `from` to `to`, keeping the locks it holds, in
+    /// one step: a move is never half done. A shelf is only moved to one
+    /// with no chats on it: moving onto one with chats isn't supported.
     ///
     /// # Errors
     ///
-    /// [`StoreError::InUse`] if `to` has a chat already that `from` has
-    /// too, or another program has one of them locked, or
-    /// [`StoreError::Io`]. What moved before a failure stays moved.
+    /// [`StoreError::InUse`] if `to` has chats already, or another program
+    /// has one of `from`'s locked, or [`StoreError::Io`]. Nothing moves
+    /// then.
     fn move_shelf(&mut self, from: &Shelf, to: &Shelf) -> Result<(), StoreError>;
 }
 
@@ -359,9 +361,11 @@ pub trait Store: Send + 'static {
 /// caller's thread, never the core's.
 ///
 /// A chat loaded that can't be read is left as it was, and released at
-/// once if loading it took its lock ([`Store::holds`]). A failure to list a shelf is [`StorageEvent::Failed`]. For a
-/// write, [`StorageEvent::Done`] says how big the snapshot or record was:
-/// the header, rewritten each time, isn't counted.
+/// once if loading it took its lock ([`Store::holds`]). A failure to list
+/// a shelf is [`StorageEvent::Failed`]. For a write,
+/// [`StorageEvent::Done`] says how big the snapshot or record was: the
+/// header, rewritten each time, isn't counted. A shelf moved onto one
+/// with chats fails, saying so.
 pub fn carry_out<A: AppItem, D: AppData>(
     store: &mut dyn Store,
     directive: StorageDirective<A, D>,
@@ -439,7 +443,8 @@ pub fn carry_out<A: AppItem, D: AppData>(
         StorageDirective::MoveShelf { ticket, from, to } => {
             let event = match store.move_shelf(&from, &to) {
                 Err(StoreError::InUse) => StorageEvent::Failed(
-                    "a chat on it is open in another program, or on the shelf it goes to already"
+                    "the shelf it goes to has chats already, which isn't supported, or a chat on \
+                     it is open in another program"
                         .into(),
                 ),
                 done => answer(done),
@@ -538,20 +543,21 @@ fn answer<A: AppItem, D: AppData>(done: Result<(), StoreError>) -> StorageEvent<
 /// writes. A snapshot it marked in a way this CAF doesn't know is
 /// [`StoreError::Newer`].
 ///
-/// Moving a shelf to a new one renames its folder. Moving it to one in
-/// use moves a chat at a time, linking each file where it goes before
-/// removing it where it was, so a crash leaves each chat whole in one
-/// place or both, and moving again finishes. Moving a shelf with a chat
-/// another program has open, or onto a shelf that has one of its chats
-/// already, is [`StoreError::InUse`].
+/// Moving a shelf renames its folder, in one step, so a move is never
+/// half done. A shelf there already with nothing in it but locks nobody
+/// holds, as a shelf whose chats were all deleted leaves, is removed
+/// first. Moving onto a shelf with chats on it isn't supported, and is
+/// [`StoreError::InUse`], as is moving a shelf with a chat another
+/// program has open. The store's own chats on it stay locked, where they
+/// went.
 ///
 /// Its locks are `flock`s, so its root must be on a local file system:
 /// on a network one, such as NFS, they may not hold between machines.
 /// Where another program holds a lock, it tries again for about 200 ms,
 /// long enough for a squeeze's rename, then says [`StoreError::InUse`].
-/// Two programs moving shelves into each other at once take the two
-/// shelves' locks in opposite orders: one gives up after its 200 ms with
-/// [`StoreError::InUse`], so neither waits for good.
+/// So nothing waits for good: two programs moving shelves into each
+/// other at once, taking the two shelves' locks in opposite orders, give
+/// up after their 200 ms with [`StoreError::InUse`].
 ///
 /// It never follows a link inside its root, nor opens anything but a file
 /// as one: a shelf's folder or a chat's file that's a link is an error,

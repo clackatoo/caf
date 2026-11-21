@@ -74,10 +74,6 @@ const EXTENSIONS: [&str; 4] = ["head", "caf", "journal", "lock"];
 /// first files made; exclusive while the shelf moves, so no chat comes to
 /// it unseen.
 const SHELF_LOCK: &str = ".shelf.lock";
-/// Moving a chat to a shelf in use: its files linked there, in this order,
-/// then removed where they were, in this.
-pub(crate) const MOVE_LINKS: [&str; 4] = ["lock", "journal", "caf", "head"];
-pub(crate) const MOVE_REMOVES: [&str; 4] = ["caf", "journal", "head", "lock"];
 /// Deleting a chat: its files removed in this order, any new files a
 /// crash left before the header.
 pub(crate) const DELETES: [&str; 4] = ["caf", "journal", "head", "lock"];
@@ -894,126 +890,75 @@ pub(crate) fn move_shelf(
         return Ok(());
     };
     // No chat comes to it, or starts to, while it moves.
-    let from_lock = take(&from_folder, SHELF_LOCK, true, true, true)?;
+    let _from_lock = take(&from_folder, SHELF_LOCK, true, true, true)?;
     let chats = chats(&from_folder)?;
     // Every chat on it locked, so none moves from under a program that
     // has it open: its next write would be to where it was.
-    let mut taken = Vec::new();
+    let mut _taken = Vec::new();
     for &chat in &chats {
-        // Held here already, or held where a move cut off halfway took it:
-        // the same lock.
-        let held_there = (held.get(&(to.clone(), chat))).is_some_and(|hold| {
-            is_at(&hold.lock, &from_folder, &file(chat, "lock")).unwrap_or(false)
-        });
-        if !held.contains_key(&(from.clone(), chat)) && !held_there {
-            taken.push(lock(&from_folder, chat, true)?);
+        if !held.contains_key(&(from.clone(), chat)) {
+            _taken.push(lock(&from_folder, chat, true)?);
         }
     }
     if !still_there(&root, &from_name, &from_folder)? {
         return Err(StoreError::InUse);
     }
-    let rekey = |held: &mut Held, chat| {
-        if let Some(hold) = held.remove(&(from.clone(), chat)) {
-            held.insert((to.clone(), chat), hold);
+    // A shelf there already with chats on it is never moved onto: only one
+    // with none, which goes first.
+    if let Some(to_folder) = subfolder(&root, &to_name, false)? {
+        let _to_lock = take(&to_folder, SHELF_LOCK, true, true, true)?;
+        if !still_there(&root, &to_name, &to_folder)? {
+            return Err(StoreError::InUse);
         }
-    };
-    match rustix::fs::renameat_with(&root, &from_name, &root, &to_name, RenameFlags::NOREPLACE) {
-        Ok(()) => {
-            chats.iter().for_each(|&chat| rekey(held, chat));
-            return Ok(sync(&root)?);
-        }
-        // `to` is there, or the system can't rename without replacing.
-        Err(Errno::EXIST | Errno::NOTEMPTY | Errno::INVAL) => {}
+        remove_empty(&root, &to_name, &to_folder)?;
+    }
+    // The folder renamed in one step: never half moved.
+    let renamed =
+        match rustix::fs::renameat_with(&root, &from_name, &root, &to_name, RenameFlags::NOREPLACE)
+        {
+            // A system that can't refuse to replace: a folder is only ever
+            // renamed over an empty one, which is fine.
+            Err(Errno::INVAL) => rustix::fs::renameat(&root, &from_name, &root, &to_name),
+            renamed => renamed,
+        };
+    match renamed {
+        Ok(()) => {}
+        // Made meanwhile, with something in it.
+        Err(Errno::EXIST | Errno::NOTEMPTY) => return Err(StoreError::InUse),
         Err(error) => return Err(StoreError::Io(error.into())),
     }
-    let to_folder = subfolder(&root, &to_name, true)?.expect("made");
-    let to_lock = take(&to_folder, SHELF_LOCK, true, true, true)?;
-    if !still_there(&root, &to_name, &to_folder)? {
-        return Err(StoreError::InUse);
-    }
     for &chat in &chats {
-        move_chat(&from_folder, &to_folder, chat)?;
-        rekey(held, chat);
+        if let Some(mut hold) = held.remove(&(from.clone(), chat)) {
+            // Found again where it went, before it's next added to.
+            hold.end = None;
+            held.insert((to.clone(), chat), hold);
+        }
     }
-    drop((taken, to_lock));
-    // Its lock goes before the folder, held: anyone waiting on it finds
-    // it gone, and looks again.
-    remove(&from_folder, SHELF_LOCK)?;
-    drop(from_lock);
-    match rustix::fs::unlinkat(&root, &from_name, AtFlags::REMOVEDIR) {
-        Ok(()) => Ok(sync(&root)?),
-        // Something not a chat's is in it: it's left.
-        Err(Errno::NOTEMPTY | Errno::EXIST) => Ok(()),
-        Err(error) => Err(StoreError::Io(error.into())),
-    }
+    Ok(sync(&root)?)
 }
 
-/// Moves a chat whose lock is held from one folder to another: each of
-/// its files is linked where it goes, and once all are, and synced, they
-/// go from where they were. A crash leaves it whole in one folder, or in
-/// both as the same files, never split; moving again finishes it. A file
-/// there already that's another is a clash: [`StoreError::InUse`].
-fn move_chat(from: impl AsFd, to: impl AsFd, chat: ChatId) -> Result<(), StoreError> {
-    let lock_name = file(chat, "lock");
-    let half_moved = matches!(
-        (look(&from, &lock_name)?, look(&to, &lock_name)?),
-        (Some(here), Some(there)) if same(&here, &there)
-    );
-    if half_moved {
-        // A move cut off once all was linked, and the chat written since,
-        // where it went or where it was: it's whichever has the newer
-        // snapshot, with its journal and header, and the other's are
-        // dropped.
-        let caf = file(chat, "caf");
-        let there_newer =
-            generation(&to, &caf)?.unwrap_or(0) > generation(&from, &caf)?.unwrap_or(0);
-        for extension in ["caf", "journal", "head"] {
-            let name = file(chat, extension);
-            if let (Some(here), Some(there)) = (look(&from, &name)?, look(&to, &name)?)
-                && !same(&here, &there)
-            {
-                if there_newer {
-                    remove(&from, &name)?;
-                } else {
-                    remove(&to, &name)?;
-                }
-            }
-        }
-        sync(&to)?;
-        sync(&from)?;
+/// Removes the folder `name` in `root`, whose shelf's lock is held, if
+/// it has no chats: nothing in it but locks nobody else holds. One with
+/// anything else, or a lock that's held, is [`StoreError::InUse`].
+fn remove_empty(root: impl AsFd, name: &str, folder: impl AsFd) -> Result<(), StoreError> {
+    let names = names(&folder)?;
+    let locks: Vec<&String> = (names.iter())
+        .filter(|name| chat_of(name).is_some_and(|(_, extension)| extension == "lock"))
+        .collect();
+    if names.len() != locks.len() + usize::from(names.iter().any(|name| name == SHELF_LOCK)) {
+        return Err(StoreError::InUse);
     }
-    let mut link = Vec::new();
-    let mut there_lock = None;
-    for extension in MOVE_LINKS {
-        let name = file(chat, extension);
-        let Some(here) = look(&from, &name)? else {
-            continue;
-        };
-        match look(&to, &name)? {
-            None => link.push(name),
-            Some(there) if same(&here, &there) => {}
-            // A lock left there by a chat gone, held by nobody, is
-            // replaced. One that's held is a program writing the chat
-            // there.
-            Some(_) if extension == "lock" => {
-                there_lock = Some(take(&to, &name, true, false, false)?);
-                link.push(name);
-            }
-            Some(_) => return Err(StoreError::InUse),
-        }
+    for name in locks {
+        // Held: a program making a chat there.
+        let _lock = take(&folder, name, true, false, false)?;
+        remove(&folder, name)?;
     }
-    for name in &link {
-        if there_lock.is_some() && *name == file(chat, "lock") {
-            remove(&to, name)?;
-        }
-        rustix::fs::linkat(&from, name, &to, name, AtFlags::empty()).map_err(io::Error::from)?;
+    remove(&folder, SHELF_LOCK)?;
+    match rustix::fs::unlinkat(&root, name, AtFlags::REMOVEDIR) {
+        Ok(()) => Ok(sync(&root)?),
+        Err(Errno::NOTEMPTY | Errno::EXIST) => Err(StoreError::InUse),
+        Err(error) => Err(StoreError::Io(error.into())),
     }
-    sync(&to)?;
-    drop(there_lock);
-    for extension in MOVE_REMOVES {
-        remove(&from, &file(chat, extension))?;
-    }
-    Ok(sync(&from)?)
 }
 
 /// [`FileStore::squeeze`](crate::FileStore::squeeze), tidying what crashes
