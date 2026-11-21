@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use crate::agent::SpawnCommand;
 use crate::ids::{ChangeNo, ChatId, Ticket};
 use crate::install::{Install, LinkFrom, SignedInAs};
-use crate::time::Mono;
+use crate::time::{Mono, Wall};
 
 /// Work for a driver.
 #[non_exhaustive]
@@ -68,7 +68,10 @@ pub enum AgentDirective {
         command: SpawnCommand,
         /// The install folder it runs from, if it's CAF's install of an
         /// agent. The driver holds a shared lock on it while the process
-        /// runs, so no CAF program on the machine removes it meanwhile.
+        /// runs, so no CAF program on the machine removes it meanwhile, and
+        /// as it starts the process it touches the folder's `.used` file
+        /// (making it if need be), so a survey can say when the folder was
+        /// last used ([`SetupEvent::Surveyed`](crate::event::SetupEvent::Surveyed)).
         hold: Option<PathBuf>,
     },
     /// Write these bytes to its standard input: whole messages, each
@@ -255,11 +258,11 @@ pub enum SetupDirective {
     Install {
         /// Its ticket.
         ticket: Ticket,
-        /// The folder's name, such as `claude-0.98.0`.
+        /// The folder's name, such as `claude-agent-acp-0.98.0`.
         folder: String,
         /// What to install.
         install: Install,
-        /// The agent's private folder, such as `claude-private`, if its
+        /// The agent's private folder, such as `claude-agent-acp-private`, if its
         /// recipe gives it one
         /// ([`EnvValue::PrivateFolder`](crate::install::EnvValue::PrivateFolder)):
         /// made beside the installs, readable only by the user, if it isn't
@@ -273,6 +276,12 @@ pub enum SetupDirective {
         ticket: Ticket,
         /// The folder's name.
         folder: String,
+        /// Remove it only if it hasn't been used since: if its `.used`
+        /// file, or the folder itself if it has none, changed later, a
+        /// process started from it since the survey the core decided on,
+        /// and it stays (`Removed { removed: false }`). Checked holding the
+        /// installs' lock, as it's removed.
+        unused_since: Wall,
     },
     /// Run a sign-in command, handing back its link and code as it gives
     /// them, until it ends or is stopped.

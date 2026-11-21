@@ -4,6 +4,7 @@ import type { LinkFrom } from "./LinkFrom.ts";
 import type { SignedInAs } from "./SignedInAs.ts";
 import type { SpawnCommand } from "./SpawnCommand.ts";
 import type { Ticket } from "./Ticket.ts";
+import type { Wall } from "./Wall.ts";
 
 /**
  * Work for the setup driver: installing agents and signing in to them.
@@ -34,7 +35,7 @@ ticket: Ticket, } } | { "type": "Install", "value": {
  */
 ticket: Ticket, 
 /**
- * The folder's name, such as `claude-0.98.0`.
+ * The folder's name, such as `claude-agent-acp-0.98.0`.
  */
 folder: string, 
 /**
@@ -42,7 +43,7 @@ folder: string,
  */
 install: Install, 
 /**
- * The agent's private folder, such as `claude-private`, if its
+ * The agent's private folder, such as `claude-agent-acp-private`, if its
  * recipe gives it one
  * ([`EnvValue::PrivateFolder`](crate::install::EnvValue::PrivateFolder)):
  * made beside the installs, readable only by the user, if it isn't
@@ -57,7 +58,15 @@ ticket: Ticket,
 /**
  * The folder's name.
  */
-folder: string, } } | { "type": "SignIn", "value": { 
+folder: string, 
+/**
+ * Remove it only if it hasn't been used since: if its `.used`
+ * file, or the folder itself if it has none, changed later, a
+ * process started from it since the survey the core decided on,
+ * and it stays (`Removed { removed: false }`). Checked holding the
+ * installs' lock, as it's removed.
+ */
+unused_since: Wall, } } | { "type": "SignIn", "value": { 
 /**
  * Its ticket.
  */

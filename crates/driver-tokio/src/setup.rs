@@ -26,8 +26,8 @@
 //!
 //! | Name | What it is |
 //! |---|---|
-//! | `<agent>-<version>/` | An install, complete: only ever renamed into place whole |
-//! | `<agent>-private/` | An agent's private folder, which outlives its versions: made, readable only by the user, by an install whose directive names it; never listed, never removed. One that's a link is refused |
+//! | `<profile>-<version>/` | An install, complete, named after its profile, such as `claude-agent-acp-0.98.0`: only ever renamed into place whole. Its `.used` file says when a process last started from it |
+//! | `<profile>-private/` | An agent's private folder, which outlives its versions: made, readable only by the user, by an install whose directive names it; never listed, never removed. One that's a link is refused |
 //! | `.lock` | The lock every install and removal takes, so only one runs at a time on the machine |
 //! | `.build-…/` | An install being built. Any left when nothing holds `.lock` is a cut-off one, removed |
 //! | `.trash-…/` | An install being removed. Any left when nothing holds `.lock` is removed |
@@ -288,9 +288,18 @@ impl SetupDriver {
                     stop,
                 ));
             }
-            SetupDirective::Remove { ticket, folder } => {
+            SetupDirective::Remove {
+                ticket,
+                folder,
+                unused_since,
+            } => {
                 let reporter = self.job(ticket);
-                tokio::spawn(install::remove(self.root.clone(), folder, reporter));
+                tokio::spawn(install::remove(
+                    self.root.clone(),
+                    folder,
+                    unused_since,
+                    reporter,
+                ));
             }
             SetupDirective::SignIn {
                 ticket,

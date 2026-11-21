@@ -3,8 +3,13 @@
 //!
 //! Each agent's recipe (see [`install`](crate::install)) says what to do;
 //! the setup driver does it. An agent CAF installs starts only once it's
-//! installed and no sign-in to it is under way: until then its chats wait
+//! installed, and any agent waits while a sign-in to it, started when it
+//! was signed out, is under way: until then its chats wait
 //! ([`ChatState::WaitingForAgent`]), with their messages.
+//!
+//! Installs are named after the agent's profile, never after what the host
+//! calls it, so agents of one profile share one install, here and in every
+//! other CAF program on the machine.
 //!
 //! Nothing a sign-in or status command prints reaches the core but the
 //! link, the code and the fields its recipe names, and of the adapter's
@@ -12,6 +17,7 @@
 //! kept.
 
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -26,20 +32,26 @@ use crate::chat::{AppItem, ChatState, Failure, FailureReason, Note, Remedy, Star
 use crate::directive::{Directive, Level, SetupDirective};
 use crate::event::SetupEvent;
 use crate::ids::{AgentName, ChatId, Ticket};
-use crate::install::{Bundled, EnvValue, Install, Program, Recipe, SignedInAs};
-use crate::time::Now;
+use crate::install::{Bundled, EnvValue, Install, Program, SignedInAs};
+use crate::profiles::Checked;
+use crate::time::{Now, Wall};
 
 /// The longest link kept, in bytes: a longer one is refused.
 const MOST_LINK: usize = 4096;
 
-/// The longest code to type kept, in bytes.
+/// The longest code to type kept, in bytes: a longer one is dropped, as
+/// cut short it would be the wrong code.
 const MOST_CODE: usize = 64;
 
 /// The longest paste passed on, in bytes.
-const MOST_PASTE: usize = 4096;
+pub(super) const MOST_PASTE: usize = 4096;
 
-/// The longest reason an install or command failed kept, in bytes.
+/// The longest reason an install failed kept, in bytes.
 const MOST_REASON: usize = 300;
+
+/// How long an older version must have gone unused before it's removed:
+/// another CAF program may pin it, and use it now and then.
+const KEEP_UNUSED: Duration = Duration::from_hours(14 * 24);
 
 impl<A: AppItem> Core<A> {
     /// Asks the setup driver what's installed and what the machine has.
@@ -61,7 +73,7 @@ impl<A: AppItem> Core<A> {
             (Launch::Installed, Some(recipe)) => recipe,
             _ => return Err(Refused::NotInstallable),
         };
-        let folder = folder(agent, recipe).ok_or(Refused::NotInstallable)?;
+        let folder = self.folder_of(agent).ok_or(Refused::NotInstallable)?;
         let standing = self.setup.agents.get(agent).ok_or(Refused::NoSuchAgent)?;
         match &standing.install {
             InstallState::Installed { .. } => return Err(Refused::AlreadyInstalled),
@@ -72,29 +84,40 @@ impl<A: AppItem> Core<A> {
             _ => return Err(Refused::NotInstallable),
         }
         let (install, size) = (recipe.install.clone(), recipe.size);
-        let private = private_folder(agent, recipe);
-        // Starting it later needs the folder installs live in.
-        if self.setup.machine.is_none() && self.setup.survey.is_none() {
-            self.survey(out);
-        }
-        let ticket = self.job(
-            agent,
-            Work::Install {
+        let private = self.private_folder(agent);
+        // Another agent of the same profile is installing it already.
+        if self.install_job(&folder).is_none() {
+            // Starting it later needs the folder installs live in.
+            if self.setup.machine.is_none() && self.setup.survey.is_none() {
+                self.survey(out);
+            }
+            let ticket = self.job(
+                agent,
+                Work::Install {
+                    folder: folder.clone(),
+                },
+            );
+            out.push(Directive::Setup(SetupDirective::Install {
+                ticket,
                 folder: folder.clone(),
-            },
-        );
-        out.push(Directive::Setup(SetupDirective::Install {
-            ticket,
-            folder,
-            install,
-            private,
-        }));
-        self.set_install(agent, InstallState::Installing { done: 0, size });
+                install,
+                private,
+            }));
+        }
+        for each in self.sharing(&folder) {
+            if !matches!(
+                self.install_state(&each),
+                Some(InstallState::Installing { .. } | InstallState::Installed { .. })
+            ) {
+                self.set_install(&each, InstallState::Installing { done: 0, size });
+            }
+        }
         Ok(())
     }
 
-    /// Stops installing `agent`: chats waiting for it have their waiting
-    /// messages stopped, and go on waiting for it.
+    /// Stops installing `agent`: chats waiting for it, or for another agent
+    /// of its profile, have their waiting messages stopped, and go on
+    /// waiting for it.
     pub(super) fn stop_installing(
         &mut self,
         now: Now,
@@ -104,19 +127,21 @@ impl<A: AppItem> Core<A> {
         if !self.agents.contains_key(agent) {
             return Err(Refused::NoSuchAgent);
         }
-        let ticket = self
-            .job_for(agent, |work| matches!(work, Work::Install { .. }))
-            .ok_or(Refused::NothingToStop)?;
+        let folder = self.folder_of(agent).ok_or(Refused::NothingToStop)?;
+        let ticket = self.install_job(&folder).ok_or(Refused::NothingToStop)?;
         self.stop_job(ticket, out);
         let size = self.recipes.get(agent).map_or(0, |recipe| recipe.size);
-        self.set_install(agent, InstallState::Missing { size });
-        self.stop_waiting_messages(now, agent, Note::NotInstalled);
+        for each in self.sharing(&folder) {
+            self.set_install(&each, InstallState::Missing { size });
+            self.stop_waiting_messages(now, &each, Note::NotInstalled);
+        }
         Ok(())
     }
 
     /// Starts signing in to `agent`.
     pub(super) fn start_sign_in(
         &mut self,
+        now: Now,
         agent: &AgentName,
         out: &mut Vec<Directive>,
     ) -> Result<(), Refused> {
@@ -140,6 +165,9 @@ impl<A: AppItem> Core<A> {
         };
         let before = self.sign_in_state(agent);
         let ticket = self.job(agent, Work::SignIn { before });
+        if let Some(job) = self.setup.jobs.get_mut(&ticket) {
+            job.deadline = Some(now.mono.after(self.host.timers.sign_in));
+        }
         out.push(Directive::Setup(SetupDirective::SignIn {
             ticket,
             command,
@@ -147,12 +175,15 @@ impl<A: AppItem> Core<A> {
             code_after,
             paste,
         }));
-        if let Some(standing) = self.setup.agents.get_mut(agent) {
-            standing.sign_in = SignInState::SigningIn(SignInLink {
-                url: None,
-                code: None,
-                paste,
-            });
+        let signing_in = SignInState::SigningIn(SignInLink {
+            url: None,
+            code: None,
+            paste,
+        });
+        for each in self.sign_in_group(agent) {
+            if let Some(standing) = self.setup.agents.get_mut(&each) {
+                standing.sign_in = signing_in.clone();
+            }
         }
         Ok(())
     }
@@ -243,29 +274,8 @@ impl<A: AppItem> Core<A> {
         event: SetupEvent,
         out: &mut Vec<Directive>,
     ) {
-        if let SetupEvent::Surveyed {
-            root,
-            installed,
-            node,
-            npm,
-            platform,
-        } = event
-        {
-            if self.setup.survey != Some(ticket) {
-                return report(
-                    out,
-                    Level::Debug,
-                    "ignored a survey CAF no longer waits for".to_owned(),
-                );
-            }
-            let machine = Machine {
-                root,
-                installed: installed.into_iter().collect(),
-                node,
-                npm,
-                platform,
-            };
-            return self.surveyed(machine, out);
+        if self.setup.survey == Some(ticket) || matches!(event, SetupEvent::Surveyed { .. }) {
+            return self.survey_said(ticket, event, out);
         }
         let Some(job) = self.setup.jobs.get(&ticket) else {
             return report(
@@ -280,62 +290,60 @@ impl<A: AppItem> Core<A> {
         let agent = job.agent.clone();
         let stopped = job.stopped;
         match (job.work.clone(), event) {
-            (Work::Install { .. }, SetupEvent::Progress { done }) if !stopped => {
+            (Work::Install { folder }, SetupEvent::Progress { done }) if !stopped => {
                 let done = done.min(super::updates::MOST_EXACT);
-                if let Some(InstallState::Installing { size, .. }) = self.install_state(&agent) {
-                    self.set_install(&agent, InstallState::Installing { done, size });
+                for each in self.sharing(&folder) {
+                    if let Some(InstallState::Installing { size, .. }) = self.install_state(&each) {
+                        self.set_install(&each, InstallState::Installing { done, size });
+                    }
                 }
             }
             (Work::Install { folder }, SetupEvent::Installed) => {
                 // Even one stopped too late: the folder is there.
                 self.setup.jobs.remove(&ticket);
-                self.installed(&agent, folder, out);
+                self.installed(&folder, out);
             }
-            (Work::Install { .. }, SetupEvent::InstallFailed(why)) => {
+            (Work::Install { folder }, SetupEvent::InstallFailed(why)) => {
                 self.setup.jobs.remove(&ticket);
                 if !stopped {
-                    self.install_failed(now, &agent, why, out);
+                    self.install_failed(now, &folder, why, out);
                 }
             }
-            (Work::Install { .. }, SetupEvent::Failed(why)) => {
+            (Work::Install { folder }, SetupEvent::Failed(why)) => {
                 self.setup.jobs.remove(&ticket);
                 if !stopped {
                     let why = InstallFailure::Other(agent_text(&why, MOST_REASON));
-                    self.install_failed(now, &agent, why, out);
+                    self.install_failed(now, &folder, why, out);
                 }
             }
             (Work::Remove { folder }, SetupEvent::Removed { removed }) => {
                 self.setup.jobs.remove(&ticket);
                 if removed && let Some(machine) = self.setup.machine.as_mut() {
                     machine.installed.remove(&folder);
+                    machine.used.remove(&folder);
                 }
                 let what = if removed {
                     "removed"
                 } else {
                     "kept, as it's in use,"
                 };
-                report(
-                    out,
-                    Level::Info,
-                    format!("{what} an old install of {}", agent.0),
-                );
+                report(out, Level::Info, format!("{what} an old install, {folder}"));
             }
             (Work::SignIn { .. }, SetupEvent::Link(url)) if !stopped => {
                 self.link(ticket, &agent, &url, out);
             }
             (Work::SignIn { .. }, SetupEvent::Code(code)) if !stopped => {
-                let code = agent_text(&code, MOST_CODE);
-                if let Some(standing) = self.setup.agents.get_mut(&agent)
-                    && let SignInState::SigningIn(link) = &mut standing.sign_in
-                    && !code.trim().is_empty()
-                {
-                    link.code = Some(code.trim().to_owned());
-                }
+                self.code(&agent, &code, out);
             }
             (Work::SignIn { before }, SetupEvent::Ended { ok }) => {
                 self.setup.jobs.remove(&ticket);
                 if !stopped && ok {
                     self.signed_in(now, &agent, out);
+                } else if ok {
+                    // Stopped as it finished: whether it's signed in now
+                    // is the status command's to say.
+                    self.forget_status(&agent);
+                    self.check_status(&agent, out);
                 } else if !stopped {
                     report(
                         out,
@@ -345,20 +353,23 @@ impl<A: AppItem> Core<A> {
                     self.set_sign_in(&agent, before);
                 }
             }
-            (Work::SignIn { before }, SetupEvent::Failed(why)) => {
+            (Work::SignIn { before }, SetupEvent::Failed(_)) => {
                 self.setup.jobs.remove(&ticket);
                 if !stopped {
-                    let why = agent_text(&why, MOST_REASON);
+                    // Never why: it may be what the command printed.
                     report(
                         out,
                         Level::Warn,
-                        format!("couldn't sign in to {}: {why}", agent.0),
+                        format!("{}'s sign-in command couldn't run", agent.0),
                     );
                     self.set_sign_in(&agent, before);
                 }
             }
             (Work::SignOut, SetupEvent::Ended { ok }) => {
                 self.setup.jobs.remove(&ticket);
+                // What a status command already running reads may be from
+                // before.
+                self.forget_status(&agent);
                 if ok {
                     self.set_sign_in(&agent, SignInState::SignedOut);
                 } else {
@@ -369,19 +380,25 @@ impl<A: AppItem> Core<A> {
                     );
                 }
             }
+            (Work::Status, SetupEvent::Status(_)) if stopped => {
+                self.setup.jobs.remove(&ticket);
+            }
             (Work::Status, SetupEvent::Status(how)) => {
                 self.setup.jobs.remove(&ticket);
                 let state = how.map_or(SignInState::SignedOut, SignInState::SignedIn);
                 self.set_sign_in(&agent, state);
             }
-            (Work::Remove { .. } | Work::SignOut | Work::Status, SetupEvent::Failed(why)) => {
+            (
+                work @ (Work::Remove { .. } | Work::SignOut | Work::Status),
+                SetupEvent::Failed(_),
+            ) => {
                 self.setup.jobs.remove(&ticket);
-                let why = agent_text(&why, MOST_REASON);
-                report(
-                    out,
-                    Level::Warn,
-                    format!("a command for {} failed: {why}", agent.0),
-                );
+                let what = match work {
+                    Work::Remove { .. } => "removing an old install of",
+                    Work::SignOut => "the sign-out command of",
+                    _ => "the status command of",
+                };
+                report(out, Level::Warn, format!("{what} {} couldn't run", agent.0));
             }
             (Work::Status, SetupEvent::Ended { .. }) => {
                 self.setup.jobs.remove(&ticket);
@@ -399,6 +416,53 @@ impl<A: AppItem> Core<A> {
                     ticket.0,
                     setup_event_kind(&event)
                 ),
+            ),
+        }
+    }
+
+    /// A survey's report: what it found, if it's the one waited for, or
+    /// that it couldn't look.
+    fn survey_said(&mut self, ticket: Ticket, event: SetupEvent, out: &mut Vec<Directive>) {
+        if self.setup.survey != Some(ticket) {
+            return report(
+                out,
+                Level::Debug,
+                "ignored a survey CAF no longer waits for".to_owned(),
+            );
+        }
+        match event {
+            SetupEvent::Surveyed {
+                root,
+                installed,
+                node,
+                npm,
+                platform,
+                used,
+            } => {
+                let machine = Machine {
+                    root,
+                    installed: installed.into_iter().collect(),
+                    node,
+                    npm,
+                    platform,
+                    used: used.into_iter().collect(),
+                };
+                self.surveyed(machine, out);
+            }
+            SetupEvent::Failed(why) => {
+                // Asked again, it may answer.
+                self.setup.survey = None;
+                let why = agent_text(&why, MOST_REASON);
+                report(
+                    out,
+                    Level::Warn,
+                    format!("couldn't look at what's installed: {why}"),
+                );
+            }
+            event => report(
+                out,
+                Level::Debug,
+                format!("ignored a survey's {}", setup_event_kind(&event)),
             ),
         }
     }
@@ -435,10 +499,8 @@ impl<A: AppItem> Core<A> {
         let Some(machine) = &self.setup.machine else {
             return InstallState::Unknown;
         };
-        let Some((recipe, folder)) =
-            (self.recipes.get(agent)).and_then(|recipe| Some((recipe, folder(agent, recipe)?)))
-        else {
-            return InstallState::Cannot(CannotInstall::Platform);
+        let Some((recipe, folder)) = (self.recipes.get(agent)).zip(self.folder_of(agent)) else {
+            return InstallState::Cannot(CannotInstall::NoRecipe);
         };
         if machine.installed.contains(&folder) {
             return InstallState::Installed {
@@ -470,27 +532,38 @@ impl<A: AppItem> Core<A> {
         }
     }
 
-    /// `agent` is installed, in `folder`: chats waiting for it start, and
-    /// its status command, if it has one, can run.
-    fn installed(&mut self, agent: &AgentName, folder: String, out: &mut Vec<Directive>) {
+    /// `folder` is installed: every agent of its profile is, any other
+    /// install of it under way is stopped, chats waiting start, and status
+    /// commands can run.
+    fn installed(&mut self, folder: &str, out: &mut Vec<Directive>) {
         if self.setup.survey.is_some() {
-            self.setup.fresh.insert(folder.clone());
+            self.setup.fresh.insert(folder.to_owned());
         }
         if let Some(machine) = self.setup.machine.as_mut() {
-            machine.installed.insert(folder);
+            machine.installed.insert(folder.to_owned());
         }
-        let Some(version) = self.recipes.get(agent).map(|recipe| recipe.version.clone()) else {
-            return;
-        };
-        self.set_install(agent, InstallState::Installed { version });
-        self.check_status(agent, out);
+        while let Some(ticket) = self.install_job(folder) {
+            self.stop_job(ticket, out);
+        }
+        for agent in self.sharing(folder) {
+            let Some(version) = self
+                .recipes
+                .get(&agent)
+                .map(|recipe| recipe.version.clone())
+            else {
+                continue;
+            };
+            self.set_install(&agent, InstallState::Installed { version });
+            self.check_status(&agent, out);
+        }
     }
 
-    /// Installing `agent` failed: messages waiting for it are stopped.
+    /// Installing `folder` failed: messages waiting for any agent of its
+    /// profile are stopped.
     fn install_failed(
         &mut self,
         now: Now,
-        agent: &AgentName,
+        folder: &str,
         why: InstallFailure,
         out: &mut Vec<Directive>,
     ) {
@@ -501,10 +574,15 @@ impl<A: AppItem> Core<A> {
         report(
             out,
             Level::Warn,
-            format!("installing {} failed: {why:?}", agent.0),
+            format!("installing {folder} failed: {why:?}"),
         );
-        self.set_install(agent, InstallState::Cannot(CannotInstall::Failed(why)));
-        self.stop_waiting_messages(now, agent, Note::InstallFailed);
+        for agent in self.sharing(folder) {
+            self.set_install(
+                &agent,
+                InstallState::Cannot(CannotInstall::Failed(why.clone())),
+            );
+            self.stop_waiting_messages(now, &agent, Note::InstallFailed);
+        }
     }
 
     /// The sign-in command gave its link: kept if it's to one of the
@@ -536,10 +614,38 @@ impl<A: AppItem> Core<A> {
             );
             return self.stop_job(ticket, out);
         }
-        if let Some(standing) = self.setup.agents.get_mut(agent)
-            && let SignInState::SigningIn(link) = &mut standing.sign_in
-        {
-            link.url = Some(url.to_owned());
+        self.edit_link(agent, |link| link.url = Some(url.to_owned()));
+    }
+
+    /// The sign-in command gave a code to type on the site: kept only as
+    /// it came, as one changed would be the wrong code.
+    fn code(&mut self, agent: &AgentName, code: &str, out: &mut Vec<Directive>) {
+        let code = code.trim();
+        if code.is_empty() {
+            return;
+        }
+        if code.len() > MOST_CODE || code.chars().any(char::is_control) {
+            return report(
+                out,
+                Level::Warn,
+                format!(
+                    "{}'s sign-in gave a code CAF can't show as it is: dropped",
+                    agent.0
+                ),
+            );
+        }
+        self.edit_link(agent, |link| link.code = Some(code.to_owned()));
+    }
+
+    /// Changes what the sign-in to `agent`, and every agent sharing its
+    /// sign-in, shows.
+    fn edit_link(&mut self, agent: &AgentName, edit: impl Fn(&mut SignInLink)) {
+        for each in self.sign_in_group(agent) {
+            if let Some(standing) = self.setup.agents.get_mut(&each)
+                && let SignInState::SigningIn(link) = &mut standing.sign_in
+            {
+                edit(link);
+            }
         }
     }
 
@@ -547,8 +653,9 @@ impl<A: AppItem> Core<A> {
     /// want of it says so, and its status command, if any, says how.
     fn signed_in(&mut self, now: Now, agent: &AgentName, out: &mut Vec<Directive>) {
         self.set_sign_in(agent, SignInState::SignedIn(SignedInAs::Unknown));
+        let group = self.sign_in_group(agent);
         let chats: Vec<ChatId> = (self.chats.values())
-            .filter(|whole| &whole.agent == agent && whole.state != ChatState::Closed)
+            .filter(|whole| group.contains(&whole.agent) && whole.state != ChatState::Closed)
             .filter(|whole| {
                 let mut theirs = whole.turns.iter().rev().filter(|turn| {
                     // A note already said so.
@@ -566,16 +673,52 @@ impl<A: AppItem> Core<A> {
         for chat in chats {
             self.say(now, chat, Note::SignedIn);
         }
+        // One already running may have read it before the sign-in ended.
+        self.forget_status(agent);
         self.check_status(agent, out);
+    }
+
+    /// A sign-in nobody finished in time is stopped.
+    pub(super) fn sign_in_overdue(&mut self, ticket: Ticket, out: &mut Vec<Directive>) {
+        let Some(job) = self.setup.jobs.get_mut(&ticket) else {
+            return;
+        };
+        job.deadline = None;
+        if job.stopped {
+            return;
+        }
+        let agent = job.agent.clone();
+        report(
+            out,
+            Level::Warn,
+            format!(
+                "stopped signing in to {}: nobody finished it in time",
+                agent.0
+            ),
+        );
+        self.stop_job(ticket, out);
+    }
+
+    /// Lets status commands already running for `agent`'s sign-in go: what
+    /// they report is ignored, as it may be from before a sign-in or
+    /// sign-out that just ended, and a fresh one may run.
+    fn forget_status(&mut self, agent: &AgentName) {
+        let group = self.sign_in_group(agent);
+        for job in self.setup.jobs.values_mut() {
+            if matches!(job.work, Work::Status) && group.contains(&job.agent) {
+                job.stopped = true;
+            }
+        }
     }
 
     /// Runs `agent`'s status command, if it has one that can run now and
     /// isn't running already.
     fn check_status(&mut self, agent: &AgentName, out: &mut Vec<Directive>) {
-        if self
-            .job_for(agent, |work| matches!(work, Work::Status))
-            .is_some()
-        {
+        let group = self.sign_in_group(agent);
+        if (group.iter()).any(|each| {
+            self.job_for(each, |work| matches!(work, Work::Status))
+                .is_some()
+        }) {
             return;
         }
         let Some(status) =
@@ -627,29 +770,46 @@ impl<A: AppItem> Core<A> {
 
     /// A process of `agent`'s answered `initialize`. One of the host's own
     /// command that said it's its profile's adapter may run its recipe's
-    /// commands; one of CAF's install at the version its profile was
-    /// checked at lets every other version installed be removed.
+    /// commands. One of CAF's install at the version its profile was
+    /// checked at, that said it's that version, lets older versions that
+    /// nothing has used for a while be removed.
     pub(super) fn agent_answered(
         &mut self,
+        now: Now,
         proc: Ticket,
         agent: &AgentName,
-        checked: crate::profiles::Checked,
+        checked: Checked,
         out: &mut Vec<Directive>,
     ) {
-        use crate::profiles::Checked;
         if let Some(standing) = self.setup.agents.get_mut(agent) {
             standing.checked = matches!(checked, Checked::Yes | Checked::Newer);
         }
         let folder = self.procs.get(&proc).and_then(|each| each.folder.clone());
-        let pinned = (self.recipes.get(agent)).and_then(|recipe| self::folder(agent, recipe));
-        if folder.is_none() || folder != pinned {
+        let pinned = self.folder_of(agent);
+        if checked != Checked::Yes || folder.is_none() || folder != pinned {
             return;
         }
-        let Some(machine) = &self.setup.machine else {
+        let (Some(machine), Some(pinned), Some(slug), Some(recipe)) = (
+            &self.setup.machine,
+            &pinned,
+            self.slugs.get(agent),
+            self.recipes.get(agent),
+        ) else {
             return;
         };
+        let Some(version) = crate::profiles::version(&recipe.version) else {
+            return;
+        };
+        let unused_since = now.wall.0 - i64::try_from(KEEP_UNUSED.as_millis()).unwrap_or(i64::MAX);
         let old: Vec<String> = (machine.installed.iter())
-            .filter(|each| Some(*each) != pinned.as_ref() && is_version_of(agent, each))
+            .filter(|each| *each != pinned && is_folder_name(each))
+            .filter(|each| older(slug, each, version))
+            .filter(|each| {
+                machine
+                    .used
+                    .get(*each)
+                    .is_some_and(|used| used.0 <= unused_since)
+            })
             .filter(|each| {
                 !(self.setup.jobs.values())
                     .any(|job| matches!(&job.work, Work::Remove { folder } if folder == *each))
@@ -663,7 +823,11 @@ impl<A: AppItem> Core<A> {
                     folder: folder.clone(),
                 },
             );
-            out.push(Directive::Setup(SetupDirective::Remove { ticket, folder }));
+            out.push(Directive::Setup(SetupDirective::Remove {
+                ticket,
+                folder,
+                unused_since: Wall(unused_since),
+            }));
         }
     }
 
@@ -691,8 +855,8 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Whether a process may be started for `agent`: it's the host's own
-    /// command, or CAF's install of it is there, and no sign-in to it is
-    /// under way.
+    /// command, or CAF's install of it is there, and no sign-in to it,
+    /// started while it was signed out, is under way.
     pub(super) fn agent_ready(&self, agent: &AgentName) -> bool {
         let Some(spec) = self.agents.get(agent) else {
             return false;
@@ -701,7 +865,17 @@ impl<A: AppItem> Core<A> {
             Launch::Command(_) => true,
             Launch::Installed => self.installed_launch(agent).is_some(),
         };
-        started && self.signing_in(agent).is_none()
+        let signing_in = (self.signing_in(agent))
+            .and_then(|ticket| self.setup.jobs.get(&ticket))
+            .is_some_and(|job| {
+                matches!(
+                    job.work,
+                    Work::SignIn {
+                        before: SignInState::SignedOut
+                    }
+                )
+            });
+        started && !signing_in
     }
 
     /// How to start `agent` from CAF's install of it, and the install's
@@ -718,7 +892,7 @@ impl<A: AppItem> Core<A> {
             return None;
         };
         let root = &self.setup.machine.as_ref()?.root;
-        let folder = root.join(folder(agent, recipe)?);
+        let folder = root.join(self.folder_of(agent)?);
         let mut command = SpawnCommand::new(folder.join(inside(path)?));
         command.args = recipe.adapter.args.iter().map(Into::into).collect();
         command.env = self.env(agent, &recipe.adapter.env)?;
@@ -729,9 +903,10 @@ impl<A: AppItem> Core<A> {
     /// can't run now.
     ///
     /// The adapter is run as the agent is started: from CAF's install, or
-    /// as the host's own command (with its variables), once a process of
-    /// that command has said it's the adapter the profile is for. A file
-    /// of the install needs it installed.
+    /// as the host's own command, with its arguments and variables and the
+    /// recipe's after them, once a process of that command has said it's
+    /// the adapter the profile is for. A command such as `npx -y <adapter>`
+    /// so stays itself. A file of the install needs it installed.
     fn resolve(&self, agent: &AgentName, bundled: &Bundled) -> Option<SpawnCommand> {
         let spec = self.agents.get(agent)?;
         let mut command = match (&bundled.program, &spec.launch) {
@@ -748,7 +923,20 @@ impl<A: AppItem> Core<A> {
             }
             (Program::InInstall(_), Launch::Command(_)) => return None,
         };
-        command.args = bundled.args.iter().map(Into::into).collect();
+        // The host's own adapter never reads a private folder: nothing
+        // gives it one, or makes it.
+        if matches!(spec.launch, Launch::Command(_))
+            && (bundled.env.iter()).any(|(_, value)| *value == EnvValue::PrivateFolder)
+        {
+            return None;
+        }
+        // CAF's install is started with the recipe's own arguments for the
+        // adapter, which a command of the recipe replaces; the host's are
+        // the host's, and are kept.
+        if spec.launch == Launch::Installed {
+            command.args.clear();
+        }
+        command.args.extend(bundled.args.iter().map(Into::into));
         command.env.extend(self.env(agent, &bundled.env)?);
         Some(command)
     }
@@ -762,7 +950,7 @@ impl<A: AppItem> Core<A> {
                     EnvValue::Text(text) => text.into(),
                     EnvValue::PrivateFolder => {
                         let root = &self.setup.machine.as_ref()?.root;
-                        let private = format!("{}-private", agent.0);
+                        let private = format!("{}-private", self.slugs.get(agent)?);
                         is_folder_name(&private).then(|| root.join(private).into_os_string())?
                     }
                 };
@@ -778,11 +966,16 @@ impl<A: AppItem> Core<A> {
         let Some(agent) = self.chats.get(&chat).map(|whole| whole.agent.clone()) else {
             return;
         };
-        let installed = matches!(
+        // Not while CAF doesn't know yet.
+        let missing = matches!(
             self.install_state(&agent),
-            None | Some(InstallState::Host | InstallState::Installed { .. })
+            Some(
+                InstallState::Missing { .. }
+                    | InstallState::Installing { .. }
+                    | InstallState::Cannot(_)
+            )
         );
-        if stopped && !installed {
+        if stopped && missing {
             self.say(now, chat, Note::NotInstalled);
         }
     }
@@ -823,21 +1016,74 @@ impl<A: AppItem> Core<A> {
 
     /// Stops every install and sign-in under way, as CAF shuts down.
     pub(super) fn stop_setup(&mut self, out: &mut Vec<Directive>) {
-        let running: Vec<(Ticket, AgentName, bool)> = (self.setup.jobs.iter())
+        let running: Vec<(Ticket, AgentName, Option<String>)> = (self.setup.jobs.iter())
             .filter(|(_, job)| !job.stopped)
-            .filter_map(|(&ticket, job)| match job.work {
-                Work::Install { .. } => Some((ticket, job.agent.clone(), true)),
-                Work::SignIn { .. } => Some((ticket, job.agent.clone(), false)),
+            .filter_map(|(&ticket, job)| match &job.work {
+                Work::Install { folder } => Some((ticket, job.agent.clone(), Some(folder.clone()))),
+                Work::SignIn { .. } => Some((ticket, job.agent.clone(), None)),
                 _ => None,
             })
             .collect();
-        for (ticket, agent, install) in running {
+        for (ticket, agent, folder) in running {
             self.stop_job(ticket, out);
-            if install {
+            if let Some(folder) = folder {
                 let size = self.recipes.get(&agent).map_or(0, |recipe| recipe.size);
-                self.set_install(&agent, InstallState::Missing { size });
+                for each in self.sharing(&folder) {
+                    self.set_install(&each, InstallState::Missing { size });
+                }
             }
         }
+    }
+
+    /// The folder `agent` is installed in: its profile's name and its
+    /// recipe's version, such as `claude-agent-acp-0.98.0`. `None` if CAF
+    /// doesn't install it.
+    fn folder_of(&self, agent: &AgentName) -> Option<String> {
+        let slug = self.slugs.get(agent)?;
+        let recipe = self.recipes.get(agent)?;
+        let folder = format!("{slug}-{}", recipe.version);
+        is_folder_name(&folder).then_some(folder)
+    }
+
+    /// `agent`'s private folder, `<profile>-private`, if its recipe gives
+    /// it one: any of its commands is given it.
+    fn private_folder(&self, agent: &AgentName) -> Option<String> {
+        let recipe = self.recipes.get(agent)?;
+        let commands = [
+            Some(&recipe.adapter),
+            recipe.sign_in.as_ref().map(|sign_in| &sign_in.command),
+            recipe.sign_out.as_ref(),
+            recipe.status.command.as_ref().map(|status| &status.command),
+        ];
+        let uses = (commands.into_iter().flatten()).any(|bundled| {
+            (bundled.env.iter()).any(|(_, value)| *value == EnvValue::PrivateFolder)
+        });
+        let private = format!("{}-private", self.slugs.get(agent)?);
+        (uses && is_folder_name(&private)).then_some(private)
+    }
+
+    /// The agents CAF installs into `folder`: every one offered with the
+    /// same profile.
+    fn sharing(&self, folder: &str) -> Vec<AgentName> {
+        (self.setup.order.iter())
+            .filter(|agent| {
+                self.agents
+                    .get(*agent)
+                    .is_some_and(|spec| spec.launch == Launch::Installed)
+                    && self.folder_of(agent).as_deref() == Some(folder)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// The ticket of the install of `folder` under way and not stopped.
+    fn install_job(&self, folder: &str) -> Option<Ticket> {
+        (self.setup.jobs.iter())
+            .find(|(_, job)| {
+                !job.stopped
+                    && matches!(&job.work, Work::Install { folder: each } if each == folder)
+            })
+            .map(|(&ticket, _)| ticket)
     }
 
     /// Starts tracking work for `agent`, and returns its ticket.
@@ -849,6 +1095,7 @@ impl<A: AppItem> Core<A> {
                 agent: agent.clone(),
                 work,
                 stopped: false,
+                deadline: None,
             },
         );
         ticket
@@ -862,9 +1109,24 @@ impl<A: AppItem> Core<A> {
             .map(|(&ticket, _)| ticket)
     }
 
-    /// The ticket of `agent`'s sign-in under way.
+    /// The ticket of the sign-in under way that's `agent`'s: its own, or
+    /// one of an agent sharing its sign-in.
     fn signing_in(&self, agent: &AgentName) -> Option<Ticket> {
-        self.job_for(agent, |work| matches!(work, Work::SignIn { .. }))
+        (self.sign_in_group(agent).iter())
+            .find_map(|each| self.job_for(each, |work| matches!(work, Work::SignIn { .. })))
+    }
+
+    /// The agents whose sign-in is `agent`'s. For one CAF installs, every
+    /// agent of its profile: they run the same commands, with the same
+    /// variables, so they keep their sign-in in the same place. One the
+    /// host starts has its own, as its command may set its own place.
+    fn sign_in_group(&self, agent: &AgentName) -> Vec<AgentName> {
+        let installed =
+            (self.agents.get(agent)).is_some_and(|spec| spec.launch == Launch::Installed);
+        match self.folder_of(agent).filter(|_| installed) {
+            Some(folder) => self.sharing(&folder),
+            None => vec![agent.clone()],
+        }
     }
 
     /// Stops work under way. A sign-in's state goes back to what it was.
@@ -873,6 +1135,7 @@ impl<A: AppItem> Core<A> {
             return;
         };
         job.stopped = true;
+        job.deadline = None;
         out.push(Directive::Setup(SetupDirective::Stop { ticket }));
         if let Work::SignIn { before } = job.work.clone() {
             let agent = job.agent.clone();
@@ -882,10 +1145,7 @@ impl<A: AppItem> Core<A> {
 
     /// `agent`'s install state.
     fn install_state(&self, agent: &AgentName) -> Option<InstallState> {
-        self.setup
-            .agents
-            .get(agent)
-            .map(|standing| standing.install.clone())
+        (self.setup.agents.get(agent)).map(|standing| standing.install.clone())
     }
 
     /// Sets `agent`'s install state.
@@ -914,8 +1174,10 @@ impl<A: AppItem> Core<A> {
             *before = state;
             return;
         }
-        if let Some(standing) = self.setup.agents.get_mut(agent) {
-            standing.sign_in = state;
+        for each in self.sign_in_group(agent) {
+            if let Some(standing) = self.setup.agents.get_mut(&each) {
+                standing.sign_in = state.clone();
+            }
         }
     }
 }
@@ -932,35 +1194,6 @@ pub(super) fn standing(launch: &Launch) -> Standing {
     }
 }
 
-/// The folder `agent` is installed in, as `recipe` says: `<agent>-<version>`.
-/// `None` if that can't name a folder.
-/// `agent`'s private folder, `<agent>-private`, if its recipe gives it
-/// one: any of its commands is given it.
-fn private_folder(agent: &AgentName, recipe: &Recipe) -> Option<String> {
-    let commands = [
-        Some(&recipe.adapter),
-        recipe.sign_in.as_ref().map(|sign_in| &sign_in.command),
-    ]
-    .into_iter()
-    .chain([
-        recipe.sign_out.as_ref(),
-        recipe.status.command.as_ref().map(|status| &status.command),
-    ]);
-    let uses = (commands.flatten()).any(|bundled| {
-        bundled
-            .env
-            .iter()
-            .any(|(_, value)| *value == EnvValue::PrivateFolder)
-    });
-    let private = format!("{}-private", agent.0);
-    (uses && is_folder_name(&private)).then_some(private)
-}
-
-fn folder(agent: &AgentName, recipe: &Recipe) -> Option<String> {
-    let folder = format!("{}-{}", agent.0, recipe.version);
-    is_folder_name(&folder).then_some(folder)
-}
-
 /// Whether `name` names a folder directly under the installs' folder: not
 /// hidden (half-built installs are), and with no separator.
 fn is_folder_name(name: &str) -> bool {
@@ -971,14 +1204,17 @@ fn is_folder_name(name: &str) -> bool {
             .any(|c| c == '/' || c == '\\' || c.is_control())
 }
 
-/// Whether `folder` is an install of `agent` at some version: its name and
-/// a version of three numbers, so that `claude-2-1.0.0` is no install of
-/// `claude`.
-fn is_version_of(agent: &AgentName, folder: &str) -> bool {
+/// Whether `folder` is an install of the profile `slug` at a version older
+/// than `pinned`: the slug and a version of three numbers, so that
+/// `claude-agent-acp-2-1.0.0` is no install of `claude-agent-acp`. A
+/// prerelease comes before its release.
+fn older(slug: &str, folder: &str, pinned: ([u64; 3], bool)) -> bool {
+    let rank = |(numbers, pre): ([u64; 3], bool)| (numbers, !pre);
     folder
-        .strip_prefix(&agent.0)
+        .strip_prefix(slug)
         .and_then(|rest| rest.strip_prefix('-'))
-        .is_some_and(|version| crate::profiles::version(version).is_some())
+        .and_then(crate::profiles::version)
+        .is_some_and(|version| rank(version) < rank(pinned))
 }
 
 /// `path` as a path inside an install: `None` if it would leave it.
@@ -1067,14 +1303,18 @@ mod tests {
     }
 
     #[test]
-    fn an_install_of_an_agent_is_its_name_and_a_version() {
-        let claude = AgentName("claude".into());
-        assert!(is_version_of(&claude, "claude-0.97.0"));
-        assert!(is_version_of(&claude, "claude-1.0.0-rc.1"));
-        assert!(!is_version_of(&claude, "claude-2-1.0.0"));
-        assert!(!is_version_of(&claude, "claude-private"));
-        assert!(!is_version_of(&claude, "claudette-1.0.0"));
-        assert!(!is_version_of(&claude, "claude"));
+    fn an_older_install_is_its_profiles_name_and_an_older_version() {
+        let pinned = crate::profiles::version("0.98.0").expect("a version");
+        let older = |folder: &str| older("claude-agent-acp", folder, pinned);
+        assert!(older("claude-agent-acp-0.97.0"));
+        assert!(older("claude-agent-acp-0.98.0-rc.1"));
+        assert!(!older("claude-agent-acp-0.98.0"));
+        assert!(!older("claude-agent-acp-0.99.0"));
+        assert!(!older("claude-agent-acp-1.0.0-rc.1"));
+        assert!(!older("claude-agent-acp-2-0.1.0"));
+        assert!(!older("claude-agent-acp-private"));
+        assert!(!older("claude-agent-acpx-0.1.0"));
+        assert!(!older("claude-agent-acp"));
     }
 
     #[test]
@@ -1087,8 +1327,8 @@ mod tests {
 
     #[test]
     fn only_a_plain_name_names_an_install_folder() {
-        assert!(is_folder_name("claude-0.98.0"));
-        assert!(!is_folder_name(".claude-0.98.0"));
+        assert!(is_folder_name("claude-agent-acp-0.98.0"));
+        assert!(!is_folder_name(".claude-agent-acp-0.98.0"));
         assert!(!is_folder_name("../x-1.0.0"));
         assert!(!is_folder_name("a/b-1.0.0"));
         assert!(!is_folder_name(""));

@@ -12,4 +12,4 @@ needs: number,
 /**
  * The one it has, if any.
  */
-has: number | null, } } | { "type": "Npm" } | { "type": "Platform" } | { "type": "Failed", "value": InstallFailure };
+has: number | null, } } | { "type": "Npm" } | { "type": "Platform" } | { "type": "NoRecipe" } | { "type": "Failed", "value": InstallFailure };

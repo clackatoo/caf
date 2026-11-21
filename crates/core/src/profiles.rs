@@ -115,6 +115,18 @@ pub enum Builtin {
 }
 
 impl Builtin {
+    /// A name for it that never changes, whatever a host calls the agent:
+    /// what its install folders are named after.
+    pub(crate) fn slug(self) -> &'static str {
+        match self {
+            Self::ClaudeAgentAcp => "claude-agent-acp",
+            #[cfg(test)]
+            Self::TestNpm => "test-npm",
+            #[cfg(test)]
+            Self::TestDownload => "test-download",
+        }
+    }
+
     /// The name its adapter gives in `initialize`.
     fn adapter_name(self) -> &'static str {
         match self {
@@ -595,7 +607,12 @@ pub(crate) mod tests {
                 paste: false,
                 sites: vec!["login.npm.example".to_owned()],
             }),
-            sign_out: Some(bundled(Program::Adapter, &["logout"])),
+            // Signing out clears the private folder it's given.
+            sign_out: Some(Bundled {
+                program: Program::Adapter,
+                args: vec!["logout".to_owned()],
+                env: vec![("TEST_NPM_HOME".to_owned(), EnvValue::PrivateFolder)],
+            }),
             status: Status {
                 pushed: true,
                 command: None,

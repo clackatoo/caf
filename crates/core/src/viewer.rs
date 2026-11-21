@@ -239,6 +239,14 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
     /// Where every agent stands, installed or not and signed in or not:
     /// right after `Welcome`, before any other message, and again
     /// whenever any of it changes. The whole list, each time.
+    ///
+    /// It goes to every viewer, but a sign-in's link and code only to
+    /// viewers the host lets act on agents (in `caf-driver-tokio`,
+    /// `ViewerRules::agents`); the rest get them as `null`. Whoever opens the link and approves it, or types
+    /// the code on the provider's site, chooses whose account the agent
+    /// signs in to: with a device-code sign-in, a viewer that may only
+    /// watch could sign CAF's agent in to its own account, and see the
+    /// user's prompts go there.
     Agents(Vec<AgentStatus>),
     /// How a request went.
     Done {

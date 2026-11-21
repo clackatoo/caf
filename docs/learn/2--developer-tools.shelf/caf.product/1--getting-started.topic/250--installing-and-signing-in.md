@@ -21,8 +21,9 @@ let (caf, running) = Caf::<NoAppItems>::start(Config::new(Host::new("eyespy", "0
 ```
 
 CAF installs the adapter at exactly the version its profile was checked at,
-in a folder of its own, `claude-0.98.0`. Every CAF program on the machine
-shares the folder these live in: by default `~/.local/share/caf/agents`
+in a folder of its own, named after its profile whatever you call the
+agent: `claude-agent-acp-0.98.0`. Every CAF program on the machine shares
+the folder these live in, and so one install of each agent: by default `~/.local/share/caf/agents`
 (`$XDG_DATA_HOME/caf/agents` if that's set). `Config::installs` names
 another.
 
@@ -98,7 +99,8 @@ What CAF does to install it:
   use: `HTTPS_PROXY` (or `HTTP_PROXY`), unless `NO_PROXY` names the host
   or a domain it's in.
 - **An agent that keeps its sign-in in a folder CAF gives it** gets one,
-  `<agent>-private`, beside its installs, readable only by the user. It
+  named after its profile like its installs, such as
+  `claude-agent-acp-private`, beside them, readable only by the user. It
   outlives every version, and CAF never removes it.
 - **Each install** is built in a hidden folder and renamed into place whole,
   so one cut off partway leaves nothing that looks installed. Two programs
@@ -152,7 +154,10 @@ rules.agents = true;
 ```
 
 With it off, a viewer's `FromViewer::Agent` request is answered
-`NotAllowed`.
+`NotAllowed`, and it sees a sign-in under way without its link or code.
+Whoever opens the link and approves it, or types the code on the
+provider's site, chooses whose account the agent signs in to: a viewer
+that may only watch mustn't be able to sign your agent in to its own.
 
 ## Recordings
 

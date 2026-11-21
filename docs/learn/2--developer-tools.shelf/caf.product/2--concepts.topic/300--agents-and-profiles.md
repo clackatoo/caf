@@ -81,7 +81,10 @@ downloaded instead is checked against its SHA-256 before it's unpacked.
 
 Installs live in one folder that every CAF program on the machine shares:
 `$XDG_DATA_HOME/caf/agents/`, by default `~/.local/share/caf/agents/`.
-Each version has its own folder there, such as `claude-0.98.0`. An install
+Each version has its own folder there, named after the agent's profile,
+never after what a program calls the agent, such as
+`claude-agent-acp-0.98.0`. So every program that offers Claude shares one
+install of it, whatever it calls it. An install
 is built in a hidden folder and renamed into place whole, so one cut off
 halfway leaves nothing that looks installed, and two programs installing at
 once can't collide.
@@ -104,9 +107,11 @@ be installed, and how big it is. Then:
   Installing again tries again.
 
 A CAF release that moves to a newer version installs it on next use,
-asking again. A version is never removed while any program runs from it.
-The one before is kept until the new one has started once, and then
-removed.
+asking again. Older versions are removed once the new one has started,
+but only those no program has started an agent from for 14 days: another
+program on the machine may pin an older version, and still use it. A
+version is never removed while any program runs from it, and a program
+never removes a version newer than its own.
 
 ## Signing in
 
@@ -120,8 +125,8 @@ no terminal:
 2. CAF runs the sign-in command and catches the link it would open in a
    browser. The agent's status shows it, for the user to open.
 3. CAF checks the link goes to one of the sites the recipe names, such as
-   `claude.com`. A link anywhere else stops the sign-in, so a tampered
-   package can't send the user to a fake sign-in page.
+   `claude.com`. A link anywhere else stops the sign-in, so CAF never
+   shows the user a link to a site the agent's profile doesn't name.
 4. The user approves the sign-in in their browser, and it finishes by
    itself. If their browser is on another machine, the page gives them a
    code to paste back, and the program passes it on (`Core::paste`).
@@ -129,6 +134,15 @@ no terminal:
 Once it's done, each chat whose last turn failed for want of signing in
 says so, and its message can be sent again. CAF never sends it again by
 itself.
+
+While a sign-in to an agent that was signed out is under way, new chats
+with it **wait for their agent**, as they do for an install, since
+starting it would only fail: its status shows the sign-in, with its link.
+A sign-in nobody finishes is stopped after a while (10 minutes, unless the
+program sets otherwise), and the chats waiting on it go ahead.
+
+Agents CAF installs from one profile share one sign-in too, whatever
+the program calls them: signing in to one signs in to all of them.
 
 CAF learns whether an agent is signed in from what the agent says when it
 starts and as it works, from a status command where the recipe has one,
@@ -143,7 +157,9 @@ command too.
 
 An agent started by the program's own command can be signed in to the same
 way, if its profile says how, once it has started and said it's the adapter
-that profile is for.
+that profile is for. The exception is an agent that keeps its sign-in in a
+private folder CAF gives it: only CAF's own install of it is given one, so
+CAF doesn't run commands that need it for the program's own.
 
 ## Sharing an adapter
 

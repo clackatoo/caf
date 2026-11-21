@@ -13,6 +13,7 @@ use std::time::Duration;
 use caf_core::agent::InstallFailure;
 use caf_core::event::SetupEvent;
 use caf_core::install::{Artifact, Install, NpmPackage, Platform, Unpack};
+use caf_core::time::Wall;
 use rustix::fs::FlockOperation;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
@@ -70,6 +71,9 @@ pub(super) async fn survey(root: PathBuf, reporter: Reporter) {
             Vec::new()
         }
     };
+    let used = (installed.iter())
+        .filter_map(|name| Some((name.clone(), last_used(&root.join(name))?)))
+        .collect();
     let (node, npm) = tokio::join!(node_version(), has_npm());
     reporter.last(SetupEvent::Surveyed {
         root,
@@ -77,6 +81,7 @@ pub(super) async fn survey(root: PathBuf, reporter: Reporter) {
         node,
         npm,
         platform: Platform::current(),
+        used,
     });
 }
 
@@ -178,8 +183,8 @@ async fn installing(
 }
 
 /// Removes `root/folder`, unless something runs from it.
-pub(super) async fn remove(root: PathBuf, folder: String, reporter: Reporter) {
-    let removed = removing(&root, &folder).await;
+pub(super) async fn remove(root: PathBuf, folder: String, unused_since: Wall, reporter: Reporter) {
+    let removed = removing(&root, &folder, unused_since).await;
     let removed = removed.unwrap_or_else(|error| {
         log::warn!(target: "caf", "can't remove {folder} from {}: {error}", root.display());
         false
@@ -187,7 +192,9 @@ pub(super) async fn remove(root: PathBuf, folder: String, reporter: Reporter) {
     reporter.last(SetupEvent::Removed { removed });
 }
 
-async fn removing(root: &Path, folder: &str) -> io::Result<bool> {
+/// Removes `root/folder`, unless it was used after `unused_since` or
+/// something runs from it. Says whether it's gone.
+async fn removing(root: &Path, folder: &str, unused_since: Wall) -> io::Result<bool> {
     if !is_install_name(folder) {
         return Err(io::Error::other(format!(
             "{folder:?} isn't an install's name"
@@ -206,6 +213,11 @@ async fn removing(root: &Path, folder: &str) -> io::Result<bool> {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
         };
+        // Used since the survey the core decided on: it stays. Read under
+        // the installs' lock, so nothing installs it again meanwhile.
+        if last_used(&place).is_none_or(|used| used > unused_since) {
+            return Ok(Some(None));
+        }
         // Something runs from it: it stays.
         let Some(held) = lock_file(held, Lock::ExclusiveNow)? else {
             return Ok(Some(None));
@@ -299,6 +311,19 @@ fn installed(root: &Path) -> io::Result<Vec<String>> {
     }
     installed.sort();
     Ok(installed)
+}
+
+/// When the install `folder` was last used: when its `.used` file was last
+/// touched, as a process started from it, or, if it has none, when the
+/// folder itself last changed, as it was installed. `None` if neither can
+/// be read, so the core never removes it.
+fn last_used(folder: &Path) -> Option<Wall> {
+    let modified = (fs::metadata(folder.join(".used")))
+        .or_else(|_| fs::metadata(folder))
+        .and_then(|metadata| metadata.modified())
+        .ok()?;
+    let since = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(Wall(i64::try_from(since.as_millis()).ok()?))
 }
 
 /// Removes hidden folders left by installs and removals that were cut

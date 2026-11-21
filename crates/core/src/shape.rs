@@ -599,7 +599,7 @@ pub(crate) fn every_type(s: &mut Samples) {
         &Directive::Agent(AgentDirective::Start {
             process: Ticket(3),
             command: command(),
-            hold: Some("/home/me/.local/share/caf/agents/claude-0.98.0".into()),
+            hold: Some("/home/me/.local/share/caf/agents/claude-agent-acp-0.98.0".into()),
         }),
         true,
     );
@@ -643,13 +643,14 @@ pub(crate) fn every_type(s: &mut Samples) {
         SetupDirective::Survey { ticket: Ticket(6) },
         SetupDirective::Install {
             ticket: Ticket(7),
-            folder: "claude-0.98.0".into(),
+            folder: "claude-agent-acp-0.98.0".into(),
             install: recipe().install,
-            private: Some("claude-private".into()),
+            private: Some("claude-agent-acp-private".into()),
         },
         SetupDirective::Remove {
             ticket: Ticket(8),
-            folder: "claude-0.97.0".into(),
+            folder: "claude-agent-acp-0.97.0".into(),
+            unused_since: Wall(1_800_000_000_000),
         },
         SetupDirective::SignIn {
             ticket: Ticket(9),
@@ -717,13 +718,14 @@ pub(crate) fn every_type(s: &mut Samples) {
     let reports = [
         SetupEvent::Surveyed {
             root: "/home/me/.local/share/caf/agents".into(),
-            installed: vec!["claude-0.98.0".into()],
+            installed: vec!["claude-agent-acp-0.98.0".into()],
             node: Some(22),
             npm: true,
             platform: Platform {
                 os: "linux".into(),
                 arch: "x86_64".into(),
             },
+            used: vec![("claude-agent-acp-0.98.0".into(), Wall(1_800_000_000_000))],
         },
         SetupEvent::Progress { done: 1000 },
         SetupEvent::Installed,

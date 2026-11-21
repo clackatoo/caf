@@ -347,7 +347,7 @@ impl<A: AppItem> Core<A> {
         );
         let (agent, how) = (each.agent.clone(), checked.checked);
         each.profile = Some(checked);
-        self.agent_answered(proc, &agent, how, out);
+        self.agent_answered(now, proc, &agent, how, out);
         if let Some(each) = self.procs.get_mut(&proc) {
             each.init = Init::Ready(caps(&result));
         }

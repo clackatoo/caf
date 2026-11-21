@@ -93,6 +93,7 @@ kinds!(CannotInstall {
     "Node" => CannotInstall::Node { .. },
     "Npm" => CannotInstall::Npm,
     "Platform" => CannotInstall::Platform,
+    "NoRecipe" => CannotInstall::NoRecipe,
     "Failed" => CannotInstall::Failed(_),
 });
 

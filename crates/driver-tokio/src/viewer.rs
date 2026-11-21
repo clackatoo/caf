@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use caf_core::OpenChat;
+use caf_core::agent::{AgentStatus, SignInState};
 use caf_core::chat::AppItem;
 use caf_core::ids::AgentName;
 use caf_core::ids::{ChangeNo, ChatId};
@@ -106,7 +107,9 @@ impl Default for ViewerRules {
 /// changes faster than the viewer reads. A request to install an agent,
 /// or sign in or out of one ([`FromViewer::Agent`]), is done only if
 /// [`ViewerRules::agents`] allows it, and otherwise answered
-/// [`Outcome::NotAllowed`].
+/// [`Outcome::NotAllowed`]. A viewer it doesn't allow sees a sign-in under
+/// way without its link or code: whoever opens the link, or types the
+/// code, chooses whose account the agent signs in to.
 ///
 /// Every request gets exactly one [`ToViewer::Done`], unless the link
 /// ends first: one made while CAF shuts down is answered
@@ -144,7 +147,8 @@ pub async fn serve<A: AppItem>(
         chats: open,
         run: caf.run().to_owned(),
     };
-    if to.send(welcome).await.is_err() || to.send(ToViewer::Agents(statuses)).await.is_err() {
+    let statuses = ToViewer::Agents(for_viewer(statuses, &rules));
+    if to.send(welcome).await.is_err() || to.send(statuses).await.is_err() {
         return;
     }
     let link = Link {
@@ -241,7 +245,7 @@ impl<A: AppItem> Link<A> {
                     None => self.gone = true,
                 },
                 statuses = self.agents.next(), if !self.gone => match statuses {
-                    Some(statuses) => room.send(ToViewer::Agents(statuses)),
+                    Some(statuses) => room.send(ToViewer::Agents(for_viewer(statuses, &self.rules))),
                     None => self.gone = true,
                 },
                 message = self.watches.next() => room.send(message),
@@ -506,4 +510,20 @@ impl<A: AppItem> Watches<A> {
         })
         .await
     }
+}
+
+/// Agents' statuses as a viewer sees them: a sign-in's link and code only
+/// if the viewer may act on agents. Whoever opens the link, or types the
+/// code on the provider's site, chooses whose account the agent signs in
+/// to.
+fn for_viewer(mut statuses: Vec<AgentStatus>, rules: &ViewerRules) -> Vec<AgentStatus> {
+    if !rules.agents {
+        for status in &mut statuses {
+            if let SignInState::SigningIn(link) = &mut status.sign_in {
+                link.url = None;
+                link.code = None;
+            }
+        }
+    }
+    statuses
 }

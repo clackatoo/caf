@@ -68,6 +68,12 @@ pub(crate) struct Script {
 /// The agents a test offers: Claude, as the Claude profile expects it.
 pub(crate) fn agents() -> Vec<AgentSpec> {
     let claude = SpawnCommand::new("/opt/caf/claude-agent-acp");
+    let mut npx = SpawnCommand::new("/usr/bin/npx");
+    npx.args = vec![
+        "-y".into(),
+        "@agentclientprotocol/claude-agent-acp@0.98.0".into(),
+    ];
+    npx.env = vec![EnvChange::Set("NPM_CONFIG_CACHE".into(), "/tmp/npm".into())];
     vec![
         AgentSpec::command(
             "claude",
@@ -83,6 +89,21 @@ pub(crate) fn agents() -> Vec<AgentSpec> {
         // shapes, so nothing assumes Claude.
         AgentSpec::installed("npm-agent", Builtin::TestNpm),
         AgentSpec::installed("dl-agent", Builtin::TestDownload),
+        // Another name for the npm agent, as another host might call it:
+        // it shares its install.
+        AgentSpec::installed("npm-twin", Builtin::TestNpm),
+        // The npm agent, started by a host's own command.
+        AgentSpec::command(
+            "npm-host",
+            SpawnCommand::new("/opt/npm-host/test-npm-acp"),
+            ProfileChoice::Builtin(Builtin::TestNpm),
+        ),
+        // Claude, run by a host as `npx -y <the adapter>`.
+        AgentSpec::command(
+            "claude-npx",
+            npx,
+            ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
+        ),
     ]
 }
 
@@ -640,8 +661,12 @@ fn render_setup(setup: &SetupDirective) -> Value {
             let how = serde_json::to_value(install).expect("installs serialise");
             json!({ "install": ticket.0, "folder": folder, "how": how["type"], "private": private })
         }
-        SetupDirective::Remove { ticket, folder } => {
-            json!({ "remove": ticket.0, "folder": folder })
+        SetupDirective::Remove {
+            ticket,
+            folder,
+            unused_since,
+        } => {
+            json!({ "remove": ticket.0, "folder": folder, "unused_since": unused_since.0 })
         }
         SetupDirective::SignIn {
             ticket,

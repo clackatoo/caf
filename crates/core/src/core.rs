@@ -68,6 +68,9 @@ pub struct Core<A: AppItem = NoAppItems> {
     agents: BTreeMap<AgentName, AgentSpec>,
     /// Each agent's recipe, from its profile, if it has one.
     recipes: BTreeMap<AgentName, Recipe>,
+    /// The name of each agent's built-in profile that never changes, which
+    /// its installs are named after.
+    slugs: BTreeMap<AgentName, &'static str>,
     /// Where each agent stands, and the setup driver's work.
     setup: Setup,
     chats: BTreeMap<ChatId, Chat<A>>,
@@ -223,7 +226,14 @@ impl<A: AppItem> Core<A> {
     pub(crate) fn starting_ids_at(host: Host, agents: Vec<AgentSpec>, first: u64) -> Self {
         let mut setup = Setup::default();
         let mut recipes = BTreeMap::new();
+        let mut slugs = BTreeMap::new();
         for agent in &agents {
+            match &agent.profile {
+                crate::profiles::ProfileChoice::Builtin(builtin) => {
+                    slugs.insert(agent.name.clone(), builtin.slug())
+                }
+                _ => slugs.remove(&agent.name),
+            };
             if !setup.agents.contains_key(&agent.name) {
                 setup.order.push(agent.name.clone());
             }
@@ -242,6 +252,7 @@ impl<A: AppItem> Core<A> {
                 .map(|agent| (agent.name.clone(), agent))
                 .collect(),
             recipes,
+            slugs,
             setup,
             chats: BTreeMap::new(),
             ids: Ids { next: first, first },
@@ -348,6 +359,12 @@ impl<A: AppItem> Core<A> {
     /// with the link once the command gives it. What a failed turn's
     /// [`Remedy::SignIn`](crate::chat::Remedy::SignIn) does.
     ///
+    /// For an agent the host starts with its own command, the command is
+    /// that, with its arguments and variables, and the recipe's arguments
+    /// after them. If the agent was signed out, new chats with it wait
+    /// until the sign-in ends. One nobody finishes is stopped after
+    /// [`Timers::sign_in`](crate::host::Timers::sign_in).
+    ///
     /// # Errors
     ///
     /// [`Refused::NoSuchAgent`]; [`Refused::CannotSignIn`] if its profile
@@ -372,7 +389,7 @@ impl<A: AppItem> Core<A> {
     ///
     /// [`Refused::NoSuchAgent`]; [`Refused::NotSigningIn`]; or
     /// [`Refused::Unsupported`] if the sign-in takes no paste, or the text
-    /// is more than one line or longer than 4 KiB.
+    /// is empty, more than one line, or longer than 4 KiB.
     pub fn paste(
         &mut self,
         now: Now,
@@ -380,6 +397,11 @@ impl<A: AppItem> Core<A> {
         text: String,
         out: &mut Vec<Directive>,
     ) -> Result<(), Refused> {
+        // Refused here, not as a command, so a recording's paste, written
+        // without its text, still replays.
+        if text.trim().is_empty() {
+            return Err(Refused::Unsupported);
+        }
         let agent = agent.clone();
         self.command(now, HostCommand::Paste { agent, text }, out)?;
         self.finish(now, out);
@@ -617,7 +639,7 @@ impl<A: AppItem> Core<A> {
             }
             HostCommand::Install(agent) => self.install_agent(&agent, out),
             HostCommand::StopInstall(agent) => self.stop_installing(now, &agent, out),
-            HostCommand::SignIn(agent) => self.start_sign_in(&agent, out),
+            HostCommand::SignIn(agent) => self.start_sign_in(now, &agent, out),
             HostCommand::Paste { agent, text } => self.paste_to(&agent, &text, out),
             HostCommand::StopSignIn(agent) => self.stop_signing_in(&agent, out),
             HostCommand::SignOut(agent) => self.start_sign_out(&agent, out),

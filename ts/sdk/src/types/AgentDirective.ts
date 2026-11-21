@@ -36,7 +36,10 @@ command: SpawnCommand,
 /**
  * The install folder it runs from, if it's CAF's install of an
  * agent. The driver holds a shared lock on it while the process
- * runs, so no CAF program on the machine removes it meanwhile.
+ * runs, so no CAF program on the machine removes it meanwhile, and
+ * as it starts the process it touches the folder's `.used` file
+ * (making it if need be), so a survey can say when the folder was
+ * last used ([`SetupEvent::Surveyed`](crate::event::SetupEvent::Surveyed)).
  */
 hold: string | null, } } | { "type": "Write", "value": { 
 /**

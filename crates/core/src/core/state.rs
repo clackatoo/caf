@@ -17,7 +17,7 @@ use crate::ids::{
 use crate::install::Platform;
 use crate::profiles::ProfileReport;
 use crate::question::PermissionOption;
-use crate::time::Mono;
+use crate::time::{Mono, Wall};
 
 /// Gives out ids, in order, from one counter, so no two things of any
 /// kind share a number.
@@ -427,6 +427,8 @@ pub(super) struct Machine {
     pub(super) npm: bool,
     /// The platform.
     pub(super) platform: Platform,
+    /// When each install folder was last used, by name.
+    pub(super) used: BTreeMap<String, Wall>,
 }
 
 /// A directive the setup driver is carrying out.
@@ -440,6 +442,8 @@ pub(super) struct Job {
     /// It was stopped, or is being: what it reports changes nothing,
     /// except an install that finished anyway.
     pub(super) stopped: bool,
+    /// When it's stopped if it hasn't ended: a sign-in nobody finishes.
+    pub(super) deadline: Option<Mono>,
 }
 
 /// What a setup job is.

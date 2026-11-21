@@ -2,6 +2,7 @@
 import type { InstallFailure } from "./InstallFailure.ts";
 import type { Platform } from "./Platform.ts";
 import type { SignedInAs } from "./SignedInAs.ts";
+import type { Wall } from "./Wall.ts";
 
 /**
  * What the setup driver reports.
@@ -26,7 +27,16 @@ npm: boolean,
 /**
  * The machine's platform.
  */
-platform: Platform, } } | { "type": "Progress", "value": { 
+platform: Platform, 
+/**
+ * When each complete install folder was last used, by name: the
+ * time its `.used` file was last changed, which happens each time
+ * a process starts from it (see
+ * [`AgentDirective::Start`](crate::directive::AgentDirective::Start)),
+ * or, if it has none, the folder's own, so when it was installed.
+ * The core never removes a folder missing here.
+ */
+used: Array<[string, Wall]>, } } | { "type": "Progress", "value": { 
 /**
  * Bytes done so far.
  */

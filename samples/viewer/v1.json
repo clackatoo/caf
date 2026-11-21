@@ -1906,10 +1906,7 @@
           "install": {
             "type": "Cannot",
             "value": {
-              "type": "Failed",
-              "value": {
-                "type": "Offline"
-              }
+              "type": "NoRecipe"
             }
           },
           "sign_in": {
@@ -1924,7 +1921,7 @@
             "value": {
               "type": "Failed",
               "value": {
-                "type": "Corrupt"
+                "type": "Offline"
               }
             }
           },
@@ -1945,7 +1942,7 @@
             "value": {
               "type": "Failed",
               "value": {
-                "type": "NoSpace"
+                "type": "Corrupt"
               }
             }
           },
@@ -1966,7 +1963,7 @@
             "value": {
               "type": "Failed",
               "value": {
-                "type": "Stopped"
+                "type": "NoSpace"
               }
             }
           },
@@ -1985,8 +1982,7 @@
             "value": {
               "type": "Failed",
               "value": {
-                "type": "Other",
-                "value": "npm ERR! code EACCES"
+                "type": "Stopped"
               }
             }
           },
@@ -1997,6 +1993,26 @@
             }
           },
           "can_sign_in": false
+        },
+        {
+          "name": "agent-14",
+          "install": {
+            "type": "Cannot",
+            "value": {
+              "type": "Failed",
+              "value": {
+                "type": "Other",
+                "value": "npm ERR! code EACCES"
+              }
+            }
+          },
+          "sign_in": {
+            "type": "SignedIn",
+            "value": {
+              "type": "Gateway"
+            }
+          },
+          "can_sign_in": true
         }
       ]
     },
