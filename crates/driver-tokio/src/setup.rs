@@ -107,7 +107,10 @@ use tokio::sync::{mpsc, oneshot};
 ///   [`SetupDirective::Stop`] says. A download waiting on the network
 ///   can't be woken: it's left to end by itself, writing only to a file
 ///   that went with the half-built folder. It ends once a minute passes
-///   with nothing coming, or sooner.
+///   with nothing coming, or sooner. Unpacking a download, and syncing an
+///   install before it's renamed into place, are stopped between one file
+///   and the next: a stop waits for the file being written to reach the
+///   disk, which on a busy disk can take a few seconds.
 /// - **Dropping the driver** stops everything it's doing, as stopping
 ///   would, as far as the runtime lets it: a half-built install the runtime
 ///   shut down too soon to remove is removed by the next survey.

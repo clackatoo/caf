@@ -125,6 +125,33 @@ async fn done(driver: &mut SetupDriver, ticket: Ticket) -> Vec<Ev> {
     events
 }
 
+/// What the driver reports about `ticket`, up to its last, if it comes
+/// within `within`; otherwise what came, to say what happened.
+async fn ended_within(
+    driver: &mut SetupDriver,
+    ticket: Ticket,
+    within: Duration,
+) -> Result<Vec<Ev>, Vec<Ev>> {
+    let mut events = Vec::new();
+    let ended = tokio::time::timeout(within, async {
+        loop {
+            let (about, event) = driver.next().await;
+            assert_eq!(about, ticket, "a report about another job: {event:?}");
+            let last = is_last(&event);
+            events.push(Ev(event));
+            if last {
+                return;
+            }
+        }
+    })
+    .await;
+    if ended.is_ok() {
+        Ok(events)
+    } else {
+        Err(events)
+    }
+}
+
 /// The next report about `ticket`, which mustn't be its last.
 async fn next_of(driver: &mut SetupDriver, ticket: Ticket) -> Ev {
     let (about, event) = tokio::time::timeout(PATIENCE, driver.next())
@@ -204,10 +231,19 @@ async fn a_survey_says_what_is_installed_and_cleans_up_what_was_cut_off() {
     assert_eq!(installed, &["claude-0.98.0", "codex-2.2.2+clackatoo.2"]);
     assert!(dir.root().join(".build-claude-0.99.0-1-1").exists());
     drop(held);
-    driver.apply(SetupDirective::Survey {
-        ticket: Ticket(1002),
-    });
-    done(&mut driver, Ticket(1002)).await;
+    // A process another test starts holds every file open here for a
+    // moment, the lock too: so a survey may find it held for that moment,
+    // and leave the hidden folders, as it should. The next one cleans.
+    for ticket in 1002..1100 {
+        driver.apply(SetupDirective::Survey {
+            ticket: Ticket(ticket),
+        });
+        done(&mut driver, Ticket(ticket)).await;
+        if !installs(&dir).iter().any(|name| name.starts_with('.')) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert_eq!(
         installs(&dir),
         [
@@ -813,7 +849,7 @@ async fn stopping_an_install_while_it_is_synced_stops_it() {
         Options {
             npm: Some(npm),
             // Each file takes a while to sync, so there's time to stop it.
-            sync_pause: Some(Duration::from_millis(20)),
+            sync_pause: Some(Duration::from_millis(100)),
             env: Some(std::collections::HashMap::new()),
             ..Options::default()
         },
@@ -836,12 +872,87 @@ async fn stopping_an_install_while_it_is_synced_stops_it() {
     driver.apply(SetupDirective::Stop {
         ticket: Ticket(1000),
     });
-    let events = tokio::time::timeout(Duration::from_secs(2), done(&mut driver, Ticket(1000)))
+    // Stopping waits for the file being synced, which on a busy disk can
+    // take seconds: well within the 10 s allowed, and well short of the
+    // whole sync, 20 s. A sync that doesn't hear Stop between files runs to
+    // its end before it's stopped.
+    let events = ended_within(&mut driver, Ticket(1000), Duration::from_secs(10))
         .await
-        .expect("stopped within a second or so, not once it's all synced");
+        .unwrap_or_else(|events| {
+            panic!("stopped within seconds, not once it's all synced: {events:?}")
+        });
     assert_eq!(
         events.last().expect("a last report"),
-        &SetupEvent::InstallFailed(InstallFailure::Stopped)
+        &SetupEvent::InstallFailed(InstallFailure::Stopped),
+        "{events:?}"
+    );
+    assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
+}
+
+#[tokio::test]
+async fn stopping_a_download_while_it_is_unpacked_stops_it() {
+    use std::io::Write as _;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default().unix_permissions(0o644);
+    // Each takes 50 ms more: unpacking takes 30 s, twice what the test
+    // waits for the stop to be heard.
+    for n in 0..600 {
+        zip.start_file(format!("many/{n}"), options).unwrap();
+        zip.write_all(b"x").unwrap();
+    }
+    let body = zip.finish().unwrap().into_inner();
+    let dir = Dir::new();
+    let server = serve(body.clone(), false).await;
+    let mut driver = SetupDriver::with_options(
+        dir.root(),
+        Options {
+            http_to_this_machine: true,
+            // Each file takes a while to sync, so there's time to stop it.
+            sync_pause: Some(Duration::from_millis(50)),
+            env: Some(std::collections::HashMap::new()),
+            ..Options::default()
+        },
+    );
+    driver.apply(SetupDirective::Install {
+        ticket: Ticket(1000),
+        folder: "fake-1.0.0".into(),
+        install: download(&server.url, &body, Unpack::Zip),
+        private: None,
+        size: 1 << 30,
+    });
+    // Once files appear in the half-built install, it's being unpacked.
+    let unpacking = tokio::time::timeout(PATIENCE, async {
+        loop {
+            let built = (dir.root().is_dir().then(|| installs(&dir)))
+                .into_iter()
+                .flatten()
+                .find(|name| name.starts_with(".build-"))
+                .map(|name| dir.root().join(name).join("many"));
+            if built.is_some_and(|many| {
+                std::fs::read_dir(many).is_ok_and(|mut files| files.next().is_some())
+            }) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(unpacking.is_ok(), "it's unpacked");
+    driver.apply(SetupDirective::Stop {
+        ticket: Ticket(1000),
+    });
+    // Stopping waits for the file being synced, which on a busy disk can
+    // take seconds: well within the 15 s allowed, and well short of the
+    // whole unpacking. Unpacking that doesn't hear Stop runs to its end.
+    let ended = ended_within(&mut driver, Ticket(1000), Duration::from_secs(15))
+        .await
+        .unwrap_or_else(|events| {
+            panic!("stopped within seconds, not once it's all unpacked: {events:?}")
+        });
+    assert_eq!(
+        ended.last().expect("a last report"),
+        &SetupEvent::InstallFailed(InstallFailure::Stopped),
+        "{ended:?}"
     );
     assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
 }
@@ -1255,20 +1366,12 @@ async fn a_download_that_stalls_stops_at_once() {
         });
         tokio::time::sleep(Duration::from_millis(500)).await;
         driver.apply(SetupDirective::Stop { ticket });
-        let events = tokio::time::timeout(Duration::from_secs(2), async {
-            let mut events = Vec::new();
-            loop {
-                let (about, event) = driver.next().await;
-                assert_eq!(about, ticket);
-                let last = is_last(&event);
-                events.push(Ev(event));
-                if last {
-                    return events;
-                }
-            }
-        })
-        .await
-        .unwrap_or_else(|_| panic!("{n}: stopped within a second or so"));
+        // A download waiting on the network would wait a minute. Stopped,
+        // it's left within a second; the half-built install's removal, on
+        // a busy disk, can take some seconds more.
+        let events = ended_within(&mut driver, ticket, Duration::from_secs(10))
+            .await
+            .unwrap_or_else(|events| panic!("{n}: stopped within seconds: {events:?}"));
         assert_eq!(
             events.last().expect("a last report"),
             &SetupEvent::InstallFailed(InstallFailure::Stopped),

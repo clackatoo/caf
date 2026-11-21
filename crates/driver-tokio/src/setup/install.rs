@@ -744,10 +744,27 @@ async fn download(
     if !sha256.eq_ignore_ascii_case(artifact.sha256.trim()) {
         return Err(InstallFailure::Corrupt);
     }
-    let (build, unpack, url) = (build.to_owned(), artifact.unpack, artifact.url.clone());
-    tokio::task::spawn_blocking(move || unpack_into(&build, &file, unpack, &url))
-        .await
-        .unwrap_or_else(|_| Err(other("unpacking panicked".into())))
+    // Unpacked while Stop is still heard, as unpacking syncs each file,
+    // which takes a while.
+    let stopped = Arc::new(AtomicBool::new(false));
+    let unpacking = {
+        let (build, unpack, url) = (build.to_owned(), artifact.unpack, artifact.url.clone());
+        let (stopped, pause) = (Arc::clone(&stopped), sync_pause(options));
+        tokio::task::spawn_blocking(move || {
+            unpack_into(&build, &file, unpack, &url, &stopped, pause)
+        })
+    };
+    tokio::pin!(unpacking);
+    let unpacked = tokio::select! {
+        unpacked = &mut unpacking => unpacked,
+        _ = &mut *stop => {
+            // It sees that between entries, and ends.
+            stopped.store(true, Ordering::Relaxed);
+            let _ = unpacking.await;
+            return Err(InstallFailure::Stopped);
+        }
+    };
+    unpacked.unwrap_or_else(|_| Err(other("unpacking panicked".into())))
 }
 
 /// The proxy a download of `url` goes through, if any, and the variable
@@ -1001,7 +1018,15 @@ fn download_failure(error: ureq::Error) -> InstallFailure {
 }
 
 /// Unpacks the checked download `file` into `build`, then removes it.
-fn unpack_into(build: &Path, file: &Path, unpack: Unpack, url: &str) -> Result<(), InstallFailure> {
+/// Stops between entries once `stopped` is set.
+fn unpack_into(
+    build: &Path,
+    file: &Path,
+    unpack: Unpack,
+    url: &str,
+    stopped: &AtomicBool,
+    pause: Duration,
+) -> Result<(), InstallFailure> {
     let unpacked = match unpack {
         Unpack::No => {
             let name = program_name(url);
@@ -1011,8 +1036,8 @@ fn unpack_into(build: &Path, file: &Path, unpack: Unpack, url: &str) -> Result<(
                 .map_err(|error| io_failure(&error, false))?;
             return Ok(());
         }
-        Unpack::Zip => unzip(build, file),
-        Unpack::TarGz => untar(build, file),
+        Unpack::Zip => unzip(file, Placing::new(build, stopped, pause)?),
+        Unpack::TarGz => untar(file, Placing::new(build, stopped, pause)?),
         // No other kind is given yet.
         _ => Err(other("CAF doesn't know how to unpack this".into())),
     };
@@ -1044,11 +1069,16 @@ fn program_name(url: &str) -> OsString {
 /// through one, and each must then lead, followed all the way, to
 /// something inside the build folder: a chain of links each harmless on
 /// its own can't climb out. Hard links must name a file already placed.
-struct Placing {
+struct Placing<'a> {
     build: PathBuf,
     /// `build`, with every link in its path followed.
     real: PathBuf,
     links: Vec<(PathBuf, PathBuf)>,
+    /// Set once the install is stopped: looked at between entries.
+    stopped: &'a AtomicBool,
+    /// How long syncing each file takes, as well: only tests make it
+    /// longer.
+    pause: Duration,
 }
 
 /// Why an archive is refused, in CAF's words: what's in it, never where
@@ -1057,14 +1087,24 @@ fn refused(why: &str) -> InstallFailure {
     other(format!("the download can't be unpacked: {why}"))
 }
 
-impl Placing {
-    fn new(build: &Path) -> Result<Self, InstallFailure> {
+impl<'a> Placing<'a> {
+    fn new(build: &Path, stopped: &'a AtomicBool, pause: Duration) -> Result<Self, InstallFailure> {
         let real = fs::canonicalize(build).map_err(|error| io_failure(&error, false))?;
         Ok(Self {
             build: build.to_owned(),
             real,
             links: Vec::new(),
+            stopped,
+            pause,
         })
+    }
+
+    /// Ends the unpacking if the install is stopped.
+    fn go_on(&self) -> Result<(), InstallFailure> {
+        if self.stopped.load(Ordering::Relaxed) {
+            return Err(InstallFailure::Stopped);
+        }
+        Ok(())
     }
 
     /// Where `name`, an entry's name, goes: refused unless it's a path
@@ -1130,6 +1170,9 @@ impl Placing {
         io::copy(&mut from, &mut out).map_err(|error| io_failure(&error, false))?;
         // Synced while it's open: its mode may not let it be opened again.
         out.sync_all().map_err(|error| io_failure(&error, false))?;
+        if !self.pause.is_zero() {
+            std::thread::sleep(self.pause);
+        }
         // The mode given when making it is cut by the umask.
         fs::set_permissions(&path, fs::Permissions::from_mode(mode))
             .map_err(|error| io_failure(&error, false))
@@ -1169,12 +1212,12 @@ impl Placing {
 }
 
 /// Unpacks a zip archive, keeping each entry inside `build`.
-fn unzip(build: &Path, file: &Path) -> Result<(), InstallFailure> {
+fn unzip(file: &Path, mut placing: Placing<'_>) -> Result<(), InstallFailure> {
     let bad = |error: &dyn std::fmt::Display| refused(&error.to_string());
     let archive = File::open(file).map_err(|error| io_failure(&error, false))?;
     let mut archive = zip::ZipArchive::new(archive).map_err(|error| bad(&error))?;
-    let mut placing = Placing::new(build)?;
     for index in 0..archive.len() {
+        placing.go_on()?;
         let mut entry = archive.by_index(index).map_err(|error| bad(&error))?;
         let Some(name) = entry.enclosed_name() else {
             return Err(refused(&format!("{:?} is outside it", entry.name())));
@@ -1222,7 +1265,7 @@ fn link_stays_inside(at: &Path, target: &Path) -> bool {
 /// Unpacks a gzipped tar archive, keeping each entry inside `build`, as
 /// [`Placing`] does. Only folders, files and links are taken: a device or
 /// a pipe is refused.
-fn untar(build: &Path, file: &Path) -> Result<(), InstallFailure> {
+fn untar(file: &Path, mut placing: Placing<'_>) -> Result<(), InstallFailure> {
     let bad = |error: &io::Error| match error.raw_os_error() {
         Some(libc::ENOSPC | libc::EDQUOT) => InstallFailure::NoSpace,
         // The tar crate's own words, which name no folder of this machine's.
@@ -1230,8 +1273,8 @@ fn untar(build: &Path, file: &Path) -> Result<(), InstallFailure> {
     };
     let archive = File::open(file).map_err(|error| io_failure(&error, false))?;
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(io::BufReader::new(archive)));
-    let mut placing = Placing::new(build)?;
     for entry in archive.entries().map_err(|error| bad(&error))? {
+        placing.go_on()?;
         let mut entry = entry.map_err(|error| bad(&error))?;
         let name = entry.path().map_err(|error| bad(&error))?.into_owned();
         let kind = entry.header().entry_type();
