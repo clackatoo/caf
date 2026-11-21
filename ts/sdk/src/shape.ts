@@ -53,7 +53,13 @@ export function isSummary(value: unknown): value is ChatSummary {
 
 /** A saved chat, as `Saved` lists them. */
 export function isSaved(value: unknown): value is SavedChat {
-  return isRecord(value) && isRecord(value.header) && isString(value.header.chat) && isTagged(value.state);
+  return (
+    isRecord(value) &&
+    isString(value.shelf) &&
+    isRecord(value.header) &&
+    isString(value.header.chat) &&
+    isTagged(value.state)
+  );
 }
 
 /**

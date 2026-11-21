@@ -95,7 +95,8 @@ export function webSocket(url: string): Promise<Transport> {
  * such as `Refused: QueueFull`.
  *
  * A later CAF may send a reason this SDK doesn't know, here in `Refused`
- * and in a chat's `Lost` and `FailureReason`. Give every `switch` on a
+ * and `CannotRestore`, in a saved chat's `Failed`, and in a chat's `Lost`
+ * and `FailureReason`. Give every `switch` on a
  * reason a `default`, and show one it doesn't know by its `type`.
  */
 export class CafError extends Error {
@@ -183,7 +184,8 @@ export type WatchEvent =
  * other listeners are still called.
  *
  * A later CAF may also send reasons this SDK doesn't know, inside messages
- * it does: a `Refused`, or a chat's `Lost` or `FailureReason`. Give every
+ * it does: a `Refused` or `CannotRestore`, or a chat's `Lost` or
+ * `FailureReason`. Give every
  * `switch` on a reason a `default`. See `CafError`.
  */
 export class Connection {
@@ -343,7 +345,8 @@ export class Connection {
   /**
    * The saved chats on the shelves the host has listed, loaded or not, in
    * the order they were made: empty until CAF says, which it does right
-   * after the agents if the host has listed any. Read-only.
+   * after the agents if the host has listed any, so possibly only after
+   * `open` has resolved: follow it with `onSaved`. Read-only.
    */
   get saved(): readonly DeepReadonly<SavedChat>[] {
     return this.#saved;
@@ -697,6 +700,7 @@ export class Connection {
     for (const listener of closes) call(listener, undefined);
     this.#chatListeners.clear();
     this.#agentListeners.clear();
+    this.#savedListeners.clear();
     try {
       this.#transport.close();
     } catch {
