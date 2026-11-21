@@ -8,6 +8,7 @@ related:
   - caf/getting-started/the-debugger
   - caf/concepts/chats-turns-and-items
   - caf/concepts/agents-and-profiles
+  - caf/getting-started/saving-and-restoring-chats
 ---
 
 **CAF**, the Clackatoo Agent Framework, is a Rust library for putting chats
@@ -83,3 +84,16 @@ has to find an agent itself:
 - **Built for any agent**: everything about one agent is data in its
   [profile](~caf/concepts/agents-and-profiles), so adding an agent is
   adding a profile.
+
+The fourth, *saving and restoring chats*, lets a chat outlive the program
+that opened it:
+
+- **[Saving](~caf/getting-started/saving-and-restoring-chats)**: CAF saves
+  each chat as it goes, whole, with the agent's session and your own data
+  on it, on shelves your program names, in files or a store of your own.
+- **Restoring**: a chat comes back with its record, tidied of whatever was
+  under way, and carries on the agent's session when a message is sent.
+  Chats can be put away, closed, deleted and moved, from your program or a
+  viewer.
+- **Readable forever**: a save from any version of CAF stays readable by
+  every later one, and an older CAF never writes over a newer one's.

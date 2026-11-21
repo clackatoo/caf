@@ -2,7 +2,7 @@
 //! browser, live or replaying a recording.
 //!
 //! ```text
-//! caf-debugger [--port 7320] [--agents agents.toml]     live
+//! caf-debugger [--port 7320] [--agents agents.toml] [--store DIR]     live
 //! caf-debugger --replay FILE.jsonl [--port 7320]        replay
 //! ```
 //!
@@ -11,8 +11,8 @@
 //! use it.
 //!
 //! - **Live** ([`live`]), it runs CAF on tokio with the agents of
-//!   [`agents`], records the run ([`files`]), and checks every step
-//!   against a replay ([`replay`]).
+//!   [`agents`], keeps its chats in a file store, records the run
+//!   ([`files`]), and checks every step against a replay ([`replay`]).
 //! - **Replaying**, it reads a recording and replays it ([`replay::load`]):
 //!   nothing is started.
 //! - **Either way**, it serves the app over HTTP on 127.0.0.1
