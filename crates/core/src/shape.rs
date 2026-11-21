@@ -412,6 +412,7 @@ pub(crate) fn every_type(s: &mut Samples) {
         stderr: vec!["out of memory".into()],
     });
     s.both(&Incompatible::HttpMcp);
+    s.both(&Incompatible::OwnTools);
     s.both(&turn());
     s.both(&Starter::OtherChat {
         from: ChatId::from_number(9),
