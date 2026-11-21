@@ -649,6 +649,7 @@ pub(crate) fn every_type(s: &mut Samples) {
         SetupDirective::Remove {
             ticket: Ticket(8),
             folder: "claude-agent-acp-0.97.0".into(),
+            unused_since: Wall(1_800_000_000_000),
         },
         SetupDirective::SignIn {
             ticket: Ticket(9),

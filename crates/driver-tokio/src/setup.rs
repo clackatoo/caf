@@ -288,9 +288,18 @@ impl SetupDriver {
                     stop,
                 ));
             }
-            SetupDirective::Remove { ticket, folder } => {
+            SetupDirective::Remove {
+                ticket,
+                folder,
+                unused_since,
+            } => {
                 let reporter = self.job(ticket);
-                tokio::spawn(install::remove(self.root.clone(), folder, reporter));
+                tokio::spawn(install::remove(
+                    self.root.clone(),
+                    folder,
+                    unused_since,
+                    reporter,
+                ));
             }
             SetupDirective::SignIn {
                 ticket,

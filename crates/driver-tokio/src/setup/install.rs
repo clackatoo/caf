@@ -183,8 +183,8 @@ async fn installing(
 }
 
 /// Removes `root/folder`, unless something runs from it.
-pub(super) async fn remove(root: PathBuf, folder: String, reporter: Reporter) {
-    let removed = removing(&root, &folder).await;
+pub(super) async fn remove(root: PathBuf, folder: String, unused_since: Wall, reporter: Reporter) {
+    let removed = removing(&root, &folder, unused_since).await;
     let removed = removed.unwrap_or_else(|error| {
         log::warn!(target: "caf", "can't remove {folder} from {}: {error}", root.display());
         false
@@ -192,7 +192,9 @@ pub(super) async fn remove(root: PathBuf, folder: String, reporter: Reporter) {
     reporter.last(SetupEvent::Removed { removed });
 }
 
-async fn removing(root: &Path, folder: &str) -> io::Result<bool> {
+/// Removes `root/folder`, unless it was used after `unused_since` or
+/// something runs from it. Says whether it's gone.
+async fn removing(root: &Path, folder: &str, unused_since: Wall) -> io::Result<bool> {
     if !is_install_name(folder) {
         return Err(io::Error::other(format!(
             "{folder:?} isn't an install's name"
@@ -211,6 +213,11 @@ async fn removing(root: &Path, folder: &str) -> io::Result<bool> {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
         };
+        // Used since the survey the core decided on: it stays. Read under
+        // the installs' lock, so nothing installs it again meanwhile.
+        if last_used(&place).is_none_or(|used| used > unused_since) {
+            return Ok(Some(None));
+        }
         // Something runs from it: it stays.
         let Some(held) = lock_file(held, Lock::ExclusiveNow)? else {
             return Ok(Some(None));

@@ -221,6 +221,12 @@ pub enum EnvValue {
     /// for an agent that keeps its sign-in in a folder CAF gives it, as
     /// Antigravity does. It's `<profile>-private` beside the installs, so
     /// every CAF program shares it, and it outlives every version.
+    ///
+    /// Only for an agent CAF installs, which is given the folder as it's
+    /// installed and started: a recipe command that uses it isn't run for
+    /// an agent started by the host's own command, which would never read
+    /// it (it's refused with
+    /// [`Refused::CannotSignIn`](crate::Refused::CannotSignIn)).
     PrivateFolder,
 }
 
@@ -243,8 +249,8 @@ pub struct SignIn {
     /// standard input, with a newline.
     pub paste: bool,
     /// The sites a link may point to, by host name, such as `claude.ai`.
-    /// A link to any other is refused, and the sign-in ends, so a tampered
-    /// package can't send the user to a fake sign-in page.
+    /// A link to any other is refused, and the sign-in ends: CAF never
+    /// shows the user a link to a site the profile doesn't name.
     pub sites: Vec<String>,
 }
 

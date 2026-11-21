@@ -516,7 +516,12 @@ pub(crate) mod tests {
                 paste: false,
                 sites: vec!["login.npm.example".to_owned()],
             }),
-            sign_out: Some(bundled(Program::Adapter, &["logout"])),
+            // Signing out clears the private folder it's given.
+            sign_out: Some(Bundled {
+                program: Program::Adapter,
+                args: vec!["logout".to_owned()],
+                env: vec![("TEST_NPM_HOME".to_owned(), EnvValue::PrivateFolder)],
+            }),
             status: Status {
                 pushed: true,
                 command: None,

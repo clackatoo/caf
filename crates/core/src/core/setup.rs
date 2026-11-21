@@ -34,7 +34,7 @@ use crate::event::SetupEvent;
 use crate::ids::{AgentName, ChatId, Ticket};
 use crate::install::{Bundled, EnvValue, Install, Program, SignedInAs};
 use crate::profiles::Checked;
-use crate::time::Now;
+use crate::time::{Now, Wall};
 
 /// The longest link kept, in bytes: a longer one is refused.
 const MOST_LINK: usize = 4096;
@@ -175,12 +175,15 @@ impl<A: AppItem> Core<A> {
             code_after,
             paste,
         }));
-        if let Some(standing) = self.setup.agents.get_mut(agent) {
-            standing.sign_in = SignInState::SigningIn(SignInLink {
-                url: None,
-                code: None,
-                paste,
-            });
+        let signing_in = SignInState::SigningIn(SignInLink {
+            url: None,
+            code: None,
+            paste,
+        });
+        for each in self.sign_in_group(agent) {
+            if let Some(standing) = self.setup.agents.get_mut(&each) {
+                standing.sign_in = signing_in.clone();
+            }
         }
         Ok(())
     }
@@ -335,6 +338,11 @@ impl<A: AppItem> Core<A> {
                 self.setup.jobs.remove(&ticket);
                 if !stopped && ok {
                     self.signed_in(now, &agent, out);
+                } else if ok {
+                    // Stopped as it finished: whether it's signed in now
+                    // is the status command's to say.
+                    self.forget_status(&agent);
+                    self.check_status(&agent, out);
                 } else if !stopped {
                     report(
                         out,
@@ -358,6 +366,9 @@ impl<A: AppItem> Core<A> {
             }
             (Work::SignOut, SetupEvent::Ended { ok }) => {
                 self.setup.jobs.remove(&ticket);
+                // What a status command already running reads may be from
+                // before.
+                self.forget_status(&agent);
                 if ok {
                     self.set_sign_in(&agent, SignInState::SignedOut);
                 } else {
@@ -367,6 +378,9 @@ impl<A: AppItem> Core<A> {
                         format!("signing out of {} failed", agent.0),
                     );
                 }
+            }
+            (Work::Status, SetupEvent::Status(_)) if stopped => {
+                self.setup.jobs.remove(&ticket);
             }
             (Work::Status, SetupEvent::Status(how)) => {
                 self.setup.jobs.remove(&ticket);
@@ -599,11 +613,7 @@ impl<A: AppItem> Core<A> {
             );
             return self.stop_job(ticket, out);
         }
-        if let Some(standing) = self.setup.agents.get_mut(agent)
-            && let SignInState::SigningIn(link) = &mut standing.sign_in
-        {
-            link.url = Some(url.to_owned());
-        }
+        self.edit_link(agent, |link| link.url = Some(url.to_owned()));
     }
 
     /// The sign-in command gave a code to type on the site: kept only as
@@ -623,10 +633,18 @@ impl<A: AppItem> Core<A> {
                 ),
             );
         }
-        if let Some(standing) = self.setup.agents.get_mut(agent)
-            && let SignInState::SigningIn(link) = &mut standing.sign_in
-        {
-            link.code = Some(code.to_owned());
+        self.edit_link(agent, |link| link.code = Some(code.to_owned()));
+    }
+
+    /// Changes what the sign-in to `agent`, and every agent sharing its
+    /// sign-in, shows.
+    fn edit_link(&mut self, agent: &AgentName, edit: impl Fn(&mut SignInLink)) {
+        for each in self.sign_in_group(agent) {
+            if let Some(standing) = self.setup.agents.get_mut(&each)
+                && let SignInState::SigningIn(link) = &mut standing.sign_in
+            {
+                edit(link);
+            }
         }
     }
 
@@ -634,8 +652,9 @@ impl<A: AppItem> Core<A> {
     /// want of it says so, and its status command, if any, says how.
     fn signed_in(&mut self, now: Now, agent: &AgentName, out: &mut Vec<Directive>) {
         self.set_sign_in(agent, SignInState::SignedIn(SignedInAs::Unknown));
+        let group = self.sign_in_group(agent);
         let chats: Vec<ChatId> = (self.chats.values())
-            .filter(|whole| &whole.agent == agent && whole.state != ChatState::Closed)
+            .filter(|whole| group.contains(&whole.agent) && whole.state != ChatState::Closed)
             .filter(|whole| {
                 let mut theirs = whole.turns.iter().rev().filter(|turn| {
                     // A note already said so.
@@ -653,6 +672,8 @@ impl<A: AppItem> Core<A> {
         for chat in chats {
             self.say(now, chat, Note::SignedIn);
         }
+        // One already running may have read it before the sign-in ended.
+        self.forget_status(agent);
         self.check_status(agent, out);
     }
 
@@ -677,13 +698,26 @@ impl<A: AppItem> Core<A> {
         self.stop_job(ticket, out);
     }
 
+    /// Lets status commands already running for `agent`'s sign-in go: what
+    /// they report is ignored, as it may be from before a sign-in or
+    /// sign-out that just ended, and a fresh one may run.
+    fn forget_status(&mut self, agent: &AgentName) {
+        let group = self.sign_in_group(agent);
+        for job in self.setup.jobs.values_mut() {
+            if matches!(job.work, Work::Status) && group.contains(&job.agent) {
+                job.stopped = true;
+            }
+        }
+    }
+
     /// Runs `agent`'s status command, if it has one that can run now and
     /// isn't running already.
     fn check_status(&mut self, agent: &AgentName, out: &mut Vec<Directive>) {
-        if self
-            .job_for(agent, |work| matches!(work, Work::Status))
-            .is_some()
-        {
+        let group = self.sign_in_group(agent);
+        if (group.iter()).any(|each| {
+            self.job_for(each, |work| matches!(work, Work::Status))
+                .is_some()
+        }) {
             return;
         }
         let Some(status) =
@@ -788,7 +822,11 @@ impl<A: AppItem> Core<A> {
                     folder: folder.clone(),
                 },
             );
-            out.push(Directive::Setup(SetupDirective::Remove { ticket, folder }));
+            out.push(Directive::Setup(SetupDirective::Remove {
+                ticket,
+                folder,
+                unused_since: Wall(unused_since),
+            }));
         }
     }
 
@@ -884,6 +922,13 @@ impl<A: AppItem> Core<A> {
             }
             (Program::InInstall(_), Launch::Command(_)) => return None,
         };
+        // The host's own adapter never reads a private folder: nothing
+        // gives it one, or makes it.
+        if matches!(spec.launch, Launch::Command(_))
+            && (bundled.env.iter()).any(|(_, value)| *value == EnvValue::PrivateFolder)
+        {
+            return None;
+        }
         // CAF's install is started with the recipe's own arguments for the
         // adapter, which a command of the recipe replaces; the host's are
         // the host's, and are kept.
@@ -1063,9 +1108,24 @@ impl<A: AppItem> Core<A> {
             .map(|(&ticket, _)| ticket)
     }
 
-    /// The ticket of `agent`'s sign-in under way.
+    /// The ticket of the sign-in under way that's `agent`'s: its own, or
+    /// one of an agent sharing its sign-in.
     fn signing_in(&self, agent: &AgentName) -> Option<Ticket> {
-        self.job_for(agent, |work| matches!(work, Work::SignIn { .. }))
+        (self.sign_in_group(agent).iter())
+            .find_map(|each| self.job_for(each, |work| matches!(work, Work::SignIn { .. })))
+    }
+
+    /// The agents whose sign-in is `agent`'s. For one CAF installs, every
+    /// agent of its profile: they run the same commands, with the same
+    /// variables, so they keep their sign-in in the same place. One the
+    /// host starts has its own, as its command may set its own place.
+    fn sign_in_group(&self, agent: &AgentName) -> Vec<AgentName> {
+        let installed =
+            (self.agents.get(agent)).is_some_and(|spec| spec.launch == Launch::Installed);
+        match self.folder_of(agent).filter(|_| installed) {
+            Some(folder) => self.sharing(&folder),
+            None => vec![agent.clone()],
+        }
     }
 
     /// Stops work under way. A sign-in's state goes back to what it was.
@@ -1113,8 +1173,10 @@ impl<A: AppItem> Core<A> {
             *before = state;
             return;
         }
-        if let Some(standing) = self.setup.agents.get_mut(agent) {
-            standing.sign_in = state;
+        for each in self.sign_in_group(agent) {
+            if let Some(standing) = self.setup.agents.get_mut(&each) {
+                standing.sign_in = state.clone();
+            }
         }
     }
 }

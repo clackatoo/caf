@@ -92,6 +92,7 @@ fn every_agent_stands_somewhere_in_the_order_offered_and_a_survey_says_where() {
             { "name": "npm-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" } },
             { "name": "dl-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" } },
             { "name": "npm-twin", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" } },
+            { "name": "npm-host", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" } },
             { "name": "claude-npx", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" } },
         ])
     );
@@ -227,7 +228,7 @@ fn a_chat_waits_for_its_agent_to_be_installed_then_starts() {
     let install = one(&out, "install");
     assert_eq!(
         install,
-        json!({ "install": install["install"], "folder": "test-npm-2.0.0", "how": "Npm", "private": null })
+        json!({ "install": install["install"], "folder": "test-npm-2.0.0", "how": "Npm", "private": "test-npm-private" })
     );
     let install = install["install"].as_u64().expect("a ticket");
     assert_has(
@@ -1389,4 +1390,227 @@ fn a_recorded_paste_without_its_text_replays() {
     let event: crate::Event = serde_json::from_str(recorded).expect("it reads");
     let out = script.event(event);
     assert_eq!(one(&out, "paste"), json!({ "paste": ticket, "text": "" }));
+}
+
+#[test]
+fn a_removal_holds_only_if_nothing_used_the_folder_since_the_survey() {
+    let mut script = Script::new(host());
+    let out = script.check_agents();
+    let SetupEvent::Surveyed {
+        root,
+        node,
+        npm,
+        platform,
+        ..
+    } = found(&[])
+    else {
+        unreachable!()
+    };
+    script.setup(
+        ticket_of(&out, "survey"),
+        SetupEvent::Surveyed {
+            root,
+            installed: vec!["test-npm-1.8.0".into(), "test-npm-2.0.0".into()],
+            node,
+            npm,
+            platform,
+            used: vec![("test-npm-1.8.0".into(), crate::time::Wall(EPOCH - 30 * DAY))],
+        },
+    );
+    // Days after the survey, it may have been used since: the driver
+    // checks, as it removes it.
+    script.at(u64::try_from(2 * DAY).expect("a time"));
+    let (chat, out) = script.open(OpenChat::new("npm-agent", "/work"));
+    chat.expect("opened");
+    let proc = one(&out, "start")["start"].as_u64().expect("a process");
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let out = script.answers(proc, init, &npm_init());
+    assert_eq!(
+        one(&out, "remove"),
+        json!({
+            "remove": ticket_of(&out, "remove"),
+            "folder": "test-npm-1.8.0",
+            "unused_since": EPOCH + 2 * DAY - 14 * DAY,
+        })
+    );
+}
+
+#[test]
+fn a_sign_in_stopped_as_it_succeeded_asks_whether_its_signed_in() {
+    let mut script = Script::new(host());
+    let out = script.surveyed(&["test-download-1.4.0"]);
+    script.setup(ticket_of(&out, "status"), SetupEvent::Status(None));
+    let ticket = ticket_of(&script.sign_in("dl-agent").1, "sign_in");
+    script.at(10 * 60 * 1000);
+    ticket_of(&script.woken(), "stop");
+    let out = script.setup(ticket, SetupEvent::Ended { ok: true });
+    let status = ticket_of(&out, "status");
+    script.setup(status, SetupEvent::Status(Some(SignedInAs::Account)));
+    // One that failed as it was stopped asks nothing.
+    let ticket = ticket_of(&script.sign_in("dl-agent").1, "sign_in");
+    script.stop_sign_in("dl-agent").0.expect("stopped");
+    let out = script.setup(ticket, SetupEvent::Ended { ok: false });
+    assert!(with(&out, "status").is_empty());
+    // A status command running as it's stopped, then ends signed in, may
+    // have read the credentials before they were written: a fresh one is
+    // asked, and the old one's answer changes nothing.
+    let survey = ticket_of(&script.check_agents(), "survey");
+    let old = ticket_of(
+        &script.setup(survey, found(&["test-download-1.4.0"])),
+        "status",
+    );
+    let ticket = ticket_of(&script.sign_in("dl-agent").1, "sign_in");
+    script.stop_sign_in("dl-agent").0.expect("stopped");
+    let out = script.setup(ticket, SetupEvent::Ended { ok: true });
+    let fresh = ticket_of(&out, "status");
+    assert_ne!(fresh, old);
+    let before = script.agent_status("dl-agent");
+    assert_eq!(before["sign_in"], signed_in("Account"));
+    script.setup(old, SetupEvent::Status(None));
+    assert_eq!(script.agent_status("dl-agent"), before);
+}
+
+#[test]
+fn agents_of_one_profile_share_its_sign_in() {
+    let mut per_chat = host();
+    per_chat.grouping = crate::host::Grouping::PerChat;
+    let mut script = Script::new(per_chat);
+    script.surveyed(&["test-npm-2.0.0"]);
+    let (chat, out) = script.open(OpenChat::new("npm-twin", "/work"));
+    let chat = chat.expect("opened");
+    let proc = one(&out, "start")["start"].as_u64().expect("a process");
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    script.send(chat, "go").0.expect("sent");
+    let out = script.answers(proc, init, &npm_init());
+    let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
+    script.fails(
+        proc,
+        new,
+        &json!({ "code": -32000, "message": "Authentication required" }),
+    );
+    for agent in ["npm-agent", "npm-twin"] {
+        assert_eq!(
+            script.agent_status(agent)["sign_in"],
+            json!({ "type": "SignedOut" }),
+            "{agent}"
+        );
+    }
+    // Signing in by either name is signing in for both.
+    let ticket = ticket_of(&script.sign_in("npm-agent").1, "sign_in");
+    assert!(script.sign_in("npm-twin").1.is_empty());
+    script.setup(
+        ticket,
+        SetupEvent::Link("https://login.npm.example/a".into()),
+    );
+    assert_eq!(
+        script.agent_status("npm-twin")["sign_in"]["value"]["url"],
+        "https://login.npm.example/a"
+    );
+    // A new chat with the other name waits on it too.
+    let other = script
+        .open(OpenChat::new("npm-twin", "/elsewhere"))
+        .0
+        .expect("opened");
+    assert_has(
+        &script.chat(other),
+        &json!({ "state": { "type": "WaitingForAgent" } }),
+    );
+    script.setup(ticket, SetupEvent::Ended { ok: true });
+    assert_eq!(
+        script.agent_status("npm-twin")["sign_in"],
+        signed_in("Unknown")
+    );
+    assert_eq!(notes(&script.chat(chat)), ["SignedIn"]);
+    // A host's own command for the same profile keeps its own.
+    assert_eq!(
+        script.agent_status("npm-host")["sign_in"],
+        json!({ "type": "Unknown" })
+    );
+}
+
+#[test]
+fn a_host_command_never_runs_a_recipe_command_that_needs_the_private_folder() {
+    let mut script = Script::new(host());
+    script.surveyed(&[]);
+    let (chat, out) = script.open(OpenChat::new("npm-host", "/work"));
+    chat.expect("opened");
+    let proc = one(&out, "start")["start"].as_u64().expect("a process");
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    script.answers(proc, init, &npm_init());
+    // Signing in needs none.
+    let out = script.sign_in("npm-host").1;
+    assert_eq!(
+        one(&out, "sign_in")["command"],
+        json!({ "program": "/opt/npm-host/test-npm-acp", "args": ["login"], "env": [] })
+    );
+    // Signing out does: the host's adapter never reads it.
+    assert_eq!(script.sign_out("npm-host").0, Err(Refused::CannotSignIn));
+    // CAF's own install of it is given it.
+    let mut script = Script::new(host());
+    script.surveyed(&["test-npm-2.0.0"]);
+    let out = script.sign_out("npm-agent").1;
+    assert_eq!(
+        one(&out, "run")["command"]["env"],
+        json!([
+            "TEST_NPM_MODE=acp",
+            "TEST_NPM_HOME=/caf/agents/test-npm-private"
+        ])
+    );
+}
+
+#[test]
+fn a_status_command_from_before_a_sign_in_ended_never_undoes_it() {
+    let mut script = Script::new(host());
+    let out = script.surveyed(&["test-download-1.4.0"]);
+    script.setup(ticket_of(&out, "status"), SetupEvent::Status(None));
+    let sign_in = ticket_of(&script.sign_in("dl-agent").1, "sign_in");
+    // The host looks again while the sign-in runs: a status command starts.
+    let survey = ticket_of(&script.check_agents(), "survey");
+    let status = ticket_of(
+        &script.setup(survey, found(&["test-download-1.4.0"])),
+        "status",
+    );
+    // The sign-in ends, and a fresh status command is asked.
+    let out = script.setup(sign_in, SetupEvent::Ended { ok: true });
+    let fresh = ticket_of(&out, "status");
+    assert_ne!(fresh, status);
+    // The old one read the credentials before they were written.
+    script.setup(status, SetupEvent::Status(None));
+    assert_eq!(
+        script.agent_status("dl-agent")["sign_in"],
+        signed_in("Unknown")
+    );
+    script.setup(fresh, SetupEvent::Status(Some(SignedInAs::Account)));
+    assert_eq!(
+        script.agent_status("dl-agent")["sign_in"],
+        signed_in("Account")
+    );
+}
+
+#[test]
+fn a_status_command_from_before_a_sign_out_ended_never_undoes_it() {
+    let mut script = Script::new(host());
+    let out = script.surveyed(&["test-download-1.4.0"]);
+    script.setup(
+        ticket_of(&out, "status"),
+        SetupEvent::Status(Some(SignedInAs::Account)),
+    );
+    let survey = ticket_of(&script.check_agents(), "survey");
+    let status = ticket_of(
+        &script.setup(survey, found(&["test-download-1.4.0"])),
+        "status",
+    );
+    let run = ticket_of(&script.sign_out("dl-agent").1, "run");
+    script.setup(run, SetupEvent::Ended { ok: true });
+    script.setup(status, SetupEvent::Status(Some(SignedInAs::Account)));
+    assert_eq!(
+        script.agent_status("dl-agent")["sign_in"],
+        json!({ "type": "SignedOut" })
+    );
+    // And it no longer stops another being asked.
+    let survey = ticket_of(&script.check_agents(), "survey");
+    one(
+        &script.setup(survey, found(&["test-download-1.4.0"])),
+        "status",
+    );
 }

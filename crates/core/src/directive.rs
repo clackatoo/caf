@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use crate::agent::SpawnCommand;
 use crate::ids::{ChangeNo, ChatId, Ticket};
 use crate::install::{Install, LinkFrom, SignedInAs};
-use crate::time::Mono;
+use crate::time::{Mono, Wall};
 
 /// Work for a driver.
 #[non_exhaustive]
@@ -262,7 +262,7 @@ pub enum SetupDirective {
         folder: String,
         /// What to install.
         install: Install,
-        /// The agent's private folder, such as `claude-private`, if its
+        /// The agent's private folder, such as `claude-agent-acp-private`, if its
         /// recipe gives it one
         /// ([`EnvValue::PrivateFolder`](crate::install::EnvValue::PrivateFolder)):
         /// made beside the installs, readable only by the user, if it isn't
@@ -276,6 +276,12 @@ pub enum SetupDirective {
         ticket: Ticket,
         /// The folder's name.
         folder: String,
+        /// Remove it only if it hasn't been used since: if its `.used`
+        /// file, or the folder itself if it has none, changed later, a
+        /// process started from it since the survey the core decided on,
+        /// and it stays (`Removed { removed: false }`). Checked holding the
+        /// installs' lock, as it's removed.
+        unused_since: Wall,
     },
     /// Run a sign-in command, handing back its link and code as it gives
     /// them, until it ends or is stopped.
