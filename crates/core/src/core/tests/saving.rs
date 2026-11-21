@@ -938,6 +938,22 @@ fn a_restore_is_under_way_until_its_chat_loads_or_fails_or_is_deleted() {
 }
 
 #[test]
+fn a_chat_put_away_is_there_as_it_was_left_until_its_written() {
+    let mut script = Script::new(host());
+    let mut store = Store::default();
+    script.open_saved("claude");
+    let chat = CHAT;
+    assert!(script.core.away(chat).is_none(), "loaded, it's not away");
+    let out = script.close(chat).1;
+    assert!(script.core.chat(chat).is_none());
+    let left = script.core.away(chat).expect("as it was left");
+    assert_eq!(left.state, crate::chat::ChatState::Closed);
+    store.take(&out);
+    script.serve(&mut store, false);
+    assert!(script.core.away(chat).is_none(), "written, it's gone");
+}
+
+#[test]
 fn what_cant_be_saved_or_restored_is_refused() {
     let mut script = Script::new(host());
     let long = "x".repeat(257);
