@@ -22,3 +22,7 @@ uuid.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]
+# A long shelf name's folder, as the tests expect it.
+sha2.workspace = true
+# Looking inside what's written: the field names in it, and its frames.
+zstd.workspace = true

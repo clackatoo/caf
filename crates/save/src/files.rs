@@ -108,10 +108,7 @@ fn chat_of(name: &str) -> Option<(ChatId, &str)> {
 
 /// The root, made if it isn't there.
 pub(crate) fn root(path: &Path) -> io::Result<OwnedFd> {
-    DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(path)?;
+    DirBuilder::new().recursive(true).mode(0o700).create(path)?;
     Ok(rustix::fs::open(
         path,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
@@ -131,7 +128,12 @@ fn subfolder(parent: impl AsFd, name: &str, make: bool) -> io::Result<Option<Own
                 Err(error) => return Err(error.into()),
             }
             sync(&parent)?;
-            Ok(Some(rustix::fs::openat(&parent, name, flags, Mode::empty())?))
+            Ok(Some(rustix::fs::openat(
+                &parent,
+                name,
+                flags,
+                Mode::empty(),
+            )?))
         }
         Err(Errno::NOENT) => Ok(None),
         Err(error) => Err(error.into()),
@@ -185,7 +187,11 @@ fn write_new(
     times: Option<&Timestamps>,
 ) -> io::Result<()> {
     let written = (|| -> io::Result<()> {
-        let mut file = open(&folder, new, OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC)?;
+        let mut file = open(
+            &folder,
+            new,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC,
+        )?;
         parts.iter().try_for_each(|part| file.write_all(part))?;
         if let Some(times) = times {
             rustix::fs::futimens(&file, times)?;
@@ -393,7 +399,12 @@ pub(crate) fn snapshot(
     let parts: [&[u8]; 3] = [&generation, &[0], snapshot];
     replace(&folder, &new_file(chat, "caf"), &caf, &parts)?;
     sync(&folder)?;
-    replace(&folder, &new_file(chat, "journal"), &journal, &[&generation])?;
+    replace(
+        &folder,
+        &new_file(chat, "journal"),
+        &journal,
+        &[&generation],
+    )?;
     let head = file(chat, "head");
     replace(&folder, &new_file(chat, "head"), &head, &[header])?;
     sync(&folder)?;
@@ -602,7 +613,8 @@ fn squeeze_chat(folder: impl AsFd, chat: ChatId, before: Option<SystemTime>) -> 
     let Ok(was) = rustix::fs::statat(&folder, &name, AtFlags::SYMLINK_NOFOLLOW) else {
         return Ok(0);
     };
-    let changed = SystemTime::UNIX_EPOCH + Duration::new(was.st_mtime as u64, was.st_mtime_nsec as u32);
+    let changed =
+        SystemTime::UNIX_EPOCH + Duration::new(was.st_mtime as u64, was.st_mtime_nsec as u32);
     if FileType::from_raw_mode(was.st_mode) != FileType::RegularFile
         || before.is_none_or(|before| changed > before)
     {

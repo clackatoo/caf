@@ -227,7 +227,9 @@ fn unpack(frame: &[u8]) -> Result<Vec<u8>, String> {
         Ok(_) => return Err("there's more after it".into()),
         Err(_) => return Err("it's cut off".into()),
     }
-    let size = zstd::zstd_safe::get_frame_content_size(frame).ok().flatten();
+    let size = zstd::zstd_safe::get_frame_content_size(frame)
+        .ok()
+        .flatten();
     // Never trusting a damaged size with more than a little memory up front.
     let mut inside = Vec::with_capacity(size.unwrap_or(0).min(1 << 26) as usize);
     zstd::stream::read::Decoder::with_buffer(frame)

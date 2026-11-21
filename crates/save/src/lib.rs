@@ -287,7 +287,11 @@ pub fn carry_out<A: AppItem, D: AppData>(
     let done = |written| StorageEvent::Done { written };
     Some(match directive {
         StorageDirective::List { ticket, shelf } => (ticket, list(store, &shelf)),
-        StorageDirective::Load { ticket, shelf, chat } => {
+        StorageDirective::Load {
+            ticket,
+            shelf,
+            chat,
+        } => {
             let event = match store.load(&shelf, chat) {
                 Ok(stored) => match decode(&stored.snapshot, &stored.journal) {
                     Ok(saved) => StorageEvent::Loaded(Box::new(saved)),
