@@ -5,8 +5,9 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Starts the debugger live, with only the fake agent, keeping its state
-/// in a folder of its own; sends it `signal` once it's serving; and
+/// Starts the debugger live, with the agents it offers by itself (the
+/// fake agent, and Claude, installed by CAF), keeping its state and any
+/// installs in a folder of its own; sends it `signal` once it's serving; and
 /// returns how it exited and the last event its recording holds.
 fn stopped_by(signal: &str) -> (std::process::ExitStatus, serde_json::Value) {
     let state =
@@ -16,6 +17,7 @@ fn stopped_by(signal: &str) -> (std::process::ExitStatus, serde_json::Value) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_caf-debugger"))
         .args(["--port", "0"])
         .env("XDG_STATE_HOME", &state)
+        .env("XDG_DATA_HOME", &state)
         .env(caf_fake_agent::BIN_VAR, caf_fake_agent::binary())
         .env("PATH", "/usr/bin:/bin")
         .stdout(Stdio::piped())

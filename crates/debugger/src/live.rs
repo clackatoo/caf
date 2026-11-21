@@ -48,11 +48,13 @@ pub fn host() -> Host {
 }
 
 /// What viewers may do: open a chat with any of `agents` in any absolute
-/// folder, with no MCP servers, and act on every chat.
+/// folder, with no MCP servers, act on every chat, and install agents and
+/// sign in and out of them.
 #[must_use]
 pub fn rules(agents: &[AgentSpec]) -> ViewerRules {
     let names: Vec<_> = agents.iter().map(|agent| agent.name.clone()).collect();
     let mut rules = ViewerRules::default();
+    rules.agents = true;
     rules.open = Box::new(move |request| {
         if !names.contains(&request.agent) || !request.cwd.is_absolute() {
             return None;
@@ -241,17 +243,21 @@ fn json(raw: &RawValue) -> Option<serde_json::Value> {
 }
 
 /// Directives with what a recording hides taken out, so a replay of the
-/// recording and the live run can be compared. A recording hides the
-/// values of MCP servers' variables and headers in the host's event that
-/// opens a chat, and those reach the agent in the `mcpServers` of the
-/// message that opens or loads its session: so in each `Write` to an
-/// agent whose message has `params.mcpServers`, every server's `env` and
-/// `headers` values become `null`. Its `bytes` are compared as the JSON
-/// they hold; every other `Write`'s bytes stay as they are.
+/// recording and the live run can be compared:
+/// - A recording hides the values of MCP servers' variables and headers
+///   in the host's event that opens a chat, and those reach the agent in
+///   the `mcpServers` of the message that opens or loads its session: so
+///   in each `Write` to an agent whose message has `params.mcpServers`,
+///   every server's `env` and `headers` values become `null`. Its `bytes`
+///   are compared as the JSON they hold; every other `Write`'s bytes stay
+///   as they are.
+/// - A recording hides what the user pasted into a sign-in, a one-time
+///   code, which a replay reads as empty: so each `Setup` `Paste`'s
+///   `text` becomes `null`.
 ///
 /// Nothing else a recording hides changes a directive:
-/// - Claude's sign-in status, written with no params, is dropped by the
-///   core either way;
+/// - of an agent's sign-in status, it keeps only the kind, which is all
+///   the core reads;
 /// - agents' arguments and variables, left out of the header, reach
 ///   only `Start`, and the check's core is made with them as given.
 fn hidden(directives: &mut serde_json::Value) {
@@ -259,6 +265,10 @@ fn hidden(directives: &mut serde_json::Value) {
         return;
     };
     for directive in all {
+        if directive["type"] == "Setup" && directive["value"]["type"] == "Paste" {
+            directive["value"]["value"]["text"] = serde_json::Value::Null;
+            continue;
+        }
         if directive["type"] != "Agent" || directive["value"]["type"] != "Write" {
             continue;
         }
@@ -416,6 +426,33 @@ mod tests {
         assert_ne!(compared(prompt("a")), compared(prompt("b")));
         // Another write's bytes stay bytes, compared exactly.
         assert_eq!(compared(prompt("a")), json!([prompt("a")]));
+    }
+
+    #[test]
+    fn only_a_pasted_codes_text_is_hidden_from_the_recording_check() {
+        let paste = |ticket: u64, text: &str| json!({"type": "Setup", "value": {"type": "Paste", "value": {"ticket": ticket, "text": text}}});
+        let compared = |directive: serde_json::Value| {
+            let mut all = json!([directive]);
+            hidden(&mut all);
+            all
+        };
+        // As the live run gave it, and as a replay of the recording does.
+        assert_eq!(
+            compared(paste(1005, "code#state")),
+            compared(paste(1005, ""))
+        );
+        assert_ne!(
+            compared(paste(1005, "code#state")),
+            compared(paste(1006, ""))
+        );
+        // Nothing else of the setup driver's.
+        let sign_in = |url: &str| json!({"type": "Setup", "value": {"type": "Run", "value": {"ticket": 1005, "url": url}}});
+        assert_ne!(compared(sign_in("a")), compared(sign_in("b")));
+    }
+
+    #[test]
+    fn viewers_may_install_agents_and_sign_in_and_out() {
+        assert!(rules(&agents()).agents);
     }
 
     #[test]

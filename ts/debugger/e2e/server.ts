@@ -30,7 +30,9 @@ export function start(args: string[]): Promise<Server & { process: ChildProcess;
   // Live runs are recorded under $XDG_STATE_HOME: a folder of the test's own.
   const state = mkdtempSync(join(tmpdir(), 'caf-e2e-'))
   return new Promise((done, fail) => {
-    const env = { ...process.env, XDG_STATE_HOME: state, CAF_FAKE_AGENT_BIN: fake }
+    // Agents CAF installs would go under $XDG_DATA_HOME: the same folder, so
+    // a test never sees, nor touches, the agents installed on this machine.
+    const env = { ...process.env, XDG_STATE_HOME: state, XDG_DATA_HOME: state, CAF_FAKE_AGENT_BIN: fake }
     const child = spawn(binary, [...args, '--port', '0'], { stdio: ['ignore', 'pipe', 'pipe'], env })
     let printed = ''
     const hear = (chunk: Buffer) => {
