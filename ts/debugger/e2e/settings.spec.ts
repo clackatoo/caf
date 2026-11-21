@@ -42,11 +42,11 @@ test('a model chosen while idle applies at once, and the next turn is sent on it
   const model = setting(page, 'Model')
   await expect(model.locator('select')).toHaveValue('small')
   await model.locator('select').selectOption('large')
-  // Taken, then answered: nothing waits.
-  await expect(page.locator('.caf-settings')).toHaveAttribute('aria-busy', 'false')
+  // Chosen, as the chat says: its description is Large's. Then answered:
+  // nothing waits.
+  await expect(model.locator('.about')).toHaveText("The fake's own, as large: it says the same")
   await expect(model.locator('.waiting')).toHaveText('')
   await expect(model.locator('select')).toHaveValue('large')
-  await expect(model).toContainText("The fake's own, as large: it says the same")
   await send(page, 'hello')
   const turn = page.locator('.caf-chat .turn').last()
   await expect(turn.locator('.life')).toHaveText('Finished')

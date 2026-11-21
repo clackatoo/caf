@@ -56,8 +56,8 @@ choice is checked against what's offered when it's made, so an effort
 level only a new model has can be chosen once the model change is
 answered, not with it.
 
-A message never goes with a choice silently replaced: either it fails, or
-the chat says what changed. If a choice made for the chat itself can't be
+A message never goes with a choice made for the chat silently replaced:
+either it fails, or the chat says what changed. If a choice made for the chat itself can't be
 applied, because the agent doesn't offer it or refuses it, every message
 waiting fails (`FailureReason::SettingNotApplied`), with Send again, and
 the chat says so whether or not any waits (`Note::NotOffered`, or
@@ -122,17 +122,17 @@ To offer models before the user opens a chat:
 caf.learn_settings(&AgentName("claude".into())).await?;
 ```
 
-CAF starts the agent if it isn't running, opens a session with none of
-the agent's tools, reads what it offers, and closes it. The session is in
-CAF's installs' folder if CAF has installed anything there, and otherwise
-in `/`, as no chat gives it a folder. No message is
-sent, so it costs nothing. Where it stands is in the agent's status from
-`watch_agents`, as `settings`: `Unknown`, `Learning`, `Known(settings)`
-or `Failed(why)`. What was learned before stays shown while it's learned
-again, and if that fails. If the agent's adapter serves chats and can't
-close sessions, the session stays until the adapter stops. Every chat's
-session tells it too. It isn't saved: it depends on the account and the
-agent's version, so it's learned again each run.
+CAF starts the agent if it isn't running, opens a session with none of the
+agent's tools, reads what it offers, and closes it. The session is in
+CAF's installs' folder if CAF has found installs there, and otherwise in
+`/`, as no chat gives it a folder. No message is sent, so it costs
+nothing. Where it stands is in the agent's status from `watch_agents`, as
+`settings`: `Unknown`, `Learning`, `Known(settings)` or `Failed(why)`.
+What was learned before stays shown while it's learned again, and if that
+fails. If the agent's adapter serves chats and can't close sessions, the
+session stays until the adapter stops. Every chat's session tells it too.
+It isn't saved: it depends on the account and the agent's version, so it's
+learned again each run.
 
 ## Saving
 

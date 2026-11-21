@@ -145,7 +145,7 @@ each chat.
 
 ## Choosing the model
 
-Below each chat, beside where you type, the debugger shows the settings
+Above the message box of each chat, the debugger shows the settings
 its agent offers: its models and effort levels as menus, as the agent
 lists and names them, and fast mode as a switch. A change made while the
 agent is replying, or before its session opens, says so ("Large, from your

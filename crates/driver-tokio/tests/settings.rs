@@ -293,7 +293,10 @@ async fn the_hosts_defaults_are_sent_and_one_the_agent_doesnt_offer_is_dropped_q
     ));
     steps.extend(set_to("fast", json!(true), &options("large", "low", true)));
     steps.extend([prompt(), say("s1", "Hello"), end_turn()]);
-    let script = dir.script("script.jsonl", &offering(&steps));
+    let mut script = offering(&steps);
+    // The session opens once the test has seen the choices waiting.
+    script.insert(4, wait_file(&dir, "go"));
+    let script = dir.script("script.jsonl", &script);
     let mut agent = fake(&dir, &script);
     agent.settings = vec![SettingChoice::model("large"), SettingChoice::effort("max")];
     let (caf, running) = Caf::start(Config::new(host(), vec![agent]));
@@ -304,9 +307,25 @@ async fn the_hosts_defaults_are_sent_and_one_the_agent_doesnt_offer_is_dropped_q
     let mut watch = chat.watch();
     chat.send(UserMessage::text("Hi")).await.unwrap();
 
+    // Before the agent has said what it offers, every choice waits.
+    let waiting = picture(&chat).await;
+    assert!(waiting.settings.offered.is_empty(), "{waiting:#?}");
+    assert_eq!(chosen(&waiting, SettingKind::Model), Some(&choice("large")));
+    assert_eq!(chosen(&waiting, SettingKind::Effort), Some(&choice("max")));
+    assert_eq!(
+        chosen(&waiting, SettingKind::Fast),
+        Some(&SettingValue::Switch(true))
+    );
+    touch(&dir, "go");
+
     let done = until(&chat, &mut watch, "the turn to finish", finished).await;
     assert_eq!(done.turns[0].model, model("large", "Large"));
     assert_eq!(current(&done, SettingKind::Effort), Some(&choice("low")));
+    assert_ne!(
+        chosen(&done, SettingKind::Effort),
+        Some(&choice("max")),
+        "the default the agent doesn't offer is gone"
+    );
     assert_eq!(
         done.settings.own,
         [SettingKind::Fast],
@@ -419,7 +438,7 @@ async fn a_change_the_agent_never_answers_restarts_its_adapter_and_goes_again() 
     let shell = r#"if [ -e "$DIR/started" ]; then script=second; else : > "$DIR/started"; script=first; fi
 exec "$FAKE" "$DIR/$script.jsonl" --record "$DIR/record.jsonl""#;
     let mut host = host();
-    host.timers.request = std::time::Duration::from_millis(500);
+    host.timers.request = std::time::Duration::from_secs(2);
     let (caf, running) = Caf::start(Config::new(host, vec![fake_by_shell(&dir, shell)]));
     let chat = caf
         .open_chat(choosing(&dir, vec![SettingChoice::model("large")]))

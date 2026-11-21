@@ -110,9 +110,10 @@ answers, whichever agent it is:
   agent lists them, in one shape for every agent.
 - **Choosing**: for a chat, as it opens or at any time, or as your
   program's default for an agent. A change made during a reply applies
-  from the next message. A message never goes on a choice silently
-  replaced: it fails, saying so, or the chat says what changed. Each turn
-  records the model it was sent on.
+  from the next message. A message never goes with a choice made for the
+  chat silently replaced: it fails, saying so, or the chat says what
+  changed. Your program's defaults the agent doesn't offer are dropped
+  quietly. Each turn records the model it was sent on.
 - **Before any chat**: CAF learns what an agent offers without sending a
   message, so your program can offer its models before a chat opens.
   Viewers choose and learn too.

@@ -703,7 +703,8 @@ fn current(chat: &Chat, kind: SettingKind) -> Option<SettingValue> {
 #[ignore = "needs a signed-in Claude, and spends usage"]
 async fn claude_answers_on_the_model_and_effort_chosen() {
     let folder = std::env::temp_dir().join(format!("caf-live-chosen-{}", std::process::id()));
-    std::fs::create_dir_all(&folder).unwrap();
+    let mut folders = Folders(Vec::new());
+    folders.make(&folder);
     let claude = AgentSpec::command(
         "claude",
         SpawnCommand::new(adapter()),
@@ -786,5 +787,5 @@ async fn claude_answers_on_the_model_and_effort_chosen() {
     })
     .await
     .expect("shutting down");
-    let _ = std::fs::remove_dir_all(&folder);
+    drop(folders);
 }
