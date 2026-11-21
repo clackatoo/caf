@@ -59,7 +59,7 @@ function bar(): HTMLElement {
 
 describe("the agent's settings", () => {
   it('offers its models in its order, its groups as it gives them, saying what the one chosen is', () => {
-    draw(chat({ settings: { offered: offered(), chosen: [] } }))
+    draw(chat({ settings: { offered: offered(), chosen: [], own: [] } }))
     const model = select('Model')
     // Opus's two choices are apart, as the agent put them, each in a group of its own.
     expect([...model.children].map((child) => (child instanceof HTMLOptGroupElement ? `[${child.label}]` : child.textContent))).toEqual([
@@ -77,7 +77,7 @@ describe("the agent's settings", () => {
   })
 
   it('chooses a model, effort and fast mode by the agent\'s own ids', async () => {
-    const { actions } = draw(chat({ settings: { offered: offered(), chosen: [] } }))
+    const { actions } = draw(chat({ settings: { offered: offered(), chosen: [], own: [] } }))
     await fireEvent.change(select('Model'), { target: { value: 'sonnet' } })
     await waitFor(() => expect(actions.setSetting).toHaveBeenCalledWith(sonnet))
     await fireEvent.change(select('Effort'), { target: { value: 'low' } })
@@ -89,27 +89,27 @@ describe("the agent's settings", () => {
   })
 
   it('says fast mode may cost more', () => {
-    draw(chat({ settings: { offered: offered(), chosen: [] } }))
+    draw(chat({ settings: { offered: offered(), chosen: [], own: [] } }))
     const fast = screen.getByRole('checkbox', { name: 'Fast mode' }) as HTMLInputElement
     expect(fast.checked).toBe(false)
     expect(fast.closest('.setting')?.textContent).toContain('May cost more.')
   })
 
   it('shows a change waiting for the turn running as from the next message', () => {
-    const { container } = draw(chat({ turns: [turn({ life: life('Running') })], settings: { offered: offered(), chosen: [sonnet] } }))
+    const { container } = draw(chat({ turns: [turn({ life: life('Running') })], settings: { offered: offered(), chosen: [sonnet], own: [{ type: 'Model' }] } }))
     expect(select('Model').value).toBe('sonnet')
     expect(container.querySelector('.waiting')?.textContent).toBe('Sonnet, from your next message')
   })
 
   it('shows a change waiting for the session to open as from the next message', () => {
-    const { container } = draw(chat({ state: { type: 'Idle' }, settings: { offered: offered(), chosen: [sonnet] } }))
+    const { container } = draw(chat({ state: { type: 'Idle' }, settings: { offered: offered(), chosen: [sonnet], own: [{ type: 'Model' }] } }))
     expect(container.querySelector('.waiting')?.textContent).toBe('Sonnet, from your next message')
   })
 
   it('shows a change sent at once as changing, and nothing once the agent has taken it', async () => {
-    const { container, rerender } = draw(chat({ settings: { offered: offered(), chosen: [sonnet] } }))
+    const { container, rerender } = draw(chat({ settings: { offered: offered(), chosen: [sonnet], own: [{ type: 'Model' }] } }))
     expect(container.querySelector('.waiting')?.textContent).toBe('Changing to Sonnet…')
-    await rerender({ chat: chat({ settings: { offered: offered('sonnet'), chosen: [sonnet] } }) })
+    await rerender({ chat: chat({ settings: { offered: offered('sonnet'), chosen: [sonnet], own: [{ type: 'Model' }] } }) })
     // The same live region, emptied: one put in with its text isn't read out.
     expect(container.querySelector('[data-kind=Model] .waiting')?.textContent).toBe('')
     expect(select('Model').value).toBe('sonnet')
@@ -117,21 +117,21 @@ describe("the agent's settings", () => {
 
   it('names a switch waiting by the setting', () => {
     const fast: SettingChoice = { kind: { type: 'Fast' }, value: { type: 'Switch', value: true } }
-    const { container } = draw(chat({ settings: { offered: offered(), chosen: [fast] } }))
+    const { container } = draw(chat({ settings: { offered: offered(), chosen: [fast], own: [{ type: 'Fast' }] } }))
     expect((screen.getByRole('checkbox', { name: 'Fast mode' }) as HTMLInputElement).checked).toBe(true)
     expect(container.querySelector('[data-kind=Fast] .waiting')?.textContent).toBe('Turning fast mode on…')
   })
 
   it('still shows a choice the agent no longer lists', () => {
     const gone: SettingChoice = { kind: { type: 'Model' }, value: { type: 'Choice', value: 'claude-2' } }
-    draw(chat({ state: { type: 'Idle' }, settings: { offered: offered(), chosen: [gone] } }))
+    draw(chat({ state: { type: 'Idle' }, settings: { offered: offered(), chosen: [gone], own: [{ type: 'Model' }] } }))
     expect(select('Model').value).toBe('claude-2')
   })
 
   it("says why a choice wasn't taken, and goes back to what it was", async () => {
     const given = actions()
     given.setSetting.mockRejectedValue(new CafError({ type: 'Refused', value: { type: 'NoSuchSetting' } }))
-    draw(chat({ settings: { offered: offered(), chosen: [] } }), { actions: given })
+    draw(chat({ settings: { offered: offered(), chosen: [], own: [] } }), { actions: given })
     await fireEvent.change(select('Model'), { target: { value: 'haiku' } })
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe("The agent doesn't offer that setting, or that choice of it."))
     expect(select('Model').value).toBe('default')
@@ -141,7 +141,7 @@ describe("the agent's settings", () => {
     const given = actions()
     let done = () => {}
     given.setSetting.mockImplementation(() => new Promise<void>((resolve) => (done = resolve)))
-    draw(chat({ settings: { offered: offered(), chosen: [] } }), { actions: given })
+    draw(chat({ settings: { offered: offered(), chosen: [], own: [] } }), { actions: given })
     const model = select('Model')
     model.focus()
     await fireEvent.change(model, { target: { value: 'sonnet' } })
@@ -162,10 +162,10 @@ describe("the agent's settings", () => {
     const given = actions()
     let refuse = (_: unknown) => {}
     given.setSetting.mockImplementation(() => new Promise<void>((_, reject) => (refuse = reject)))
-    const { rerender } = draw(chat({ settings: { offered: offered(), chosen: [] } }), { actions: given })
+    const { rerender } = draw(chat({ settings: { offered: offered(), chosen: [], own: [] } }), { actions: given })
     await fireEvent.change(select('Model'), { target: { value: 'haiku' } })
     // The agent fell back to Sonnet by itself while the change was sent.
-    await rerender({ chat: chat({ settings: { offered: offered('sonnet'), chosen: [] } }) })
+    await rerender({ chat: chat({ settings: { offered: offered('sonnet'), chosen: [], own: [] } }) })
     refuse(new CafError({ type: 'Refused', value: { type: 'NoSuchSetting' } }))
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
     expect(select('Model').value).toBe('sonnet')
@@ -176,7 +176,7 @@ describe("the agent's settings", () => {
     let refuse = (_: unknown) => {}
     given.setSetting.mockImplementation(() => new Promise<void>((_, reject) => (refuse = reject)))
     const fast: SettingChoice = { kind: { type: 'Fast' }, value: { type: 'Switch', value: true } }
-    draw(chat({ settings: { offered: offered(), chosen: [fast] } }), { actions: given })
+    draw(chat({ settings: { offered: offered(), chosen: [fast], own: [{ type: 'Fast' }] } }), { actions: given })
     const box = screen.getByRole('checkbox', { name: 'Fast mode' }) as HTMLInputElement
     expect(box.checked).toBe(true)
     await fireEvent.click(box)
@@ -189,7 +189,7 @@ describe("the agent's settings", () => {
   })
 
   it('links each control to what it says of itself and its change waiting', () => {
-    draw(chat({ settings: { offered: offered(), chosen: [sonnet] } }))
+    draw(chat({ settings: { offered: offered(), chosen: [sonnet], own: [{ type: 'Model' }] } }))
     const said = (control: HTMLElement) =>
       control
         .getAttribute('aria-describedby')!
@@ -204,13 +204,13 @@ describe("the agent's settings", () => {
     ['looking back', { readOnly: true }],
     ['the host lets it only watch', { may: { act: false, agents: true } }],
   ])('chooses nothing while %s', (_, options) => {
-    draw(chat({ settings: { offered: offered(), chosen: [] } }), options)
+    draw(chat({ settings: { offered: offered(), chosen: [], own: [] } }), options)
     expect(select('Model').disabled).toBe(true)
     expect((screen.getByRole('checkbox', { name: 'Fast mode' }) as HTMLInputElement).disabled).toBe(true)
   })
 
   it('chooses nothing in a closed chat', () => {
-    draw(chat({ state: { type: 'Closed' }, settings: { offered: offered(), chosen: [] } }))
+    draw(chat({ state: { type: 'Closed' }, settings: { offered: offered(), chosen: [], own: [] } }))
     expect(select('Model').disabled).toBe(true)
   })
 
@@ -219,7 +219,7 @@ describe("the agent's settings", () => {
       { kind: { type: 'Mode' }, name: 'Mode', form: { type: 'Choices', value: [choice('plan', 'Plan')] }, current: null },
       { kind: { type: 'Voice' }, name: 'Voice', form: { type: 'Slider', value: { max: 9 } }, current: null },
     ] as never as Setting[]
-    draw(chat({ settings: { offered: later, chosen: [] } }))
+    draw(chat({ settings: { offered: later, chosen: [], own: [] } }))
     expect(select('Mode').value).toBe('')
     expect(bar().textContent).toContain("Voice A kind of setting this viewer can't show (Slider).")
   })
@@ -240,7 +240,7 @@ describe('before the session opens', () => {
   })
 
   it('shows a choice made before the session opens as from the next message', () => {
-    const { container } = draw(chat({ state: { type: 'Opening' }, settings: { offered: [], chosen: [sonnet] } }), {
+    const { container } = draw(chat({ state: { type: 'Opening' }, settings: { offered: [], chosen: [sonnet], own: [{ type: 'Model' }] } }), {
       agent: status({ type: 'Host' }, undefined, false, { type: 'Known', value: offered() }),
     })
     expect(select('Model').value).toBe('sonnet')
@@ -371,7 +371,11 @@ describe('the words for settings', () => {
     [{ type: 'AgentChanged', value: sonnet }, 'The agent changed by itself to the model sonnet, and this chat follows it.'],
     [
       { type: 'NotOffered', value: { kind: { type: 'Fast' }, value: { type: 'Switch', value: true } } },
-      "The agent no longer offers fast mode, so that choice was dropped, and the agent's own applies.",
+      "The agent doesn't offer fast mode, so that choice was dropped: the app's default, or else the agent's own, applies.",
+    ],
+    [
+      { type: 'NotApplied', value: { kind: { type: 'Effort' }, value: { type: 'Choice', value: 'max' } } },
+      "The agent refused the effort max, so that choice was dropped: the app's default, or else the agent's own, applies.",
     ],
   ])('draws the note %j', (note, says) => {
     const { container } = draw(chat({ turns: [turn({ items: [item({ type: 'Note', value: note as never })] })] }))

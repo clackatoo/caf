@@ -66,8 +66,6 @@
   const closed = $derived(chat.state.type === 'Closed')
   /** Whether anything can be done in the chat: it isn't read-only, and the host lets this viewer act. */
   const acting = $derived(!readOnly && may.act)
-  /** Its settings: a chat from before CAF had them has none, as the core reads it. */
-  const settings = $derived(chat.settings ?? { offered: [], chosen: [] })
   let problem = $state<string | null>(null)
   // Follow the end of the chat as it grows, unless the user has scrolled up.
   let scroller = $state<HTMLElement>()
@@ -159,7 +157,7 @@
 
   <Questions questions={chat.questions} readOnly={!acting} answer={actions.answer} />
   <SettingsBar
-    {settings}
+    settings={chat.settings}
     known={closed ? undefined : status?.settings}
     held={running !== undefined || chat.state.type !== 'Open'}
     disabled={!acting || closed}

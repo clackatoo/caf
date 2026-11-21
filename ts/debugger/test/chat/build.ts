@@ -49,7 +49,7 @@ export function chat(fields: Partial<Chat> = {}): Chat {
     turns: [],
     usage: null,
     questions: [],
-    settings: { offered: [], chosen: [] },
+    settings: { offered: [], chosen: [], own: [] },
     ...fields,
   }
 }

@@ -154,7 +154,7 @@ export function failureText(reason: DeepReadonly<FailureReason>): string {
     case 'BadAnswer':
       return "The agent's answer made no sense."
     case 'SettingNotApplied':
-      return "A setting you chose, such as a model, couldn't be applied, so CAF didn't send the message. The agent's own setting applies now: sending it again uses that."
+      return "A setting chosen for this chat, such as a model, couldn't be applied, so CAF didn't send the message. The app's default, or else the agent's own, applies now: sending it again uses that."
     case 'Other':
       return 'The agent reported an error.'
     default:
@@ -200,8 +200,10 @@ export function noteText(note: DeepReadonly<Note>): string {
       // A switch that's gone is gone on and off alike: it's named alone.
       const choice = note.value
       const what = choice.value.type === 'Switch' ? settingText(choice) : choiceText(choice)
-      return `The agent no longer offers ${what}, so that choice was dropped, and the agent's own applies.`
+      return `The agent doesn't offer ${what}, so that choice was dropped: the app's default, or else the agent's own, applies.`
     }
+    case 'NotApplied':
+      return `The agent refused ${choiceText(note.value)}, so that choice was dropped: the app's default, or else the agent's own, applies.`
     default:
       return `A note this viewer doesn't know (${tagOf(note)}).`
   }

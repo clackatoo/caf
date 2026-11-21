@@ -346,16 +346,20 @@ await caf.setSetting(chatId, { kind: { type: "Fast" }, value: { type: "Switch", 
 ```
 
 Choices are by the agent's own ids, matched exactly. The chat's `chosen`
-holds them, and where one differs from its setting's `current`, the change
-is waiting. A change made while a turn runs waits for it to end, and
-applies from the next message; with none running, it's sent at once. One
-made before the session opens is applied as it opens, before any message
-goes, and if it can't be, the message fails, `SettingNotApplied`, offering
-Send again, and the setting goes back to what the agent uses. When the
-agent changes a setting by itself, such as falling back to another model,
-the chat follows it, and a note in the chat says so (`AgentChanged`); a
-choice it no longer offers is dropped, with a note (`NotOffered`). Each
-turn's `model` names the model that answered it, if the agent says.
+holds them, with the host's defaults for the agent, and its `own` says
+which kinds were chosen for the chat itself. Where a choice differs from
+its setting's `current`, the change is waiting. A change made while a turn
+runs waits for it to end, and applies from the next message; with none
+running, it's sent at once. One made before the session opens is applied
+as it opens, before any message goes, and if it can't be, the message
+fails, `SettingNotApplied`, offering Send again. A choice the agent
+doesn't offer, or refuses, is dropped, with a note in the chat
+(`NotOffered`, `NotApplied`), and the setting falls back to the host's
+default, if the agent offers it, or else to what the agent uses; a host's
+default the agent doesn't offer is dropped quietly. When the agent changes
+a setting by itself, such as falling back to another model, the chat
+follows it, and a note says so (`AgentChanged`). Each turn's `model` names
+the model that answered it, if the agent says.
 
 The core refuses `NoSuchSetting` for a setting, or a value of it, that the
 agent has said it doesn't offer.
