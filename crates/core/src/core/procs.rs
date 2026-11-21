@@ -190,6 +190,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     proc.0
                 ),
             );
+            // Learning its agent's settings doesn't wait either.
+            if let Some(conn) = self.procs.get(&proc).map(|each| each.conn) {
+                self.learn_failed(conn, "the agent didn't start in time");
+            }
             return self.lose_process(now, proc, Cause::Restarted, out);
         }
         for &chat in wanted {

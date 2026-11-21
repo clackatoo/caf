@@ -1236,3 +1236,64 @@ fn a_change_refused_after_a_newer_one_was_chosen_leaves_the_newer_to_be_sent() {
     assert_eq!(prompts(&out).len(), 1);
     assert_eq!(notes(&script.chat(CHAT)), []);
 }
+
+#[test]
+fn an_answer_to_a_setting_after_its_chat_closed_changes_nothing() {
+    let mut script = Script::new(host());
+    script.open_offering(
+        OpenChat::new("claude", "/work"),
+        &claude_options("default", "default", false),
+    );
+    let (_, out) = script.set_setting(CHAT, SettingChoice::model("sonnet"));
+    let (id, _) = set(&out);
+    script.close(CHAT).0.expect("closed");
+    let before = script.chat(CHAT);
+    // Set, but to something else: still nothing.
+    script.answers(
+        PROC,
+        id,
+        &json!({ "configOptions": claude_options("haiku", "", false) }),
+    );
+    assert_eq!(script.chat(CHAT), before);
+}
+
+#[test]
+fn what_the_agent_changes_in_a_turn_it_started_is_said_in_that_turn() {
+    let mut script = Script::new(host());
+    script.open_offering(
+        choosing(vec![SettingChoice::model("default")]),
+        &claude_options("default", "default", false),
+    );
+    let out = script.answers(
+        PROC,
+        1002,
+        &json!({ "configOptions": claude_options("default", "default", false) }),
+    );
+    assert!(writes(&out).is_empty());
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "A background task finished." } }));
+    script.update(
+        PROC,
+        SESSION,
+        &update(&claude_options("sonnet", "default", false)),
+    );
+    assert_eq!(
+        notes(&script.chat(CHAT)),
+        [(
+            "Agent".to_owned(),
+            note("AgentChanged", &SettingChoice::model("sonnet"))
+        )]
+    );
+}
+
+#[test]
+fn learning_from_an_adapter_that_never_starts_says_so() {
+    let mut script = Script::new(host());
+    script.learn_settings("plain").0.expect("learning");
+    script.at(30_000);
+    let out = script.woken();
+    assert_eq!(with(&out, "signal").len(), 1, "stopped: {out:#?}");
+    assert_eq!(
+        script.agent_status("plain")["settings"],
+        json!({ "type": "Failed", "value": "the agent didn't start in time" })
+    );
+}

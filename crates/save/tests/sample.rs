@@ -398,9 +398,7 @@ fn records(version: u32) -> Vec<Vec<Entry<Pin, Notes>>> {
 /// on, CAF's notes about settings, and the message waiting failed as a
 /// setting couldn't be applied.
 fn settings() -> Vec<Value> {
-    let choice = |id: &str, name: &str, group: Value| {
-        json!({ "id": id, "name": name, "description": null, "group": group })
-    };
+    let choice = |id: &str, name: &str, group: Value| json!({ "id": id, "name": name, "description": null, "group": group });
     let offered = json!([
         {
             "kind": { "type": "Model" },
@@ -425,9 +423,7 @@ fn settings() -> Vec<Value> {
             "current": { "type": "Switch", "value": false },
         },
     ]);
-    let note = |id: u64, note: Value| {
-        json!({ "type": "ItemAdded", "value": { "turn": 10, "item": item(id, None, json!({ "type": "Note", "value": note })) } })
-    };
+    let note = |id: u64, note: Value| json!({ "type": "ItemAdded", "value": { "turn": 10, "item": item(id, None, json!({ "type": "Note", "value": note })) } });
     vec![
         json!({ "type": "Settings", "value": {
             "offered": offered,
@@ -438,8 +434,14 @@ fn settings() -> Vec<Value> {
             ],
         }}),
         json!({ "type": "TurnModel", "value": { "turn": 8, "model": { "id": "sonnet", "name": "Sonnet 4.6" } } }),
-        note(101, json!({ "type": "AgentChanged", "value": { "kind": { "type": "Model" }, "value": { "type": "Choice", "value": "haiku" } } })),
-        note(102, json!({ "type": "NotOffered", "value": { "kind": { "type": "Fast" }, "value": { "type": "Switch", "value": true } } })),
+        note(
+            101,
+            json!({ "type": "AgentChanged", "value": { "kind": { "type": "Model" }, "value": { "type": "Choice", "value": "haiku" } } }),
+        ),
+        note(
+            102,
+            json!({ "type": "NotOffered", "value": { "kind": { "type": "Fast" }, "value": { "type": "Switch", "value": true } } }),
+        ),
         json!({ "type": "TurnLife", "value": {
             "turn": 9,
             "life": { "type": "Failed", "value": {

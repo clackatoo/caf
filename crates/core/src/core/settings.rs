@@ -384,7 +384,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         out: &mut Vec<Directive<A, D>>,
     ) {
         let waited = self.take_asked(chat, (proc, id));
-        if !waited {
+        // A closed chat's record is as it was left.
+        let closed = (self.chats.get(&chat)).is_none_or(|whole| whole.state == ChatState::Closed);
+        if !waited || closed {
             return report(
                 out,
                 Level::Debug,
@@ -485,7 +487,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 chat.0
             ),
         );
-        let waited = self.take_asked(chat, (proc, id));
+        let waited = self.take_asked(chat, (proc, id))
+            && (self.chats.get(&chat)).is_some_and(|whole| whole.state != ChatState::Closed);
         let superseded = (self.chats.get(&chat))
             .is_none_or(|whole| chosen(&whole.settings, choice.kind) != Some(&choice.value));
         if waited && !superseded {
@@ -584,13 +587,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.tell(now, chat, Note::AgentChanged(choice));
     }
 
-    /// Says `note` in `chat`: in the turn running, as it happened during
-    /// it, or as a turn of CAF's own.
+    /// Says `note` in `chat`: in the turn open, the agent's or one it
+    /// started by itself, as it happened during it; or as a turn of CAF's
+    /// own.
     fn tell(&mut self, now: Now, chat: ChatId, note: Note) {
-        let running = (self.runs.get(&chat))
-            .and_then(|run| run.running.as_ref())
-            .map(|running| running.turn);
-        match running {
+        match self.open_turn(chat) {
             Some(turn) => {
                 let window = crate::time::Window::instant(now);
                 self.add_live_item(now, chat, turn, crate::chat::ItemKind::Note(note), window);
