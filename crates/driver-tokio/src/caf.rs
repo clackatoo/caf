@@ -496,7 +496,8 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
             listed,
             shelves: Vec::new(),
             restores: Restores::default(),
-            stored: false,
+            put_away: HashMap::new(),
+            lists_due: false,
             inbox,
             listening: true,
             reads: reading,
@@ -1018,12 +1019,13 @@ pub enum Update<A: AppItem = NoAppItems> {
 }
 
 impl<A: AppItem> Watch<A> {
-    /// The next update, or `None` once the chat is closed or CAF has shut
-    /// down.
+    /// The next update, or `None` once the chat is closed, put away or
+    /// deleted, or CAF has shut down.
     ///
     /// When CAF shuts down, a watch that hasn't seen how it left the chat
     /// gets that as one last [`Update::Picture`], even if it never read
-    /// before.
+    /// before. So does a watch of a chat put away, or closed and so put
+    /// away, as it's let go from memory: the chat as it was written whole.
     ///
     /// Cancel-safe: dropped before it resolves, it loses nothing.
     pub async fn next(&mut self) -> Option<Update<A>> {
@@ -1376,9 +1378,15 @@ struct Task<A: AppItem, D: AppData> {
     shelves: Vec<Shelf>,
     /// The restores the host waits for.
     restores: Restores,
-    /// The core gave the store work since the lists were last told: a
-    /// loaded chat written is listed as it is now.
-    stored: bool,
+    /// Each chat some watch follows that was put away, as it was written
+    /// whole, for its watches' last picture: kept until they're dropped,
+    /// or it's loaded again.
+    put_away: HashMap<ChatId, Chat<A>>,
+    /// The lists of chats, open and saved, may have changed since the
+    /// watches were last told: after a host's call or the store's answer,
+    /// and when the core gives the store work, as a loaded chat written is
+    /// listed as it is now.
+    lists_due: bool,
     inbox: mpsc::Receiver<Command<D>>,
     /// Whether any handle is left to send commands.
     listening: bool,
@@ -1686,8 +1694,8 @@ impl<A: AppItem, D: AppData> Task<A, D> {
             .and_then(recorded)
             .and_then(|command| self.keep(now, &Event::Host(command)));
         self.kept(step);
+        self.lists_due = true;
         self.route();
-        self.tell_lists();
         result
     }
 
@@ -1711,15 +1719,15 @@ impl<A: AppItem, D: AppData> Task<A, D> {
         let step = self.keep(now, &Event::Host(HostCommand::<A, D>::Shutdown));
         self.core.shutdown(now, &mut self.out);
         self.kept(step);
+        self.lists_due = true;
         self.route();
-        self.tell_lists();
     }
 
     /// Gives the core the store's answer.
     fn stored(&mut self, ticket: Ticket, event: StorageEvent<A, D>) {
         self.restores.answered(ticket, &event);
+        self.lists_due = true;
         self.give(Event::Storage { ticket, event });
-        self.tell_lists();
     }
 
     /// Gives the core what a driver reported.
@@ -1819,14 +1827,23 @@ impl<A: AppItem, D: AppData> Task<A, D> {
 
     /// After a host's call or the store's answer: tells the watches of
     /// lists what changed, ends the watches of chats no longer loaded, and
-    /// answers the restores that are over.
+    /// answers the restores that are over. Open chats are told first, so
+    /// a watcher who sees a chat loaded in the saved list finds it open,
+    /// as does a host told a restore is done.
     fn tell_lists(&mut self) {
+        self.lists_due = false;
         self.tell_chats();
         self.tell_saved();
         // A chat put away or deleted is gone from the core, with no change
-        // to say so: its watches are woken, find it gone, and end.
+        // to say so: its watches are woken, find it gone, and end, with how
+        // it was left if it was put away.
         let core = &self.core;
         self.feeds.retain(|chat, _| core.chat(*chat).is_some());
+        if !self.put_away.is_empty() {
+            let last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+            (self.put_away)
+                .retain(|chat, _| last.watched.contains_key(chat) && core.chat(*chat).is_none());
+        }
         self.settle_restores();
     }
 
@@ -1854,8 +1871,7 @@ impl<A: AppItem, D: AppData> Task<A, D> {
 
     /// Tells the [`SavedWatch`]es the saved chats on every shelf listed,
     /// if that changed.
-    fn tell_saved(&mut self) {
-        self.stored = false;
+    fn tell_saved(&self) {
         let mut listed = None;
         for shelf in &self.shelves {
             if let Some(chats) = self.core.saved(shelf) {
@@ -1960,6 +1976,13 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 }
                 Directive::Setup(setup) => self.setup.apply(setup),
                 Directive::Storage(storage) => {
+                    // A watched chat put away, written whole as it's let go.
+                    if let StorageDirective::Snapshot { saved, .. } = &storage
+                        && self.feeds.contains_key(&saved.header.chat)
+                        && self.core.chat(saved.header.chat).is_none()
+                    {
+                        (self.put_away).insert(saved.header.chat, saved.chat.clone());
+                    }
                     if let StorageDirective::Load {
                         ticket,
                         shelf,
@@ -1968,7 +1991,7 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                     {
                         (self.restores.loads).insert(*ticket, (*chat, shelf.clone()));
                     }
-                    self.stored = true;
+                    self.lists_due = true;
                     self.storage.apply(storage);
                 }
                 Directive::Report(report) => log_report(&report),
@@ -1979,9 +2002,8 @@ impl<A: AppItem, D: AppData> Task<A, D> {
         }
         self.out = out;
         self.tell_agents();
-        // A loaded chat written is listed as it is now.
-        if self.stored {
-            self.tell_saved();
+        if self.lists_due {
+            self.tell_lists();
         }
     }
 
@@ -2008,7 +2030,16 @@ impl<A: AppItem, D: AppData> Task<A, D> {
     /// What a watch that has seen up to `since` hasn't seen of `chat`.
     fn read(&mut self, chat: ChatId, since: Option<ChangeNo>, subscribe: bool) -> Option<Seen<A>> {
         let closed = self.closed(chat);
-        let read = self.core.read(chat, since)?;
+        let Some(read) = self.core.read(chat, since) else {
+            // Put away: as it was left, and nothing more.
+            let left = self.put_away.get(&chat)?;
+            return Some(Seen {
+                update: Some(Update::Picture(left.clone())),
+                latest: since,
+                closed: true,
+                wake: None,
+            });
+        };
         let (update, latest) = match read {
             Read::Changes([]) => (None, since),
             Read::Changes(changes) => (

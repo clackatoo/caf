@@ -378,6 +378,41 @@ async fn a_chat_put_away_is_let_go_and_comes_back_and_a_deleted_one_is_gone() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_watch_of_a_saved_chat_closed_sees_it_closed_then_ends() {
+    let dir = Dir::new();
+    let (caf, running) = start::<NoAppData>(&dir, &first_script(&dir));
+    let chat = caf.open_chat(saved_open(&dir, SHELF)).await.unwrap();
+    let mut watch = chat.watch();
+    chat.send(UserMessage::text("Hi")).await.unwrap();
+    until(&chat, &mut watch, "the answer", finished).await;
+    // Closed, a saved chat is put away: let go from memory, its watch is
+    // told how it was left.
+    chat.close().await.unwrap();
+    let last = tokio::time::timeout(PATIENCE, async {
+        let mut last = None;
+        while let Some(update) = watch.next().await {
+            last = Some(update);
+        }
+        last
+    })
+    .await
+    .expect("the watch ends");
+    match last {
+        Some(caf_driver_tokio::Update::Picture(left)) => {
+            assert_eq!(left.state, ChatState::Closed);
+            assert_eq!(words(&left.turns[0]), "Hello there");
+        }
+        other => panic!("the chat as it was left, not {other:?}"),
+    }
+    assert!(caf.watch_chats().next().await.unwrap().is_empty());
+    stop(&caf, running).await;
+    let mut store = FileStore::new(root(&dir));
+    let header = store.list(&shelf(SHELF)).unwrap();
+    let header = caf_save::decode_header(&header[0].1).unwrap();
+    assert!(header.closed, "saved, closed");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_shelf_moves_with_its_chats_loaded_or_not() {
     let dir = Dir::new();
     let script = dir.script("idle.jsonl", &handshake("s1"));
