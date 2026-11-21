@@ -291,7 +291,10 @@ pub enum StorageDirective<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     /// Move every chat on a shelf to another, such as when framewright
     /// saves a project under a new name. Chats that are loaded move with
     /// their locks. All of the shelf moves, or none of it: a move that
-    /// fails leaves every chat where it was.
+    /// fails leaves every chat where it was. A store refuses a move onto a
+    /// shelf that already has chats, as merging shelves isn't supported,
+    /// and one chat on `from` open in another program stops the whole
+    /// move; either way, it fails and nothing moves.
     MoveShelf {
         /// Its ticket.
         ticket: Ticket,
