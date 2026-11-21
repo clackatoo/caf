@@ -8,6 +8,7 @@ use std::time::SystemTime;
 
 use caf_debugger::server::{self, App};
 use caf_debugger::{agents, fake, files, live, replay};
+use caf_save::FileStore;
 
 /// Prints a line, as `println!` does, but one that can't be printed, as
 /// when its terminal has closed, is left out: `println!` would panic, and
@@ -31,17 +32,22 @@ macro_rules! tell {
 const PORT: u16 = 7320;
 
 const USAGE: &str = "\
-usage: caf-debugger [--port PORT] [--agents agents.toml]   run CAF live
-       caf-debugger --replay FILE.jsonl [--port PORT]     replay a recording
+usage: caf-debugger [--port PORT] [--agents agents.toml] [--store DIR]   run CAF live
+       caf-debugger --replay FILE.jsonl [--port PORT]                   replay a recording
 
 The page is served on 127.0.0.1 only, at the URL printed, which holds this
-launch's token. Port 7320 unless given; 0 picks a free one.";
+launch's token. Port 7320 unless given; 0 picks a free one.
+
+Live, chats are saved in DIR, by default $XDG_DATA_HOME/caf-debugger/chats
+(~/.local/share/caf-debugger/chats), and those saved before are listed, to
+restore.";
 
 /// What the command line asks for.
 struct Args {
     port: u16,
     agents: Option<PathBuf>,
     replay: Option<PathBuf>,
+    store: Option<PathBuf>,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
@@ -49,6 +55,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         port: PORT,
         agents: None,
         replay: None,
+        store: None,
     };
     while let Some(arg) = args.next() {
         let mut value = |name: &str| args.next().ok_or_else(|| format!("{name} needs a value"));
@@ -59,12 +66,16 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             }
             "--agents" => parsed.agents = Some(value("--agents")?.into()),
             "--replay" => parsed.replay = Some(value("--replay")?.into()),
+            "--store" => parsed.store = Some(value("--store")?.into()),
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown argument: {other}")),
         }
     }
     if parsed.agents.is_some() && parsed.replay.is_some() {
         return Err("--agents is for running live, not replaying".into());
+    }
+    if parsed.store.is_some() && parsed.replay.is_some() {
+        return Err("--store is for running live, not replaying".into());
     }
     Ok(parsed)
 }
@@ -124,7 +135,19 @@ async fn run(args: Args) -> Result<(), String> {
                 return Err("no agents to offer: give some with --agents".into());
             }
             let recording = files::new_recording(&dir, SystemTime::now());
-            let live = live::start(agents, Some(recording));
+            let store = match &args.store {
+                Some(store) => Some(
+                    std::path::absolute(store)
+                        .map_err(|error| format!("{}: {error}", store.display()))?,
+                ),
+                None => FileStore::default_root("caf-debugger").or_else(|| {
+                    log::warn!(
+                        "there's no $XDG_DATA_HOME or $HOME to keep chats in: they aren't saved"
+                    );
+                    None
+                }),
+            };
+            let live = live::start(agents, Some(recording), store);
             let names: Vec<_> = live
                 .caf
                 .agents()
@@ -135,6 +158,9 @@ async fn run(args: Args) -> Result<(), String> {
             match &live.recording {
                 Some(path) => say!("Recording to {}.", path.display()),
                 None => say!("Not recording: CAF couldn't make the file, as it says above."),
+            }
+            if let Some(store) = &live.store {
+                say!("Keeping chats in {}.", store.display());
             }
             let mut app = App::new(Arc::clone(&live.book), port, token.clone());
             app.live = Some((live.caf.clone(), Arc::clone(&live.rules)));
