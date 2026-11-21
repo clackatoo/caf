@@ -132,7 +132,9 @@ impl Default for AgentLimits {
 ///   exited and something it started holds its output open with nothing
 ///   coming through for [`AgentLimits::drain`]: its output isn't waited
 ///   for any more. Something that goes on writing is read until the core
-///   forgets the process.
+///   forgets the process. "Nothing coming through" is checked by reading
+///   when the time comes, so output waiting in a pipe is never given up
+///   on, even when the driver's task runs late.
 /// - **Writes after [`AgentDirective::CloseInput`]**, or after
 ///   [`AgentEvent::WriteFailed`], are dropped without a word: nothing more
 ///   is written.
@@ -362,7 +364,7 @@ async fn run(
                 };
             },
             status = exit(&process.leader.pidfd), if process.leader.watched() => process.exited(status),
-            () = until(process.drain), if room => process.stop_draining(),
+            () = until(process.drain), if room => process.drain_due(),
             () = until(process.stuck_since.map(|since| since + process.limits.stuck.min(LONGEST))) => process.stuck(),
         }
         if stepped {
@@ -710,6 +712,24 @@ impl Process {
         if self.stdout.is_some() || self.stderr.is_some() {
             self.drain = Some(later(self.limits.drain));
         }
+    }
+
+    /// Its drain time has come. Its task may have run late, as on a loaded
+    /// machine, so what's in its pipes is read first: anything there, or no
+    /// room to read it, means it isn't done, and the wait goes on. Only
+    /// pipes found empty are given up on.
+    fn drain_due(&mut self) {
+        let due = self.drain;
+        if self.stdout.is_some() {
+            self.read_output();
+        }
+        if self.stderr.is_some() {
+            self.read_errors();
+        }
+        if self.drain != due || !self.room() {
+            return;
+        }
+        self.stop_draining();
     }
 
     /// Nothing has come through its pipes for long enough since it exited:
@@ -1166,6 +1186,42 @@ async fn until(at: Option<Instant>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn output_left_when_the_drain_comes_due_is_still_read() {
+        // Its drain time passes while its task isn't run, as on a loaded
+        // machine, with output it wrote still in the pipe: that's read,
+        // not given up on.
+        let limits = AgentLimits {
+            read_step: 64,
+            ..AgentLimits::default()
+        };
+        let mut command = SpawnCommand::new("/bin/sh");
+        command.args = vec![
+            "-c".into(),
+            r#"i=0; while [ $i -lt 100 ]; do printf '{"jsonrpc":"2.0","method":"m"}\n'; i=$((i+1)); done"#.into(),
+        ];
+        let mut process = Process::start(&command, &mut None, limits).unwrap();
+        let status = exit(&process.leader.pidfd).await;
+        process.exited(status);
+        assert!(process.drain.is_some(), "its pipes are waited for");
+        process.drain = Some(Instant::now());
+        process.drain_due();
+        while process.stdout.is_some() {
+            if !process.read_output() {
+                process.close_output();
+            }
+        }
+        let lines = (process.queue.iter())
+            .filter(|queued| {
+                matches!(
+                    queued,
+                    Queued::Ready(AgentEvent::Frame(Frame::Message(_)), _)
+                )
+            })
+            .count();
+        assert_eq!(lines, 100, "every line it wrote");
+    }
 
     #[test]
     fn path_keeps_only_absolute_directories() {
