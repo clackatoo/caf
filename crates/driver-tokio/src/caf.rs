@@ -1163,7 +1163,7 @@ enum Command<D: AppData> {
     /// Answered once the chat is loaded or has failed to be.
     Restore {
         restore: RestoreChat,
-        reply: oneshot::Sender<Result<Result<ChatId, CannotRestore>, Refused>>,
+        reply: RestoreReply,
     },
     PutAway {
         chat: ChatId,
@@ -1261,11 +1261,16 @@ impl<A: AppItem> Default for Last<A> {
     }
 }
 
+/// Where a restore is answered: once it's over, with the chat loaded, or
+/// why not; or at once, refused.
+type RestoreReply = oneshot::Sender<Result<Result<ChatId, CannotRestore>, Refused>>;
+
 /// The restores the host waits for, and what the store found for each.
-struct Restores<D: AppData> {
+#[derive(Default)]
+struct Restores {
     /// Each restore the host waits for, by chat: one at a time for a
     /// chat, as the core refuses another while one is under way.
-    waiting: HashMap<ChatId, oneshot::Sender<Result<Result<ChatId, CannotRestore>, Refused>>>,
+    waiting: HashMap<ChatId, RestoreReply>,
     /// Each load given to the store and not yet answered: its chat, and
     /// the shelf it's read from.
     loads: HashMap<Ticket, (ChatId, Shelf)>,
@@ -1273,24 +1278,12 @@ struct Restores<D: AppData> {
     /// its load was answered: its shelf, and why it couldn't be read, or
     /// `None` if it was.
     found: HashMap<ChatId, (Shelf, Option<CannotRestore>)>,
-    data: std::marker::PhantomData<D>,
 }
 
-impl<D: AppData> Default for Restores<D> {
-    fn default() -> Self {
-        Self {
-            waiting: HashMap::new(),
-            loads: HashMap::new(),
-            found: HashMap::new(),
-            data: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<D: AppData> Restores<D> {
+impl Restores {
     /// Notes what the store found, if `ticket` is a load for a restore
     /// the host waits for.
-    fn answered<A: AppItem>(&mut self, ticket: Ticket, event: &StorageEvent<A, D>) {
+    fn answered<A: AppItem, D: AppData>(&mut self, ticket: Ticket, event: &StorageEvent<A, D>) {
         let Some((chat, shelf)) = self.loads.remove(&ticket) else {
             return;
         };
@@ -1382,7 +1375,7 @@ struct Task<A: AppItem, D: AppData> {
     /// The shelves the host has listed, in the order it first did.
     shelves: Vec<Shelf>,
     /// The restores the host waits for.
-    restores: Restores<D>,
+    restores: Restores,
     /// The core gave the store work since the lists were last told: a
     /// loaded chat written is listed as it is now.
     stored: bool,

@@ -6,9 +6,12 @@
 //! and every directive with a ticket is answered once.
 //!
 //! The store is the app's code, so a panic in it is caught: the work it
-//! was doing fails, and the store isn't used again, as it may be left
-//! half way through something. Everything after is answered as failed,
-//! so the core never waits on an answer that won't come.
+//! was doing fails, as if the store had said so, and the core never waits
+//! on an answer that won't come. The store is used again after, as the
+//! core tries a failed write again until it's written, and shutting down
+//! waits for that: a store that's no longer used would hold shutting down
+//! up for good. A store's write is whole or not there, so one cut off by
+//! a panic is as if it never happened.
 
 use std::panic::AssertUnwindSafe;
 
@@ -101,22 +104,15 @@ fn keep<A: AppItem, D: AppData>(
     inbox: &std::sync::mpsc::Receiver<StorageDirective<A, D>>,
     tell: &mpsc::UnboundedSender<Answer<A, D>>,
 ) {
-    let mut broken = false;
     while let Ok(directive) = inbox.recv() {
         let ticket = ticket_of(&directive);
-        let answer = if broken {
-            let failed = "the store panicked earlier, and isn't used again";
-            ticket.map(|ticket| (ticket, StorageEvent::Failed(failed.into())))
-        } else {
-            let done = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                caf_save::carry_out(&mut *store, directive)
-            }));
-            done.unwrap_or_else(|_| {
-                log::warn!(target: "caf", "the store panicked: what it was doing failed, and it isn't used again");
-                broken = true;
-                ticket.map(|ticket| (ticket, StorageEvent::Failed("the store panicked".into())))
-            })
-        };
+        let done = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            caf_save::carry_out(&mut *store, directive)
+        }));
+        let answer = done.unwrap_or_else(|_| {
+            log::warn!(target: "caf", "the store panicked: what it was doing failed");
+            ticket.map(|ticket| (ticket, StorageEvent::Failed("the store panicked".into())))
+        });
         if let Some(answer) = answer {
             // Once the task has gone, nobody needs it.
             let _ = tell.send(answer);
