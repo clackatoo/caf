@@ -4,11 +4,7 @@
 //! send messages, and watch them change.
 //!
 //! ```ignore
-//! let claude = AgentSpec::command(
-//!     "claude",
-//!     SpawnCommand::new("/home/me/.local/share/caf/agents/claude-0.98.0/bin/claude-agent-acp"),
-//!     ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
-//! );
+//! let claude = AgentSpec::installed("claude", Builtin::ClaudeAgentAcp);
 //! let (caf, running) = Caf::<NoAppItems>::start(Config::new(Host::new("eyespy", "0.4.0"), vec![claude]));
 //! let chat = caf.open_chat(OpenChat::new("claude", "/home/me/project")).await?;
 //! let mut watch = chat.watch();
@@ -23,6 +19,49 @@
 //! caf.shutdown().await;
 //! running.await;
 //! ```
+//!
+//! # Installing and signing in
+//!
+//! An agent offered with [`AgentSpec::installed`] is installed by CAF
+//! itself, at the version its profile was checked at, in a folder every
+//! CAF program on the machine shares ([`Config::installs`], by default
+//! `~/.local/share/caf/agents`). CAF looks at what's installed as it
+//! starts. A chat opened with an agent that isn't installed yet waits for
+//! it, and the user decides: installing Claude's adapter takes about
+//! 620 MB.
+//!
+//! ```ignore
+//! let claude = AgentName("claude".into());
+//! let mut agents = caf.watch_agents();
+//! caf.install(&claude).await?; // progress shows in `agents`
+//! caf.sign_in(&claude).await?; // so does the link to open
+//! while let Some(statuses) = agents.next().await {
+//!     if let SignInState::SigningIn(link) = &statuses[0].sign_in {
+//!         show_link(link); // the user opens it, and may paste a code back
+//!     }
+//! }
+//! caf.paste(&claude, code_the_user_pasted).await?;
+//! ```
+//!
+//! - [`Caf::watch_agents`] follows where every agent stands, installed or
+//!   not and signed in or not ([`AgentStatus`]).
+//! - [`Caf::install`] and [`Caf::stop_install`]; chats waiting for the
+//!   agent start once it's installed, or are told why it wasn't.
+//! - [`Caf::sign_in`], [`Caf::paste`], [`Caf::stop_sign_in`] and
+//!   [`Caf::sign_out`] run the sign-in the agent's profile names, never one
+//!   the agent suggests. The link it gives is checked against the sites
+//!   its profile allows before anyone sees it.
+//! - [`Caf::check_agents`] looks again, such as after the user installed
+//!   Node.
+//!
+//! The work is the [`SetupDriver`]'s: npm installs from a lockfile CAF
+//! ships, checked downloads, and the agent's own sign-in commands. It needs
+//! Node 22 or later and npm on `PATH` for agents installed with npm, which
+//! Claude's is. CAF keeps how an agent is signed in, never who: no email,
+//! and no pasted code, reaches its state or a recording.
+//!
+//! [`AgentSpec::installed`]: caf_core::agent::AgentSpec::installed
+//! [`AgentStatus`]: caf_core::agent::AgentStatus
 //!
 //! # Serving viewers
 //!
@@ -53,6 +92,10 @@
 //!   for it is what's in its channel, each message up to a whole chat.
 //! - A viewer watches at most
 //!   [`max_watches`](viewer::ViewerRules::max_watches) chats at once.
+//! - Every viewer hears every agent's status, after the welcome and each
+//!   time it changes. Installing and signing in from a viewer is the
+//!   host's decision too: [`agents`](viewer::ViewerRules::agents) is off
+//!   by default.
 //! - A viewer doesn't keep CAF running, and `serve` ends when CAF does,
 //!   after telling the viewer each watched chat has ended.
 //!
@@ -69,8 +112,9 @@
 //!
 //! The drivers inside are separate pieces, each usable on its own by a
 //! host that wires the core up itself: [`AgentDriver`] runs adapter
-//! processes, [`TimerDriver`] wakes the core, and a [`Policy`] answers
-//! permission requests.
+//! processes, [`TimerDriver`] wakes the core, [`SetupDriver`] installs
+//! agents and signs in to them, and a [`Policy`] answers permission
+//! requests.
 
 mod agent;
 mod caf;

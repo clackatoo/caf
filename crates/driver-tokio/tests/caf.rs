@@ -713,7 +713,7 @@ async fn a_recorded_run_replays_to_the_same_state() {
         "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}]
     }}});
     let script = dir.script("script.jsonl", &after_handshake(&[
-        json!({"notify": {"method": "_auth/status_update", "params": {"email": "someone@example.com"}}}),
+        json!({"notify": {"method": "_auth/status_update", "params": {"authStatus": {"kind": "account", "label": "Claude Max", "email": "someone@example.com"}}}}),
         json!({"stderr": "warming up"}),
         prompt(),
         say("s1", "Looking."),
@@ -729,7 +729,7 @@ async fn a_recorded_run_replays_to_the_same_state() {
     let recording = dir.path("run.jsonl");
     let mut agent = fake(&dir, &script);
     let Launch::Command(command) = &mut agent.launch else {
-        panic!("the fake agent is started by a command")
+        unreachable!("the fake is the host's own command")
     };
     command.env.push(EnvChange::Set(
         "SECRET_KEY".into(),
@@ -778,9 +778,9 @@ async fn a_recorded_run_replays_to_the_same_state() {
     );
     assert!(
         text.contains(
-            r#"{"type":"Notification","value":{"method":"_auth/status_update","params":null}}"#
+            r#"{"type":"Notification","value":{"method":"_auth/status_update","params":{"authStatus":{"kind":"account"}}}}"#
         ),
-        "the sign-in status is recorded, without its params"
+        "the sign-in status is recorded with its kind alone"
     );
     assert!(
         !holds(&text, "sk-do-not-record"),
@@ -792,7 +792,7 @@ async fn a_recorded_run_replays_to_the_same_state() {
     );
     let header: Header = serde_json::from_str(text.lines().next().unwrap()).unwrap();
     let Launch::Command(command) = &header.agents[0].launch else {
-        panic!("the fake agent is recorded as started by a command")
+        panic!("the fake is recorded as the host's own command")
     };
     assert!(command.args.is_empty());
     assert!(

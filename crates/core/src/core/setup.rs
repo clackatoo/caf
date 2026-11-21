@@ -84,6 +84,7 @@ impl<A: AppItem> Core<A> {
             _ => return Err(Refused::NotInstallable),
         }
         let (install, size) = (recipe.install.clone(), recipe.size);
+        let private = self.private_folder(agent);
         // Another agent of the same profile is installing it already.
         if self.install_job(&folder).is_none() {
             // Starting it later needs the folder installs live in.
@@ -100,6 +101,7 @@ impl<A: AppItem> Core<A> {
                 ticket,
                 folder: folder.clone(),
                 install,
+                private,
             }));
         }
         for each in self.sharing(&folder) {
@@ -171,6 +173,7 @@ impl<A: AppItem> Core<A> {
             command,
             link,
             code_after,
+            paste,
         }));
         if let Some(standing) = self.setup.agents.get_mut(agent) {
             standing.sign_in = SignInState::SigningIn(SignInLink {
@@ -996,6 +999,23 @@ impl<A: AppItem> Core<A> {
         is_folder_name(&folder).then_some(folder)
     }
 
+    /// `agent`'s private folder, `<profile>-private`, if its recipe gives
+    /// it one: any of its commands is given it.
+    fn private_folder(&self, agent: &AgentName) -> Option<String> {
+        let recipe = self.recipes.get(agent)?;
+        let commands = [
+            Some(&recipe.adapter),
+            recipe.sign_in.as_ref().map(|sign_in| &sign_in.command),
+            recipe.sign_out.as_ref(),
+            recipe.status.command.as_ref().map(|status| &status.command),
+        ];
+        let uses = (commands.into_iter().flatten()).any(|bundled| {
+            (bundled.env.iter()).any(|(_, value)| *value == EnvValue::PrivateFolder)
+        });
+        let private = format!("{}-private", self.slugs.get(agent)?);
+        (uses && is_folder_name(&private)).then_some(private)
+    }
+
     /// The agents CAF installs into `folder`: every one offered with the
     /// same profile.
     fn sharing(&self, folder: &str) -> Vec<AgentName> {
@@ -1244,8 +1264,8 @@ mod tests {
 
     #[test]
     fn only_a_plain_name_names_an_install_folder() {
-        assert!(is_folder_name("claude-0.98.0"));
-        assert!(!is_folder_name(".claude-0.98.0"));
+        assert!(is_folder_name("claude-agent-acp-0.98.0"));
+        assert!(!is_folder_name(".claude-agent-acp-0.98.0"));
         assert!(!is_folder_name("../x-1.0.0"));
         assert!(!is_folder_name("a/b-1.0.0"));
         assert!(!is_folder_name(""));

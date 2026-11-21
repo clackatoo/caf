@@ -227,7 +227,7 @@ fn a_chat_waits_for_its_agent_to_be_installed_then_starts() {
     let install = one(&out, "install");
     assert_eq!(
         install,
-        json!({ "install": install["install"], "folder": "test-npm-2.0.0", "how": "Npm" })
+        json!({ "install": install["install"], "folder": "test-npm-2.0.0", "how": "Npm", "private": null })
     );
     let install = install["install"].as_u64().expect("a ticket");
     assert_has(
@@ -318,6 +318,17 @@ fn a_failed_install_stops_the_messages_waiting_for_it() {
     assert_eq!(
         script.agent_status("dl-agent")["install"],
         json!({ "type": "Cannot", "value": { "type": "Failed", "value": { "type": "Other", "value": "tar: ^[[31mbad" } } })
+    );
+}
+
+#[test]
+fn an_install_makes_the_private_folder_its_recipe_uses() {
+    let mut script = Script::new(host());
+    script.surveyed(&[]);
+    let install = one(&script.install("dl-agent").1, "install");
+    assert_eq!(
+        install,
+        json!({ "install": install["install"], "folder": "test-download-1.4.0", "how": "Download", "private": "test-download-private" })
     );
 }
 
@@ -447,6 +458,7 @@ fn signing_in_hands_on_a_link_to_one_of_the_recipes_sites() {
             },
             "link": { "type": "Browser" },
             "code_after": null,
+            "paste": false,
         })
     );
     let ticket = sign_in["sign_in"].as_u64().expect("a ticket");
@@ -546,6 +558,7 @@ fn a_sign_in_that_prints_its_link_and_a_code_takes_a_paste() {
             },
             "link": { "type": "Output", "value": "Open this link: " },
             "code_after": "Your code: ",
+            "paste": true,
         })
     );
     let ticket = sign_in["sign_in"].as_u64().expect("a ticket");

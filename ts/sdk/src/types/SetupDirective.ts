@@ -40,7 +40,16 @@ folder: string,
 /**
  * What to install.
  */
-install: Install, } } | { "type": "Remove", "value": { 
+install: Install, 
+/**
+ * The agent's private folder, such as `claude-private`, if its
+ * recipe gives it one
+ * ([`EnvValue::PrivateFolder`](crate::install::EnvValue::PrivateFolder)):
+ * made beside the installs, readable only by the user, if it isn't
+ * there, and never removed. One that's a link is refused, and the
+ * install fails.
+ */
+private: string | null, } } | { "type": "Remove", "value": { 
 /**
  * Its ticket.
  */
@@ -65,7 +74,12 @@ link: LinkFrom,
 /**
  * What comes before the code it shows, if it shows one.
  */
-code_after: string | null, } } | { "type": "Paste", "value": { 
+code_after: string | null, 
+/**
+ * Whether the user may paste something back to it. Only then is it
+ * given a standard input; otherwise it reads nothing there.
+ */
+paste: boolean, } } | { "type": "Paste", "value": { 
 /**
  * The sign-in's ticket.
  */

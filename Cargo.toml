@@ -25,8 +25,11 @@ memchr = "2.8"
 # MessagePack, in named mode: the saved and Rust viewer format, which the
 # shape tests round-trip through.
 rmp-serde = "1.3"
-# pidfds and waitid, for watching, reaping and signalling adapters.
-rustix = { version = "1.1", features = ["process"] }
+# pidfds and waitid, for watching, reaping and signalling adapters; flock,
+# for the setup driver's locks on installs.
+rustix = { version = "1.1", features = ["fs", "process"] }
+# The setup driver's download check.
+sha2 = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 # raw_value: a message's params stay unparsed until the core knows what
 # they are, so one big tool output is read once.
@@ -37,4 +40,14 @@ serde_json = { version = "1.0", features = ["raw_value"] }
 # type is given by hand. Silencing them would hide a future one that
 # changes a shape, so caf-core's `ts.rs` checks the types against real JSON.
 ts-rs = { version = "12.0", default-features = false, features = ["serde-compat", "serde-json-impl", "no-serde-warnings"] }
+# Unpacking a downloaded `.tar.gz`, in pure Rust: flate2's default backend
+# is miniz_oxide. No xattr: an install needs none.
+flate2 = "1.1"
+tar = { version = "0.4", default-features = false }
+# The setup driver's HTTPS client: blocking, small, rustls with Mozilla's
+# roots, and no async runtime of its own. No gzip: downloads are taken as
+# they come, and checked byte for byte.
+ureq = { version = "3.5", default-features = false, features = ["rustls"] }
+# Unpacking a downloaded zip: deflate only, through flate2.
+zip = { version = "9.1", default-features = false, features = ["deflate-flate2"] }
 tokio = { version = "1.54", features = ["rt", "macros", "io-util", "process", "sync", "time"] }

@@ -262,6 +262,13 @@ pub enum SetupDirective {
         folder: String,
         /// What to install.
         install: Install,
+        /// The agent's private folder, such as `claude-private`, if its
+        /// recipe gives it one
+        /// ([`EnvValue::PrivateFolder`](crate::install::EnvValue::PrivateFolder)):
+        /// made beside the installs, readable only by the user, if it isn't
+        /// there, and never removed. One that's a link is refused, and the
+        /// install fails.
+        private: Option<String>,
     },
     /// Remove the folder `folder`, unless something runs from it.
     Remove {
@@ -282,6 +289,9 @@ pub enum SetupDirective {
         link: LinkFrom,
         /// What comes before the code it shows, if it shows one.
         code_after: Option<String>,
+        /// Whether the user may paste something back to it. Only then is it
+        /// given a standard input; otherwise it reads nothing there.
+        paste: bool,
     },
     /// Give a running sign-in what the user pasted, with a newline.
     Paste {
@@ -310,8 +320,17 @@ pub enum SetupDirective {
         /// mean.
         how: Option<(String, Vec<(String, SignedInAs)>)>,
     },
-    /// Stop an install, sign-in or command under way. Its last report says
-    /// it was stopped.
+    /// Stop an install, sign-in or command under way, within about a
+    /// second, killing what it runs. Its last report says it was stopped:
+    /// - an install's is
+    ///   [`InstallFailed(Stopped)`](crate::agent::InstallFailure::Stopped),
+    ///   once what it had built is gone;
+    /// - a sign-in's, a status command's or another command's is
+    ///   [`Ended { ok: false }`](crate::event::SetupEvent::Ended).
+    ///
+    /// A survey or a removal isn't stopped: it ends by itself, soon. Nor is
+    /// work that has ended already, or a ticket the driver never had:
+    /// those get no report.
     Stop {
         /// Its ticket.
         ticket: Ticket,

@@ -635,9 +635,10 @@ fn render_setup(setup: &SetupDirective) -> Value {
             ticket,
             folder,
             install,
+            private,
         } => {
             let how = serde_json::to_value(install).expect("installs serialise");
-            json!({ "install": ticket.0, "folder": folder, "how": how["type"] })
+            json!({ "install": ticket.0, "folder": folder, "how": how["type"], "private": private })
         }
         SetupDirective::Remove { ticket, folder } => {
             json!({ "remove": ticket.0, "folder": folder })
@@ -647,11 +648,13 @@ fn render_setup(setup: &SetupDirective) -> Value {
             command,
             link,
             code_after,
+            paste,
         } => json!({
             "sign_in": ticket.0,
             "command": spawn(command),
             "link": link,
             "code_after": code_after,
+            "paste": paste,
         }),
         SetupDirective::Paste { ticket, text } => json!({ "paste": ticket.0, "text": text }),
         SetupDirective::Run { ticket, command } => {

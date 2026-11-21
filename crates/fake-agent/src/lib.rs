@@ -249,12 +249,52 @@
 //!
 //! Its types aren't `#[non_exhaustive]`, unlike CAF's, so other crates
 //! can build them.
+//!
+//! # Signing in
+//!
+//! ```text
+//! caf-fake-agent [--cli] auth login|status|logout
+//! ```
+//!
+//! The fake also has the sign-in commands an agent's own command line
+//! has, as `claude-agent-acp --cli auth login` does, for testing CAF's
+//! setup driver and the views of a sign-in. These come before the
+//! script: an adapter's sign-in is run with its environment, which may
+//! name one. What they do is set by a JSON file, [`Auth`], that
+//! [`AUTH_VAR`] (`CAF_FAKE_AGENT_AUTH`) names:
+//!
+//! ```text
+//! {"url": "https://example.com/sign-in", "browser": true, "code": "ABCD-1234",
+//!  "paste": true, "expect": "pasted-code", "state": "/tmp/test-1234/signed-in"}
+//! ```
+//!
+//! - **`auth login`**, in this order:
+//!   1. prints a token and an email, [`AUTH_SECRET`] and [`AUTH_EMAIL`],
+//!      which nothing CAF keeps may ever hold;
+//!   2. prints the code, on its error output, after `code_after` (`Your
+//!      code: ` unless it says);
+//!   3. prints the link after `marker`, if there is one, on its standard
+//!      output;
+//!   4. runs `$BROWSER` with the link, if `browser`;
+//!   5. if `paste`, prompts for a code, and waits for a line on its
+//!      standard input, which must be `expect` if that's set;
+//!   6. waits for `wait_file`, if there is one, as a sign-in waits for the
+//!      user to approve it, up to `timeout` milliseconds;
+//!   7. then writes `method` (`claude.ai` unless it says) to `state`, and
+//!      exits with `exit` (0 unless it says). A step that fails exits with
+//!      1, and signs nobody in.
+//! - **`auth status`** prints, as Claude's `auth status --json` does,
+//!   `{"loggedIn": true, "authMethod": METHOD, "email": …}` and exits with
+//!   0, or `{"loggedIn": false, …}` and exits with 1, as `state` says.
+//! - **`auth logout`** removes `state`.
 
+mod auth;
 mod binary;
 mod pattern;
 mod run;
 mod script;
 
+pub use auth::{AUTH_EMAIL, AUTH_SECRET, Auth, auth};
 pub use binary::binary;
 pub use run::run;
 pub use script::{
@@ -275,6 +315,10 @@ pub const SCRIPT_VAR: &str = "CAF_FAKE_AGENT_SCRIPT";
 /// The environment variable that names the record file, an absolute path,
 /// when [`SCRIPT_VAR`] is set.
 pub const RECORD_VAR: &str = "CAF_FAKE_AGENT_RECORD";
+
+/// The environment variable that names the settings for `auth login`,
+/// `auth status` and `auth logout`, a JSON file of an [`Auth`].
+pub const AUTH_VAR: &str = "CAF_FAKE_AGENT_AUTH";
 
 /// The exit code when the script or the arguments are wrong.
 pub const EXIT_BAD_SCRIPT: i32 = 2;

@@ -307,14 +307,16 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
         file.as_deref(),
         Some(recording.display().to_string().as_str())
     );
-    assert!(matches!(
-        seen.others.last(),
-        Some(ToInspector::Position {
-            live: true,
-            at: 0,
-            end: 0
-        })
-    ));
+    // CAF looks at its agents as it starts: that's its first step, and the
+    // survey's answer may already have followed.
+    assert!(
+        matches!(
+            seen.others.last(),
+            Some(ToInspector::Position { live: true, at, end }) if at == end && *end >= 1
+        ),
+        "{:?}",
+        seen.others.last()
+    );
 
     // A chat, through the viewer wire.
     let mut viewer = debugger.chat().await;
@@ -566,7 +568,7 @@ async fn the_recording_check_passes_with_secrets_the_recording_hides() {
         json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"mcpCapabilities": {"http": true}}, "agentInfo": {"name": "fake", "version": "1.0.0"}}}}),
         json!({"wait": {"method": "session/new"}}),
         json!({"respond": {"result": {"sessionId": "s1"}}}),
-        json!({"notify": {"method": "_auth/status_update", "params": {"email": "me@example.com"}}}),
+        json!({"notify": {"method": "_auth/status_update", "params": {"authStatus": {"kind": "account", "email": "me@example.com"}}}}),
         json!({"wait": {"method": "session/prompt"}}),
         json!({"say": {"session": "s1", "text": "Hi."}}),
         json!({"respond": {"result": {"stopReason": "end_turn"}}}),
