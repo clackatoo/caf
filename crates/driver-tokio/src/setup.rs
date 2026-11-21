@@ -126,6 +126,11 @@ use tokio::sync::{mpsc, oneshot};
 ///   `.example.com` both cover `dl.example.com`). npm installs are npm's
 ///   own, and read the same. A download asks the proxy for a tunnel
 ///   (`CONNECT`), and its `https` is checked end to end through it.
+/// - **Unpacking** keeps everything inside the install: each file is
+///   written only once its folder, followed through any links, is found
+///   inside; links are made after every file, and each must lead, followed
+///   all the way, to something inside. Anything else refuses the whole
+///   download, as do devices and pipes in a tar.
 /// - **A download unpacked as `Unpack::No`** is saved under the last part
 ///   of its URL's path, such as `agent` for `https://example.com/v1/agent`,
 ///   and made runnable.

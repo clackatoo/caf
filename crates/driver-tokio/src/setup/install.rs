@@ -846,53 +846,155 @@ fn program_name(url: &str) -> OsString {
     }
 }
 
-/// Unpacks a zip archive, keeping each entry inside `build`.
-fn unzip(build: &Path, file: &Path) -> Result<(), InstallFailure> {
-    let bad =
-        |error: &dyn std::fmt::Display| other(format!("the download can't be unzipped: {error}"));
-    let archive = File::open(file).map_err(|error| io_failure(&error, false))?;
-    let mut archive = zip::ZipArchive::new(archive).map_err(|error| bad(&error))?;
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|error| bad(&error))?;
-        let Some(name) = entry.enclosed_name() else {
-            return Err(bad(&format!("{:?} is outside the archive", entry.name())));
-        };
-        let path = build.join(&name);
-        if entry.is_dir() {
-            fs::create_dir_all(&path).map_err(|error| io_failure(&error, false))?;
-            continue;
+/// Where an archive's entries go: inside `build`, and nowhere else.
+///
+/// Folders and files are made as they come, each only once its folder is
+/// found, by following any links, to be inside the build folder. Links
+/// are made last, once every file is written, so nothing is ever written
+/// through one, and each must then lead, followed all the way, to
+/// something inside the build folder: a chain of links each harmless on
+/// its own can't climb out. Hard links must name a file already placed.
+struct Placing {
+    build: PathBuf,
+    /// `build`, with every link in its path followed.
+    real: PathBuf,
+    links: Vec<(PathBuf, PathBuf)>,
+}
+
+/// Why an archive is refused, in CAF's words: what's in it, never where
+/// on this machine it was being put.
+fn refused(why: &str) -> InstallFailure {
+    other(format!("the download can't be unpacked: {why}"))
+}
+
+impl Placing {
+    fn new(build: &Path) -> Result<Self, InstallFailure> {
+        let real = fs::canonicalize(build).map_err(|error| io_failure(&error, false))?;
+        Ok(Self {
+            build: build.to_owned(),
+            real,
+            links: Vec::new(),
+        })
+    }
+
+    /// Where `name`, an entry's name, goes: refused unless it's a path
+    /// down from the archive's top.
+    fn path(&self, name: &Path) -> Result<PathBuf, InstallFailure> {
+        let plain = name
+            .components()
+            .all(|part| matches!(part, Component::Normal(_) | Component::CurDir));
+        if !plain || name.as_os_str().is_empty() {
+            return Err(refused(&format!("{} is outside it", name.display())));
         }
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| io_failure(&error, false))?;
+        Ok(self.build.join(name))
+    }
+
+    /// Makes the folder `path` goes in, and checks it's inside.
+    fn folder_for(&self, path: &Path, name: &Path) -> Result<(), InstallFailure> {
+        let folder = path.parent().unwrap_or(&self.build);
+        fs::create_dir_all(folder).map_err(|error| io_failure(&error, false))?;
+        self.inside(folder, name)
+    }
+
+    /// Checks `path`, followed all the way, is inside the build folder.
+    fn inside(&self, path: &Path, name: &Path) -> Result<(), InstallFailure> {
+        match fs::canonicalize(path) {
+            Ok(real) if real.starts_with(&self.real) => Ok(()),
+            Ok(_) => Err(refused(&format!("{} leads outside it", name.display()))),
+            Err(_) => Err(refused(&format!(
+                "{} leads to nothing in it",
+                name.display()
+            ))),
         }
-        if entry.is_symlink() {
-            let mut target = String::new();
-            entry
-                .read_to_string(&mut target)
-                .map_err(|error| bad(&error))?;
-            if !link_stays_inside(&name, Path::new(&target)) {
-                return Err(bad(&format!("{name:?} links outside the archive")));
-            }
-            std::os::unix::fs::symlink(&target, &path)
-                .map_err(|error| io_failure(&error, false))?;
-            continue;
-        }
-        let mode = entry.unix_mode().map_or(0o644, |mode| mode & 0o777);
+    }
+
+    fn folder(&self, name: &Path) -> Result<(), InstallFailure> {
+        let path = self.path(name)?;
+        fs::create_dir_all(&path).map_err(|error| io_failure(&error, false))?;
+        self.inside(&path, name)
+    }
+
+    /// Writes a file, with `mode`'s permissions alone.
+    fn file(&self, name: &Path, mode: u32, mut from: impl Read) -> Result<(), InstallFailure> {
+        let path = self.path(name)?;
+        self.folder_for(&path, name)?;
+        let mode = mode & 0o777;
+        // New, so nothing already there, a link least of all, is written
+        // through.
         let mut out = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(mode)
             .open(&path)
             .map_err(|error| io_failure(&error, false))?;
-        io::copy(&mut entry, &mut out).map_err(|error| io_failure(&error, false))?;
+        io::copy(&mut from, &mut out).map_err(|error| io_failure(&error, false))?;
         // The mode given when making it is cut by the umask.
         fs::set_permissions(&path, fs::Permissions::from_mode(mode))
-            .map_err(|error| io_failure(&error, false))?;
+            .map_err(|error| io_failure(&error, false))
     }
-    Ok(())
+
+    /// Notes a link, made once every file is.
+    fn link(&mut self, name: &Path, target: &Path) -> Result<(), InstallFailure> {
+        self.path(name)?;
+        if !link_stays_inside(name, target) {
+            return Err(refused(&format!("{} links outside it", name.display())));
+        }
+        self.links.push((name.to_owned(), target.to_owned()));
+        Ok(())
+    }
+
+    /// Makes a hard link to a file already placed.
+    fn hard_link(&self, name: &Path, target: &Path) -> Result<(), InstallFailure> {
+        let path = self.path(name)?;
+        let original = self.path(target)?;
+        self.inside(&original, target)?;
+        self.folder_for(&path, name)?;
+        fs::hard_link(&original, &path).map_err(|error| io_failure(&error, false))
+    }
+
+    /// Makes the links, then checks each, followed all the way.
+    fn finish(self) -> Result<(), InstallFailure> {
+        for (name, target) in &self.links {
+            let path = self.build.join(name);
+            self.folder_for(&path, name)?;
+            std::os::unix::fs::symlink(target, &path).map_err(|error| io_failure(&error, false))?;
+        }
+        for (name, _) in &self.links {
+            self.inside(&self.build.join(name), name)?;
+        }
+        Ok(())
+    }
 }
 
-/// Whether a link at `at` in an archive, to `target`, stays inside it.
+/// Unpacks a zip archive, keeping each entry inside `build`.
+fn unzip(build: &Path, file: &Path) -> Result<(), InstallFailure> {
+    let bad = |error: &dyn std::fmt::Display| refused(&error.to_string());
+    let archive = File::open(file).map_err(|error| io_failure(&error, false))?;
+    let mut archive = zip::ZipArchive::new(archive).map_err(|error| bad(&error))?;
+    let mut placing = Placing::new(build)?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|error| bad(&error))?;
+        let Some(name) = entry.enclosed_name() else {
+            return Err(refused(&format!("{:?} is outside it", entry.name())));
+        };
+        if entry.is_dir() {
+            placing.folder(&name)?;
+        } else if entry.is_symlink() {
+            let mut target = String::new();
+            entry
+                .read_to_string(&mut target)
+                .map_err(|error| bad(&error))?;
+            placing.link(&name, Path::new(&target))?;
+        } else {
+            let mode = entry.unix_mode().unwrap_or(0o644);
+            placing.file(&name, mode, &mut entry)?;
+        }
+    }
+    placing.finish()
+}
+
+/// Whether a link at `at` in an archive, to `target`, stays inside it, as
+/// text: a first check, before the links are made and followed.
 fn link_stays_inside(at: &Path, target: &Path) -> bool {
     if target.is_absolute() {
         return false;
@@ -915,19 +1017,50 @@ fn link_stays_inside(at: &Path, target: &Path) -> bool {
     true
 }
 
-/// Unpacks a gzipped tar archive. The tar crate keeps every entry, link
-/// targets included, inside `build`.
+/// Unpacks a gzipped tar archive, keeping each entry inside `build`, as
+/// [`Placing`] does. Only folders, files and links are taken: a device or
+/// a pipe is refused.
 fn untar(build: &Path, file: &Path) -> Result<(), InstallFailure> {
+    let bad = |error: &io::Error| match error.raw_os_error() {
+        Some(libc::ENOSPC | libc::EDQUOT) => InstallFailure::NoSpace,
+        // The tar crate's own words, which name no folder of this machine's.
+        _ => refused(&error.to_string()),
+    };
     let archive = File::open(file).map_err(|error| io_failure(&error, false))?;
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(io::BufReader::new(archive)));
-    archive.set_preserve_permissions(false);
-    archive.set_overwrite(false);
-    archive
-        .unpack(build)
-        .map_err(|error| match error.raw_os_error() {
-            Some(libc::ENOSPC) => InstallFailure::NoSpace,
-            _ => other(format!("the download can't be untarred: {error}")),
-        })
+    let mut placing = Placing::new(build)?;
+    for entry in archive.entries().map_err(|error| bad(&error))? {
+        let mut entry = entry.map_err(|error| bad(&error))?;
+        let name = entry.path().map_err(|error| bad(&error))?.into_owned();
+        let kind = entry.header().entry_type();
+        if kind.is_dir() {
+            placing.folder(&name)?;
+        } else if kind.is_file() || kind == tar::EntryType::Continuous {
+            let mode = entry.header().mode().unwrap_or(0o644);
+            placing.file(&name, mode, &mut entry)?;
+        } else if kind.is_symlink() || kind.is_hard_link() {
+            let Some(target) = entry.link_name().map_err(|error| bad(&error))? else {
+                return Err(refused(&format!("{} links to nothing", name.display())));
+            };
+            if kind.is_symlink() {
+                placing.link(&name, &target)?;
+            } else {
+                placing.hard_link(&name, &target)?;
+            }
+        } else if kind.is_pax_global_extensions()
+            || kind.is_pax_local_extensions()
+            || kind.is_gnu_longname()
+            || kind.is_gnu_longlink()
+        {
+            // Read by the tar crate for the entries after them.
+        } else {
+            return Err(refused(&format!(
+                "{} isn't a file, folder or link",
+                name.display()
+            )));
+        }
+    }
+    placing.finish()
 }
 
 /// How many bytes the files under `path` hold. Anything that can't be read

@@ -508,6 +508,108 @@ async fn downloads_are_checked_and_unpacked_into_place() {
     assert_eq!(installs(&dir), ["fake-0", "fake-1", "fake-2"]);
 }
 
+/// A zip of these entries, in order: a link is `(name, Some(target))`,
+/// a file `(name, None)`.
+fn zip_of(entries: &[(&str, Option<&str>)]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default().unix_permissions(0o644);
+    for (name, target) in entries {
+        match target {
+            Some(target) => archive.add_symlink(*name, *target, options).unwrap(),
+            None => {
+                archive.start_file(*name, options).unwrap();
+                archive.write_all(b"escaped").unwrap();
+            }
+        }
+    }
+    archive.finish().unwrap().into_inner()
+}
+
+/// A gzipped tar of these entries, as [`zip_of`]'s.
+fn tar_of(entries: &[(&str, Option<&str>)]) -> Vec<u8> {
+    let mut archive = tar::Builder::new(flate2::write::GzEncoder::new(
+        Vec::new(),
+        flate2::Compression::default(),
+    ));
+    for (name, target) in entries {
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o644);
+        match target {
+            Some(target) => {
+                header.set_entry_type(tar::EntryType::Symlink);
+                header.set_size(0);
+                archive.append_link(&mut header, *name, *target).unwrap();
+            }
+            None => {
+                header.set_size(7);
+                header.set_cksum();
+                archive
+                    .append_data(&mut header, *name, &b"escaped"[..])
+                    .unwrap();
+            }
+        }
+    }
+    archive.into_inner().unwrap().finish().unwrap()
+}
+
+#[tokio::test]
+async fn nothing_in_a_download_reaches_outside_its_install() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    // Each link's target, read as text, stays inside; followed, the chain
+    // climbs out, and files written through it would land above.
+    let chain: &[(&str, Option<&str>)] = &[
+        ("a/l1", Some("..")),
+        ("l2", Some("a/l1/..")),
+        ("l3", Some("l2/..")),
+        ("l2/escaped-into-root", None),
+        ("l3/escaped-above-root", None),
+    ];
+    let links_out: &[(&str, Option<&str>)] = &[("a/l1", Some("..")), ("l2", Some("a/l1/.."))];
+    let absolute: &[(&str, Option<&str>)] = &[("passwd", Some("/etc/passwd"))];
+    let up: &[(&str, Option<&str>)] = &[("up", Some("../../outside"))];
+    let nowhere: &[(&str, Option<&str>)] = &[("gone", Some("missing/file"))];
+    let mut n = 0;
+    for entries in [chain, links_out, absolute, up, nowhere] {
+        for (body, unpack) in [
+            (zip_of(entries), Unpack::Zip),
+            (tar_of(entries), Unpack::TarGz),
+        ] {
+            n += 1;
+            let server = serve(body.clone(), false).await;
+            let ticket = Ticket(1000 + n);
+            driver.apply(SetupDirective::Install {
+                ticket,
+                folder: "fake-1.0.0".into(),
+                install: download(&server.url, &body, unpack),
+                private: None,
+            });
+            let events = done(&mut driver, ticket).await;
+            let what = format!("{unpack:?} of {entries:?}");
+            let Some(Ev(SetupEvent::InstallFailed(InstallFailure::Other(why)))) = events.last()
+            else {
+                panic!("{what} is refused: {events:?}")
+            };
+            assert!(
+                !why.contains(&*dir.0.to_string_lossy()),
+                "{what}: no folder of the user's is told: {why}"
+            );
+            assert!(installs(&dir).is_empty(), "{what}: {:?}", installs(&dir));
+            for escaped in [
+                dir.root().join("escaped-into-root"),
+                dir.0.join("escaped-above-root"),
+            ] {
+                assert!(
+                    !escaped.exists(),
+                    "{what}: {} was written",
+                    escaped.display()
+                );
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn a_download_that_doesnt_match_its_checksum_is_thrown_away() {
     let dir = Dir::new();
