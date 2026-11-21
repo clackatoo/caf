@@ -1958,7 +1958,7 @@ fn a_change_unanswered_on_an_adapter_busy_with_another_chat_restarts_only_its_se
 }
 
 #[test]
-fn a_change_nobody_waits_for_any_more_touches_no_chat_when_its_deadline_passes() {
+fn a_change_nobody_waits_for_any_more_leaves_its_chat_untouched_when_its_deadline_passes() {
     let mut script = Script::new(host());
     script.open_offering(
         OpenChat::new("claude", "/elsewhere"),
@@ -2130,5 +2130,58 @@ fn choosing_the_value_being_set_makes_it_the_chats_own_without_sending_it_twice(
     assert_eq!(
         whole["settings"]["chosen"],
         json!([chosen(&SettingChoice::model("default"))])
+    );
+}
+
+#[test]
+fn a_change_nobody_waits_for_restarts_an_idle_adapter_and_a_chat_opening_on_it_opens_again() {
+    let mut script = Script::new(host());
+    script.open_offering(
+        OpenChat::new("claude", "/elsewhere"),
+        &claude_options("default", "default", false),
+    );
+    // A saved chat, on the same adapter, put away with a change being sent.
+    let mut open = OpenChat::new("claude", "/work");
+    open.shelf = Some(Shelf("work".to_owned()));
+    let (away, out) = script.open(open);
+    let away = away.expect("opened");
+    script.answers(
+        PROC,
+        id_of(&sent(&out, "session/new")),
+        &json!({ "sessionId": "sess-2", "configOptions": claude_options("default", "default", false) }),
+    );
+    let (_, out) = script.set_setting(away, SettingChoice::model("sonnet"));
+    set(&out);
+    script.at(1000);
+    let out = script.put_away(away).1;
+    script.answers(PROC, id_of(&sent(&out, "session/close")), &json!({}));
+    // A third chat is opening on the adapter as the deadline passes, and
+    // no chat is mid-turn.
+    script.at(50_000);
+    let (opening, out) = script.open(OpenChat::new("claude", "/third"));
+    let opening = opening.expect("opened");
+    sent(&out, "session/new");
+    script.at(60_000);
+    let out = script.woken();
+    assert_eq!(
+        with(&out, "signal"),
+        [json!({ "signal": PROC, "is": "Term" })],
+        "stuck, and nothing to cut off: restarted"
+    );
+    // It opens again on the new process.
+    script.agent(PROC, AgentEvent::OutputClosed);
+    let out = script.agent(PROC, AgentEvent::Group { empty: true });
+    let proc = started(&out);
+    let out = script.answers(proc, id_of(&sent(&out, "initialize")), &claude_init());
+    let new = sent(&out, "session/new");
+    assert_eq!(new["params"]["cwd"], "/third");
+    script.answers(
+        proc,
+        id_of(&new),
+        &json!({ "sessionId": "sess-3", "configOptions": claude_options("default", "default", false) }),
+    );
+    assert_has(
+        &script.chat(opening),
+        &json!({ "state": { "type": "Open", "value": { "session": "sess-3" } } }),
     );
 }

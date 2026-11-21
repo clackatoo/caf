@@ -8,7 +8,7 @@ use super::procs::Cause;
 use super::state::{Group, Init, Open, Purpose};
 use super::{Core, report};
 use crate::chat::AppData;
-use crate::chat::{AppItem, ChatState};
+use crate::chat::AppItem;
 use crate::directive::{Directive, Level};
 use crate::ids::{ChatId, Ticket};
 use crate::time::{Mono, Now};
@@ -230,16 +230,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             // waits for it, the chat's session is restarted, and the choice
             // sent again as it opens again, before the messages waiting.
             // If nobody waits for it any more, as its chat was closed, put
-            // away or restored since, no chat is touched: the adapter is
-            // restarted, as for a session it doesn't close, unless that
-            // would cut a turn off.
+            // away or restored since, its chat isn't touched: the adapter
+            // is restarted, as for any stuck request, unless that would cut
+            // a turn off or it's being stopped already; other chats on it
+            // lose their sessions, as by any restart.
             Purpose::Set { chat, .. } => {
                 self.pending.remove(&(proc, id));
+                // Closing or putting its chat away forgets it.
                 let waited = (self.runs.get(&chat))
                     .and_then(|run| run.choosing.asked.as_ref())
-                    .is_some_and(|asked| asked.proc == proc && asked.id == id)
-                    && (self.chats.get(&chat))
-                        .is_some_and(|whole| whole.state != ChatState::Closed);
+                    .is_some_and(|asked| asked.proc == proc && asked.id == id);
                 report(
                     out,
                     Level::Warn,
@@ -248,9 +248,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                         proc.0, chat.0
                     ),
                 );
+                let stopping = (self.procs.get(&proc))
+                    .is_none_or(|each| each.retired || each.ending.is_some());
                 if waited {
                     self.restart_stuck(now, chat, proc, out);
-                } else if !self.busy(proc) {
+                } else if !self.busy(proc) && !stopping {
                     self.lose_process(now, proc, Cause::Restarted, out);
                 }
             }

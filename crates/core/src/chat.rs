@@ -224,7 +224,9 @@ pub enum Lost {
         /// Its last lines of error output, cleaned.
         stderr: Vec<String>,
     },
-    /// The adapter was restarted, for this chat or another sharing it.
+    /// The adapter was restarted, for this chat or another sharing it; or,
+    /// while another chat was mid-turn on it, only this chat's session was
+    /// closed, to be opened again.
     Restarted,
     /// The agent wants the user to sign in first.
     SignInNeeded,
