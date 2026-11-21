@@ -29,6 +29,9 @@ CAF holds that knowledge so your program doesn't have to:
 
 - **It talks to the agent.** It starts the adapter, opens sessions, sends
   messages, follows the reply as it streams in, and stops a turn when asked.
+- **It gives the agent only your tools.** Every agent runs with none of its
+  own: no built-in file editing or commands, and none of the user's own
+  setup. See [Agents and profiles](~caf/concepts/agents-and-profiles#an-agent-has-only-your-tools).
 - **It keeps its own record of every chat**, in one format for every agent,
   so your program draws a chat the same way whichever agent it's with.
 - **It absorbs each agent's quirks** in a profile per adapter, so nothing

@@ -1,7 +1,7 @@
 ---
 title: Agents and Profiles
 type: concept
-description: A program describes itself to CAF in plain terms, and CAF works out what to tell each agent from that agent's profile, which holds everything CAF knows about one adapter at one version, down to how to install it and sign in to it.
+description: A program describes itself to CAF in plain terms, and CAF works out what to tell each agent from that agent's profile, which holds everything CAF knows about one adapter at one version, down to how to turn off the agent's own tools, install it and sign in to it.
 related:
   - caf/concepts/the-core
   - caf/concepts/chats-turns-and-items
@@ -28,6 +28,7 @@ A **profile** holds everything CAF knows about one adapter at one version:
 - how to read its oddities, such as how it reports a failure;
 - how to start and configure it;
 - how it describes what it's doing;
+- how to turn off its own tools;
 - its **recipe**: how to install it, how to sign in and out, and how to tell
   whether it's signed in.
 
@@ -41,11 +42,12 @@ against the profile:
 | Check | What CAF does |
 |---|---|
 | This version was checked | Every feature the profile lists is on |
-| A newer version than any checked | The last checked profile, with its risky features off |
-| A different adapter, or none named | The cautious profile |
+| A newer version than any checked | The last checked profile, with its risky features off, and its tools turned off the same way |
+| A different adapter, or none named | The cautious profile, and no session is opened |
 
 The **cautious profile** is for agents CAF doesn't know: plain ACP, with
-nothing risky switched on.
+nothing risky switched on. CAF can't turn off such an agent's own tools,
+so it never runs one: see below.
 
 Profiles are CAF's own: a program chooses one for each agent but never
 changes one. Today CAF has profiles for Claude Code's adapter,
@@ -54,6 +56,49 @@ changes one. Today CAF has profiles for Claude Code's adapter,
 Everything that's particular to one agent is data in its profile. Nothing
 else in CAF is written for one agent, so adding an agent is adding a
 profile.
+
+## An agent has only your tools
+
+Every agent runs with **none of its own tools**. Claude Code, for example,
+can usually read and edit files, run commands and search the web, and it
+loads the user's own setup: their MCP servers, skills, plugins, hooks,
+slash commands, and instruction files such as `CLAUDE.md` and `AGENTS.md`.
+CAF turns all of that off, as the agent's profile says how. The only tools
+the agent has are the ones your program gives it, as MCP servers
+(`OpenChat::mcp_servers`).
+
+Each of the agent's own tools will come back, one at a time, once CAF
+supports it fully: what it does, in CAF's own terms, the permission it
+needs, and how it shows in the chat.
+
+In place of the agent's built-in instructions, which describe tools it no
+longer has, CAF gives it short ones of its own. For a program called
+`framewright` they say:
+
+> You are working inside framewright, the app the user is talking to you
+> in. You have no tools of your own: you can't read or change files, run
+> commands or browse the web, except through tools framewright gives you.
+> Answer in Markdown.
+
+Your program can add its own after them, such as a description of the
+project open, with `OpenChat::instructions`. They're sent each time the
+chat's session is opened, so they're kept to 64 KiB. They aren't saved:
+give them again when you restore the chat (`RestoreChat::instructions`).
+
+**CAF never runs an agent it can't strip.** An agent with the cautious
+profile is refused (`Refused::OwnTools`): opening a chat with it fails, as
+does sending a message to a restored chat with it. Its status says so
+beforehand: `AgentStatus::own_tools_off` is false. An agent whose adapter
+turns out not to be the one its profile is for falls to the cautious
+profile, so its chats get no session: they're lost, as CAF can't turn off
+its tools, and their waiting messages fail.
+
+For Claude, a few things stay as they are: settings an organisation
+manages on the machine, the plugins built into Claude Code, and two
+commands of the adapter's own, `/mcp` and `/remote-control`, which the
+user can send as a message but the agent can't call. The user's sign-in is
+untouched, but one that lives in their own Claude Code settings, such as
+an API key helper, isn't read, so the chat asks them to sign in.
 
 ## Where an agent stands
 
