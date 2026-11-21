@@ -34,8 +34,12 @@ quiet: Duration,
 /**
  * How long any other request CAF sends may go unanswered (closing a
  * session, changing a setting) before the adapter is treated as stuck
- * and restarted. A prompt has no such limit: an agent may work on one
- * for an hour. 60 s.
+ * and restarted. A change of setting a chat waits for restarts only
+ * that chat's session while another chat is mid-turn on the adapter:
+ * the session is closed and opened again, at once if a message waits
+ * and otherwise with the next, with every choice sent again first. A
+ * prompt has no such limit: an agent may work on one for an hour.
+ * 60 s.
  */
 request: Duration, 
 /**

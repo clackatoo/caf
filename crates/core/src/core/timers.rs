@@ -8,7 +8,7 @@ use super::procs::Cause;
 use super::state::{Group, Init, Open, Purpose};
 use super::{Core, report};
 use crate::chat::AppData;
-use crate::chat::AppItem;
+use crate::chat::{AppItem, ChatState};
 use crate::directive::{Directive, Level};
 use crate::ids::{ChatId, Ticket};
 use crate::time::{Mono, Now};
@@ -144,6 +144,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
     }
 
+    /// Whether a chat has a turn running on `proc`.
+    fn busy(&self, proc: Ticket) -> bool {
+        (self.runs.values()).any(|run| {
+            run.running
+                .as_ref()
+                .is_some_and(|running| running.proc == proc)
+        })
+    }
+
     /// `proc` hasn't answered `initialize` in time: each chat waiting on
     /// it is asked whether to keep waiting.
     fn init_slow(&mut self, now: Now, proc: Ticket) {
@@ -213,29 +222,37 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     format!("process {} didn't answer closing a session", proc.0),
                 );
                 // Stuck: restarted, unless that would cut a turn off.
-                let busy = (self.runs.values()).any(|run| {
-                    run.running
-                        .as_ref()
-                        .is_some_and(|running| running.proc == proc)
-                });
-                if !busy {
+                if !self.busy(proc) {
                     self.lose_process(now, proc, Cause::Restarted, out);
                 }
             }
-            // Stuck, as any request unanswered so long: restarted. The
-            // choice is sent again as the session opens again, and messages
-            // waiting go after it.
+            // Stuck, as any request unanswered so long. If its chat still
+            // waits for it, the chat's session is restarted, and the choice
+            // sent again as it opens again, before the messages waiting.
+            // If nobody waits for it any more, as its chat was closed, put
+            // away or restored since, no chat is touched: the adapter is
+            // restarted, as for a session it doesn't close, unless that
+            // would cut a turn off.
             Purpose::Set { chat, .. } => {
                 self.pending.remove(&(proc, id));
+                let waited = (self.runs.get(&chat))
+                    .and_then(|run| run.choosing.asked.as_ref())
+                    .is_some_and(|asked| asked.proc == proc && asked.id == id)
+                    && (self.chats.get(&chat))
+                        .is_some_and(|whole| whole.state != ChatState::Closed);
                 report(
                     out,
                     Level::Warn,
                     format!(
-                        "process {} didn't answer changing a setting of chat {}: restarting it",
+                        "process {} didn't answer changing a setting of chat {}",
                         proc.0, chat.0
                     ),
                 );
-                self.restart_stuck(now, chat, proc, out);
+                if waited {
+                    self.restart_stuck(now, chat, proc, out);
+                } else if !self.busy(proc) {
+                    self.lose_process(now, proc, Cause::Restarted, out);
+                }
             }
             // As an abandoned open: a session it opens even so is closed.
             Purpose::Learn { conn } => {

@@ -68,10 +68,11 @@ quietly.
 
 A change the agent never answers doesn't fail anything: as with any
 request it leaves unanswered for `Timers::request` (60 s), its program is
-taken to be stuck and restarted, its session opened again, and every
-choice sent again before the messages waiting go. If the agent had lost
-the session, it's opened again and the choice sent to it, as a message
-would be.
+taken to be stuck and restarted, or, while another chat is mid-turn on
+it, only this chat's session is closed. The session opens again at once
+if a message waits, and otherwise with the next, and every choice is
+sent again before the messages go. If the agent had lost the session,
+it's opened again and the choice sent to it, as a message would be.
 
 A choice already applied that the agent stops offering, such as fast mode
 when the model changes to one without it, falls back the same way, and

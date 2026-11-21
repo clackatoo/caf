@@ -1907,6 +1907,10 @@ fn a_change_unanswered_on_an_adapter_busy_with_another_chat_restarts_only_its_se
     prompts(&out);
     let (_, out) = script.set_setting(other, SettingChoice::model("sonnet"));
     set(&out);
+    script
+        .set_setting(other, SettingChoice::effort("high"))
+        .0
+        .expect("taken");
     script.send(other, "Hello").0.expect("sent");
     script.at(60_000);
     let out = script.woken();
@@ -1914,11 +1918,108 @@ fn a_change_unanswered_on_an_adapter_busy_with_another_chat_restarts_only_its_se
         with(&out, "signal").is_empty(),
         "the other chat's turn runs on"
     );
+    let close = sent(&out, "session/close");
+    assert_eq!(close["params"], json!({ "sessionId": "sess-2" }));
+    assert_eq!(failed(&script.chat(other)), 0);
+    // Closed, it's resumed at once, as a message waits; its choices go
+    // again, in order, before it.
+    let out = script.answers(PROC, id_of(&close), &json!({}));
+    let resume = sent(&out, "session/resume");
+    assert_eq!(resume["params"]["sessionId"], "sess-2");
+    let out = script.answers(
+        PROC,
+        id_of(&resume),
+        &json!({ "configOptions": claude_options("default", "default", false) }),
+    );
+    let mut sent_values = Vec::new();
+    let mut out = out;
+    for (model, effort) in [("sonnet", "default"), ("sonnet", "high")] {
+        assert!(prompts(&out).is_empty());
+        let (id, params) = set(&out);
+        sent_values.push((params["configId"].clone(), params["value"].clone()));
+        out = script.answers(
+            PROC,
+            id,
+            &json!({ "configOptions": claude_options(model, effort, false) }),
+        );
+    }
     assert_eq!(
-        sent(&out, "session/close")["params"],
-        json!({ "sessionId": "sess-2" })
+        sent_values,
+        [
+            (json!("model"), json!("sonnet")),
+            (json!("effort"), json!("high"))
+        ]
+    );
+    assert_has(
+        &json!(prompts(&out)),
+        &json!([{ "params": { "sessionId": "sess-2", "prompt": [{ "type": "text", "text": "Hello" }] } }]),
     );
     assert_eq!(failed(&script.chat(other)), 0);
+}
+
+#[test]
+fn a_change_nobody_waits_for_any_more_touches_no_chat_when_its_deadline_passes() {
+    let mut script = Script::new(host());
+    script.open_offering(
+        OpenChat::new("claude", "/elsewhere"),
+        &claude_options("default", "default", false),
+    );
+    // A saved chat, on the same adapter, with a change being sent.
+    let mut open = OpenChat::new("claude", "/work");
+    open.shelf = Some(Shelf("work".to_owned()));
+    let (other, out) = script.open(open);
+    let other = other.expect("opened");
+    script.answers(
+        PROC,
+        id_of(&sent(&out, "session/new")),
+        &json!({ "sessionId": "sess-2", "configOptions": claude_options("default", "default", false) }),
+    );
+    let (_, out) = script.set_setting(other, SettingChoice::model("sonnet"));
+    set(&out);
+    // The first chat is mid-turn.
+    script.send(CHAT, "Busy").0.expect("sent");
+    // Put away, and its store's work done.
+    script.at(1000);
+    let out = script.put_away(other).1;
+    let close = sent(&out, "session/close");
+    let saved = with(&out, "storage")
+        .into_iter()
+        .find(|each| each["storage"]["type"] == "Snapshot")
+        .expect("written whole")["storage"]["value"]["saved"]
+        .clone();
+    let mut work = with(&out, "storage");
+    while let Some(each) = work.pop() {
+        // Letting it go is answered by nothing.
+        let Some(ticket) = each["storage"]["value"]["ticket"].as_u64() else {
+            continue;
+        };
+        work.extend(with(
+            &script.storage(ticket, StorageEvent::Done { written: 100 }),
+            "storage",
+        ));
+    }
+    script.answers(PROC, id_of(&close), &json!({}));
+    // Restored, idle.
+    let (done, out) = script.restore(RestoreChat::new(other, Shelf("work".to_owned())));
+    done.expect("restoring");
+    let load = with(&out, "storage")[0]["storage"]["value"]["ticket"]
+        .as_u64()
+        .expect("a ticket");
+    let saved: Saved = serde_json::from_value(saved).expect("a save");
+    script.storage(load, StorageEvent::Loaded(Box::new(saved)));
+    let before = script.chat(other);
+    // The change's deadline passes: nobody waits for it.
+    script.at(60_000);
+    let out = script.woken();
+    assert!(
+        with(&out, "write").is_empty() && with(&out, "signal").is_empty(),
+        "nothing is asked of any session, and the turn runs on: {out:#?}"
+    );
+    assert_eq!(script.chat(other), before, "the restored chat is untouched");
+    assert_eq!(
+        script.state()["runs"][other.to_string()]["open"]["type"],
+        "Idle"
+    );
 }
 
 #[test]

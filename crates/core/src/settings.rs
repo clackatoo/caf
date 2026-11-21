@@ -21,10 +21,11 @@
 //! - only the latest change of a setting counts;
 //! - while a change is asked for, the agent's reports about that setting
 //!   don't move the choice: its answer decides. A change the agent leaves
-//!   unanswered for [`Timers::request`](crate::host::Timers::request)
-//!   means its program is stuck: it's restarted, as for any request so
-//!   left, and the session opened again, with every choice sent to it
-//!   before the messages waiting go;
+//!   unanswered for [`Timers::request`](crate::host::Timers::request) is
+//!   a stuck request: the agent's program is restarted, or, while another
+//!   chat is mid-turn on it, only this chat's session is closed. Either
+//!   way the session opens again, at once if a message waits and
+//!   otherwise with the next, with every choice sent to it first;
 //! - when a session opens or reopens, the choices are sent first, and the
 //!   messages waiting go once they're answered;
 //! - only a choice made for the chat itself that the agent doesn't offer,

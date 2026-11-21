@@ -809,6 +809,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             _ => None,
         };
         run.open = Open::Idle;
+        // A setting being sent is waited for no more: its answer, or its
+        // watchdog, changes nothing of the chat.
+        run.choosing.asked = None;
+        run.choosing.unsent.clear();
         let session = run.session.clone();
         if let Some(each) = self.conns.get_mut(&conn) {
             each.chats.remove(&chat);

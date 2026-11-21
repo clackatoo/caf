@@ -423,10 +423,12 @@ pub enum FailureReason {
     DidNotStop,
     /// The agent's answer made no sense.
     BadAnswer,
-    /// A setting chosen couldn't be applied before it was sent, such as a
-    /// model the agent no longer offers, or a change it refused: rather
-    /// than send it with a setting nobody chose, CAF didn't send it. The
-    /// setting is now what the agent uses, so sending it again uses that.
+    /// A setting chosen for the chat couldn't be applied before it was
+    /// sent, such as a model the agent no longer offers, or a change it
+    /// refused: rather than send it with a setting nobody chose, CAF
+    /// didn't send it. The setting falls back to the host's default for
+    /// the agent, if the agent offers it, which is sent first, and
+    /// otherwise to what the agent uses: sending it again uses that.
     SettingNotApplied,
     /// Anything else the agent reported.
     Other,
@@ -603,13 +605,15 @@ pub enum Note {
     /// A setting chosen for the chat isn't offered by the agent, or no
     /// longer is, such as a model it no longer has. The setting falls back
     /// to the host's default for the agent, if the agent offers it, and
-    /// otherwise to what the agent uses; a message waiting for it failed.
+    /// otherwise to what the agent uses. The messages waiting failed if it
+    /// wasn't applied yet; if it was, and the agent stopped offering it,
+    /// they go on what's used now.
     NotOffered(SettingChoice),
     /// A setting chosen for the chat was refused by the agent. It falls
-    /// back as for [`Note::NotOffered`], and a message waiting for it
-    /// failed. A change the agent never answers isn't refused: its program
-    /// is restarted, as for any request it leaves unanswered, and the
-    /// change is sent again.
+    /// back as for [`Note::NotOffered`], and the messages waiting failed.
+    /// A change the agent never answers isn't refused: it's a stuck
+    /// request (see [`Timers::request`](crate::host::Timers::request)),
+    /// and the change is sent again as the session opens again.
     NotApplied(SettingChoice),
 }
 
