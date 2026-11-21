@@ -35,12 +35,19 @@ export interface Setup {
   agents?: string
   /** What the fake agent's `auth` commands do (see caf-fake-agent's `Auth`), with `{state}` as the test's folder. */
   auth?: Record<string, unknown>
+  /**
+   * The folder to keep its state in, as `$XDG_STATE_HOME` and
+   * `$XDG_DATA_HOME`: another run's, to start the debugger again where it
+   * left off, with its saved chats. A new one of its own by default.
+   */
+  state?: string
 }
 
 /** Starts caf-debugger with `args`; resolves once it says where it is. */
 export function start(args: string[], setup: Setup = {}): Promise<Server & { process: ChildProcess; state: string }> {
-  // Live runs are recorded under $XDG_STATE_HOME: a folder of the test's own.
-  const state = mkdtempSync(join(tmpdir(), 'caf-e2e-'))
+  // Live runs are recorded under $XDG_STATE_HOME, and their chats kept
+  // under $XDG_DATA_HOME: a folder of the test's own.
+  const state = setup.state ?? mkdtempSync(join(tmpdir(), 'caf-e2e-'))
   const fill = (text: string) =>
     text
       .replaceAll('{fake}', fake)
@@ -80,6 +87,19 @@ export function start(args: string[], setup: Setup = {}): Promise<Server & { pro
   })
 }
 
+/**
+ * Stops caf-debugger as Ctrl-C would, and resolves once it has exited: its
+ * chats are saved and let go by then.
+ */
+export function stop(server: { process: ChildProcess }): Promise<void> {
+  const child = server.process
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
+  return new Promise((done) => {
+    child.once('exit', () => done())
+    child.kill('SIGTERM')
+  })
+}
+
 /** `env` without any proxy settings, in either case. */
 function withoutProxies(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(env).filter(([name]) => !/^(https?|all|no)_proxy$/i.test(name)))
@@ -90,7 +110,7 @@ function withoutProxies(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  * arguments. Its page fails the test if the app's Content-Security-Policy
  * ever blocks anything, which would mean the policy and the app disagree.
  */
-export const test = base.extend<{ serve: string[]; setup: Setup; server: Server & { state: string } }>({
+export const test = base.extend<{ serve: string[]; setup: Setup; server: Server & { process: ChildProcess; state: string } }>({
   page: async ({ page }, use) => {
     const blocked: string[] = []
     page.on('console', (message) => {
@@ -104,7 +124,8 @@ export const test = base.extend<{ serve: string[]; setup: Setup; server: Server 
   server: async ({ serve, setup }, use) => {
     const server = await start(serve, setup)
     await use(server)
-    server.process.kill('SIGTERM')
+    // Once it has exited, so nothing it saves on its way out is left.
+    await stop(server)
     rmSync(server.state, { recursive: true, force: true })
   },
 })
