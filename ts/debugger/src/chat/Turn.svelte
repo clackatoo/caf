@@ -77,7 +77,9 @@
     {#if turn.imported}<span class="history" title="Imported from the agent's own record: CAF didn't see it happen">History</span>{/if}
     <span class="life" title={lifeHint(turn.life)}>{lifeLabel(turn.life)}</span>
     {#if turn.model}
-      <span class="model" title="The model that answered, as the agent said when it was sent">{turn.model.name ?? turn.model.id}</span>
+      <span class="model" title="The model that answered, as the agent said when it was sent"
+        ><span class="hidden">{'Model: '}</span>{turn.model.name ?? turn.model.id}</span
+      >
     {/if}
     {#if turn.window.start !== null}
       <time class="when" datetime={isoTime(turn.window.start)} title={fullTime(turn.window.start)}>
@@ -211,6 +213,15 @@
   .model {
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Said to screen readers: the badge's place says it to the eye. */
+  .hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
     white-space: nowrap;
   }
   .when,

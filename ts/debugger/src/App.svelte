@@ -11,6 +11,7 @@
     ChatList,
     ChatView,
     SavedList,
+    openThenChoose,
     restoreOnceFree,
     showsAgent,
     type ChatActions,
@@ -102,7 +103,11 @@
     signIn: () => live?.caf.signIn(agentOf(chat)),
     paste: (text: string) => live?.caf.paste(agentOf(chat), text),
     stopSignIn: () => live?.caf.stopSignIn(agentOf(chat)),
-    setSetting: (choice: SettingChoice) => live?.caf.setSetting(need(selected), choice),
+    setSetting: async (choice: SettingChoice) => {
+      await live?.caf.setSetting(need(selected), choice)
+      // Chosen again, as the notice asked.
+      if (notice?.chat === selected) notice = null
+    },
     learnSettings: () => live?.caf.learnSettings(agentOf(chat)),
   }
 
@@ -125,17 +130,21 @@
     open: async (agent: AgentName, cwd: string, settings: readonly SettingChoice[] = []) => {
       if (live === null) throw new Error('Not live.')
       const caf = live.caf
-      const chat = await caf.open({ agent, cwd, session: { type: 'New' } })
-      selected = chat
       // Opening can't carry settings: they're chosen once it's open, and
       // applied as its session opens.
-      try {
-        for (const choice of settings) await caf.setSetting(chat, choice)
-      } catch (error) {
-        throw new Error(`The chat is open, but its model couldn't be chosen: ${errorText(error)} Choose it in the chat.`)
-      }
+      const { chat, problem } = await openThenChoose(
+        () => caf.open({ agent, cwd, session: { type: 'New' } }),
+        (chat, choice) => caf.setSetting(chat, choice),
+        settings,
+      )
+      selected = chat
+      notice =
+        problem === null ? null : { chat, text: `The chat is open, but its settings couldn't be chosen: ${errorText(problem)} Choose them below.` }
     },
   }
+
+  /** What went wrong choosing a chat's settings as it opened, shown in that chat. */
+  let notice = $state<{ chat: ChatId; text: string } | null>(null)
 
   const savedActions: SavedActions = {
     select: (chat: ChatId) => (selected = chat),
@@ -275,6 +284,7 @@
             actions={chatActions}
             readOnly={!actable}
             {readOnlyWhy}
+            notice={notice?.chat === chat.id ? notice.text : null}
           />
         {:else}
           <p class="empty">

@@ -4,6 +4,7 @@
   // agent's models. Where it doesn't, the chat view offers them once the
   // chat is open, before anything is sent.
   import type { AgentName, AgentStatus, ChatId, ChatSummary, DeepReadonly, SettingChoice } from '@clackatoo/caf'
+  import { untrack } from 'svelte'
   import { attempt, type ListActions } from './actions.ts'
   import { runs } from './settings.ts'
   import { errorText, folderName, shortId } from './words.ts'
@@ -32,6 +33,10 @@
   let cwd = $state('')
   /** The model chosen, or '' for the one the agent would use. */
   let model = $state('')
+  /** Whether the user picked `model`, rather than it being what the agent would use. */
+  let picked = false
+  /** The agent `model` was picked for. */
+  let pickedFor: AgentName | null = null
   let opening = $state(false)
   let problem = $state<string | null>(null)
 
@@ -46,15 +51,27 @@
   /** What the agent would use: its model as it last said. */
   const theirs = $derived(models?.current?.type === 'Choice' ? models.current.value : '')
 
-  // Another agent, or its models learned: start from what it would use.
+  // Until the user picks one, the model is what the agent would use, as
+  // its status says. A pick stays through the agents' statuses changing,
+  // until another agent is chosen, or the agent no longer offers it.
   $effect.pre(() => {
-    void agent
-    model = theirs
+    const now = agent
+    const choices = models?.choices ?? []
+    const own = theirs
+    untrack(() => {
+      if (now !== pickedFor) picked = false
+      pickedFor = now
+      if (picked && choices.some((choice) => choice.id === model)) return
+      picked = false
+      model = own
+    })
   })
 
   function start() {
     adding = true
     problem = null
+    picked = false
+    model = theirs
     if (!agents.includes(agent)) agent = agents[0] ?? ''
   }
 
@@ -65,7 +82,7 @@
     problem = null
     // Only a model the user changed is chosen: otherwise the agent's own,
     // or the host's default for it, applies.
-    const settings: SettingChoice[] = model !== theirs ? [{ kind: { type: 'Model' }, value: { type: 'Choice', value: model } }] : []
+    const settings: SettingChoice[] = picked && model !== theirs ? [{ kind: { type: 'Model' }, value: { type: 'Choice', value: model } }] : []
     const error = await attempt(() => actions.open(agent, cwd.trim(), settings))
     opening = false
     if (error === null) adding = false
@@ -97,7 +114,7 @@
       {#if models !== null}
         <label>
           Model
-          <select bind:value={model}>
+          <select bind:value={model} onchange={() => (picked = true)}>
             {#if theirs === ''}<option value="">The agent's own</option>{/if}
             {#each runs(models.choices) as run, r (r)}
               {#if run.group === null}

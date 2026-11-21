@@ -30,6 +30,7 @@
     readOnly = false,
     readOnlyWhy = 'As it was then: nothing can be done here.',
     appSummary = () => "An item of the app's own",
+    notice = null,
   }: {
     chat: DeepReadonly<Chat>
     /** The app's line for the chat, such as its title, from its `ChatSummary`, if it has one. */
@@ -52,6 +53,11 @@
     readOnlyWhy?: string
     /** The one-line summary of one of the app's own items, which only the app can write. */
     appSummary?: (app: unknown) => string
+    /**
+     * Something the host has to say about the chat, shown as a problem:
+     * such as why its settings couldn't be chosen as it opened.
+     */
+    notice?: string | null
   } = $props()
 
   /** The status of the chat's agent, if the host gave it, and it's this chat's agent's. */
@@ -111,6 +117,7 @@
       <button type="button" class="close" disabled={readOnly} onclick={close}>Close</button>
     {/if}
   </header>
+  {#if notice !== null}<div class="problem" role="alert">{notice}</div>{/if}
   {#if problem !== null}<div class="problem" role="alert">{problem}</div>{/if}
   {#if readOnly}
     <div class="looking-back" role="status">{readOnlyWhy}</div>
@@ -156,7 +163,7 @@
     known={closed ? undefined : status?.settings}
     held={running !== undefined || chat.state.type !== 'Open'}
     disabled={!acting || closed}
-    canLearn={!readOnly && may.agents}
+    canLearn={acting && may.agents}
     set={actions.setSetting}
     learn={actions.learnSettings}
   />

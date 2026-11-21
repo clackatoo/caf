@@ -101,6 +101,28 @@ export async function restoreOnceFree<T>(
 }
 
 /**
+ * Opens a chat with `open`, then chooses `settings` for it with `choose`,
+ * as a host's `ListActions.open` does: opening can't carry them. It
+ * resolves once the chat is open, with why its settings couldn't be
+ * chosen, if they couldn't, and rejects only if it didn't open: a chat
+ * that opened is never opened again for want of its settings. The host
+ * shows the problem in the chat (`ChatView`'s `notice`), where the user
+ * can choose them again.
+ */
+export async function openThenChoose<C>(
+  open: () => Promise<C>,
+  choose: (chat: C, choice: SettingChoice) => Promise<unknown>,
+  settings: readonly SettingChoice[],
+): Promise<{ chat: C; problem: unknown }> {
+  const chat = await open()
+  for (const choice of settings) {
+    const problem = await attempt(() => choose(chat, choice))
+    if (problem !== null) return { chat, problem }
+  }
+  return { chat, problem: null }
+}
+
+/**
  * Runs an action, and gives back why it failed, or null. A host's action
  * that throws instead of rejecting counts too.
  */

@@ -196,8 +196,12 @@ export function noteText(note: DeepReadonly<Note>): string {
       return 'You signed in to the agent: send the message again to try it now.'
     case 'AgentChanged':
       return `The agent changed by itself to ${choiceText(note.value)}, and this chat follows it.`
-    case 'NotOffered':
-      return `The agent no longer offers ${choiceText(note.value)}, so that choice was dropped, and the agent's own applies.`
+    case 'NotOffered': {
+      // A switch that's gone is gone on and off alike: it's named alone.
+      const choice = note.value
+      const what = choice.value.type === 'Switch' ? settingText(choice) : choiceText(choice)
+      return `The agent no longer offers ${what}, so that choice was dropped, and the agent's own applies.`
+    }
     default:
       return `A note this viewer doesn't know (${tagOf(note)}).`
   }
@@ -212,15 +216,22 @@ export function choiceText(choice: DeepReadonly<SettingChoice>): string {
   const value = choice.value
   const said =
     value.type === 'Choice' ? value.value : value.type === 'Switch' ? (value.value ? 'on' : 'off') : `(${tagOf(value)})`
+  return choice.kind.type === 'Model' || choice.kind.type === 'Effort' || choice.kind.type === 'Fast'
+    ? `${settingText(choice)} ${said}`
+    : `${settingText(choice)}, ${said}`
+}
+
+/** The setting a choice is of, as a note names it: "the model", "fast mode". */
+export function settingText(choice: DeepReadonly<SettingChoice>): string {
   switch (choice.kind.type) {
     case 'Model':
-      return `the model ${said}`
+      return 'the model'
     case 'Effort':
-      return `the effort ${said}`
+      return 'the effort'
     case 'Fast':
-      return `fast mode ${said}`
+      return 'fast mode'
     default:
-      return `a setting this viewer doesn't know (${tagOf(choice.kind)}), ${said}`
+      return `a setting this viewer doesn't know (${tagOf(choice.kind)})`
   }
 }
 

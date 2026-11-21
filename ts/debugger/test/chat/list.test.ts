@@ -81,11 +81,43 @@ describe('the chat list', () => {
 
     async function form() {
       const actions = { select: vi.fn(), open: vi.fn(async () => {}) }
-      render(ChatList, { chats, agents: ['claude', 'fake'], statuses, selected: null, actions })
+      const view = render(ChatList, { chats, agents: ['claude', 'fake'], statuses, selected: null, actions })
       await fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
       await fireEvent.input(screen.getByRole('textbox'), { target: { value: '/home/me/new' } })
-      return actions
+      return Object.assign(actions, { rerender: view.rerender })
     }
+
+    /** Claude's status, its models as given, the first its current. */
+    function offering(...ids: string[]): AgentStatus[] {
+      const [claude, fake] = statuses as [AgentStatus, AgentStatus]
+      const setting = {
+        kind: { type: 'Model' as const },
+        name: 'Model',
+        form: { type: 'Choices' as const, value: ids.map((id) => choice(id, id)) },
+        current: { type: 'Choice' as const, value: ids[0]! },
+      }
+      return [{ ...claude, settings: { type: 'Known', value: [setting] } }, fake]
+    }
+
+    it("keeps the model picked as the agents' statuses change, until it's no longer offered", async () => {
+      const actions = await form()
+      const model = () => screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement
+      await fireEvent.change(model(), { target: { value: 'sonnet' } })
+      await actions.rerender({ statuses: offering('opus', 'sonnet', 'haiku') })
+      expect(model().value).toBe('sonnet')
+      await actions.rerender({ statuses: offering('opus', 'haiku') })
+      expect(model().value).toBe('opus')
+      await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
+      expect(actions.open).toHaveBeenCalledWith('claude', '/home/me/new', [])
+    })
+
+    it("follows what the agent would use while nothing's picked", async () => {
+      const actions = await form()
+      await actions.rerender({ statuses: offering('haiku', 'sonnet') })
+      expect((screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement).value).toBe('haiku')
+      await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
+      expect(actions.open).toHaveBeenCalledWith('claude', '/home/me/new', [])
+    })
 
     it('opens a chat with the model chosen', async () => {
       const actions = await form()

@@ -5,11 +5,13 @@
 
 import type { Setting, SettingChoice } from '@clackatoo/caf'
 import { CafError } from '@clackatoo/caf'
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, describe, expect, it } from 'vitest'
+import { openThenChoose } from '../../src/chat/actions.ts'
+import ChatView from '../../src/chat/ChatView.svelte'
 import { runs } from '../../src/chat/settings.ts'
 import { choiceText, failureText, noteText, refusedText } from '../../src/chat/words.ts'
-import { actions, chat, draw, item, life, status, turn } from './build.ts'
+import { actions, chat, chatId, draw, item, life, status, turn } from './build.ts'
 
 afterEach(cleanup)
 
@@ -108,7 +110,8 @@ describe("the agent's settings", () => {
     const { container, rerender } = draw(chat({ settings: { offered: offered(), chosen: [sonnet] } }))
     expect(container.querySelector('.waiting')?.textContent).toBe('Changing to Sonnet…')
     await rerender({ chat: chat({ settings: { offered: offered('sonnet'), chosen: [sonnet] } }) })
-    expect(container.querySelector('.waiting')).toBeNull()
+    // The same live region, emptied: one put in with its text isn't read out.
+    expect(container.querySelector('[data-kind=Model] .waiting')?.textContent).toBe('')
     expect(select('Model').value).toBe('sonnet')
   })
 
@@ -116,7 +119,7 @@ describe("the agent's settings", () => {
     const fast: SettingChoice = { kind: { type: 'Fast' }, value: { type: 'Switch', value: true } }
     const { container } = draw(chat({ settings: { offered: offered(), chosen: [fast] } }))
     expect((screen.getByRole('checkbox', { name: 'Fast mode' }) as HTMLInputElement).checked).toBe(true)
-    expect(container.querySelector('.waiting')?.textContent).toBe('Changing to Fast mode on…')
+    expect(container.querySelector('[data-kind=Fast] .waiting')?.textContent).toBe('Turning fast mode on…')
   })
 
   it('still shows a choice the agent no longer lists', () => {
@@ -132,6 +135,56 @@ describe("the agent's settings", () => {
     await fireEvent.change(select('Model'), { target: { value: 'haiku' } })
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe("The agent doesn't offer that setting, or that choice of it."))
     expect(select('Model').value).toBe('default')
+  })
+
+  it('keeps the control and its focus while a change is sent, saying the bar is busy, and puts back what is chosen meanwhile', async () => {
+    const given = actions()
+    let done = () => {}
+    given.setSetting.mockImplementation(() => new Promise<void>((resolve) => (done = resolve)))
+    draw(chat({ settings: { offered: offered(), chosen: [] } }), { actions: given })
+    const model = select('Model')
+    model.focus()
+    await fireEvent.change(model, { target: { value: 'sonnet' } })
+    expect(bar().getAttribute('aria-busy')).toBe('true')
+    expect(model.disabled).toBe(false)
+    expect(document.activeElement).toBe(model)
+    // Another choice while it's sent isn't sent, and the control shows the one that is.
+    await fireEvent.change(model, { target: { value: 'haiku' } })
+    await fireEvent.change(select('Effort'), { target: { value: 'low' } })
+    expect(given.setSetting).toHaveBeenCalledOnce()
+    expect(model.value).toBe('sonnet')
+    expect(select('Effort').value).toBe('high')
+    done()
+    await waitFor(() => expect(bar().getAttribute('aria-busy')).toBe('false'))
+  })
+
+  it('puts a switch back as it was if the change is refused', async () => {
+    const given = actions()
+    let refuse = (_: unknown) => {}
+    given.setSetting.mockImplementation(() => new Promise<void>((_, reject) => (refuse = reject)))
+    const fast: SettingChoice = { kind: { type: 'Fast' }, value: { type: 'Switch', value: true } }
+    draw(chat({ settings: { offered: offered(), chosen: [fast] } }), { actions: given })
+    const box = screen.getByRole('checkbox', { name: 'Fast mode' }) as HTMLInputElement
+    expect(box.checked).toBe(true)
+    await fireEvent.click(box)
+    // A second click while it's sent is put back, not flipped twice.
+    await fireEvent.click(box)
+    expect(box.checked).toBe(false)
+    refuse(new CafError({ type: 'Refused', value: { type: 'NoSuchSetting' } }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain("doesn't offer that setting"))
+    expect(box.checked).toBe(true)
+  })
+
+  it('links each control to what it says of itself and its change waiting', () => {
+    draw(chat({ settings: { offered: offered(), chosen: [sonnet] } }))
+    const said = (control: HTMLElement) =>
+      control
+        .getAttribute('aria-describedby')!
+        .split(' ')
+        .map((id) => document.getElementById(id)?.textContent)
+    expect(said(select('Model'))).toEqual(['Quick, for everyday tasks', 'Changing to Sonnet…'])
+    expect(said(select('Effort'))).toEqual([''])
+    expect(said(screen.getByRole('checkbox', { name: 'Fast mode' }))).toEqual(['May cost more.', ''])
   })
 
   it.each([
@@ -173,6 +226,14 @@ describe('before the session opens', () => {
     await waitFor(() => expect(actions.setSetting).toHaveBeenCalledWith(sonnet))
   })
 
+  it('shows a choice made before the session opens as from the next message', () => {
+    const { container } = draw(chat({ state: { type: 'Opening' }, settings: { offered: [], chosen: [sonnet] } }), {
+      agent: status({ type: 'Host' }, undefined, false, { type: 'Known', value: offered() }),
+    })
+    expect(select('Model').value).toBe('sonnet')
+    expect(container.querySelector('[data-kind=Model] .waiting')?.textContent).toBe('Sonnet, from your next message')
+  })
+
   it("learns what the agent offers, if it isn't known", async () => {
     const { actions, container } = draw(opening, { agent: status({ type: 'Host' }) })
     expect(container.querySelector('.caf-settings')?.textContent).toContain('shows once its session opens')
@@ -180,8 +241,11 @@ describe('before the session opens', () => {
     expect(actions.learnSettings).toHaveBeenCalledOnce()
   })
 
-  it('offers no learning where the host lets it only watch the agents', () => {
-    const { container } = draw(opening, { agent: status({ type: 'Host' }), may: { act: true, agents: false } })
+  it.each([
+    ['agents', { act: true, agents: false }],
+    ['chats', { act: false, agents: true }],
+  ])('offers no learning where the host lets it only watch the %s', (_, may) => {
+    const { container } = draw(opening, { agent: status({ type: 'Host' }), may })
     expect(container.querySelector('.caf-settings')).toBeNull()
   })
 
@@ -204,6 +268,41 @@ describe('before the session opens', () => {
   })
 })
 
+describe('opening a chat with its settings', () => {
+  const open = async () => chatId(9)
+  const fast: SettingChoice = { kind: { type: 'Fast' }, value: { type: 'Switch', value: true } }
+
+  it('opens it, then chooses each', async () => {
+    const chosen: [string, SettingChoice][] = []
+    const choose = async (chat: string, choice: SettingChoice) => void chosen.push([chat, choice])
+    expect(await openThenChoose(open, choose, [sonnet, fast])).toEqual({ chat: chatId(9), problem: null })
+    expect(chosen).toEqual([
+      [chatId(9), sonnet],
+      [chatId(9), fast],
+    ])
+  })
+
+  it('resolves with the chat, and why, if its settings couldn\'t be chosen, so it isn\'t opened again', async () => {
+    const refused = new CafError({ type: 'Refused', value: { type: 'NoSuchSetting' } })
+    const choose = async () => Promise.reject(refused)
+    expect(await openThenChoose(open, choose, [sonnet, fast])).toEqual({ chat: chatId(9), problem: refused })
+  })
+
+  it("rejects if it didn't open", async () => {
+    const notAllowed = new CafError({ type: 'NotAllowed' })
+    await expect(openThenChoose(async () => Promise.reject(notAllowed), async () => {}, [sonnet])).rejects.toBe(notAllowed)
+  })
+
+  it("shows the host's notice in the chat", () => {
+    const { container } = render(ChatView, {
+      chat: chat(),
+      actions: actions(),
+      notice: "The chat is open, but its settings couldn't be chosen.",
+    })
+    expect(container.querySelector('[role=alert]')?.textContent).toBe("The chat is open, but its settings couldn't be chosen.")
+  })
+})
+
 describe('the model each turn used', () => {
   it('shows it quietly in the turn, by name, or by id where the agent gave none', () => {
     const { container } = draw(
@@ -212,8 +311,8 @@ describe('the model each turn used', () => {
       }),
     )
     expect([...container.querySelectorAll('.turn')].map((each) => each.querySelector('.model')?.textContent ?? null)).toEqual([
-      'Sonnet 4.6',
-      'haiku',
+      'Model: Sonnet 4.6',
+      'Model: haiku',
       null,
     ])
   })
@@ -224,7 +323,7 @@ describe('the words for settings', () => {
     [{ type: 'AgentChanged', value: sonnet }, 'The agent changed by itself to the model sonnet, and this chat follows it.'],
     [
       { type: 'NotOffered', value: { kind: { type: 'Fast' }, value: { type: 'Switch', value: true } } },
-      "The agent no longer offers fast mode on, so that choice was dropped, and the agent's own applies.",
+      "The agent no longer offers fast mode, so that choice was dropped, and the agent's own applies.",
     ],
   ])('draws the note %j', (note, says) => {
     const { container } = draw(chat({ turns: [turn({ items: [item({ type: 'Note', value: note as never })] })] }))

@@ -494,15 +494,18 @@ choice's description shown, and fast mode as a switch, saying it may cost
 more. A change waiting shows as such: "Sonnet, from your next message"
 while a turn runs or the session isn't open, and "Changing to Sonnet…"
 otherwise. Before the session first opens, it offers what the agent's
-status knows, or, with `agents`, to learn it. Each turn names the model
-that answered it.
+status knows, or, with `act` and `agents`, to learn it. Each turn names
+the model that answered it.
 
 Given its `label`, from the chat's summary in `caf.chats`, the view heads
 the chat with it. Beside it, `ChatList` lists the open chats, by their
 labels where they have them, and opens new ones. Given the agents'
 statuses, it offers choosing the model of an agent whose models are known,
 passing the choice to its `open(agent, cwd, settings)` action, for the
-page to choose once the chat is open. `SavedList` lists `caf.saved`: each
+page to choose once the chat is open. `openThenChoose` does both, and
+resolves once the chat is open even if its settings couldn't be chosen,
+so it's never opened twice: say why in the chat, with `ChatView`'s
+`notice`. `SavedList` lists `caf.saved`: each
 chat's label or first line, its agent, folder, when it last changed and its
 turns, whether it's loaded or why it can't be, and Restore. Its actions are
 `select(chat)`, to show a loaded one, and `restore(chat, shelf)`:
