@@ -91,7 +91,7 @@
         >
           <!-- The app's line for it if it has one, or else its folder. -->
           <span class="name">{chat.label ?? folderName(chat.cwd)}</span>
-          <span class="meta">{chat.agent} · {chat.label === null ? shortId(chat.id) : folderName(chat.cwd)}</span>
+          <span class="meta">{chat.agent} · {chat.label == null ? shortId(chat.id) : folderName(chat.cwd)}</span>
         </button>
       </li>
     {:else}

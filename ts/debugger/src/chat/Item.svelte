@@ -33,11 +33,17 @@
   <div class="note" role="note"><span class="who">CAF</span>The agent compacted its memory here.</div>
 {:else if kind.type === 'App'}
   <div class="app">{appSummary(kind.value)}</div>
-{:else if kind.type === 'Unknown' && kind.value.what === 'App' && kind.value.summary !== null}
+{:else if kind.type === 'Unknown' && kind.value.what === 'App'}
   <!-- One of the app's own items, saved by a version of the app that this
        one can't read: kept as it was, and shown by the summary it had. -->
   <details class="app unreadable">
-    <summary>{kind.value.summary} <span class="why">(an item of the app's this version can't read)</span></summary>
+    <summary>
+      {#if kind.value.summary !== null}
+        {kind.value.summary} <span class="why">(an item of the app's this version can't read)</span>
+      {:else}
+        An item of the app's that this version can't read
+      {/if}
+    </summary>
     <pre>{rawJson(kind.value.raw)}</pre>
   </details>
 {:else if kind.type === 'Unknown'}

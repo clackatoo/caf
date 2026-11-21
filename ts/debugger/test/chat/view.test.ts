@@ -287,15 +287,17 @@ describe('items', () => {
     const { container } = draw(chat({ turns: [turn({ items: [unreadable] })] }))
     const details = container.querySelector('details.unreadable') as HTMLDetailsElement
     expect(details.open).toBe(false)
-    expect(text(details.querySelector('summary') as HTMLElement)).toBe("Planned a route (an item of the app's this version can't read)")
+    expect(text(details.querySelector('summary') as HTMLElement).trim()).toBe("Planned a route (an item of the app's this version can't read)")
     expect(JSON.parse(details.querySelector('pre')!.textContent!)).toEqual({ route: ['Kyiv'] })
     expect(container.querySelector('details.unknown')).toBeNull()
   })
 
-  it("draws an app item with no summary as something CAF couldn't read", () => {
+  it("draws an app item this version can't read, with no summary, as the app's", () => {
     const unreadable = item({ type: 'Unknown', value: { what: 'App', raw: {}, summary: null } })
     const { container } = draw(chat({ turns: [turn({ items: [unreadable] })] }))
-    expect(container.querySelector('details.unknown summary')?.textContent).toContain('App')
+    expect(text(container.querySelector('details.unreadable summary') as HTMLElement).trim()).toBe(
+      "An item of the app's that this version can't read",
+    )
   })
 
   it("draws an app item by the app's summary", () => {
