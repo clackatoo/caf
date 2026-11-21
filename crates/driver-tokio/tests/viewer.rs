@@ -286,6 +286,42 @@ async fn the_welcome_has_the_agents_and_the_open_chats() {
     viewer.ends().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_agents_come_right_after_the_welcome_while_chats_open_and_close() {
+    let dir = Dir::new();
+    let (caf, running, _chat) = started(&dir, &[]).await;
+    // The open chats change all the while viewers connect, so a list of
+    // them is always ready to go out.
+    let churn = {
+        let caf = caf.clone();
+        let cwd = dir.0.clone();
+        tokio::spawn(async move {
+            for _ in 0..40 {
+                if let Ok(chat) = caf.open_chat(OpenChat::new("fake", &cwd)).await {
+                    let _ = chat.close().await;
+                }
+            }
+        })
+    };
+    let viewers: Vec<_> = (0..40)
+        .map(|_| {
+            let caf = caf.clone();
+            // `welcomed` checks the very next message after the welcome is
+            // the agents' statuses.
+            tokio::spawn(async move { Viewer::welcomed(&caf, ViewerRules::default(), 64).await })
+        })
+        .collect();
+    for viewer in viewers {
+        let (viewer, agents, _) = viewer
+            .await
+            .expect("each viewer is welcomed, then told the agents");
+        assert_eq!(agents, [AgentName("fake".into())]);
+        drop(viewer);
+    }
+    churn.await.unwrap();
+    shut_down(&caf, running).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn anything_but_hello_first_ends_the_link() {
     let dir = Dir::new();
