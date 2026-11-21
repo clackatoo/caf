@@ -69,17 +69,20 @@
 //! program that doesn't know the app's type at all, such as a debugger,
 //! reads them all as unknown items, with their summaries. Through JSON,
 //! an app item keeps what serde writes with text keys and no raw bytes,
-//! as [`AppItem`] asks. One the app's type reads but wouldn't write all
-//! of back, as an older version of the app reading what a newer one
-//! added, stays unknown, and so unchanged: it's the app's item again only
-//! if every key in it as saved, however deep, through maps and lists as
-//! long as each other, is in it written again. Keys the type adds are
-//! fine. The app's data is checked the same way, and data the app would
-//! lose some of stops the chat restoring ([`CannotRestore::AppData`]),
-//! its save left as it was. The app's item in a tool call
-//! ([`ToolCall::app`](caf_core::chat::ToolCall::app)) has no envelope,
-//! as the chat's type leaves it none: one the app can't read stops the
-//! chat restoring, as data it can't read does ([`CannotRestore::AppData`]).
+//! as [`AppItem`] asks.
+//!
+//! **What the app reads, it must keep.** An app item is the app's again
+//! only if what its type writes back holds all of what was saved: every
+//! key of every map, with what it held; every list, as long, with what it
+//! held; and everything else equal. Keys the type adds, as a newer
+//! version does, are fine; nothing else may differ. One that fails, as
+//! when an older version of the app reads what a newer one added, stays
+//! an [`Unknown`](caf_core::chat::Unknown) item, so it's saved back
+//! unchanged. The app's data, and its items in tool calls
+//! ([`ToolCall::app`](caf_core::chat::ToolCall::app)), which have no
+//! envelope, are checked the same way, and one that fails, or can't be
+//! read at all, stops the chat restoring ([`CannotRestore::AppData`]),
+//! its save left as it was.
 //!
 //! **Small, losslessly.** Live chats are compressed fast (zstd's level 3:
 //! hundreds of MB/s, so never a wait). A chat left alone a while is

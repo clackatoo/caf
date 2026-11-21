@@ -82,19 +82,25 @@ pub(crate) fn read<A: AppItem, D: AppData>(
     let inside = unpack(frame).map_err(|why| damaged("its snapshot", &why))?;
     let mut saved: Saved<A, D> =
         parse_app::<_, Saved<Anything, Anything>>(&inside, "its snapshot")?;
-    // The data as it was saved, last set: to check the app's type keeps
-    // all of it.
+    // The data as it was saved, last set, and the app's items in tool
+    // calls as the journal set them: to check the app's types keep all of
+    // them.
     let mut data = parse::<DataOf>(&inside)
         .map_err(|why| damaged("its snapshot", &why))?
         .data;
+    let mut tools_set = Vec::new();
     let (records, _) = records(journal)?;
     for (no, inside) in records.into_iter().enumerate() {
         let what = format!("its journal's record {}", no + 1);
         let entries: Vec<Entry<A, D>> =
             parse_app::<_, Vec<Entry<Anything, Anything>>>(&inside, &what)?;
         let raw: Vec<RawEntry> = parse(&inside).map_err(|why| damaged(&what, &why))?;
-        if let Some(last) = raw.into_iter().rev().find(|entry| entry.kind == "Data") {
-            data = last.value;
+        for entry in raw {
+            match entry.kind.as_str() {
+                "Data" => data = entry.value,
+                "Change" => tool_apps_changed(&entry.value, &mut tools_set),
+                _ => {}
+            }
         }
         for entry in entries {
             match entry {
@@ -108,11 +114,35 @@ pub(crate) fn read<A: AppItem, D: AppData>(
             }
         }
     }
-    let kept = named(&saved.data).and_then(|bytes| parse::<Keys>(&bytes));
-    if !kept.is_ok_and(|kept| data.kept_in(&kept)) {
+    if !keeps(&data, &saved.data) {
         return Err(CannotRestore::AppData(
             "this version of the app can't keep all of it".into(),
         ));
+    }
+    let tools: Vec<(u64, &A)> = (saved.chat.turns.iter())
+        .flat_map(|turn| &turn.items)
+        .filter_map(|item| match &item.kind {
+            ItemKind::Tool(tool) => tool.app.as_ref().map(|app| (item.id.0, app)),
+            _ => None,
+        })
+        .collect();
+    if !tools.is_empty() {
+        // Read again only for them, which few chats have.
+        let of: ChatOf = parse(&inside).map_err(|why| damaged("its snapshot", &why))?;
+        let mut as_saved = BTreeMap::new();
+        for item in of.chat.turns.iter().flat_map(|turn| &turn.items) {
+            tool_app(item, &mut |id, app| {
+                as_saved.insert(id, app.clone());
+            });
+        }
+        as_saved.extend(tools_set);
+        for (id, app) in tools {
+            if !as_saved.get(&id).is_some_and(|saved| keeps(saved, app)) {
+                return Err(CannotRestore::AppData(
+                    "this version of the app can't keep all of an app item in a tool call".into(),
+                ));
+            }
+        }
     }
     for turn in &mut saved.chat.turns {
         for item in &mut turn.items {
@@ -414,132 +444,233 @@ fn open_envelope<A: AppItem>(item: &mut Item<A>) {
         && unknown.what == APP
         && unknown.summary.is_some()
         && let Ok(app) = A::deserialize(&unknown.raw)
-        && let Ok(saved) = Keys::deserialize(&unknown.raw)
+        && let Ok(saved) = Tree::deserialize(&unknown.raw)
         && serde_json::to_value(&app)
             .ok()
-            .and_then(|back| Keys::deserialize(back).ok())
-            .is_some_and(|back| saved.kept_in(&back))
+            .and_then(|back| Tree::deserialize(back).ok())
+            .is_some_and(|back| saved.within(&back))
     {
         item.kind = ItemKind::App(app);
     }
 }
 
+/// Whether `value`, written again, holds all of what was saved as
+/// `saved`: so reading it lost nothing.
+fn keeps<T: Serialize>(saved: &Tree, value: &T) -> bool {
+    named(value)
+        .and_then(|bytes| parse::<Tree>(&bytes))
+        .is_ok_and(|back| saved.within(&back))
+}
+
 /// A snapshot, but only its data.
 #[derive(Deserialize)]
 struct DataOf {
-    data: Keys,
+    data: Tree,
 }
 
-/// A journal entry, but only its kind, and its keys.
+/// A snapshot, but only its items, as saved.
+#[derive(Deserialize)]
+struct ChatOf {
+    chat: TurnsOf,
+}
+
+/// A chat, but only its items, as saved.
+#[derive(Deserialize)]
+struct TurnsOf {
+    turns: Vec<ItemsOf>,
+}
+
+/// A turn, but only its items, as saved.
+#[derive(Deserialize)]
+struct ItemsOf {
+    items: Vec<Tree>,
+}
+
+/// A journal entry, but only its kind, and what it holds as saved.
 #[derive(Deserialize)]
 struct RawEntry {
     #[serde(rename = "type")]
     kind: String,
     #[serde(default)]
-    value: Keys,
+    value: Tree,
 }
 
-/// The keys of what's saved, however deep, and nothing else: what tells
-/// whether the app's type keeps all of it.
-#[derive(Debug, Default)]
-enum Keys {
-    /// Anything but a map or list.
-    #[default]
-    Leaf,
-    /// A map, by its keys, written as text.
-    Map(BTreeMap<String, Keys>),
-    /// A list.
-    List(Vec<Keys>),
+/// Notes the app's item in a tool call, as saved, if `item` is a tool call
+/// that has one.
+fn tool_app(item: &Tree, note: &mut impl FnMut(u64, &Tree)) {
+    let kind = item.get("kind");
+    if kind.and_then(|kind| kind.get("type")) == Some(&Tree::Str("Tool".into()))
+        && let Some(Tree::Int(id)) = item.get("id")
+        && let Some(app) = kind.and_then(|kind| kind.get("value")?.get("app"))
+        && *app != Tree::Nil
+    {
+        note(*id as u64, app);
+    }
 }
 
-impl Keys {
-    /// Whether every key here is in `back`, as deep as it goes: through
-    /// maps, and lists as long as each other. Keys `back` has that this
-    /// hasn't, as a newer version adds, are fine.
-    fn kept_in(&self, back: &Keys) -> bool {
-        match (self, back) {
-            (Keys::Map(saved), Keys::Map(back)) => (saved.iter())
-                .all(|(key, saved)| back.get(key).is_some_and(|back| saved.kept_in(back))),
-            (Keys::Map(saved), _) => saved.is_empty(),
-            (Keys::List(saved), Keys::List(back)) if saved.len() == back.len() => saved
+/// Notes the apps' items in tool calls a change sets, as saved, in order.
+fn tool_apps_changed(change: &Tree, set: &mut Vec<(u64, Tree)>) {
+    let mut note = |id, app: &Tree| set.push((id, app.clone()));
+    let Some(Tree::Str(kind)) = change.get("type") else {
+        return;
+    };
+    let value = change.get("value");
+    let turn = |turn: Option<&Tree>, note: &mut dyn FnMut(u64, &Tree)| {
+        if let Some(Tree::List(items)) = turn.and_then(|turn| turn.get("items")) {
+            items
                 .iter()
-                .zip(back)
-                .all(|(saved, back)| saved.kept_in(back)),
-            _ => true,
+                .for_each(|item| tool_app(item, &mut |id, app| note(id, app)));
+        }
+    };
+    match kind.as_str() {
+        "TurnAdded" => turn(value, &mut note),
+        "TurnInserted" => turn(value.and_then(|value| value.get("turn")), &mut note),
+        "ItemAdded" => {
+            if let Some(item) = value.and_then(|value| value.get("item")) {
+                tool_app(item, &mut note);
+            }
+        }
+        "ToolChanged" => {
+            if let Some(Tree::Int(id)) = value.and_then(|value| value.get("item"))
+                && let Some(app) = value.and_then(|value| value.get("tool")?.get("app"))
+                && *app != Tree::Nil
+            {
+                note(*id as u64, app);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// What's saved, as anything is: what tells whether the app's type keeps
+/// all of it.
+#[derive(Debug, Default, Clone, PartialEq)]
+enum Tree {
+    /// Nothing.
+    #[default]
+    Nil,
+    Bool(bool),
+    Int(i128),
+    Float(f64),
+    Str(String),
+    Bytes(Vec<u8>),
+    List(Vec<Tree>),
+    /// A map, by its keys, written as text.
+    Map(BTreeMap<String, Tree>),
+}
+
+impl Tree {
+    /// A map's value, by key.
+    fn get(&self, key: &str) -> Option<&Tree> {
+        match self {
+            Tree::Map(map) => map.get(key),
+            _ => None,
+        }
+    }
+
+    /// Whether `back` holds all of this: every key of a map, with what it
+    /// holds; every list as long, with each of what it holds; and every
+    /// thing else equal. Keys `back` has that this hasn't, as a newer
+    /// version adds, are fine; nothing else may differ.
+    fn within(&self, back: &Tree) -> bool {
+        match (self, back) {
+            (Tree::Map(saved), Tree::Map(back)) => (saved.iter())
+                .all(|(key, saved)| back.get(key).is_some_and(|back| saved.within(back))),
+            (Tree::List(saved), Tree::List(back)) => {
+                saved.len() == back.len()
+                    && saved
+                        .iter()
+                        .zip(back)
+                        .all(|(saved, back)| saved.within(back))
+            }
+            (Tree::Float(saved), Tree::Float(back)) => {
+                saved == back || (saved.is_nan() && back.is_nan())
+            }
+            (saved, back) => saved == back,
         }
     }
 }
 
-impl<'de> Deserialize<'de> for Keys {
+impl<'de> Deserialize<'de> for Tree {
     fn deserialize<De: Deserializer<'de>>(deserializer: De) -> Result<Self, De::Error> {
-        deserializer.deserialize_any(KeysVisitor)
+        deserializer.deserialize_any(TreeVisitor)
     }
 }
 
-/// Reads [`Keys`] from anything.
-struct KeysVisitor;
+/// Reads a [`Tree`] from anything.
+struct TreeVisitor;
 
-impl<'de> Visitor<'de> for KeysVisitor {
-    type Value = Keys;
+impl<'de> Visitor<'de> for TreeVisitor {
+    type Value = Tree;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("anything")
     }
 
-    fn visit_bool<E>(self, _: bool) -> Result<Keys, E> {
-        Ok(Keys::Leaf)
+    fn visit_bool<E>(self, value: bool) -> Result<Tree, E> {
+        Ok(Tree::Bool(value))
     }
 
-    fn visit_i64<E>(self, _: i64) -> Result<Keys, E> {
-        Ok(Keys::Leaf)
+    fn visit_i64<E>(self, value: i64) -> Result<Tree, E> {
+        Ok(Tree::Int(value.into()))
     }
 
-    fn visit_u64<E>(self, _: u64) -> Result<Keys, E> {
-        Ok(Keys::Leaf)
+    fn visit_u64<E>(self, value: u64) -> Result<Tree, E> {
+        Ok(Tree::Int(value.into()))
     }
 
-    fn visit_f64<E>(self, _: f64) -> Result<Keys, E> {
-        Ok(Keys::Leaf)
+    fn visit_i128<E>(self, value: i128) -> Result<Tree, E> {
+        Ok(Tree::Int(value))
     }
 
-    fn visit_str<E>(self, _: &str) -> Result<Keys, E> {
-        Ok(Keys::Leaf)
+    fn visit_u128<E: serde::de::Error>(self, value: u128) -> Result<Tree, E> {
+        i128::try_from(value)
+            .map(Tree::Int)
+            .map_err(|_| E::custom("a number past 127 bits"))
     }
 
-    fn visit_bytes<E>(self, _: &[u8]) -> Result<Keys, E> {
-        Ok(Keys::Leaf)
+    fn visit_f64<E>(self, value: f64) -> Result<Tree, E> {
+        Ok(Tree::Float(value))
     }
 
-    fn visit_none<E>(self) -> Result<Keys, E> {
-        Ok(Keys::Leaf)
+    fn visit_str<E>(self, value: &str) -> Result<Tree, E> {
+        Ok(Tree::Str(value.to_owned()))
     }
 
-    fn visit_unit<E>(self) -> Result<Keys, E> {
-        Ok(Keys::Leaf)
+    fn visit_bytes<E>(self, value: &[u8]) -> Result<Tree, E> {
+        Ok(Tree::Bytes(value.to_owned()))
     }
 
-    fn visit_some<De: Deserializer<'de>>(self, inner: De) -> Result<Keys, De::Error> {
-        Keys::deserialize(inner)
+    fn visit_none<E>(self) -> Result<Tree, E> {
+        Ok(Tree::Nil)
     }
 
-    fn visit_newtype_struct<De: Deserializer<'de>>(self, inner: De) -> Result<Keys, De::Error> {
-        Keys::deserialize(inner)
+    fn visit_unit<E>(self) -> Result<Tree, E> {
+        Ok(Tree::Nil)
     }
 
-    fn visit_seq<S: SeqAccess<'de>>(self, mut seq: S) -> Result<Keys, S::Error> {
+    fn visit_some<De: Deserializer<'de>>(self, inner: De) -> Result<Tree, De::Error> {
+        Tree::deserialize(inner)
+    }
+
+    fn visit_newtype_struct<De: Deserializer<'de>>(self, inner: De) -> Result<Tree, De::Error> {
+        Tree::deserialize(inner)
+    }
+
+    fn visit_seq<S: SeqAccess<'de>>(self, mut seq: S) -> Result<Tree, S::Error> {
         let mut list = Vec::new();
         while let Some(each) = seq.next_element()? {
             list.push(each);
         }
-        Ok(Keys::List(list))
+        Ok(Tree::List(list))
     }
 
-    fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Keys, M::Error> {
-        let mut keys = BTreeMap::new();
-        while let Some((key, value)) = map.next_entry::<KeyName, Keys>()? {
-            keys.insert(key.0, value);
+    fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Tree, M::Error> {
+        let mut entries = BTreeMap::new();
+        while let Some((key, value)) = map.next_entry::<KeyName, Tree>()? {
+            entries.insert(key.0, value);
         }
-        Ok(Keys::Map(keys))
+        Ok(Tree::Map(entries))
     }
 }
 

@@ -32,11 +32,15 @@ use crate::time::Window;
 /// as an [`Unknown`] item. Read old items leniently, with `#[serde(default)]`
 /// on fields added later.
 ///
-/// One the type reads but wouldn't write all of back, as an older version
-/// of the app reading what a newer one added, is kept unchanged as an
-/// [`Unknown`] item too: an item is the app's again only if every key in
-/// it as saved, however deep, is in it written again. So never skip
-/// writing a field the type read, such as with `skip_serializing_if`.
+/// One the type reads but wouldn't write back as it was saved, as an
+/// older version of the app reading what a newer one added, is kept
+/// unchanged as an [`Unknown`] item too. An item is the app's again only
+/// if what the type writes back holds all of what was saved: every key of
+/// every map, with what it held; every list, as long, with what it held;
+/// and everything else equal. Keys the type adds are fine; nothing else
+/// may differ. So never drop, shorten, narrow or replace what the type
+/// read, as `skip_serializing_if`, `#[serde(other)]` or a lossy
+/// `deserialize_with` would.
 pub trait AppItem:
     Clone + Debug + PartialEq + Serialize + DeserializeOwned + Send + 'static
 {
@@ -74,9 +78,8 @@ impl AppItem for NoAppItems {
 /// read isn't restored, and its save is left as it was
 /// ([`CannotRestore::AppData`](crate::save::CannotRestore::AppData)), for
 /// a version of the app that can. Nor is one the type reads but wouldn't
-/// write all of back, as an older version of the app reading what a newer
-/// one added: every key in it as saved, however deep, must be in it
-/// written again. So never skip writing a field the type read.
+/// write back as it was saved, as an older version of the app reading
+/// what a newer one added: the same rule as [`AppItem`]'s.
 pub trait AppData:
     Clone + Debug + Default + PartialEq + Serialize + DeserializeOwned + Send + 'static
 {
