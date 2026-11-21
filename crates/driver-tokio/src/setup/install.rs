@@ -60,7 +60,10 @@ pub(super) async fn survey(root: PathBuf, reporter: Reporter) {
             if !root.is_dir() {
                 return Ok(Vec::new());
             }
-            if let Some(lock) = try_lock(&root.join(LOCK), Lock::Exclusive)? {
+            // Cleaned only while the lock is held. One that can't even be
+            // made, as in a root that can't be written to, leaves things
+            // as they are: what's there is still said.
+            if let Ok(Some(lock)) = try_lock(&root.join(LOCK), Lock::Exclusive) {
                 clean(&root);
                 drop(lock);
             }

@@ -217,6 +217,24 @@ async fn a_survey_says_what_is_installed_and_cleans_up_what_was_cut_off() {
     );
 }
 
+#[tokio::test]
+async fn a_survey_that_cant_take_the_lock_still_says_whats_installed() {
+    let dir = Dir::new();
+    std::fs::create_dir_all(dir.root().join("fake-1.0.0")).unwrap();
+    // A root that can't be written to, so its lock can't be made.
+    std::fs::set_permissions(dir.root(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    let mut driver = driver(&dir);
+    driver.apply(SetupDirective::Survey {
+        ticket: Ticket(1000),
+    });
+    let events = done(&mut driver, Ticket(1000)).await;
+    std::fs::set_permissions(dir.root(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let [Ev(SetupEvent::Surveyed { installed, .. })] = events.as_slice() else {
+        panic!("{events:?}")
+    };
+    assert_eq!(installed, &["fake-1.0.0"]);
+}
+
 /// A package `fake-adapter` 1.0.0 with a program of the same name, packed
 /// in `dir`, and the manifest and lockfile that install it, offline.
 fn npm_package(dir: &Dir) -> NpmPackage {
