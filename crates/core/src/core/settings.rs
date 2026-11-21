@@ -66,9 +66,31 @@ pub(super) struct Choosing {
     /// The agent has said what it offers, in this run.
     pub(super) told: bool,
     /// Setting one found its session gone, and the session was opened
-    /// again: until one is set, the next that finds it gone is refused,
-    /// so a broken agent can't have it opened over and over.
+    /// again: until one is set or a prompt works, the next that finds it
+    /// gone is refused, so a broken agent can't have it opened over and
+    /// over.
     pub(super) reopened: bool,
+    /// How many times its session has opened, this run: a late answer is
+    /// about the session it was asked of only.
+    pub(super) opens: u64,
+    /// How many choices of the chat's own have been made of each kind,
+    /// in the order of [`ORDER`], this run: a later one makes an earlier
+    /// one's late answer no longer the chat's choice.
+    pub(super) own_choices: [u64; 3],
+}
+
+/// A setting sent to an agent: what was asked, of which session, and
+/// whether it was the chat's own.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(super) struct Sent {
+    /// What was asked.
+    pub(super) choice: SettingChoice,
+    /// The session it was asked of: the how-manyth to open
+    /// ([`Choosing::opens`]).
+    pub(super) opened: u64,
+    /// If it was the chat's own, how many of its own of that kind had been
+    /// made then ([`Choosing::own_choices`]).
+    pub(super) own: Option<u64>,
 }
 
 /// A setting being set.
@@ -206,6 +228,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             asked.choice == choice && self.pending.contains_key(&(asked.proc, asked.id))
         });
         if let Some(run) = self.runs.get_mut(&chat) {
+            run.choosing.own_choices[index(choice.kind)] += 1;
             if asking {
                 run.choosing.unsent.remove(&choice.kind);
             } else {
@@ -242,6 +265,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             run.choosing.told = true;
             run.choosing.asked = None;
             run.choosing.unsent = kinds;
+            run.choosing.opens += 1;
         }
         if let Some(standing) = self.setup.agents.get_mut(&agent) {
             standing.settings = KnownSettings::Known(offer.settings.clone());
@@ -301,10 +325,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 continue;
             };
             let wait = self.host.timers.request;
+            let own =
+                (whole.settings.own.contains(&kind)).then(|| run.choosing.own_choices[index(kind)]);
             let purpose = Purpose::Set {
                 chat,
-                choice: choice.clone(),
-                session: session.clone(),
+                sent: Sent {
+                    choice: choice.clone(),
+                    opened: run.choosing.opens,
+                    own,
+                },
                 given_up: false,
             };
             let id = self.request(now, proc, request, purpose, Some(wait), out);
@@ -362,9 +391,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Level::Info,
             format!("chat {}: {choice:?} wasn't applied: {why}", chat.0),
         );
-        if !offered {
-            self.tell(now, chat, Note::NotOffered(choice.clone()));
-        }
+        // Said whether or not messages wait.
+        let note = if offered {
+            Note::NotApplied(choice.clone())
+        } else {
+            Note::NotOffered(choice.clone())
+        };
+        self.tell(now, chat, note);
         let failure = Failure {
             reason: FailureReason::SettingNotApplied,
             agent_said: refused,
@@ -532,75 +565,85 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// The agent answered, late, a request setting one of `chat`'s settings
-    /// that CAF gave up on: what it lists is read as the agent's word on
-    /// what it offers and uses now, as if it said it by itself.
+    /// that CAF gave up on (`late`): what it says is read as the agent's
+    /// word on what it offers and uses now, as an answer in time would be.
     ///
-    /// Only for the session it was asked of: a session opened since may
-    /// use something else. If it says the setting is what was asked, and
-    /// nothing has been chosen of it since, the choice was applied after
-    /// all, and is the chat's own again.
+    /// Only for the session it was asked of, the `opened`th to open: a
+    /// session opened since may use something else. If it says the
+    /// setting is what was asked, the choice was applied after all: the
+    /// chat's own again if it was its own when asked, and no choice of the
+    /// chat's own of that kind has been made since; otherwise chosen as
+    /// what it was, the host's default or the agent's.
     pub(super) fn late_set_answered(
         &mut self,
         now: Now,
-        (chat, choice, session): (ChatId, &SettingChoice, &AgentSessionId),
+        chat: ChatId,
+        late: &Sent,
         reply: &Reply,
         out: &mut Vec<Directive<A, D>>,
     ) {
-        let same = (self.runs.get(&chat)).is_some_and(|run| {
-            matches!(run.open, Open::Live { .. }) && run.session.as_ref() == Some(session)
-        });
-        if !same {
-            return report(
-                out,
-                Level::Debug,
-                format!(
-                    "chat {}: a late answer about a session it no longer has, ignored",
-                    chat.0
-                ),
-            );
-        }
-        let listed = match reply {
-            Reply::Result(result) => result.get("configOptions").and_then(Value::as_array),
-            _ => None,
+        let choice = &late.choice;
+        let (Some(run), Some(whole)) = (self.runs.get(&chat), self.chats.get(&chat)) else {
+            return;
         };
+        let same = matches!(run.open, Open::Live { .. })
+            && run.choosing.opens == late.opened
+            && whole.state != ChatState::Closed;
+        let result = match reply {
+            Reply::Result(result) if same => result,
+            _ => {
+                return report(
+                    out,
+                    Level::Debug,
+                    format!(
+                        "chat {}: ignored a late answer to a setting: its session is gone, or it refused",
+                        chat.0
+                    ),
+                );
+            }
+        };
+        let latest = late.own == Some(run.choosing.own_choices[index(choice.kind)]);
+        let before = whole.settings.offered.clone();
         let style = self.profile_of_chat(chat).settings();
-        let applied = listed.is_some_and(|options| {
-            let offer = options_offer(style, options);
-            let says = (offer.settings.iter())
-                .find(|setting| setting.kind == choice.kind)
-                .and_then(|setting| setting.current.as_ref());
-            says == Some(&choice.value)
-        });
-        let own =
-            (self.chats.get(&chat)).is_some_and(|whole| whole.settings.own.contains(&choice.kind));
-        if applied && !own {
+        let listed = (result.get("configOptions").and_then(Value::as_array))
+            .filter(|_| style.options)
+            .map(|options| options_offer(style, options));
+        match listed {
+            Some(offer) => {
+                if let Some(run) = self.runs.get_mut(&chat) {
+                    run.choosing.via = offer.via;
+                }
+                self.change_settings(chat, |settings| {
+                    settings.offered = offer.settings;
+                    as_asked(settings, choice, false);
+                });
+            }
+            None => self.change_settings(chat, |settings| as_asked(settings, choice, true)),
+        }
+        let Some(whole) = self.chats.get(&chat) else {
+            return;
+        };
+        let applied = current(&whole.settings, choice.kind) == Some(&choice.value);
+        // A choice of the chat's own made since stands.
+        if applied && !whole.settings.own.contains(&choice.kind) {
             self.change_settings(chat, |settings| {
-                make_own(settings, choice.kind);
+                if latest {
+                    make_own(settings, choice.kind);
+                }
                 choose(settings, choice.clone());
             });
             // Something else of it may be on its way meanwhile, such as the
             // host's default it fell back to: this goes again after it.
             if let Some(run) = self.runs.get_mut(&chat)
-                && run
-                    .choosing
-                    .asked
-                    .as_ref()
+                && latest
+                && (run.choosing.asked.as_ref())
                     .is_some_and(|asked| asked.choice.kind == choice.kind)
             {
                 run.choosing.unsent.insert(choice.kind);
             }
         }
-        match listed {
-            Some(options) => self.options_updated(now, chat, Some(options), out),
-            None => report(
-                out,
-                Level::Debug,
-                format!(
-                    "chat {}: the agent answered a setting given up on, saying nothing of it",
-                    chat.0
-                ),
-            ),
-        }
+        self.follow(now, chat, &before);
+        self.pump(now, chat, out);
     }
 
     /// `chat`'s choice of `kind` can't be applied, or is no longer offered:
@@ -1231,6 +1274,15 @@ fn choose(settings: &mut Settings, choice: SettingChoice) {
     settings.chosen.retain(|each| each.kind != choice.kind);
     settings.chosen.push(choice);
     settings.chosen.sort_by_key(|each| each.kind);
+}
+
+/// Where `kind` is in [`ORDER`].
+fn index(kind: SettingKind) -> usize {
+    match kind {
+        SettingKind::Model => 0,
+        SettingKind::Effort => 1,
+        SettingKind::Fast => 2,
+    }
 }
 
 /// Marks `kind` as chosen for the chat itself.

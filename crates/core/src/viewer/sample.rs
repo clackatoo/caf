@@ -166,9 +166,10 @@ fn chat() -> Chat {
         Note::SignedIn,
         Note::AgentChanged(SettingChoice::model("sonnet")),
         Note::NotOffered(SettingChoice::fast(true)),
+        Note::NotApplied(SettingChoice::effort("high")),
     ];
     // 24 to 34 are taken, so the newer notes follow.
-    let notes = (notes.into_iter().zip([21, 22, 23, 41, 42, 43, 44, 45]))
+    let notes = (notes.into_iter().zip([21, 22, 23, 41, 42, 43, 44, 45, 46]))
         .map(|(note, id)| item(id, ended(300, 300), ItemKind::Note(note)))
         .collect();
     let mut imported = turn(

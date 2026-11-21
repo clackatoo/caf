@@ -322,6 +322,7 @@ kinds!(Note {
     "SignedIn" => Note::SignedIn,
     "AgentChanged" => Note::AgentChanged(_),
     "NotOffered" => Note::NotOffered(_),
+    "NotApplied" => Note::NotApplied(_),
 });
 
 kinds!(QuestionKind {

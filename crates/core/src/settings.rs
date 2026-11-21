@@ -24,14 +24,18 @@
 //!   applied; if its answer comes late, for the same session, what it
 //!   says is followed, and it's applied after all if it says so;
 //! - when a session opens or reopens, the choices are sent first, and the
-//!   messages waiting go once they're answered. One of the chat's own
-//!   that can't be applied (a model gone, a change refused, one never
-//!   answered) fails every message waiting, saying why, with
-//!   [`Remedy::SendAgain`](crate::chat::Remedy::SendAgain);
-//! - one of the chat's own that can't be applied, or that the agent stops
-//!   offering, falls back as a restore would have it: to the host's
-//!   default, if the agent offers that, and otherwise to what the agent
-//!   uses. It's no longer the chat's own;
+//!   messages waiting go once they're answered;
+//! - a choice made for the chat itself that can't be applied (a model
+//!   gone, a change refused, one never answered) fails every message
+//!   waiting, saying why, with
+//!   [`Remedy::SendAgain`](crate::chat::Remedy::SendAgain), and the chat
+//!   says so whether or not any waits
+//!   ([`Note::NotOffered`](crate::chat::Note::NotOffered),
+//!   [`Note::NotApplied`](crate::chat::Note::NotApplied));
+//! - a choice made for the chat itself that can't be applied, or that the
+//!   agent stops offering, falls back as a restore would have it: to the
+//!   host's default, if the agent offers that, and otherwise to what the
+//!   agent uses. It's no longer the chat's own;
 //! - **a message never goes with a choice silently replaced**: either it
 //!   fails, as when a choice waiting to be sent can't be applied, or the
 //!   chat says what changed, as when one applied already stops being

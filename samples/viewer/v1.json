@@ -844,6 +844,32 @@
                       }
                     }
                   }
+                },
+                {
+                  "id": 46,
+                  "window": {
+                    "start": 1800000000300,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000300
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Note",
+                    "value": {
+                      "type": "NotApplied",
+                      "value": {
+                        "kind": {
+                          "type": "Effort"
+                        },
+                        "value": {
+                          "type": "Choice",
+                          "value": "high"
+                        }
+                      }
+                    }
+                  }
                 }
               ],
               "imported": false,

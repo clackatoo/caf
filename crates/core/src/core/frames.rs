@@ -266,12 +266,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
             super::state::Purpose::Set {
                 chat,
-                choice,
-                session,
+                sent,
                 given_up: true,
-            } => self.late_set_answered(now, (chat, &choice, &session), &reply, out),
-            super::state::Purpose::Set { chat, choice, .. } => {
-                self.set_answered(now, (proc, id), chat, choice, reply, out);
+            } => self.late_set_answered(now, chat, &sent, &reply, out),
+            super::state::Purpose::Set { chat, sent, .. } => {
+                self.set_answered(now, (proc, id), chat, sent.choice, reply, out);
             }
             super::state::Purpose::Learn { conn } => {
                 self.learned(now, (proc, id), conn, reply, out);

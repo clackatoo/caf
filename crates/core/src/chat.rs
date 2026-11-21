@@ -604,6 +604,10 @@ pub enum Note {
     /// model it no longer has, so the choice was dropped, and the agent's
     /// own applies.
     NotOffered(SettingChoice),
+    /// A setting chosen for the chat couldn't be applied: the agent
+    /// refused it, or never answered. The setting falls back, and any
+    /// message waiting failed.
+    NotApplied(SettingChoice),
 }
 
 /// Something the agent sent that CAF couldn't read, or an app item a

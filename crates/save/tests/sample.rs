@@ -443,6 +443,10 @@ fn settings() -> Vec<Value> {
             102,
             json!({ "type": "NotOffered", "value": { "kind": { "type": "Fast" }, "value": { "type": "Switch", "value": true } } }),
         ),
+        note(
+            103,
+            json!({ "type": "NotApplied", "value": { "kind": { "type": "Effort" }, "value": { "type": "Choice", "value": "high" } } }),
+        ),
         json!({ "type": "TurnLife", "value": {
             "turn": 9,
             "life": { "type": "Failed", "value": {

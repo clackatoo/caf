@@ -171,6 +171,10 @@ chat.turns[].items[].kind<Note>.value<AgentChanged>.value.kind<Model> {type}
 chat.turns[].items[].kind<Note>.value<AgentChanged>.value.value<Choice> {type, value}
 chat.turns[].items[].kind<Note>.value<CannotContinue> {type}
 chat.turns[].items[].kind<Note>.value<InstallFailed> {type}
+chat.turns[].items[].kind<Note>.value<NotApplied> {type, value}
+chat.turns[].items[].kind<Note>.value<NotApplied>.value {kind, value}
+chat.turns[].items[].kind<Note>.value<NotApplied>.value.kind<Effort> {type}
+chat.turns[].items[].kind<Note>.value<NotApplied>.value.value<Choice> {type, value}
 chat.turns[].items[].kind<Note>.value<NotInstalled> {type}
 chat.turns[].items[].kind<Note>.value<NotOffered> {type, value}
 chat.turns[].items[].kind<Note>.value<NotOffered>.value {kind, value}

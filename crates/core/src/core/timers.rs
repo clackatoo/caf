@@ -230,13 +230,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             // watchdog of its own ends it.
             Purpose::Set {
                 chat,
-                ref choice,
+                ref sent,
                 ref mut given_up,
-                ..
             } => {
                 *given_up = true;
                 pending.deadline = Some(now.mono.after(self.host.timers.request));
-                let choice = choice.clone();
+                let choice = sent.choice.clone();
                 self.set_overdue(now, (proc, id), chat, &choice, out);
             }
             // As an abandoned open: a session it opens even so is closed.
