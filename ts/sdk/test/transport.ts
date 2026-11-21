@@ -77,8 +77,9 @@ export const agents = {
       install: { type: "Missing", value: { size: 626_797_331 } },
       sign_in: { type: "Unknown" },
       can_sign_in: false,
+      own_tools_off: true,
     },
-    { name: "fake", install: { type: "Host" }, sign_in: { type: "Unknown" }, can_sign_in: true },
+    { name: "fake", install: { type: "Host" }, sign_in: { type: "Unknown" }, can_sign_in: true, own_tools_off: true },
   ],
 } satisfies ToViewer;
 
