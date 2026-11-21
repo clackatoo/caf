@@ -66,7 +66,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if let Ok(number) = u64::try_from(chat.0.as_u128()) {
             self.ids.seen(number);
         }
-        self.saving.made += 1;
+        self.made_chat(chat);
         self.data.insert(chat, D::default());
         self.shutting_down = false;
         let conn = self.conn_for(chat, &open.agent);

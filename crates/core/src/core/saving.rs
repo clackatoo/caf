@@ -30,6 +30,9 @@ use crate::ids::{AgentSessionId, ChatId, Shelf, Ticket};
 use crate::save::{CannotRestore, Entry, Header, RestoreChat, Saved, SavedChat, SavedState};
 use crate::time::{End, Mono, Now, Wall};
 
+/// The latest time a chat's UUID holds, in milliseconds: 48 bits.
+const MOST_MILLIS: u64 = (1 << 48) - 1;
+
 /// The longest shelf name, in bytes.
 const MOST_SHELF: usize = 256;
 
@@ -47,6 +50,8 @@ pub(super) struct Saving<A: AppItem, D: AppData> {
     /// How many chats the core has made: with the host's seed, what the
     /// next chat's id is made from.
     pub(super) made: u64,
+    /// The last chat made with a UUID: the next sorts after it.
+    pub(super) last: Option<ChatId>,
     /// Each saved chat that's loaded: where it's kept, and what's still
     /// to write.
     pub(super) kept: BTreeMap<ChatId, Kept<A, D>>,
@@ -81,6 +86,7 @@ impl<A: AppItem, D: AppData> Default for Saving<A, D> {
     fn default() -> Self {
         Self {
             made: 0,
+            last: None,
             kept: BTreeMap::new(),
             shelves: BTreeMap::new(),
             restoring: BTreeMap::new(),
@@ -275,14 +281,41 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if self.numbered {
             return ChatId::from_number(self.ids.next);
         }
-        let first = mix(self.host.seed ^ mix(self.saving.made));
-        let second = mix(first);
-        let mut random = [0; 10];
-        random[..8].copy_from_slice(&first.to_le_bytes());
-        random[8..].copy_from_slice(&second.to_le_bytes()[..2]);
         // Before 1970 can't be: such a clock is wrong, and 0 still sorts.
-        let millis = u64::try_from(now.wall.0).unwrap_or(0);
-        ChatId(uuid::Builder::from_unix_timestamp_millis(millis, &random).into_uuid())
+        let mut millis = u64::try_from(now.wall.0).unwrap_or(0) & MOST_MILLIS;
+        // Within one millisecond, or if the clock went back, the next of
+        // a count after the last, so ids sort as their chats were made.
+        let mut count = 0;
+        if let Some(last) = self.saving.last {
+            let (at, counted) = (last.0.as_u128() >> 80, (last.0.as_u128() >> 64) & 0xfff);
+            let at = u64::try_from(at).unwrap_or(0);
+            if millis <= at {
+                millis = at;
+                count = counted + 1;
+                if count > 0xfff {
+                    millis += 1;
+                    count = 0;
+                }
+            }
+        }
+        // 62 bits from the seed and how many chats came before, so runs
+        // with different seeds don't meet.
+        let random = mix(self.host.seed ^ mix(self.saving.made)) >> 2;
+        let id = (u128::from(millis) << 80)
+            | (0x7 << 76)
+            | (count << 64)
+            | (0b10 << 62)
+            | u128::from(random);
+        ChatId(uuid::Uuid::from_u128(id))
+    }
+
+    /// Notes chat `chat` was made: the next made sorts after it, if it's a
+    /// UUID of version 7.
+    pub(super) fn made_chat(&mut self, chat: ChatId) {
+        self.saving.made += 1;
+        if chat.0.get_version_num() == 7 && self.saving.last.is_none_or(|last| last < chat) {
+            self.saving.last = Some(chat);
+        }
     }
 
     /// Takes in the storage driver's report.

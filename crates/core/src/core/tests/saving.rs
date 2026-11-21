@@ -1279,6 +1279,8 @@ fn chat_ids_are_uuids_of_version_7_from_the_seed_and_the_time() {
             .collect::<Vec<_>>()
     };
     let first = ids(7);
+    // Made in one millisecond, they sort as they were made.
+    assert!(first.windows(2).all(|pair| pair[0] < pair[1]), "{first:?}");
     assert_eq!(first, ids(7), "the same seed gives the same ids");
     assert_ne!(first, ids(8));
     let unique: BTreeSet<_> = first.iter().collect();
@@ -2284,4 +2286,23 @@ fn moves_answered_in_turn_leave_a_chat_where_the_store_has_it() {
             "{first} {second}"
         );
     }
+}
+
+#[test]
+fn a_chat_made_after_the_clock_went_back_still_sorts_after() {
+    let mut core: crate::core::Core = crate::core::Core::new(host(), super::harness::agents());
+    core.numbered = false;
+    let mut open = |ms: i64| {
+        let now = crate::time::Now {
+            wall: Wall(EPOCH + ms),
+            mono: crate::time::Mono(0),
+        };
+        let chat = OpenChat::new("claude", "/work");
+        core.open_chat(now, chat, &mut Vec::new()).expect("opened")
+    };
+    let first = open(1000);
+    let second = open(0);
+    let third = open(2000);
+    assert!(first < second && second < third);
+    assert_eq!(second.0.get_version_num(), 7);
 }
