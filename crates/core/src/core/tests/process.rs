@@ -434,6 +434,24 @@ fn retrying_an_adapter_that_hasnt_answered_restarts_it() {
 }
 
 #[test]
+fn an_adapter_let_go_that_answers_late_changes_nothing() {
+    let mut script = Script::new(host());
+    script
+        .open(OpenChat::new("claude", "/work"))
+        .0
+        .expect("opened");
+    // Its only chat closes before it answers: it's let go.
+    script.close(CHAT).0.expect("closed");
+    // It answers after all, as another adapter, as it's being stopped.
+    let mut other = claude_init();
+    other["agentInfo"]["name"] = json!("someone-elses-acp");
+    let out = script.answers(PROC, 1000, &other);
+    assert!(writes(&out).is_empty(), "nothing asked of it: {out:#?}");
+    assert!(with(&out, "status").is_empty(), "nothing run: {out:#?}");
+    assert_eq!(script.agent_status("claude")["own_tools_off"], true);
+}
+
+#[test]
 fn giving_up_on_a_slow_session_stops_its_waiting_message() {
     let mut script = Script::new(host());
     script

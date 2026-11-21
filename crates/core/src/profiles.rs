@@ -121,7 +121,11 @@
 //! CAF's fake agent (`Builtin::Fake`, with the `fake` feature) and the
 //! made-up agents of CAF's own tests do only what they're told, and have
 //! no tools to turn off: nothing is sent to strip them, and CAF's
-//! instructions aren't sent.
+//! instructions aren't sent. The fake's profile is checked at version
+//! 0.0.0, so a fake agent that names itself `caf-fake-agent`, at any
+//! version, keeps it: its scripts may say any version they like. One
+//! that names itself otherwise falls to the cautious profile, and its
+//! chats get no session, as any other adapter's.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

@@ -157,7 +157,10 @@ fn an_adapter_that_isnt_the_one_its_profile_is_for_is_read_cautiously_and_never_
             .expect("opened");
         // A message waiting for the session.
         script.send(CHAT, "go").0.expect("sent");
+        assert_eq!(script.agent_status("claude")["own_tools_off"], true);
         let out = script.answers(PROC, 1000, &init);
+        // Its status says so now: CAF can't turn its tools off.
+        assert_eq!(script.agent_status("claude")["own_tools_off"], false);
         assert!(writes(&out).is_empty(), "no session asked for: {out:#?}");
         assert_has(
             &script.state(),
@@ -190,6 +193,7 @@ fn a_newer_claude_keeps_its_profile() {
     let mut init = claude_init();
     init["agentInfo"]["version"] = json!("0.99.0");
     let out = script.answers(PROC, 1000, &init);
+    assert_eq!(script.agent_status("claude")["own_tools_off"], true);
     assert_has(
         &script.state(),
         &json!({ "conns": { "1001": { "profile": { "profile": { "type": "Builtin", "value": { "type": "ClaudeAgentAcp" } }, "checked": { "type": "Newer" } } } } }),

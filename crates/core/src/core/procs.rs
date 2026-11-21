@@ -318,6 +318,18 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }),
             Reply::Unreadable => Err(Lost::Incompatible(Incompatible::BadAnswer)),
         };
+        // A process already retired, answering late, says nothing of the
+        // adapter its connection now runs: its answer changes nothing.
+        if self.procs.get(&proc).is_some_and(|each| each.retired) {
+            return report(
+                out,
+                Level::Debug,
+                format!(
+                    "process {} answered initialize after it was retired",
+                    proc.0
+                ),
+            );
+        }
         let result = match result {
             Ok(result) => result,
             Err(lost) => {

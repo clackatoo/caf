@@ -673,7 +673,7 @@ fn a_sign_in_that_fails_or_is_stopped_leaves_things_as_they_were() {
 fn caf_signs_in_only_with_a_recipe_it_can_run_now() {
     let mut script = Script::new(host());
     assert_eq!(script.sign_in("nobody").0, Err(Refused::NoSuchAgent));
-    // The cautious profile has no recipe.
+    // The plain agent's profile has no sign-in.
     assert_eq!(script.sign_in("plain").0, Err(Refused::CannotSignIn));
     assert_eq!(script.sign_out("plain").0, Err(Refused::CannotSignIn));
     // A file of an install that isn't there yet.

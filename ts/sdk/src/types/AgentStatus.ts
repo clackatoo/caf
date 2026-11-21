@@ -40,6 +40,13 @@ can_sign_in: boolean,
  * Its profile says how. CAF never runs an agent it can't strip: one
  * with the cautious profile is refused ([`Refused::OwnTools`](crate::Refused::OwnTools)).
  *
- * Statuses written before it was added read as `true`.
+ * It's as the agent's profile says until an adapter of it has
+ * answered `initialize` in this run, then as that profile, checked,
+ * says: false once an adapter turned out not to be the one its
+ * profile is for, as its chats then get no session
+ * ([`Incompatible::OwnTools`](crate::chat::Incompatible::OwnTools)).
+ *
+ * Statuses written before it was added, by a CAF that didn't turn
+ * agents' tools off, read as `false`.
  */
 own_tools_off: boolean, };

@@ -416,6 +416,10 @@ pub(super) struct Standing {
     /// that it's the adapter its profile is for: commands of its recipe
     /// that run the adapter may run it.
     pub(super) checked: bool,
+    /// Whether CAF can turn off the own tools of the adapter that last
+    /// answered `initialize` for it in this run, as its profile, checked,
+    /// says: `None` until one has.
+    pub(super) strips: Option<bool>,
 }
 
 /// What a survey found: where installs live, what's there, and what the

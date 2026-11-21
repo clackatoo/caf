@@ -91,7 +91,10 @@ does sending a message to a restored chat with it. Its status says so
 beforehand: `AgentStatus::own_tools_off` is false. An agent whose adapter
 turns out not to be the one its profile is for falls to the cautious
 profile, so its chats get no session: they're lost, as CAF can't turn off
-its tools, and their waiting messages fail.
+its tools, and their waiting messages fail. From then on, in that run, its
+status says `own_tools_off` is false too, until an adapter of it answers
+as the one its profile is for. A status read from an older CAF, which
+didn't turn tools off, says false.
 
 For Claude, a few things stay as they are: settings an organisation
 manages on the machine, the plugins built into Claude Code, and the
