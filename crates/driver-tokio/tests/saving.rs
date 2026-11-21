@@ -174,7 +174,7 @@ fn resuming_script(dir: &Dir) -> std::path::PathBuf {
     dir.script("resuming.jsonl", &[
         json!({"on": {"fallback": true, "do": [{"respond": {"error": {"code": -32601, "message": "Method not found"}}}]}}),
         json!({"wait": {"method": "initialize"}}),
-        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"sessionCapabilities": {"resume": {}}}, "agentInfo": {"name": "fake", "version": "1.0.0"}}}}),
+        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"sessionCapabilities": {"resume": {}}}, "agentInfo": {"name": "caf-fake-agent", "version": "1.0.0"}}}}),
         json!({"wait": {"method": "session/resume", "expect": {"params": {"sessionId": "s1"}}}}),
         json!({"respond": {"result": {}}}),
         prompt(),
@@ -188,7 +188,7 @@ fn loading_script(dir: &Dir) -> std::path::PathBuf {
     dir.script("loading.jsonl", &[
         json!({"on": {"fallback": true, "do": [{"respond": {"error": {"code": -32601, "message": "Method not found"}}}]}}),
         json!({"wait": {"method": "initialize"}}),
-        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true}, "agentInfo": {"name": "fake", "version": "1.0.0"}}}}),
+        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true}, "agentInfo": {"name": "caf-fake-agent", "version": "1.0.0"}}}}),
         json!({"wait": {"method": "session/load", "expect": {"params": {"sessionId": "s1"}}}}),
         json!({"update": {"session": "s1", "update": {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "Hi"}}}}),
         say("s1", "Hello there"),

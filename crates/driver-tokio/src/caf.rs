@@ -2864,7 +2864,11 @@ mod tests {
             caf_fake_agent::SCRIPT_VAR.into(),
             script.into(),
         )];
-        let fake = AgentSpec::command("fake", command, ProfileChoice::Cautious);
+        let fake = AgentSpec::command(
+            "fake",
+            command,
+            ProfileChoice::Builtin(caf_core::profiles::Builtin::Fake),
+        );
         let (caf, running) =
             Caf::<NoAppItems>::start(Config::new(Host::new("test", "1.0.0"), vec![fake]));
         let chat = caf.open_chat(OpenChat::new("fake", &dir)).await.unwrap();
