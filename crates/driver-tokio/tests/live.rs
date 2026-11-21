@@ -8,7 +8,9 @@
 //!
 //! `CAF_LIVE_CLAUDE` names the adapter, by default claude-agent-acp
 //! 0.98.0 where clackatoo installs it. It runs on Haiku, the cheapest
-//! model. `CAF_LIVE_RECORD` keeps the run's recording at that path.
+//! model: chosen through its variable, or, in the test of choosing, as
+//! CAF chooses it. `CAF_LIVE_RECORD` keeps the run's recording at that
+//! path.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -17,9 +19,11 @@ use caf_core::agent::{AgentSpec, EnvChange, SpawnCommand};
 use caf_core::change::Change;
 use caf_core::chat::{ChatState, ItemKind, Turn, TurnLife, UserMessage};
 use caf_core::host::Host;
+use caf_core::ids::AgentName;
 use caf_core::profiles::{Builtin, ProfileChoice};
-use caf_core::{Chat, OpenChat};
-use caf_driver_tokio::{Caf, ChatHandle, Config, Update, Watch};
+use caf_core::settings::{Choice, KnownSettings, Setting, SettingForm, SettingKind, SettingValue};
+use caf_core::{Chat, OpenChat, Refused, SettingChoice};
+use caf_driver_tokio::{Caf, ChatHandle, Config, Error, Update, Watch};
 
 /// Long enough for a model to answer.
 const PATIENCE: Duration = Duration::from_secs(180);
@@ -646,4 +650,141 @@ async fn claude_runs_with_none_of_its_own_tools() {
         calls.len()
     );
     drop(folders);
+}
+
+/// What CAF learns Claude offers, before any chat with it.
+async fn learned(caf: &Caf, agent: &AgentName) -> Vec<Setting> {
+    let mut agents = caf.watch_agents();
+    caf.learn_settings(agent).await.unwrap();
+    let learned = tokio::time::timeout(PATIENCE, async {
+        while let Some(statuses) = agents.next().await {
+            // Only the settings: a status may name the account.
+            match &statuses[0].settings {
+                KnownSettings::Known(known) => return Ok(known.clone()),
+                KnownSettings::Failed(why) => return Err(why.clone()),
+                _ => {}
+            }
+        }
+        Err("CAF ended".to_owned())
+    })
+    .await;
+    match learned {
+        Ok(Ok(known)) => known,
+        Ok(Err(why)) => panic!("Claude's settings couldn't be learned: {why}"),
+        Err(_) => panic!("gave up learning Claude's settings"),
+    }
+}
+
+/// The choices of the setting of `kind` among `settings`.
+fn choices(settings: &[Setting], kind: SettingKind) -> Option<&[Choice]> {
+    (settings.iter())
+        .find(|setting| setting.kind == kind)
+        .and_then(|setting| match &setting.form {
+            SettingForm::Choices(choices) => Some(choices.as_slice()),
+            _ => None,
+        })
+}
+
+/// What `chat`'s agent says `kind` is now.
+fn current(chat: &Chat, kind: SettingKind) -> Option<SettingValue> {
+    (chat.settings.offered.iter())
+        .find(|setting| setting.kind == kind)
+        .and_then(|setting| setting.current.clone())
+}
+
+/// A chat opened on Haiku, the cheapest model, chosen by the id Claude
+/// lists it by, before any chat, answers on it; then its lowest effort,
+/// if Haiku has any, is applied. No model is set any other way.
+///
+/// ```text
+/// cargo test -p caf-driver-tokio --test live chosen -- --ignored
+/// ```
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a signed-in Claude, and spends usage"]
+async fn claude_answers_on_the_model_and_effort_chosen() {
+    let folder = std::env::temp_dir().join(format!("caf-live-chosen-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let claude = AgentSpec::command(
+        "claude",
+        SpawnCommand::new(adapter()),
+        ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
+    );
+    let mut config = Config::new(Host::new("caf-live-test", "0.0.0"), vec![claude]);
+    config.record = std::env::var_os("CAF_LIVE_RECORD").map(PathBuf::from);
+    let (caf, running) = Caf::start(config);
+
+    let known = learned(&caf, &AgentName("claude".into())).await;
+    let models = choices(&known, SettingKind::Model).expect("Claude offers its models");
+    let haiku = (models.iter())
+        .find(|choice| choice.id.to_lowercase().contains("haiku"))
+        .or_else(|| (models.iter()).find(|choice| choice.name.to_lowercase().contains("haiku")))
+        .unwrap_or_else(|| panic!("no Haiku among {models:#?}"))
+        .id
+        .clone();
+
+    let mut open = OpenChat::new("claude", &folder);
+    open.settings = vec![SettingChoice::model(&haiku)];
+    let chat = caf.open_chat(open).await.unwrap();
+    let turn = ask(&chat, "Say hi").await;
+    assert_eq!(turn.life, TurnLife::Finished, "{turn:#?}");
+    assert!(!words(&turn).is_empty(), "{turn:#?}");
+    assert_eq!(
+        turn.model.as_ref().map(|model| model.id.as_str()),
+        Some(haiku.as_str()),
+        "{turn:#?}"
+    );
+    let now = picture(&chat).await;
+    assert_eq!(
+        current(&now, SettingKind::Model),
+        Some(SettingValue::Choice(haiku.clone()))
+    );
+    assert_eq!(now.settings.own, [SettingKind::Model]);
+
+    // Its lowest effort: the first of Claude's levels it offers, past
+    // `default`, which stands for whichever the agent would pick.
+    let efforts = choices(&now.settings.offered, SettingKind::Effort).map(<[Choice]>::to_vec);
+    let lowest = efforts.as_deref().and_then(|efforts| {
+        ["minimal", "low", "medium", "high"]
+            .into_iter()
+            .find(|level| efforts.iter().any(|choice| choice.id == *level))
+            .or_else(|| {
+                (efforts.iter())
+                    .find(|choice| choice.id != "default")
+                    .map(|choice| choice.id.as_str())
+            })
+            .map(str::to_owned)
+    });
+    match lowest {
+        Some(lowest) => {
+            chat.set_setting(SettingChoice::effort(&lowest))
+                .await
+                .unwrap();
+            let mut watch = chat.watch();
+            let mut streamed = 0;
+            let set = until(&chat, &mut watch, &mut streamed, "the effort", |chat| {
+                current(chat, SettingKind::Effort) == Some(SettingValue::Choice(lowest.clone()))
+            })
+            .await;
+            assert_eq!(
+                current(&set, SettingKind::Model),
+                Some(SettingValue::Choice(haiku.clone()))
+            );
+            eprintln!("Claude answered on {haiku:?}, then took effort {lowest:?}.");
+        }
+        None => {
+            // Claude offers no effort for Haiku: nothing to set.
+            assert_eq!(
+                chat.set_setting(SettingChoice::effort("low")).await,
+                Err(Error::Refused(Refused::NoSuchSetting))
+            );
+            eprintln!("Claude answered on {haiku:?}, which has no effort levels to choose.");
+        }
+    }
+    tokio::time::timeout(PATIENCE, async {
+        caf.shutdown().await;
+        running.await;
+    })
+    .await
+    .expect("shutting down");
+    let _ = std::fs::remove_dir_all(&folder);
 }
