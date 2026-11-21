@@ -77,21 +77,36 @@ impl Store {
     }
 
     /// Does the oldest work that's answered, and returns its ticket and
-    /// answer: or fails it, if it's a write and `fail`.
+    /// answer: or fails it, doing nothing, if `fail`.
     fn next(&mut self, fail: bool) -> Option<(u64, StorageEvent)> {
         loop {
             let work = self.work.pop_front()?;
+            let ticket = match &work {
+                StorageDirective::Release { .. } => None,
+                StorageDirective::List { ticket, .. }
+                | StorageDirective::Load { ticket, .. }
+                | StorageDirective::Snapshot { ticket, .. }
+                | StorageDirective::Append { ticket, .. }
+                | StorageDirective::Delete { ticket, .. }
+                | StorageDirective::MoveShelf { ticket, .. } => Some(ticket.0),
+            };
+            if let (true, Some(ticket)) = (fail, ticket) {
+                self.counts[2] += 1;
+                return Some((ticket, StorageEvent::Failed("disk full".to_owned())));
+            }
             let (ticket, event) = match work {
                 StorageDirective::Snapshot {
                     ticket,
                     shelf,
                     saved,
                 } => {
-                    if fail {
-                        self.counts[2] += 1;
-                        return Some((ticket.0, StorageEvent::Failed("disk full".to_owned())));
-                    }
                     self.counts[0] += 1;
+                    // A chat is on one shelf.
+                    let id = saved.chat.id;
+                    assert!(
+                        (self.chats.keys()).all(|(on, chat)| *chat != id || *on == shelf),
+                        "chat {id} written to {shelf:?} is on another shelf"
+                    );
                     let written = serde_json::to_vec(&saved).expect("JSON").len();
                     self.locked.insert(saved.chat.id);
                     self.chats
@@ -104,10 +119,6 @@ impl Store {
                     header,
                     entries,
                 } => {
-                    if fail {
-                        self.counts[2] += 1;
-                        return Some((ticket.0, StorageEvent::Failed("disk full".to_owned())));
-                    }
                     self.counts[1] += entries.len();
                     let written = serde_json::to_vec(&entries).expect("JSON").len();
                     let (saved, journal) = (self.chats.get_mut(&(shelf, header.chat)))
@@ -169,6 +180,13 @@ impl Store {
             };
             return Some((ticket.0, event));
         }
+    }
+
+    /// The shelf a chat is on, if it's stored.
+    fn shelf_of(&self, chat: ChatId) -> Option<Shelf> {
+        (self.chats.keys())
+            .find(|(_, each)| *each == chat)
+            .map(|(shelf, _)| shelf.clone())
     }
 
     /// A chat as it's read: its snapshot, with its journal applied.
@@ -1350,7 +1368,16 @@ fn random_script(seed: u64) -> [usize; 5] {
     let mut script = Script::new(host);
     script.without_fixtures();
     let mut store = Store::default();
+    // Another program's chat, to list, move and delete.
+    let other = ChatId::from_number(9000);
+    let mut theirs = saved(&mid_turn("claude"), None, 0);
+    theirs.chat.id = other;
+    theirs.header.chat = other;
+    store
+        .chats
+        .insert((Shelf(SHELF.to_owned()), other), (theirs, Vec::new()));
     script.open_saved("claude");
+    let shelves = [SHELF, "else"];
     let words = ["Run", "ning ", "the ", "tests", ".\n", "All ", "pass."];
     let (mut ms, mut prompt, mut tools, mut asked) = (0, None, 0, 0);
     let mut proc = PROC;
@@ -1369,7 +1396,25 @@ fn random_script(seed: u64) -> [usize; 5] {
                 &mut prompt,
             );
             end_process(&mut script, proc);
-            while script.state()["saving"]["away"] != json!({}) {
+            settle(
+                &mut script,
+                &mut store,
+                &mut ms,
+                &mut dice,
+                &mut proc,
+                &mut prompt,
+            );
+            // Restored, though the store may fail to load it.
+            while script.core.chat(CHAT).is_none() {
+                let shelf = store.shelf_of(CHAT).expect("it's stored");
+                let out = script.restore(RestoreChat::new(CHAT, shelf)).1;
+                follow(
+                    &mut script,
+                    &mut store,
+                    (out, false),
+                    &mut proc,
+                    &mut prompt,
+                );
                 let served = script.serve(&mut store, dice.roll(4) == 0);
                 follow(
                     &mut script,
@@ -1378,35 +1423,7 @@ fn random_script(seed: u64) -> [usize; 5] {
                     &mut proc,
                     &mut prompt,
                 );
-                ms += 61_000;
-                script.at(ms);
-                let out = script.woken();
-                follow(
-                    &mut script,
-                    &mut store,
-                    (out, false),
-                    &mut proc,
-                    &mut prompt,
-                );
             }
-            let out = script
-                .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
-                .1;
-            follow(
-                &mut script,
-                &mut store,
-                (out, false),
-                &mut proc,
-                &mut prompt,
-            );
-            let served = script.serve(&mut store, false);
-            follow(
-                &mut script,
-                &mut store,
-                (served, true),
-                &mut proc,
-                &mut prompt,
-            );
             continue;
         }
         if dice.roll(40) == 0 {
@@ -1420,13 +1437,23 @@ fn random_script(seed: u64) -> [usize; 5] {
                 &mut prompt,
             );
             end_process(&mut script, proc);
+            settle(
+                &mut script,
+                &mut store,
+                &mut ms,
+                &mut dice,
+                &mut proc,
+                &mut prompt,
+            );
+            assert!(script.core.is_idle(), "seed {seed}: idle once shut down");
+            assert!(store.locked.is_empty(), "seed {seed}: every chat let go");
             continue;
         }
         let chunk = |kind: &str, dice: &mut Dice| {
             let text = words[usize::try_from(dice.roll(7)).unwrap_or(0)];
             json!({ "sessionUpdate": kind, "content": { "type": "text", "text": text } })
         };
-        let out = match dice.roll(12) {
+        let out = match dice.roll(15) {
             0 | 1 => {
                 let text = format!("message {}\nmore", dice.roll(100));
                 script.send(CHAT, &text).1
@@ -1469,6 +1496,19 @@ fn random_script(seed: u64) -> [usize; 5] {
                 out
             }
             10 => script.set_data(CHAT).1,
+            11 => {
+                let shelf = shelves[usize::try_from(dice.roll(2)).unwrap_or(0)];
+                script.list_saved(shelf).1
+            }
+            12 => {
+                let from = chat_shelf(&script);
+                let to = if from == SHELF { "else" } else { SHELF };
+                script.move_shelf(&from, to).1
+            }
+            13 => {
+                let shelf = shelves[usize::try_from(dice.roll(2)).unwrap_or(0)];
+                script.delete(other, shelf).1
+            }
             _ => script.woken(),
         };
         follow(
@@ -1514,7 +1554,12 @@ fn random_script(seed: u64) -> [usize; 5] {
             &mut prompt,
         );
     }
-    let shelf = Shelf(SHELF.to_owned());
+    let shelf = store.shelf_of(CHAT).expect("it's stored");
+    assert_eq!(
+        shelf.0,
+        chat_shelf(&script),
+        "seed {seed}: kept where it's stored"
+    );
     let stored = store.read(&shelf, CHAT).expect("it's stored");
     let live = script.core.chat(CHAT).cloned().expect("the chat");
     assert_eq!(
@@ -1527,6 +1572,34 @@ fn random_script(seed: u64) -> [usize; 5] {
         "seed {seed}"
     );
     assert_eq!(stored.header.turns, live.turns.len() as u64);
+    // Listed again, each shelf's list is what the store holds.
+    for listed in shelves {
+        let out = script.list_saved(listed).1;
+        follow(
+            &mut script,
+            &mut store,
+            (out, false),
+            &mut proc,
+            &mut prompt,
+        );
+        let served = script.serve(&mut store, false);
+        follow(
+            &mut script,
+            &mut store,
+            (served, true),
+            &mut proc,
+            &mut prompt,
+        );
+        let held: BTreeSet<ChatId> = (store.chats.keys())
+            .filter(|(on, _)| on.0 == listed)
+            .map(|(_, chat)| *chat)
+            .collect();
+        let shown: BTreeSet<ChatId> = (script.core.saved(&Shelf(listed.to_owned())).into_iter())
+            .flatten()
+            .map(|each| each.header.chat)
+            .collect();
+        assert_eq!(shown, held, "seed {seed}: shelf {listed}");
+    }
 
     // Restored, it's the chat, tidied as of when it was last changed.
     let mut tidied = live;
@@ -1547,6 +1620,39 @@ fn random_script(seed: u64) -> [usize; 5] {
         script.answers(proc, id, &json!({ "stopReason": "end_turn" }));
     }
     store.counts
+}
+
+/// The shelf the core keeps [`CHAT`] on, loaded or put away.
+fn chat_shelf(script: &Script) -> String {
+    let state = script.state();
+    let saving = &state["saving"];
+    let kept = &saving["kept"][CHAT.to_string()]["shelf"];
+    let away = &saving["away"][CHAT.to_string()]["shelf"];
+    kept.as_str().or(away.as_str()).expect("a shelf").to_owned()
+}
+
+/// Has the store do its work, failing some, until nothing put away or
+/// shutting down waits on it, the time passing for writes to be tried
+/// again.
+fn settle(
+    script: &mut Script,
+    store: &mut Store,
+    ms: &mut u64,
+    dice: &mut Dice,
+    proc: &mut u64,
+    prompt: &mut Option<u64>,
+) {
+    loop {
+        let served = script.serve(store, dice.roll(4) == 0);
+        follow(script, store, (served, true), proc, prompt);
+        if script.core.saving.settled() && store.work.is_empty() {
+            return;
+        }
+        *ms += 61_000;
+        script.at(*ms);
+        let out = script.woken();
+        follow(script, store, (out, false), proc, prompt);
+    }
 }
 
 #[test]
@@ -2140,4 +2246,42 @@ fn a_chat_isnt_written_while_its_shelf_is_being_moved() {
         &json!(storage(&out)),
         &json!([{ "type": "Append", "value": { "shelf": "renamed" } }]),
     );
+}
+
+#[test]
+fn moves_answered_in_turn_leave_a_chat_where_the_store_has_it() {
+    // Each pair: whether the first move, then the second back, is done.
+    for (first, second, ends) in [
+        (false, false, SHELF),
+        (true, false, "renamed"),
+        (false, true, SHELF),
+        (true, true, SHELF),
+    ] {
+        let mut script = Script::new(host());
+        script.open_saved("claude");
+        script.at(1000);
+        let snapshot = ticket(&one_storage(&script.woken()));
+        script.storage(snapshot, done(10_000));
+        let there = ticket(&one_storage(&script.move_shelf(SHELF, "renamed").1));
+        let back = ticket(&one_storage(&script.move_shelf("renamed", SHELF).1));
+        let answer = |done_: bool| {
+            if done_ {
+                done(0)
+            } else {
+                StorageEvent::Failed("in use".to_owned())
+            }
+        };
+        script.storage(there, answer(first));
+        let out = script.storage(back, answer(second));
+        let kept = &script.state()["saving"]["kept"][CHAT.to_string()];
+        assert_eq!(kept["shelf"], ends, "{first} {second}");
+        assert_eq!(kept["stored"], ends, "{first} {second}");
+        // Where it was thought to be at first, it's not written again.
+        let moved = ends != SHELF;
+        assert_eq!(
+            storage(&out).iter().any(|each| each["type"] == "Snapshot"),
+            moved,
+            "{first} {second}"
+        );
+    }
 }

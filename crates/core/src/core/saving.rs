@@ -108,8 +108,10 @@ impl<A: AppItem, D: AppData> Saving<A, D> {
 #[cfg_attr(feature = "inspect", derive(Clone))]
 #[allow(clippy::struct_excessive_bools)] // one plain answer each
 pub(super) struct Kept<A: AppItem, D: AppData> {
-    /// Its shelf.
+    /// Its shelf, once every move of a shelf under way is done.
     pub(super) shelf: Shelf,
+    /// The shelf the store holds it on, as the moves it has answered say.
+    pub(super) stored: Shelf,
     /// What's changed since it was last written, squashed as it's added.
     /// Its own list, not the viewers' bounded one, so nothing is lost
     /// however much changes at once; past the size of its last snapshot,
@@ -158,6 +160,7 @@ impl<A: AppItem, D: AppData> Kept<A, D> {
     /// now if `stored`.
     fn new(shelf: Shelf, made: Wall, stored: bool) -> Self {
         Self {
+            stored: shelf.clone(),
             shelf,
             unsaved: Vec::new(),
             snapshot_size: 0,
@@ -215,8 +218,10 @@ impl<A: AppItem, D: AppData> Kept<A, D> {
 #[serde(bound = "A: AppItem, D: AppData")]
 #[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) struct Away<A: AppItem, D: AppData> {
-    /// Its shelf.
+    /// Its shelf, once every move of a shelf under way is done.
     pub(super) shelf: Shelf,
+    /// The shelf the store holds it on, as the moves it has answered say.
+    pub(super) stored: Shelf,
     /// It, whole.
     pub(super) saved: Box<Saved<A, D>>,
     /// The write under way.
@@ -256,11 +261,8 @@ pub(super) enum Job {
         from: Shelf,
         /// To.
         to: Shelf,
-        /// The chats loaded or put away that moved with it: moved back if
-        /// it couldn't be.
-        chats: Vec<ChatId>,
         /// The loads, of restores and of chats deleted while restored,
-        /// that moved with it.
+        /// that moved with it: moved back if it couldn't be.
         loads: Vec<Ticket>,
     },
 }
@@ -412,6 +414,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 self.saving.deleted.retain(|_, each| each.chat != chat);
             }
             (Job::Move { from, to, .. }, StorageEvent::Done { .. }) => {
+                self.moved(now, &from, &to, true);
                 // What each holds now is the store's: read again, if
                 // listed, as a list read before the move may hold what
                 // moved.
@@ -458,21 +461,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     }
                 }
             }
-            (
-                Job::Move {
-                    from,
-                    to,
-                    chats,
-                    loads,
-                },
-                StorageEvent::Failed(why),
-            ) => {
+            (Job::Move { from, to, loads }, StorageEvent::Failed(why)) => {
                 report(
                     out,
                     Level::Warn,
                     format!("shelf {:?} couldn't be moved to {:?}: {why}", from.0, to.0),
                 );
-                self.unmove(now, &from, &to, &chats, &loads);
+                self.moved(now, &from, &to, false);
+                self.unmove_loads(&from, &to, &loads);
                 for shelf in [from, to] {
                     if self.saving.shelves.contains_key(&shelf) {
                         self.list_again(shelf, out);
@@ -863,7 +859,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(kept) = self.forget(chat) else {
             return;
         };
-        let shelf = kept.shelf;
+        let Kept { shelf, stored, .. } = kept;
         self.relist(
             &shelf,
             chat,
@@ -873,6 +869,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             chat,
             Away {
                 shelf,
+                stored,
                 saved: Box::new(saved),
                 writing: None,
                 retry: None,
@@ -881,7 +878,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         );
         // At once, unless its shelf is being moved: then once it's said
         // whether it moved.
-        if !self.moving(chat) {
+        if !self.moving() {
             self.write_away(chat, out);
         }
     }
@@ -980,18 +977,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if from == to {
             return Ok(());
         }
-        let mut chats = Vec::new();
         let mut loads = Vec::new();
-        for (&chat, kept) in &mut self.saving.kept {
+        for kept in self.saving.kept.values_mut() {
             if kept.shelf == from {
                 kept.shelf = to.clone();
-                chats.push(chat);
             }
         }
-        for (&chat, away) in &mut self.saving.away {
+        for away in self.saving.away.values_mut() {
             if away.shelf == from {
                 away.shelf = to.clone();
-                chats.push(chat);
             }
         }
         for (&load, restore) in &mut self.saving.restoring {
@@ -1029,7 +1023,6 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let job = Job::Move {
             from: from.clone(),
             to: to.clone(),
-            chats,
             loads,
         };
         self.saving.jobs.insert(ticket, job);
@@ -1041,21 +1034,49 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         Ok(())
     }
 
-    /// A move from `from` to `to` failed: what moved with it moves back.
-    /// What the store holds of each chat is in doubt, so each loaded one
-    /// is written whole, at once.
-    fn unmove(&mut self, now: Now, from: &Shelf, to: &Shelf, chats: &[ChatId], loads: &[Ticket]) {
-        for chat in chats {
-            if let Some(kept) = (self.saving.kept.get_mut(chat)).filter(|kept| kept.shelf == *to) {
-                kept.shelf = from.clone();
+    /// The store moved `from` to `to`, if `done`, or failed to. Each chat
+    /// loaded or put away is where the store holds it now, with the moves
+    /// still under way done after, in order, as the store does them: a
+    /// chat that ends up elsewhere than was thought is in doubt, and is
+    /// written whole.
+    fn moved(&mut self, now: Now, from: &Shelf, to: &Shelf, done: bool) {
+        let pending: Vec<(Shelf, Shelf)> = (self.saving.jobs.values())
+            .filter_map(|job| match job {
+                Job::Move { from, to, .. } => Some((from.clone(), to.clone())),
+                _ => None,
+            })
+            .collect();
+        let after = |stored: &Shelf| {
+            (pending.iter()).fold(
+                stored.clone(),
+                |at, (from, to)| {
+                    if at == *from { to.clone() } else { at }
+                },
+            )
+        };
+        for kept in self.saving.kept.values_mut() {
+            if done && kept.stored == *from {
+                kept.stored = to.clone();
+            }
+            let shelf = after(&kept.stored);
+            if shelf != kept.shelf {
+                kept.shelf = shelf;
                 kept.whole = true;
                 kept.behind = true;
                 kept.due = Some(now.mono);
             }
-            if let Some(away) = (self.saving.away.get_mut(chat)).filter(|away| away.shelf == *to) {
-                away.shelf = from.clone();
-            }
         }
+        for away in self.saving.away.values_mut() {
+            if done && away.stored == *from {
+                away.stored = to.clone();
+            }
+            away.shelf = after(&away.stored);
+        }
+    }
+
+    /// A move from `from` to `to` failed: the loads that moved with it
+    /// move back.
+    fn unmove_loads(&mut self, from: &Shelf, to: &Shelf, loads: &[Ticket]) {
         for load in loads {
             if let Some(restore) =
                 (self.saving.restoring.get_mut(load)).filter(|each| each.shelf == *to)
@@ -1141,10 +1162,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
         }
         let away: Vec<ChatId> = (self.saving.away.iter())
-            .filter(|&(&chat, away)| {
+            .filter(|(_, away)| {
                 away.writing.is_none()
                     && away.retry.is_none_or(|at| at <= now.mono)
-                    && !self.moving(chat)
+                    && !self.moving()
             })
             .map(|(&chat, _)| chat)
             .collect();
@@ -1157,7 +1178,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// write of it is under way.
     pub(super) fn save_at(&self, chat: ChatId) -> Option<Mono> {
         let kept = self.saving.kept.get(&chat)?;
-        if kept.writing.is_some() || self.moving(chat) {
+        if kept.writing.is_some() || self.moving() {
             return None;
         }
         let due = kept.due?;
@@ -1167,15 +1188,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// When a chat put away is next written, after a write of it failed.
     pub(super) fn away_at(&self, chat: ChatId) -> Option<Mono> {
         let away = self.saving.away.get(&chat)?;
-        (away.writing.is_none() && !self.moving(chat)).then_some(away.retry?)
+        (away.writing.is_none() && !self.moving()).then_some(away.retry?)
     }
 
-    /// Whether `chat`'s shelf is being moved: until the store says whether
-    /// it moved, it isn't written, as a write could land on the shelf it
-    /// didn't move to.
-    fn moving(&self, chat: ChatId) -> bool {
-        (self.saving.jobs.values())
-            .any(|job| matches!(job, Job::Move { chats, .. } if chats.contains(&chat)))
+    /// Whether a shelf is being moved: until the store says whether it
+    /// moved, no saved chat is written, as a write could land on a shelf
+    /// the chat isn't on. Moves are rare, and quick.
+    fn moving(&self) -> bool {
+        (self.saving.jobs.values()).any(|job| matches!(job, Job::Move { .. }))
     }
 
     /// Writes what's changed of `chat`: whole if it must be or its journal
