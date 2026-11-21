@@ -670,8 +670,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     ///
     /// # Errors
     ///
-    /// [`Refused::BadShelf`], or [`Refused::NoSuchChat`] if it's loaded on
-    /// another shelf.
+    /// [`Refused::BadShelf`], or [`Refused::NoSuchChat`] if it's loaded,
+    /// or put away and not yet written, on another shelf.
     pub fn delete(
         &mut self,
         now: Now,
@@ -835,8 +835,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             HostCommand::Paste { agent, text } => self.paste_to(&agent, &text, out),
             HostCommand::StopSignIn(agent) => self.stop_signing_in(&agent, out),
             HostCommand::SignOut(agent) => self.start_sign_out(&agent, out),
-            HostCommand::ListSaved(shelf) => self.list_shelf(shelf, out),
-            HostCommand::Restore(restore) => self.start_restore(restore, out),
+            HostCommand::ListSaved(shelf) => self.list_shelf(now, shelf, out),
+            HostCommand::Restore(restore) => self.start_restore(now, restore, out),
             HostCommand::PutAway { chat } => self.put_chat_away(now, chat, out),
             HostCommand::Delete { chat, shelf } => self.delete_chat(now, chat, shelf, out),
             HostCommand::MoveShelf { from, to } => self.move_chats(from, to),

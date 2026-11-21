@@ -260,7 +260,7 @@ pub enum StorageDirective<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     /// program: one it doesn't isn't added to, and the write fails
     /// ([`StorageEvent::Failed`](crate::event::StorageEvent::Failed)). The
     /// core never asks for one: a chat's first write, and its first after
-    /// a write failed, it was let go, or a move of its shelf failed, is a
+    /// a write failed or it was let go, is a
     /// [`Snapshot`](StorageDirective::Snapshot).
     Append {
         /// Its ticket.
@@ -290,7 +290,8 @@ pub enum StorageDirective<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     },
     /// Move every chat on a shelf to another, such as when framewright
     /// saves a project under a new name. Chats that are loaded move with
-    /// their locks.
+    /// their locks. All of the shelf moves, or none of it: a move that
+    /// fails leaves every chat where it was.
     MoveShelf {
         /// Its ticket.
         ticket: Ticket,

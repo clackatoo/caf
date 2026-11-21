@@ -106,8 +106,34 @@ impl Store {
     /// Does the oldest work that's answered, and returns its ticket and
     /// answer: or fails it, doing nothing, if `fail`.
     fn next(&mut self, fail: bool) -> Option<(u64, StorageEvent)> {
+        self.next_any(0, fail)
+    }
+
+    /// Does work that's answered, as [`Store::next`], but not always the
+    /// oldest: the `pick`th, round, of the work the contract lets it do
+    /// now, which is any whose chat has nothing earlier waiting, with
+    /// nothing given before it still to let go.
+    fn next_any(&mut self, pick: u64, fail: bool) -> Option<(u64, StorageEvent)> {
+        let chat_of = |work: &StorageDirective| match work {
+            StorageDirective::Load { chat, .. }
+            | StorageDirective::Delete { chat, .. }
+            | StorageDirective::Release { chat, .. } => Some(*chat),
+            StorageDirective::Snapshot { saved, .. } => Some(saved.chat.id),
+            StorageDirective::Append { header, .. } => Some(header.chat),
+            StorageDirective::List { .. } | StorageDirective::MoveShelf { .. } => None,
+        };
         loop {
-            let work = self.work.pop_front()?;
+            let ready: Vec<usize> = (0..self.work.len())
+                .filter(|&at| {
+                    let chat = chat_of(&self.work[at]);
+                    (self.work.iter().take(at)).all(|earlier| {
+                        !matches!(earlier, StorageDirective::Release { .. })
+                            && (chat.is_none() || chat_of(earlier) != chat)
+                    })
+                })
+                .collect();
+            let at = *ready.get(usize::try_from(pick).unwrap_or(0) % ready.len().max(1))?;
+            let work = self.work.remove(at)?;
             let ticket = match &work {
                 StorageDirective::Release { .. } => None,
                 StorageDirective::List { ticket, .. }
@@ -196,10 +222,7 @@ impl Store {
                     shelf,
                     chat,
                 } => {
-                    assert!(
-                        (self.locked.iter()).all(|(on, each)| *each != chat || *on == shelf),
-                        "chat {chat} deleted from {shelf:?}, where it isn't"
-                    );
+                    // From a shelf it isn't on, nothing goes.
                     self.locked.remove(&(shelf.clone(), chat));
                     self.chats.remove(&(shelf, chat));
                     (ticket, done(0))
@@ -265,6 +288,19 @@ impl Script {
         let out = self.answers(PROC, init, &answer);
         let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
         self.answers(PROC, new, &json!({ "sessionId": SESSION }));
+    }
+
+    /// Gives the store's answers back, in any order it may give them, until
+    /// it has nothing more to do, failing one in `odds`, and returns what
+    /// they gave out.
+    fn serve_any(&mut self, store: &mut Store, dice: &mut Dice, odds: u64) -> Vec<Value> {
+        let mut all = Vec::new();
+        while let Some((ticket, event)) = store.next_any(dice.roll(1000), dice.roll(odds) == 0) {
+            let out = self.storage(ticket, event);
+            store.take(&out);
+            all.extend(out);
+        }
+        all
     }
 
     /// Gives the store's answers back until it has nothing more to do,
@@ -1481,7 +1517,7 @@ fn random_script(seed: u64) -> [usize; 5] {
                     &mut proc,
                     &mut prompt,
                 );
-                let served = script.serve(&mut store, dice.roll(4) == 0);
+                let served = script.serve_any(&mut store, &mut dice, 4);
                 follow(
                     &mut script,
                     &mut store,
@@ -1586,7 +1622,7 @@ fn random_script(seed: u64) -> [usize; 5] {
         );
         // The store answers some of its work, late, and fails some.
         while dice.roll(3) == 0 {
-            let Some((ticket, event)) = store.next(dice.roll(8) == 0) else {
+            let Some((ticket, event)) = store.next_any(dice.roll(1000), dice.roll(8) == 0) else {
                 break;
             };
             let out = script.storage(ticket, event);
@@ -1723,7 +1759,7 @@ fn settle(
     prompt: &mut Option<u64>,
 ) {
     loop {
-        let served = script.serve(store, dice.roll(4) == 0);
+        let served = script.serve_any(store, dice, 4);
         follow(script, store, (served, true), proc, prompt);
         if script.core.saving.settled() && store.work.is_empty() {
             return;
@@ -2233,12 +2269,14 @@ fn a_loaded_or_put_away_chat_that_couldnt_be_deleted_is_let_go_and_listed_again(
             serde_json::from_value(snapshot["value"]["saved"]["header"].clone()).expect("a header");
         let (chats, unreadable) = (vec![header], Vec::new());
         script.storage(list, StorageEvent::Listed { chats, unreadable });
-        if put_away {
-            script.put_away(CHAT).0.expect("put away");
-        }
+        let away = put_away.then(|| ticket(&one_storage(&script.put_away(CHAT).1)));
         let delete = (storage(&script.delete(CHAT, SHELF).1).into_iter())
             .find(|each| each["type"] == "Delete")
             .expect("a deletion");
+        // The store does the chat's work in order: its last write first.
+        if let Some(away) = away {
+            assert!(storage(&script.storage(away, done(10_000))).is_empty());
+        }
         let out = script.storage(
             ticket(&delete),
             StorageEvent::Failed("read-only".to_owned()),
@@ -2246,8 +2284,8 @@ fn a_loaded_or_put_away_chat_that_couldnt_be_deleted_is_let_go_and_listed_again(
         assert_has(
             &json!(storage(&out)),
             &json!([
-                { "type": "Release", "value": { "shelf": SHELF, "chat": CHAT } },
-                { "type": "List", "value": { "shelf": SHELF } }
+                { "type": "List", "value": { "shelf": SHELF } },
+                { "type": "Release", "value": { "shelf": SHELF, "chat": CHAT } }
             ]),
         );
     }
@@ -2450,4 +2488,167 @@ fn a_tool_call_that_changes_again_is_one_entry() {
         .collect();
     assert_eq!(changed.len(), 1, "{append:#}");
     assert_eq!(changed[0]["value"]["value"]["tool"]["output"], "three");
+}
+
+#[test]
+fn a_chat_deleted_while_restored_and_moved_is_let_go_on_the_shelf_it_moved_to() {
+    let mut script = Script::new(host());
+    let restore = RestoreChat::new(CHAT, Shelf(SHELF.to_owned()));
+    let load = ticket(&one_storage(&script.restore(restore).1));
+    // The move waits for the load, and the deletion for the move.
+    assert!(storage(&script.move_shelf(SHELF, "renamed").1).is_empty());
+    assert!(storage(&script.delete(CHAT, SHELF).1).is_empty());
+    let stored = saved(&mid_turn("claude"), Some("old"), 0);
+    let out = script.storage(load, StorageEvent::Loaded(Box::new(stored)));
+    let moving = ticket(&one_storage(&out));
+    let out = script.storage(moving, done(0));
+    let delete = one_storage(&out);
+    assert_has(
+        &delete,
+        &json!({ "type": "Delete", "value": { "shelf": "renamed", "chat": CHAT } }),
+    );
+    assert!(!script.core.is_idle(), "it waits for the deletion");
+    let out = script.storage(
+        ticket(&delete),
+        StorageEvent::Failed("read-only".to_owned()),
+    );
+    assert_eq!(
+        storage(&out),
+        [json!({ "type": "Release", "value": { "shelf": "renamed", "chat": CHAT } })]
+    );
+    assert!(script.core.is_idle());
+}
+
+#[test]
+fn a_chat_never_written_isnt_let_go_when_it_couldnt_be_deleted() {
+    let mut script = Script::new(host());
+    script.open_saved("claude");
+    let delete = ticket(&one_storage(&script.delete(CHAT, SHELF).1));
+    let out = script.storage(delete, StorageEvent::Failed("read-only".to_owned()));
+    assert!(storage(&out).is_empty(), "the store never held it");
+    // One whose first write was under way is, as that write locked it.
+    let mut script = Script::new(host());
+    script.open_saved("claude");
+    script.at(1000);
+    let snapshot = ticket(&one_storage(&script.woken()));
+    let delete = ticket(&one_storage(&script.delete(CHAT, SHELF).1));
+    script.storage(snapshot, done(10_000));
+    let out = script.storage(delete, StorageEvent::Failed("read-only".to_owned()));
+    assert_eq!(
+        storage(&out),
+        [json!({ "type": "Release", "value": { "shelf": SHELF, "chat": CHAT } })]
+    );
+}
+
+#[test]
+fn a_move_done_lists_its_chats_on_the_shelf_they_went_to_at_once() {
+    let mut script = Script::new(host());
+    script.open_saved("claude");
+    for shelf in [SHELF, "renamed"] {
+        let list = ticket(&one_storage(&script.list_saved(shelf).1));
+        let (chats, unreadable) = (Vec::new(), Vec::new());
+        script.storage(list, StorageEvent::Listed { chats, unreadable });
+    }
+    let moving = ticket(&one_storage(&script.move_shelf(SHELF, "renamed").1));
+    script.storage(moving, done(0));
+    let renamed = Shelf("renamed".to_owned());
+    assert_eq!(
+        script.core.saved(&Shelf(SHELF.to_owned())),
+        Some(Vec::new())
+    );
+    assert_has(
+        &serde_json::to_value(script.core.saved(&renamed)).expect("JSON"),
+        &json!([{ "shelf": "renamed", "header": { "chat": CHAT } }]),
+    );
+    assert_eq!(script.core.summaries()[0].shelf, Some(renamed));
+}
+
+/// Restores, puts away, deletes, moves and lists two saved chats in an
+/// order made at random from `seed`, while the store answers in any order
+/// the contract lets it and fails some; then checks that, settled, the
+/// core is idle, holds locked exactly the chats it has loaded, each where
+/// the store has it.
+fn random_lives(seed: u64) {
+    let mut dice = Dice(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+    let mut script = Script::new(host());
+    script.without_fixtures();
+    let mut store = Store::default();
+    let chats = [ChatId::from_number(9000), ChatId::from_number(9001)];
+    for chat in chats {
+        let mut theirs = saved(&mid_turn("claude"), Some("old"), 0);
+        theirs.chat.id = chat;
+        theirs.header.chat = chat;
+        store
+            .chats
+            .insert((Shelf(SHELF.to_owned()), chat), (theirs, Vec::new()));
+    }
+    let shelves = [SHELF, "else"];
+    let mut ms = 0;
+    for _ in 0..80 {
+        ms += dice.roll(3000);
+        script.at(ms);
+        let chat = chats[usize::try_from(dice.roll(2)).unwrap_or(0)];
+        let shelf = shelves[usize::try_from(dice.roll(2)).unwrap_or(0)];
+        let elsewhere = if shelf == SHELF { "else" } else { SHELF };
+        let out = match dice.roll(6) {
+            0 => {
+                script
+                    .restore(RestoreChat::new(chat, Shelf(shelf.to_owned())))
+                    .1
+            }
+            1 => script.put_away(chat).1,
+            2 => script.delete(chat, shelf).1,
+            3 => script.move_shelf(shelf, elsewhere).1,
+            4 => script.list_saved(shelf).1,
+            _ => script.woken(),
+        };
+        store.take(&out);
+        while dice.roll(2) == 0 {
+            let Some((ticket, event)) = store.next_any(dice.roll(1000), dice.roll(6) == 0) else {
+                break;
+            };
+            let out = script.storage(ticket, event);
+            store.take(&out);
+        }
+    }
+    loop {
+        script.serve_any(&mut store, &mut dice, u64::MAX);
+        if script.core.saving.settled() && store.work.is_empty() {
+            break;
+        }
+        ms += 61_000;
+        script.at(ms);
+        let out = script.woken();
+        store.take(&out);
+    }
+    assert!(script.core.is_idle(), "seed {seed}");
+    for chat in chats {
+        let kept = &script.state()["saving"]["kept"][chat.to_string()];
+        let locked: Vec<&Shelf> = (store.locked.iter())
+            .filter(|(_, each)| *each == chat)
+            .map(|(shelf, _)| shelf)
+            .collect();
+        match kept["shelf"].as_str() {
+            Some(shelf) => {
+                assert_eq!(
+                    locked,
+                    [&Shelf(shelf.to_owned())],
+                    "seed {seed}: chat {chat}"
+                );
+                assert_eq!(
+                    store.shelf_of(chat),
+                    Some(Shelf(shelf.to_owned())),
+                    "seed {seed}"
+                );
+            }
+            None => assert!(locked.is_empty(), "seed {seed}: chat {chat} let go"),
+        }
+    }
+}
+
+#[test]
+fn saved_chats_restored_put_away_deleted_and_moved_in_any_order_settle_as_they_should() {
+    for seed in 1..=200 {
+        random_lives(seed);
+    }
 }
