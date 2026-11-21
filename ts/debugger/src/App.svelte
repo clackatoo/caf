@@ -5,7 +5,7 @@
   // Live and following, the chat view shows `/viewer`'s chats, as any
   // host's does. Looking back, or replaying, it shows the chats as they
   // were, from the inspector channel's `Past` messages, read-only.
-  import type { AgentName, Answer, Chat, ChatId, DeepReadonly, QuestionId, Shelf, UserMessage } from '@clackatoo/caf'
+  import type { AgentName, Answer, Chat, ChatId, DeepReadonly, QuestionId, SettingChoice, Shelf, UserMessage } from '@clackatoo/caf'
   import AgentsPanel, { type AgentActions } from './AgentsPanel.svelte'
   import {
     ChatList,
@@ -25,6 +25,7 @@
   import { hasToken, httpUrl, socketUrl, type LinkState } from './link.ts'
   import { Live } from './live.svelte.ts'
   import { canAct } from './view.ts'
+  import { errorText } from './chat/words.ts'
 
   let inspector = $state.raw(connectInspector())
   let live = $state.raw<Live | null>(null)
@@ -101,6 +102,8 @@
     signIn: () => live?.caf.signIn(agentOf(chat)),
     paste: (text: string) => live?.caf.paste(agentOf(chat), text),
     stopSignIn: () => live?.caf.stopSignIn(agentOf(chat)),
+    setSetting: (choice: SettingChoice) => live?.caf.setSetting(need(selected), choice),
+    learnSettings: () => live?.caf.learnSettings(agentOf(chat)),
   }
 
   const agentActions: AgentActions = {
@@ -119,9 +122,18 @@
 
   const listActions: ListActions = {
     select: (chat: ChatId) => (selected = chat),
-    open: async (agent: AgentName, cwd: string) => {
+    open: async (agent: AgentName, cwd: string, settings: readonly SettingChoice[] = []) => {
       if (live === null) throw new Error('Not live.')
-      selected = await live.caf.open({ agent, cwd, session: { type: 'New' } })
+      const caf = live.caf
+      const chat = await caf.open({ agent, cwd, session: { type: 'New' } })
+      selected = chat
+      // Opening can't carry settings: they're chosen once it's open, and
+      // applied as its session opens.
+      try {
+        for (const choice of settings) await caf.setSetting(chat, choice)
+      } catch (error) {
+        throw new Error(`The chat is open, but its model couldn't be chosen: ${errorText(error)} Choose it in the chat.`)
+      }
     },
   }
 
@@ -229,7 +241,14 @@
     <div class="left">
       <div class="list">
         <div class="chats">
-          <ChatList chats={summaries} agents={agents.map((agent) => agent.name)} {selected} actions={listActions} readOnly={!actable} />
+          <ChatList
+            chats={summaries}
+            agents={agents.map((agent) => agent.name)}
+            statuses={agents}
+            {selected}
+            actions={listActions}
+            readOnly={!actable}
+          />
         </div>
         {#if saved.length > 0}
           <div class="saved">
