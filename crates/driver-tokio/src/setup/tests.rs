@@ -1009,7 +1009,10 @@ async fn a_download_that_stalls_with_nobody_stopping_it_ends_offline() {
         &SetupEvent::InstallFailed(InstallFailure::Offline)
     );
     assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
-    // The installs' lock is let go: another install goes ahead.
+    // The installs' lock is let go: another install goes ahead, on a
+    // driver with the usual limit, so a slow first byte on a loaded
+    // machine isn't taken as offline.
+    let mut driver = self::driver(&dir);
     let good = tar_gz();
     let server = serve(good.clone(), false).await;
     driver.apply(SetupDirective::Install {
