@@ -729,6 +729,8 @@ fn squeezing_tidies_what_crashes_left() {
     // A lock of a chat with nothing else, held by nobody, and one held.
     let (orphan, held) = (file(root, "work", 2, "lock"), file(root, "work", 3, "lock"));
     fs::write(&orphan, b"").expect("a lock");
+    let journal = file(root, "work", 2, "journal");
+    fs::write(&journal, 1_u64.to_le_bytes()).expect("a journal");
     let mut holder = FileStore::new(root);
     holder
         .snapshot(&shelf("work"), ChatId::from_number(3), &head(3), &snap(3))
@@ -743,6 +745,7 @@ fn squeezing_tidies_what_crashes_left() {
         .squeeze(Duration::from_secs(3600))
         .expect("it squeezes");
     assert!(!orphan.exists(), "given up");
+    assert!(!journal.exists(), "given up before its snapshot");
     assert!(held.exists(), "held");
     assert!(new.exists(), "too new to be left by a crash");
     assert!(file(root, "work", 1, "lock").exists(), "a chat's");

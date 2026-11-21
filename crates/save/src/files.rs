@@ -857,8 +857,8 @@ pub(crate) fn squeeze(path: &Path, after: Duration) -> io::Result<u64> {
 }
 
 /// Removes what crashes left in a shelf's folder that nobody uses: a
-/// squeeze's new files long since made, and locks of chats with nothing
-/// else.
+/// squeeze's new files long since made, and chats with nothing but a
+/// lock, and maybe a journal.
 fn tidy(folder: impl AsFd) -> io::Result<()> {
     let names = names(&folder)?;
     let now = SystemTime::now();
@@ -876,11 +876,16 @@ fn tidy(folder: impl AsFd) -> io::Result<()> {
                 }
             }
         } else if extension == "lock"
-            && !(names.iter())
-                .any(|other| other != name && chat_of(other).is_some_and(|(of, _)| of == chat))
+            && !(names.iter()).any(|other| {
+                other != name
+                    && chat_of(other)
+                        .is_some_and(|(of, extension)| of == chat && extension != "journal")
+            })
             && let Ok(_lock) = lock(&folder, chat, false)
         {
-            // Held, so nobody's making the chat: it was given up.
+            // Held, so nobody's making the chat: it was given up, maybe
+            // after its journal, before its snapshot.
+            remove(&folder, &file(chat, "journal"))?;
             remove(&folder, name)?;
         }
     }

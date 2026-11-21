@@ -533,7 +533,18 @@ const SHAPE_CHANGED: &str = "what's saved has changed shape, but caf_save::VERSI
 
 #[test]
 fn version_1_is_what_this_caf_writes_unless_the_version_changed() {
-    if caf_save::VERSION != 1 {
+    // Every saved type, every field and variant, as the TypeScript types
+    // generated from them say, as this version's sample pins them.
+    let version = caf_save::VERSION;
+    let path = format!("samples/save/v{version}/shapes.ts");
+    let pinned = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(&path),
+    )
+    .unwrap_or_else(|error| panic!("{path}: {error}: {SHAPE_CHANGED}"));
+    assert!(pinned == shapes(), "{SHAPE_CHANGED}");
+    if version != 1 {
         return;
     }
     let folder = folder();
@@ -541,10 +552,6 @@ fn version_1_is_what_this_caf_writes_unless_the_version_changed() {
         fs::read(folder.join(name))
             .unwrap_or_else(|error| panic!("samples/save/v1/{name}: {error}"))
     };
-    // Every saved type, every field and variant, as the TypeScript types
-    // generated from them say.
-    let pinned = String::from_utf8(read("shapes.ts")).expect("text");
-    assert!(pinned == shapes(), "{SHAPE_CHANGED}");
     // What it writes of the sample's values is what version 1 wrote.
     let header = encode_header(&from(header(9)));
     assert!(
