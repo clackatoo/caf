@@ -224,7 +224,9 @@ pub enum Lost {
         /// Its last lines of error output, cleaned.
         stderr: Vec<String>,
     },
-    /// The adapter was restarted, for this chat or another sharing it.
+    /// The adapter was restarted, for this chat or another sharing it; or,
+    /// while another chat was mid-turn on it, only this chat's session was
+    /// closed, to be opened again.
     Restarted,
     /// The agent wants the user to sign in first.
     SignInNeeded,
@@ -423,10 +425,12 @@ pub enum FailureReason {
     DidNotStop,
     /// The agent's answer made no sense.
     BadAnswer,
-    /// A setting chosen couldn't be applied before it was sent, such as a
-    /// model the agent no longer offers, or a change it refused: rather
-    /// than send it with a setting nobody chose, CAF didn't send it. The
-    /// setting is now what the agent uses, so sending it again uses that.
+    /// A setting chosen for the chat couldn't be applied before it was
+    /// sent, such as a model the agent no longer offers, or a change it
+    /// refused: rather than send it with a setting nobody chose, CAF
+    /// didn't send it. The setting falls back to the host's default for
+    /// the agent, if the agent offers it, which is sent first, and
+    /// otherwise to what the agent uses: sending it again uses that.
     SettingNotApplied,
     /// Anything else the agent reported.
     Other,
@@ -600,10 +604,19 @@ pub enum Note {
     /// The agent changed a setting by itself, such as falling back to
     /// another model; the choice follows it.
     AgentChanged(SettingChoice),
-    /// A setting chosen isn't offered by the agent any more, such as a
-    /// model it no longer has, so the choice was dropped, and the agent's
-    /// own applies.
+    /// A setting chosen for the chat isn't offered by the agent, or no
+    /// longer is, such as a model it no longer has. The setting falls back
+    /// to the host's default for the agent, if the agent offers it, and
+    /// otherwise to what the agent uses. The messages waiting failed if it
+    /// wasn't applied yet; if it was, and the agent stopped offering it,
+    /// they go on what's used now.
     NotOffered(SettingChoice),
+    /// A setting chosen for the chat was refused by the agent. It falls
+    /// back as for [`Note::NotOffered`], and the messages waiting failed.
+    /// A change the agent never answers isn't refused: it's a stuck
+    /// request (see [`Timers::request`](crate::host::Timers::request)),
+    /// and the change is sent again as the session opens again.
+    NotApplied(SettingChoice),
 }
 
 /// Something the agent sent that CAF couldn't read, or an app item a

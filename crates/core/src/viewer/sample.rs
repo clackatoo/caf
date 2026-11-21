@@ -32,7 +32,8 @@ use crate::question::{
     SlowToOpen,
 };
 use crate::save::{CannotRestore, Header, SavedChat, SavedState};
-use crate::settings::{KnownSettings, SettingChoice};
+use crate::settings::{KnownSettings, ModelUsed, SettingChoice};
+use crate::shape::settings;
 use crate::time::{End, Wall, Window};
 use crate::viewer::{
     AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
@@ -165,9 +166,10 @@ fn chat() -> Chat {
         Note::SignedIn,
         Note::AgentChanged(SettingChoice::model("sonnet")),
         Note::NotOffered(SettingChoice::fast(true)),
+        Note::NotApplied(SettingChoice::effort("high")),
     ];
     // 24 to 34 are taken, so the newer notes follow.
-    let notes = (notes.into_iter().zip([21, 22, 23, 41, 42, 43, 44, 45]))
+    let notes = (notes.into_iter().zip([21, 22, 23, 41, 42, 43, 44, 45, 46]))
         .map(|(note, id)| item(id, ended(300, 300), ItemKind::Note(note)))
         .collect();
     let mut imported = turn(
@@ -263,7 +265,7 @@ fn chat() -> Chat {
                 }),
             },
         ],
-        settings: crate::shape::settings(),
+        settings: settings(),
     }
 }
 
@@ -339,7 +341,7 @@ fn changes() -> Vec<Change> {
         end: End::At(wall(900)),
     };
     let mut changes: Vec<Change> = states.into_iter().map(Change::State).collect();
-    changes.push(Change::Settings(crate::shape::settings()));
+    changes.push(Change::Settings(settings()));
     changes.push(Change::TurnAdded(turn(
         30,
         Starter::User(UserMessage::text("And the docs")),
@@ -371,6 +373,13 @@ fn changes() -> Vec<Change> {
             .map(ending),
     );
     changes.extend([
+        Change::TurnModel {
+            turn: TurnId(19),
+            model: ModelUsed {
+                id: "opus[1m]".into(),
+                name: Some("Opus (1M context)".into()),
+            },
+        },
         Change::ItemAdded {
             turn: TurnId(19),
             item: item(
@@ -472,7 +481,7 @@ fn agents() -> Vec<AgentStatus> {
         settings: [
             KnownSettings::Unknown,
             KnownSettings::Learning,
-            KnownSettings::Known(crate::shape::settings().offered),
+            KnownSettings::Known(settings().offered),
             KnownSettings::Failed("the agent didn't start".into()),
         ][at % 4]
             .clone(),

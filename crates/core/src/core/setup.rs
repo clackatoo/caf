@@ -35,6 +35,7 @@ use crate::event::SetupEvent;
 use crate::ids::{AgentName, ChatId, Ticket};
 use crate::install::{Bundled, EnvValue, Install, Program, SignedInAs};
 use crate::profiles::Checked;
+use crate::settings::KnownSettings;
 use crate::time::{Now, Wall};
 
 /// The longest link kept, in bytes: a longer one is refused.
@@ -263,7 +264,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     install: standing.install.clone(),
                     sign_in: standing.sign_in.clone(),
                     can_sign_in: self.signing_in(name).is_some() || self.can_sign_in(name),
-                    settings: crate::settings::KnownSettings::default(),
+                    settings: standing.settings.clone(),
                     own_tools_off: standing.strips.unwrap_or_else(|| {
                         (self.agents.get(name)).is_some_and(|agent| agent.profile.strips())
                     }),
@@ -1143,7 +1144,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// The ticket of the sign-in under way that's `agent`'s: its own, or
     /// one of an agent sharing its sign-in.
-    fn signing_in(&self, agent: &AgentName) -> Option<Ticket> {
+    pub(super) fn signing_in(&self, agent: &AgentName) -> Option<Ticket> {
         (self.sign_in_group(agent).iter())
             .find_map(|each| self.job_for(each, |work| matches!(work, Work::SignIn { .. })))
     }
@@ -1176,7 +1177,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// `agent`'s install state.
-    fn install_state(&self, agent: &AgentName) -> Option<InstallState> {
+    pub(super) fn install_state(&self, agent: &AgentName) -> Option<InstallState> {
         (self.setup.agents.get(agent)).map(|standing| standing.install.clone())
     }
 
@@ -1224,6 +1225,7 @@ pub(super) fn standing(launch: &Launch) -> Standing {
         sign_in: SignInState::Unknown,
         checked: false,
         strips: None,
+        settings: KnownSettings::Unknown,
     }
 }
 

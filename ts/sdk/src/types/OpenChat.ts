@@ -45,8 +45,10 @@ instructions: string | null,
  * Choices for the agent's settings, such as its model, by the agent's
  * own ids: applied as its session opens, before any message goes,
  * over the host's defaults for the agent. One the agent doesn't offer
- * fails the chat's first message, saying so (see
- * [`settings`](crate::settings)). Empty (the default) leaves the
+ * fails the messages waiting, saying so (see
+ * [`settings`](crate::settings)). One whose id is empty, longer than
+ * 256 bytes or has control characters is refused
+ * ([`Refused::Unsendable`]). Empty (the default) leaves the
  * host's defaults, then the agent's own. Recordings made before it
  * was added read as empty.
  */

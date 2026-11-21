@@ -844,6 +844,32 @@
                       }
                     }
                   }
+                },
+                {
+                  "id": 46,
+                  "window": {
+                    "start": 1800000000300,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000300
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Note",
+                    "value": {
+                      "type": "NotApplied",
+                      "value": {
+                        "kind": {
+                          "type": "Effort"
+                        },
+                        "value": {
+                          "type": "Choice",
+                          "value": "high"
+                        }
+                      }
+                    }
+                  }
                 }
               ],
               "imported": false,
@@ -1097,12 +1123,29 @@
               },
               {
                 "kind": {
+                  "type": "Effort"
+                },
+                "value": {
+                  "type": "Choice",
+                  "value": "high"
+                }
+              },
+              {
+                "kind": {
                   "type": "Fast"
                 },
                 "value": {
                   "type": "Switch",
                   "value": true
                 }
+              }
+            ],
+            "own": [
+              {
+                "type": "Effort"
+              },
+              {
+                "type": "Fast"
               }
             ]
           }
@@ -1469,12 +1512,29 @@
                   },
                   {
                     "kind": {
+                      "type": "Effort"
+                    },
+                    "value": {
+                      "type": "Choice",
+                      "value": "high"
+                    }
+                  },
+                  {
+                    "kind": {
                       "type": "Fast"
                     },
                     "value": {
                       "type": "Switch",
                       "value": true
                     }
+                  }
+                ],
+                "own": [
+                  {
+                    "type": "Effort"
+                  },
+                  {
+                    "type": "Fast"
                   }
                 ]
               }
@@ -1973,6 +2033,19 @@
           {
             "no": 46,
             "change": {
+              "type": "TurnModel",
+              "value": {
+                "turn": 19,
+                "model": {
+                  "id": "opus[1m]",
+                  "name": "Opus (1M context)"
+                }
+              }
+            }
+          },
+          {
+            "no": 47,
+            "change": {
               "type": "ItemAdded",
               "value": {
                 "turn": 19,
@@ -2007,7 +2080,7 @@
             }
           },
           {
-            "no": 47,
+            "no": 48,
             "change": {
               "type": "Appended",
               "value": {
@@ -2017,7 +2090,7 @@
             }
           },
           {
-            "no": 48,
+            "no": 49,
             "change": {
               "type": "ToolChanged",
               "value": {
@@ -2040,7 +2113,7 @@
             }
           },
           {
-            "no": 49,
+            "no": 50,
             "change": {
               "type": "ItemEnded",
               "value": {
@@ -2053,7 +2126,7 @@
             }
           },
           {
-            "no": 50,
+            "no": 51,
             "change": {
               "type": "Usage",
               "value": {
@@ -2064,7 +2137,7 @@
             }
           },
           {
-            "no": 51,
+            "no": 52,
             "change": {
               "type": "QuestionAsked",
               "value": {
@@ -2095,7 +2168,7 @@
             }
           },
           {
-            "no": 52,
+            "no": 53,
             "change": {
               "type": "QuestionGone",
               "value": 26

@@ -12,13 +12,14 @@ use super::procs::Cause;
 use super::state::{Open, Purpose, Running};
 use super::{Core, Refused, report};
 use crate::acp::RpcError;
+use crate::change::Change;
 use crate::chat::AppData;
 use crate::chat::{
-    AppItem, ChatState, Failure, FailureReason, ItemKind, Part, Remedy, Starter, ToolStatus, Turn,
-    TurnLife, UserMessage,
+    AppItem, ChatState, Failure, FailureReason, ItemKind, Lost, Note, Part, Remedy, Starter,
+    ToolStatus, Turn, TurnLife, UserMessage,
 };
 use crate::directive::{Directive, Level};
-use crate::ids::{ChatId, TurnId};
+use crate::ids::{ChatId, Ticket, TurnId};
 use crate::time::{End, Now, Window};
 
 impl<A: AppItem, D: AppData> Core<A, D> {
@@ -90,7 +91,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Sends `chat`'s next waiting turn, if its session is open and no
-    /// turn is running.
+    /// turn is running: once what's chosen of its settings is sent, and
+    /// answered.
     pub(super) fn pump(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
         let Some(run) = self.runs.get(&chat) else {
             return;
@@ -100,6 +102,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return;
         };
         let (proc, session) = (*proc, session.clone());
+        if !self.send_settings(now, chat, proc, &session, out) {
+            return;
+        }
         let Some(turn) = self.waiting_turns(chat).first().copied() else {
             return;
         };
@@ -132,6 +137,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             });
         }
         self.set_life(now, chat, turn, TurnLife::Running);
+        if let Some(model) = self.model_used(chat) {
+            self.record(chat, Change::TurnModel { turn, model });
+        }
     }
 
     /// The agent answered the prompt of `chat`'s turn `turn`.
@@ -163,7 +171,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return self.prompt_lost_session(now, chat, turn, stopping, out);
         }
         let life = match reply {
-            Reply::Result(result) => ended_by(&result),
+            Reply::Result(result) => {
+                // The session works: a setting that finds it gone may have
+                // it opened again.
+                if let Some(run) = self.runs.get_mut(&chat) {
+                    run.choosing.reopened = false;
+                }
+                ended_by(&result)
+            }
             Reply::Error(error) => {
                 let mut failure = self.failure(chat, turn, &error);
                 self.sign_in_failure(chat, &mut failure);
@@ -473,9 +488,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// The agent didn't stop `chat`'s turn in time: the turn fails, and
-    /// the session is restarted. The adapter is restarted if no other chat
-    /// is mid-turn on it; otherwise only this chat's session is closed,
-    /// where the agent can, and opened again with its next message.
+    /// the session is restarted ([`Core::restart_stuck`]).
     pub(super) fn stop_overdue(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
         let Some(running) = self.give_up_prompt(now, chat) else {
             return;
@@ -487,13 +500,27 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         );
         let failed = failure(FailureReason::DidNotStop, Some(Remedy::SendAgain));
         self.end_turn(now, chat, running.turn, TurnLife::Failed(failed));
-        if !self.busy_besides(running.proc, chat) {
-            return self.lose_process(now, running.proc, Cause::Restarted, out);
+        self.restart_stuck(now, chat, running.proc, out);
+    }
+
+    /// `chat`'s session on `proc` is stuck: the adapter is restarted if no
+    /// other chat is mid-turn on it; otherwise only this chat's session is
+    /// closed, where the agent can, and opened again with its next
+    /// message, or at once if one waits.
+    pub(super) fn restart_stuck(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        proc: Ticket,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
+        if !self.busy_besides(proc, chat) {
+            return self.lose_process(now, proc, Cause::Restarted, out);
         }
         let session = self.runs.get(&chat).and_then(|run| run.session.clone());
         let closes = self
             .procs
-            .get(&running.proc)
+            .get(&proc)
             .and_then(|each| each.caps())
             .is_some_and(|caps| caps.close);
         match (session, closes) {
@@ -502,7 +529,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 let params = json!({ "sessionId": session.0 });
                 self.request(
                     now,
-                    running.proc,
+                    proc,
                     ("session/close", params),
                     Purpose::Close { session },
                     Some(wait),
@@ -514,11 +541,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             _ => {
                 if let Some(run) = self.runs.get_mut(&chat) {
                     run.session = None;
-                    run.note = Some(crate::chat::Note::SessionStuck);
+                    run.note = Some(Note::SessionStuck);
                 }
             }
         }
-        self.session_lost(now, chat, crate::chat::Lost::Restarted, true, out);
+        self.session_lost(now, chat, Lost::Restarted, true, out);
     }
 }
 

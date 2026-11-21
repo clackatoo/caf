@@ -31,7 +31,9 @@ pub struct AgentSpec {
     /// The host's default choices for it, such as a cheaper model, by the
     /// agent's own ids: applied to each chat with it that doesn't choose
     /// otherwise. One the agent doesn't offer is skipped quietly, and its
-    /// own applies. Empty (the default) leaves the agent's own.
+    /// own applies. One whose id is empty, longer than 256 bytes or has
+    /// control characters is skipped. Empty (the default) leaves the
+    /// agent's own.
     /// Recordings made before it was added read as empty.
     #[serde(default)]
     pub settings: Vec<SettingChoice>,

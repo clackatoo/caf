@@ -20,13 +20,33 @@
 //!   turn running, it's sent at once;
 //! - only the latest change of a setting counts;
 //! - while a change is asked for, the agent's reports about that setting
-//!   don't move the choice: its answer decides;
-//! - when a session opens or reopens, the choices are sent first, and a
-//!   waiting message goes once they're answered. One that can't be applied
-//!   (a model gone, a change refused) fails that message, saying why, with
-//!   [`Remedy::SendAgain`](crate::chat::Remedy::SendAgain), and the
-//!   setting goes back to what the agent uses: a message never goes on a
-//!   model nobody chose;
+//!   don't move the choice: its answer decides. A change the agent leaves
+//!   unanswered for [`Timers::request`](crate::host::Timers::request) is
+//!   a stuck request: the agent's program is restarted, or, while another
+//!   chat is mid-turn on it, only this chat's session is closed. Either
+//!   way the session opens again, at once if a message waits and
+//!   otherwise with the next, with every choice sent to it first;
+//! - when a session opens or reopens, the choices are sent first, and the
+//!   messages waiting go once they're answered;
+//! - only a choice made for the chat itself that the agent doesn't offer,
+//!   or refuses, fails every message waiting, saying why, with
+//!   [`Remedy::SendAgain`](crate::chat::Remedy::SendAgain); and the chat
+//!   says so whether or not any waits
+//!   ([`Note::NotOffered`](crate::chat::Note::NotOffered),
+//!   [`Note::NotApplied`](crate::chat::Note::NotApplied)). The host's
+//!   default is dropped quietly;
+//! - a choice made for the chat itself that can't be applied, or that the
+//!   agent stops offering, falls back as a restore would have it: to the
+//!   host's default, if the agent offers that, and otherwise to what the
+//!   agent uses. It's no longer the chat's own;
+//! - **a message never goes with a choice silently replaced**: either it
+//!   fails, as when a choice waiting to be sent can't be applied, or the
+//!   chat says what changed, as when one applied already stops being
+//!   offered ([`Note::NotOffered`](crate::chat::Note::NotOffered)), and
+//!   messages go on what's used then;
+//! - a choice is checked against what the agent offers when it's made, so
+//!   an effort level only the model being changed to offers can be chosen
+//!   once that change is answered, not with it;
 //! - a change the agent makes by itself, such as a fallback model, is
 //!   followed, and the chat says so
 //!   ([`Note::AgentChanged`](crate::chat::Note::AgentChanged)).
@@ -35,9 +55,14 @@
 //! ([`OpenChat::settings`](crate::OpenChat::settings),
 //! [`Core::set_setting`](crate::Core::set_setting)); the host's default for
 //! the agent ([`AgentSpec::settings`](crate::agent::AgentSpec::settings));
-//! the agent's own. A host default the agent doesn't offer is skipped
-//! quietly; a chat's own choice it doesn't offer fails the chat's first
-//! message, saying so.
+//! the agent's own. A host default the agent doesn't offer is dropped
+//! quietly. Which choices are the chat's own is saved with it
+//! ([`Settings::own`]): a restored chat takes the host's defaults as they
+//! are then for the rest, and leaves what the agent chose by itself to
+//! the agent.
+//!
+//! **What the agent says it uses counts as offered**, even if it isn't in
+//! the list it gives, as a model it fell back to may not be.
 //!
 //! **Choices are matched exactly**, by the agent's own ids, never by a
 //! partial name: "opus" never quietly becomes a pricier "Opus (1M
@@ -175,6 +200,18 @@ pub struct Settings {
     /// running to end, for the session to open, or for the agent's
     /// answer.
     pub chosen: Vec<SettingChoice>,
+    /// The kinds chosen for the chat itself, with
+    /// [`OpenChat::settings`](crate::OpenChat::settings) or
+    /// [`Core::set_setting`](crate::Core::set_setting), in the order
+    /// settings are sent in. Every other choice is the host's default
+    /// ([`AgentSpec::settings`](crate::agent::AgentSpec::settings)), or
+    /// what the agent changed to by itself, or went back to: one the agent
+    /// doesn't offer is dropped quietly, and a restored chat takes the
+    /// host's defaults as they are then in their place, or leaves them to
+    /// the agent. Missing, as in a chat saved before CAF had settings, it
+    /// reads as empty.
+    #[serde(default)]
+    pub own: Vec<SettingKind>,
 }
 
 /// What CAF knows of the settings an agent offers, before any chat:

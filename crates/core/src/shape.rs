@@ -259,11 +259,17 @@ pub(crate) fn chat() -> Chat {
     }
 }
 
-/// A chat's settings: a model chosen and waiting, effort, and fast mode.
+/// A chat's settings: the host's model, waiting, and effort and fast mode
+/// chosen for the chat itself.
 pub(crate) fn settings() -> Settings {
     Settings {
         offered: offered(),
-        chosen: vec![SettingChoice::model("sonnet"), SettingChoice::fast(true)],
+        chosen: vec![
+            SettingChoice::model("sonnet"),
+            SettingChoice::effort("high"),
+            SettingChoice::fast(true),
+        ],
+        own: vec![SettingKind::Effort, SettingKind::Fast],
     }
 }
 
@@ -986,7 +992,8 @@ fn enums_are_type_then_value() {
                 "parent": null,
                 "kind": { "type": "Words", "value": "On it." }
             }],
-            "imported": false
+            "imported": false,
+            "model": { "id": "sonnet", "name": "Sonnet 4.6" }
         } })
     );
     assert_eq!(

@@ -16,7 +16,7 @@ use crate::chat::{
 };
 use crate::ids::{ChangeNo, ItemId, QuestionId, TurnId};
 use crate::question::Question;
-use crate::settings::Settings;
+use crate::settings::{ModelUsed, Settings};
 use crate::time::End;
 
 /// A change, with its number.
@@ -66,6 +66,14 @@ pub enum Change<A: AppItem = NoAppItems> {
         life: TurnLife,
         /// Whether it has ended.
         end: End,
+    },
+    /// A turn was sent, on this model: its
+    /// [`model`](crate::chat::Turn::model), as the agent said then.
+    TurnModel {
+        /// The turn.
+        turn: TurnId,
+        /// The model that answers it.
+        model: ModelUsed,
     },
     /// An item was added to a turn.
     ItemAdded {
@@ -166,6 +174,7 @@ impl<A: AppItem> Chat<A> {
                 each.life = life.clone();
                 each.window.end = *end;
             }
+            Change::TurnModel { turn, model } => self.turn_mut(*turn)?.model = Some(model.clone()),
             Change::ItemAdded { turn, item } => self.turn_mut(*turn)?.items.push(item.clone()),
             Change::Appended { item, text } => match &mut self.item_mut(*item)?.kind {
                 ItemKind::Words(words) | ItemKind::Thinking(words) => words.push_str(text),

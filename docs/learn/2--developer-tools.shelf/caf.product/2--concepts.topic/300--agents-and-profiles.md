@@ -211,6 +211,27 @@ that profile is for. The exception is an agent that keeps its sign-in in a
 private folder CAF gives it: only CAF's own install of it is given one, so
 CAF doesn't run commands that need it for the program's own.
 
+## Settings
+
+The user can choose an agent's model, how hard it thinks (its effort) and
+fast mode, for any agent. The agent says what it offers, never CAF: once a
+session opens, the agent's profile reads its list from however the agent
+gives it (ACP's session config options, or an older agent's list of
+models) into one shape, and a chat holds it beside what was chosen. What
+the agent offers that CAF doesn't support yet, such as Claude's modes,
+stays as the agent set it.
+
+A chat's choices are sent before any message, one at a time and the model
+first, as which effort levels there are depends on it; a change made while
+a turn runs waits for it to end. A message never goes on a setting nobody
+chose without saying so: a choice made for the chat itself that can't
+be applied fails the messages waiting, and the chat says so; one that
+stops being offered, or that the agent changes by itself, is said in the
+chat too. The agent's status
+says what it offers before any chat, once CAF has learned it
+(`Core::learn_settings`). See
+[Choosing the model](~caf/getting-started/choosing-the-model).
+
 ## Sharing an adapter
 
 One adapter process can serve many chats. The program chooses whether each

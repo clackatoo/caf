@@ -139,8 +139,12 @@ pub struct Timers {
     pub quiet: Duration,
     /// How long any other request CAF sends may go unanswered (closing a
     /// session, changing a setting) before the adapter is treated as stuck
-    /// and restarted. A prompt has no such limit: an agent may work on one
-    /// for an hour. 60 s.
+    /// and restarted, unless a chat is mid-turn on it. Then a change of
+    /// setting a chat waits for restarts only that chat's session: it's
+    /// closed and opened again, at once if a message waits and otherwise
+    /// with the next, with every choice sent again first; and a request
+    /// nobody waits for just ends. A prompt has no such limit: an agent
+    /// may work on one for an hour. 60 s.
     #[cfg_attr(feature = "ts", ts(as = "crate::ts::Duration"))]
     pub request: Duration,
     /// How long CAF keeps listening to an adapter that has gone, for its

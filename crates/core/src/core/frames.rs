@@ -264,6 +264,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     self.prompt_answered(now, chat, turn, reply, out);
                 }
             }
+            super::state::Purpose::Set { chat, choice } => {
+                self.set_answered(now, (proc, id), chat, choice, reply, out);
+            }
+            super::state::Purpose::Learn { conn } => {
+                self.learned(now, (proc, id), conn, reply, out);
+            }
             super::state::Purpose::Close { session } => match reply {
                 Reply::Result(_) => {
                     if let Some(each) = self.procs.get_mut(&proc) {

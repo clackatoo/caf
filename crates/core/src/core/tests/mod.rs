@@ -13,6 +13,7 @@ mod own_tools;
 mod permissions;
 mod process;
 mod saving;
+mod settings;
 mod setup;
 mod shared;
 mod stop;

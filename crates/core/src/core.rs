@@ -10,6 +10,7 @@ mod procs;
 mod record;
 mod saving;
 mod sessions;
+mod settings;
 mod setup;
 mod state;
 mod timers;
@@ -150,8 +151,10 @@ pub struct OpenChat {
     /// Choices for the agent's settings, such as its model, by the agent's
     /// own ids: applied as its session opens, before any message goes,
     /// over the host's defaults for the agent. One the agent doesn't offer
-    /// fails the chat's first message, saying so (see
-    /// [`settings`](crate::settings)). Empty (the default) leaves the
+    /// fails the messages waiting, saying so (see
+    /// [`settings`](crate::settings)). One whose id is empty, longer than
+    /// 256 bytes or has control characters is refused
+    /// ([`Refused::Unsendable`]). Empty (the default) leaves the
     /// host's defaults, then the agent's own. Recordings made before it
     /// was added read as empty.
     #[serde(default)]
@@ -210,8 +213,10 @@ pub enum Refused {
     /// program, argument or variable that isn't valid UTF-8, what ACP
     /// can't say for an MCP server (a variable to remove, or a folder to
     /// start in), or instructions longer than 64 KiB
-    /// ([`OpenChat::instructions`]). CAF never sends something else in
-    /// its place.
+    /// ([`OpenChat::instructions`]), or a setting's id that's empty,
+    /// longer than 256 bytes or has control characters
+    /// ([`OpenChat::settings`], [`Core::set_setting`]). CAF never sends
+    /// something else in its place.
     Unsendable,
     /// The chat already has as many messages waiting as the host allows.
     QueueFull,
@@ -784,10 +789,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     ///
     /// # Errors
     ///
-    /// [`Refused::NoSuchChat`], [`Refused::Closed`], or
-    /// [`Refused::NoSuchSetting`] if the chat's agent has said what it
-    /// offers and that isn't among it. Before it has, any choice is taken,
-    /// and checked as the session opens.
+    /// [`Refused::NoSuchChat`], [`Refused::Closed`],
+    /// [`Refused::Unsendable`] for an id CAF can't send exactly, or
+    /// [`Refused::NoSuchSetting`] if the chat's agent has said in this run
+    /// what it offers and that isn't among it. Before it has, any choice
+    /// is taken, and checked as the session opens: a restored chat's
+    /// saved [`Settings::offered`](crate::settings::Settings::offered) is
+    /// shown, not used to refuse. A choice is checked against what's
+    /// offered when it's made, so an effort level only a model being
+    /// changed to offers can be chosen once that change is answered.
     pub fn set_setting(
         &mut self,
         now: Now,
@@ -805,8 +815,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// runs, opens a session with none of the agent's own tools, reads what
     /// it offers, and closes it, sending no message, so it costs nothing.
     /// Where it stands shows in the agent's
-    /// [`AgentStatus::settings`](crate::agent::AgentStatus::settings).
-    /// CAF never does this by itself: every chat's session also tells it.
+    /// [`AgentStatus::settings`](crate::agent::AgentStatus::settings):
+    /// what was learned before stays shown while it's learned again, and
+    /// if that fails. CAF never does this by itself: every chat's session
+    /// also tells it.
+    ///
+    /// On an adapter that goes on serving chats, the session is closed if
+    /// the adapter can close sessions, and otherwise stays until the
+    /// adapter stops; an adapter nothing else needs is stopped.
     ///
     /// # Errors
     ///
@@ -970,7 +986,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             HostCommand::Delete { chat, shelf } => self.delete_chat(now, chat, shelf, out),
             HostCommand::MoveShelf { from, to } => self.move_chats(from, to),
             HostCommand::SetData { chat, data } => self.set_chat_data(chat, data),
-            HostCommand::SetSetting { .. } | HostCommand::LearnSettings(_) => todo!(),
+            HostCommand::SetSetting { chat, choice } => self.set_setting_as(now, chat, choice, out),
+            HostCommand::LearnSettings(agent) => self.learn_as(now, &agent, out),
             HostCommand::AddAppItem(_) => {
                 report(
                     out,

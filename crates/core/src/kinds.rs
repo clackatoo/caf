@@ -190,6 +190,7 @@ kinds!(Change {
     "QuestionAsked" => Change::QuestionAsked(_),
     "QuestionGone" => Change::QuestionGone(_),
     "Settings" => Change::Settings(_),
+    "TurnModel" => Change::TurnModel { .. },
 });
 
 kinds!(Mismatch {
@@ -321,6 +322,7 @@ kinds!(Note {
     "SignedIn" => Note::SignedIn,
     "AgentChanged" => Note::AgentChanged(_),
     "NotOffered" => Note::NotOffered(_),
+    "NotApplied" => Note::NotApplied(_),
 });
 
 kinds!(QuestionKind {
@@ -468,7 +470,10 @@ impl Seen {
             Change::ToolChanged { tool, .. } => self.tool(tool),
             Change::ItemEnded { end, .. } => self.mark(end),
             Change::QuestionAsked(question) => self.question(question),
-            Change::Appended { .. } | Change::Usage(_) | Change::QuestionGone(_) => {}
+            Change::Appended { .. }
+            | Change::TurnModel { .. }
+            | Change::Usage(_)
+            | Change::QuestionGone(_) => {}
         }
     }
 
