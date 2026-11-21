@@ -94,9 +94,11 @@ profile, so its chats get no session: they're lost, as CAF can't turn off
 its tools, and their waiting messages fail.
 
 For Claude, a few things stay as they are: settings an organisation
-manages on the machine, the plugins built into Claude Code, and two
-commands of the adapter's own, `/mcp` and `/remote-control`, which the
-user can send as a message but the agent can't call. The user's sign-in is
+manages on the machine, the plugins built into Claude Code, and the
+adapter's own `/mcp` command, which the user can send as a message (the
+agent can't call it) to see the program's MCP servers and reconnect them.
+The adapter offers `/remote-control` too, but it fails: CAF turns Remote
+Control off, so a chat is never reachable from claude.ai. The user's sign-in is
 untouched, but one that lives in their own Claude Code settings, such as
 an API key helper, isn't read, so the chat asks them to sign in.
 

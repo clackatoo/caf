@@ -68,6 +68,8 @@
 //!   permission rules of theirs;
 //! - `strictMcpConfig: true`, `settings.disableClaudeAiConnectors`: only
 //!   the MCP servers the app gives;
+//! - `settings.disableRemoteControl`: the session can't be connected to
+//!   claude.ai, even if the user sends the adapter's `/remote-control`;
 //! - `systemPrompt`: CAF's own short instructions, saying what the agent
 //!   is in and that it has only the app's tools, then the app's own
 //!   ([`OpenChat::instructions`](crate::OpenChat::instructions)), in place
@@ -87,7 +89,10 @@
 //! built into Claude Code, and the adapter's own two commands, `/mcp` and
 //! `/remote-control`, which it offers whatever Claude Code does and runs
 //! itself when the user's message is one of them: they're the user's, not
-//! tools the agent can call. Sign-in is untouched (its credentials
+//! tools the agent can call, and `/remote-control` fails, as Remote
+//! Control is off. `/mcp` shows the app's MCP servers and reconnects
+//! them. Plugins are off through `settingSources`, which say which are
+//! enabled: Claude Code has no variable for it. Sign-in is untouched (its credentials
 //! live in `~/.claude`), but a sign-in that lives in the user's
 //! `settings.json` (an API key helper, a gateway's variables) isn't seen,
 //! so the chat asks the user to sign in. The user's model choice still
@@ -640,16 +645,14 @@ fn claude_stripped(own: &str, instructions: Option<&str>) -> Value {
         // commands, and no CLAUDE.md or rules files sent with them.
         "verbatimPrompts": true,
         "allowDangerouslySkipPermissions": false,
-        "settings": { "disableClaudeAiConnectors": true },
+        // No claude.ai connectors, and no Remote Control: the adapter
+        // still offers `/remote-control`, but Claude Code refuses it, so a
+        // session is never reachable from claude.ai.
+        "settings": { "disableClaudeAiConnectors": true, "disableRemoteControl": true },
         "env": {
             "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
             "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS": "1",
             "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
-            // The Claude Code 0.98.0 brings reads no such variable (it
-            // knows only pytest's `PYTEST_DISABLE_PLUGIN_AUTOLOAD`):
-            // plugins are off through `settingSources`, which say which
-            // are enabled. It's sent as agreed, and changes nothing.
-            "DISABLE_PLUGIN_AUTOLOAD": "1",
             "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
         },
         "extraArgs": { "disable-slash-commands": null },

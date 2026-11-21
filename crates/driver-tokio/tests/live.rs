@@ -283,8 +283,13 @@ fn objects_with<'a>(
 /// CLAUDE.md or AGENTS.md, which each tell it to answer something else,
 /// it calls no tools, and Claude Code offers no commands: only the
 /// adapter's own two, `/mcp` and `/remote-control`, which it adds
-/// whatever Claude Code offers. It never signs in, and prints nothing of
-/// the recording, which may name the account.
+/// whatever Claude Code offers (and the second fails, as CAF turns Remote
+/// Control off). It never signs in, and prints nothing of the recording,
+/// which may name the account.
+///
+/// The folder's instructions do work when nothing is turned off:
+/// `claude -p --model haiku` with its default settings, in such a folder,
+/// answers PINEAPPLE. So an answer of 4 here shows they weren't read.
 ///
 /// ```text
 /// cargo test -p caf-driver-tokio --test live own_tools -- --ignored

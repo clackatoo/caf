@@ -28,12 +28,11 @@ fn stripped(prompt: &str) -> Value {
         "promptSuggestions": false,
         "verbatimPrompts": true,
         "allowDangerouslySkipPermissions": false,
-        "settings": { "disableClaudeAiConnectors": true },
+        "settings": { "disableClaudeAiConnectors": true, "disableRemoteControl": true },
         "env": {
             "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
             "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS": "1",
             "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
-            "DISABLE_PLUGIN_AUTOLOAD": "1",
             "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
         },
         "extraArgs": { "disable-slash-commands": null },
