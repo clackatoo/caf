@@ -481,8 +481,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     ///
     /// # Errors
     ///
-    /// [`Refused::NoSuchAgent`], [`Refused::RelativeFolder`] or
-    /// [`Refused::Unsendable`].
+    /// [`Refused::NoSuchAgent`], [`Refused::RelativeFolder`],
+    /// [`Refused::Unsendable`], or [`Refused::BadShelf`] for its shelf.
     pub fn open_chat(
         &mut self,
         now: Now,
@@ -735,7 +735,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.finish(now, out);
     }
 
-    /// Whether nothing is running: no adapters, nothing waiting.
+    /// Whether nothing is running: no adapters, nothing waiting, and
+    /// every saved chat put away or saved as CAF shuts down written whole
+    /// and let go in the store.
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.procs.is_empty()

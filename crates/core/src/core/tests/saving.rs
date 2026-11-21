@@ -1390,3 +1390,71 @@ fn a_saved_chat_reads_back_as_it_is_and_restores_tidied() {
     // Snapshots and journals both, and failures to try again.
     assert!(counts.iter().all(|&count| count > 60), "{counts:?}");
 }
+
+#[test]
+fn a_host_chooses_how_soon_after_a_change_a_chat_is_saved() {
+    let mut host = host();
+    host.timers.save = std::time::Duration::from_secs(2);
+    let mut script = Script::new(host);
+    let (_, out) = script.open(saved_open("claude"));
+    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 2000 })]);
+    script.at(1999);
+    assert!(storage(&script.woken()).is_empty());
+    script.at(2000);
+    assert_eq!(one_storage(&script.woken())["type"], "Snapshot");
+}
+
+#[test]
+fn chats_a_shelf_cant_read_are_reported_and_left_out() {
+    let mut script = Script::new(host());
+    script.list_saved(SHELF).0.expect("listing");
+    let broken = ChatId::from_number(9000);
+    let out = script.storage(
+        1000,
+        StorageEvent::Listed {
+            chats: Vec::new(),
+            unreadable: vec![(broken, crate::save::CannotRestore::Newer { version: 9 })],
+        },
+    );
+    assert_eq!(
+        with(&out, "report"),
+        [
+            json!({ "report": "Warn", "message": format!("chat {broken} on shelf \"work\" can't be read: Newer {{ version: 9 }}") })
+        ]
+    );
+    assert_eq!(
+        script.core.saved(&Shelf(SHELF.to_owned())),
+        Some(Vec::new())
+    );
+}
+
+#[test]
+fn a_shelf_that_couldnt_be_moved_is_read_again() {
+    let mut script = Script::new(host());
+    for shelf in [SHELF, "renamed"] {
+        script.list_saved(shelf).0.expect("listing");
+    }
+    for ticket in [1000, 1001] {
+        let chats = Vec::new();
+        let unreadable = Vec::new();
+        script.storage(ticket, StorageEvent::Listed { chats, unreadable });
+    }
+    let out = script.move_shelf(SHELF, "renamed").1;
+    let out = script.storage(
+        ticket(&one_storage(&out)),
+        StorageEvent::Failed("the folder is in use".to_owned()),
+    );
+    assert_has(
+        &json!(storage(&out)),
+        &json!([
+            { "type": "List", "value": { "shelf": SHELF } },
+            { "type": "List", "value": { "shelf": "renamed" } }
+        ]),
+    );
+    assert_eq!(
+        with(&out, "report"),
+        [
+            json!({ "report": "Warn", "message": "shelf \"work\" couldn't be moved to \"renamed\": the folder is in use" })
+        ]
+    );
+}
