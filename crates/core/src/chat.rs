@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{AgentName, AgentSessionId, ChatId, ItemId, TurnId};
 use crate::question::Question;
+use crate::settings::{ModelUsed, SettingChoice, Settings};
 use crate::time::Window;
 
 /// An app's own kind of item, such as eyespy's "the agent moved the map
@@ -131,6 +132,10 @@ pub struct Chat<A: AppItem = NoAppItems> {
     /// they come and go. Once one is answered, what was decided is written
     /// on the item it was about.
     pub questions: Vec<Question>,
+    /// The agent's settings the user may choose, such as its model: what
+    /// the agent offers, and what was chosen.
+    #[serde(default)]
+    pub settings: Settings,
 }
 
 /// How full the agent's memory is, as it says.
@@ -281,6 +286,11 @@ pub struct Turn<A: AppItem = NoAppItems> {
     /// Whether it's history imported from the agent's replay rather than
     /// something CAF saw happen.
     pub imported: bool,
+    /// The model that answered it, as the agent said when it was sent, if
+    /// the agent says. A change the agent makes by itself during the turn
+    /// shows as a note in it.
+    #[serde(default)]
+    pub model: Option<ModelUsed>,
 }
 
 /// What started a turn.
@@ -413,6 +423,11 @@ pub enum FailureReason {
     DidNotStop,
     /// The agent's answer made no sense.
     BadAnswer,
+    /// A setting chosen couldn't be applied before it was sent, such as a
+    /// model the agent no longer offers, or a change it refused: rather
+    /// than send it with a setting nobody chose, CAF didn't send it. The
+    /// setting is now what the agent uses, so sending it again uses that.
+    SettingNotApplied,
     /// Anything else the agent reported.
     Other,
 }
@@ -582,6 +597,13 @@ pub enum Note {
     /// The user signed in to the agent. A turn that failed for want of it
     /// can be sent again.
     SignedIn,
+    /// The agent changed a setting by itself, such as falling back to
+    /// another model; the choice follows it.
+    AgentChanged(SettingChoice),
+    /// A setting chosen isn't offered by the agent any more, such as a
+    /// model it no longer has, so the choice was dropped, and the agent's
+    /// own applies.
+    NotOffered(SettingChoice),
 }
 
 /// Something the agent sent that CAF couldn't read, or an app item a

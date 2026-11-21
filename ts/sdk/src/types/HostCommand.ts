@@ -7,6 +7,7 @@ import type { NoAppItems } from "./NoAppItems.ts";
 import type { OpenChat } from "./OpenChat.ts";
 import type { QuestionId } from "./QuestionId.ts";
 import type { RestoreChat } from "./RestoreChat.ts";
+import type { SettingChoice } from "./SettingChoice.ts";
 import type { Shelf } from "./Shelf.ts";
 import type { TurnId } from "./TurnId.ts";
 import type { UserMessage } from "./UserMessage.ts";
@@ -70,7 +71,15 @@ from: Shelf,
 /**
  * Where they go.
  */
-to: Shelf, } } | { "type": "SetData", "value": { 
+to: Shelf, } } | { "type": "SetSetting", "value": { 
+/**
+ * The chat.
+ */
+chat: ChatId, 
+/**
+ * The choice.
+ */
+choice: SettingChoice, } } | { "type": "LearnSettings", "value": AgentName } | { "type": "SetData", "value": { 
 /**
  * The chat.
  */

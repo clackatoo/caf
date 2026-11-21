@@ -68,6 +68,7 @@ use caf_core::event::{AgentEvent, HostCommand, PolicyAnswer, StorageEvent};
 use caf_core::ids::{AgentName, ChangeNo};
 use caf_core::question::Answer;
 use caf_core::save::{CannotRestore, RestoreChat, SavedChat, SavedState};
+use caf_core::settings::SettingChoice;
 use caf_core::viewer::ChatSummary;
 use caf_core::{
     AppData, AppItem, Chat, ChatId, Core, Directive, Event, Host, NoAppData, NoAppItems, Now,
@@ -637,6 +638,19 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
         self.about(agent, AgentCall::SignOut).await
     }
 
+    /// Learns what settings an agent offers, such as its models, to offer
+    /// them before any chat with it; they show in [`Caf::watch_agents`].
+    /// See [`Core::learn_settings`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::learn_settings`]: caf_core::Core::learn_settings
+    pub async fn learn_settings(&self, agent: &AgentName) -> Result<(), Error> {
+        self.about(agent, AgentCall::LearnSettings).await
+    }
+
     /// Follows which chats are open, with each one's agent and folder.
     #[must_use]
     pub fn watch_chats(&self) -> ChatsWatch {
@@ -834,6 +848,24 @@ impl<A: AppItem, D: AppData> ChatHandle<A, D> {
     pub async fn close(self) -> Result<(), Error> {
         let chat = self.id;
         self.caf.ask(|reply| Command::Close { chat, reply }).await
+    }
+
+    /// Chooses a setting of the chat's agent, such as its model. See
+    /// [`caf_core::Core::set_setting`]; the chat's settings show it
+    /// waiting until the agent answers.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    pub async fn set_setting(&self, choice: SettingChoice) -> Result<(), Error> {
+        let chat = self.id;
+        (self.caf)
+            .ask(|reply| Command::SetSetting {
+                chat,
+                choice,
+                reply,
+            })
+            .await
     }
 
     /// Saves the chat whole and lets it go from memory, to be restored
@@ -1034,6 +1066,9 @@ impl ChatsWatch {
 /// What a watch gets.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
+// A picture is the chat itself, as a watcher reads it: boxing it would
+// change the frozen API for a few hundred bytes.
+#[allow(clippy::large_enum_variant)]
 pub enum Update<A: AppItem = NoAppItems> {
     /// The whole chat, as it is: at the start, and after falling behind.
     Picture(Chat<A>),
@@ -1212,6 +1247,11 @@ enum Command<D: AppData> {
         to: Shelf,
         reply: oneshot::Sender<Result<(), Refused>>,
     },
+    SetSetting {
+        chat: ChatId,
+        choice: SettingChoice,
+        reply: oneshot::Sender<Result<(), Refused>>,
+    },
     SetData {
         chat: ChatId,
         data: D,
@@ -1231,6 +1271,7 @@ enum AgentCall {
     Paste(String),
     StopSignIn,
     SignOut,
+    LearnSettings,
 }
 
 /// A watch's read: what changed in `chat` since `since`, and a way to
@@ -1660,6 +1701,18 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 let result = self.agent(&agent, call);
                 let _ = reply.send(result);
             }
+            Command::SetSetting {
+                chat,
+                choice,
+                reply,
+            } => {
+                let recorded = self.keeping().then(|| choice.clone());
+                let result = self.host(
+                    |core, now, out| core.set_setting(now, chat, choice, out),
+                    |()| recorded.map(|choice| HostCommand::SetSetting { chat, choice }),
+                );
+                let _ = reply.send(result);
+            }
             command @ (Command::ListSaved { .. }
             | Command::Restore { .. }
             | Command::PutAway { .. }
@@ -1804,6 +1857,10 @@ impl<A: AppItem, D: AppData> Task<A, D> {
             AgentCall::SignOut => self.host(
                 |core, now, out| core.sign_out(now, agent, out),
                 |()| Some(HostCommand::SignOut(named())),
+            ),
+            AgentCall::LearnSettings => self.host(
+                |core, now, out| core.learn_settings(now, agent, out),
+                |()| Some(HostCommand::LearnSettings(named())),
             ),
         }
     }

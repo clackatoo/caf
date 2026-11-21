@@ -42,6 +42,10 @@ use crate::question::{
     SlowToOpen,
 };
 use crate::save::{CannotRestore, Entry, Header, RestoreChat, Saved, SavedChat, SavedState};
+use crate::settings::{
+    Choice, KnownSettings, ModelUsed, Setting, SettingChoice, SettingForm, SettingKind,
+    SettingValue, Settings,
+};
 use crate::time::{End, Mono, Now, Wall, Window};
 use crate::viewer::{
     AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
@@ -206,6 +210,10 @@ pub(crate) fn turn() -> Turn {
         window: Window::open(now()),
         items: vec![item()],
         imported: false,
+        model: Some(ModelUsed {
+            id: "sonnet".into(),
+            name: Some("Sonnet 4.6".into()),
+        }),
     }
 }
 
@@ -247,7 +255,56 @@ pub(crate) fn chat() -> Chat {
         turns: vec![turn()],
         usage: Some(usage()),
         questions: vec![question()],
+        settings: settings(),
     }
+}
+
+/// A chat's settings: a model chosen and waiting, effort, and fast mode.
+pub(crate) fn settings() -> Settings {
+    Settings {
+        offered: offered(),
+        chosen: vec![SettingChoice::model("sonnet"), SettingChoice::fast(true)],
+    }
+}
+
+/// What Claude offers, as CAF shows it.
+fn offered() -> Vec<Setting> {
+    let choice = |id: &str, name: &str| Choice {
+        id: id.into(),
+        name: name.into(),
+        description: None,
+        group: None,
+    };
+    vec![
+        Setting {
+            kind: SettingKind::Model,
+            name: "Model".into(),
+            form: SettingForm::Choices(vec![
+                Choice {
+                    description: Some("Opus 4.7, for most work".into()),
+                    ..choice("default", "Default")
+                },
+                choice("sonnet", "Sonnet"),
+                Choice {
+                    group: Some("Older".into()),
+                    ..choice("haiku", "Haiku")
+                },
+            ]),
+            current: Some(SettingValue::Choice("default".into())),
+        },
+        Setting {
+            kind: SettingKind::Effort,
+            name: "Effort".into(),
+            form: SettingForm::Choices(vec![choice("low", "Low"), choice("high", "High")]),
+            current: Some(SettingValue::Choice("high".into())),
+        },
+        Setting {
+            kind: SettingKind::Fast,
+            name: "Fast mode".into(),
+            form: SettingForm::Switch,
+            current: Some(SettingValue::Switch(false)),
+        },
+    ]
 }
 
 fn command() -> SpawnCommand {
@@ -313,6 +370,7 @@ fn recipe() -> Recipe {
 /// An agent's status: installed, and signing in.
 fn agent_status() -> AgentStatus {
     AgentStatus {
+        settings: KnownSettings::Known(offered()),
         name: AgentName("claude".into()),
         install: InstallState::Installed {
             version: "0.98.0".into(),
@@ -585,6 +643,26 @@ pub(crate) fn every_type(s: &mut Samples) {
         profile: Some(profile()),
         chats: vec![ChatId::from_number(1)],
         stderr: vec!["warming up".into()],
+    });
+    // settings
+    s.both(&settings());
+    for setting in offered() {
+        s.both(&setting.kind);
+        s.both(&setting.form);
+        s.both(&setting);
+    }
+    s.both(&Choice {
+        id: "opus[1m]".into(),
+        name: "Opus (1M context)".into(),
+        description: Some("For long sessions".into()),
+        group: Some("Opus".into()),
+    });
+    s.both(&SettingValue::Switch(true));
+    s.both(&SettingChoice::model("sonnet"));
+    s.both(&KnownSettings::Learning);
+    s.both(&ModelUsed {
+        id: "haiku".into(),
+        name: None,
     });
     // save
     s.both(&Shelf("work".into()));

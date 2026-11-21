@@ -78,6 +78,7 @@ use crate::core::{Refused, SessionChoice};
 use crate::ids::{AgentName, ChangeNo, ChatId, QuestionId, Shelf, TurnId};
 use crate::question::Answer;
 use crate::save::{CannotRestore, SavedChat};
+use crate::settings::SettingChoice;
 
 /// The versions of the viewer wire this CAF speaks.
 pub const VERSIONS: RangeInclusive<u32> = 1..=1;
@@ -150,6 +151,17 @@ pub enum FromViewer {
         /// The chat.
         chat: ChatId,
     },
+    /// Choose a setting of a chat's agent, such as its model. See
+    /// [`Core::set_setting`](crate::Core::set_setting). Allowed as the
+    /// rest of acting on chats is ([`Rights::act`]).
+    Set {
+        /// The viewer's number for this request.
+        request: RequestNo,
+        /// The chat.
+        chat: ChatId,
+        /// The choice.
+        choice: SettingChoice,
+    },
     /// Ask to restore a saved chat, as [`ToViewer::Saved`] lists them.
     /// The host decides, as for opening one.
     Restore {
@@ -191,6 +203,9 @@ pub enum AgentAction {
     StopSignIn,
     /// Sign out of it.
     SignOut,
+    /// Learn what settings it offers. See
+    /// [`Core::learn_settings`](crate::Core::learn_settings).
+    LearnSettings,
 }
 
 /// A message from CAF to a viewer.

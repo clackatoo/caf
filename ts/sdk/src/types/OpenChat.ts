@@ -2,6 +2,7 @@
 import type { AgentName } from "./AgentName.ts";
 import type { McpServer } from "./McpServer.ts";
 import type { SessionChoice } from "./SessionChoice.ts";
+import type { SettingChoice } from "./SettingChoice.ts";
 import type { Shelf } from "./Shelf.ts";
 
 /**
@@ -39,4 +40,14 @@ shelf: Shelf | null,
  * saved: the host gives them again when it restores the chat
  * ([`RestoreChat::instructions`](crate::save::RestoreChat::instructions)).
  */
-instructions: string | null, };
+instructions: string | null, 
+/**
+ * Choices for the agent's settings, such as its model, by the agent's
+ * own ids: applied as its session opens, before any message goes,
+ * over the host's defaults for the agent. One the agent doesn't offer
+ * fails the chat's first message, saying so (see
+ * [`settings`](crate::settings)). Empty (the default) leaves the
+ * host's defaults, then the agent's own. Recordings made before it
+ * was added read as empty.
+ */
+settings: Array<SettingChoice>, };

@@ -7,6 +7,7 @@
 //! until they do. [`Seen`] walks a value and notes every variant in it,
 //! however deep.
 
+use crate::settings::{KnownSettings, Setting, SettingForm, SettingKind, SettingValue, Settings};
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
@@ -59,6 +60,7 @@ kinds!(FromViewer {
     "Close" => FromViewer::Close { .. },
     "Restore" => FromViewer::Restore { .. },
     "Agent" => FromViewer::Agent { .. },
+    "Set" => FromViewer::Set { .. },
 });
 
 kinds!(AgentAction {
@@ -68,6 +70,7 @@ kinds!(AgentAction {
     "Paste" => AgentAction::Paste(_),
     "StopSignIn" => AgentAction::StopSignIn,
     "SignOut" => AgentAction::SignOut,
+    "LearnSettings" => AgentAction::LearnSettings,
 });
 
 kinds!(ToViewer {
@@ -151,6 +154,7 @@ kinds!(Refused {
     "Loaded" => Refused::Loaded,
     "BadShelf" => Refused::BadShelf,
     "OwnTools" => Refused::OwnTools,
+    "NoSuchSetting" => Refused::NoSuchSetting,
 });
 
 kinds!(SessionChoice {
@@ -185,6 +189,7 @@ kinds!(Change {
     "Usage" => Change::Usage(_),
     "QuestionAsked" => Change::QuestionAsked(_),
     "QuestionGone" => Change::QuestionGone(_),
+    "Settings" => Change::Settings(_),
 });
 
 kinds!(Mismatch {
@@ -254,6 +259,7 @@ kinds!(FailureReason {
     "DidNotStop" => FailureReason::DidNotStop,
     "BadAnswer" => FailureReason::BadAnswer,
     "Other" => FailureReason::Other,
+    "SettingNotApplied" => FailureReason::SettingNotApplied,
 });
 
 kinds!(Remedy {
@@ -313,6 +319,8 @@ kinds!(Note {
     "NotInstalled" => Note::NotInstalled,
     "InstallFailed" => Note::InstallFailed,
     "SignedIn" => Note::SignedIn,
+    "AgentChanged" => Note::AgentChanged(_),
+    "NotOffered" => Note::NotOffered(_),
 });
 
 kinds!(QuestionKind {
@@ -439,6 +447,10 @@ impl Seen {
         if let SignInState::SignedIn(how) = &agent.sign_in {
             self.mark(how);
         }
+        self.mark(&agent.settings);
+        if let KnownSettings::Known(offered) = &agent.settings {
+            offered.iter().for_each(|setting| self.offered(setting));
+        }
     }
 
     /// A change, and everything in it.
@@ -446,6 +458,7 @@ impl Seen {
         self.mark(change);
         match change {
             Change::State(state) => self.state(state),
+            Change::Settings(settings) => self.settings(settings),
             Change::TurnAdded(turn) | Change::TurnInserted { turn, .. } => self.turn(turn),
             Change::TurnLife { life, end, .. } => {
                 self.life(life);
@@ -464,6 +477,28 @@ impl Seen {
         self.state(&chat.state);
         chat.turns.iter().for_each(|turn| self.turn(turn));
         (chat.questions.iter()).for_each(|question| self.question(question));
+        self.settings(&chat.settings);
+    }
+
+    /// A chat's settings, and everything in them.
+    fn settings(&mut self, settings: &Settings) {
+        settings
+            .offered
+            .iter()
+            .for_each(|setting| self.offered(setting));
+        for choice in &settings.chosen {
+            self.mark(&choice.kind);
+            self.mark(&choice.value);
+        }
+    }
+
+    /// A setting an agent offers.
+    fn offered(&mut self, setting: &Setting) {
+        self.mark(&setting.kind);
+        self.mark(&setting.form);
+        if let Some(value) = &setting.current {
+            self.mark(value);
+        }
     }
 
     fn state(&mut self, state: &ChatState) {
@@ -528,3 +563,26 @@ impl Seen {
         }
     }
 }
+
+kinds!(SettingKind {
+    "Model" => SettingKind::Model,
+    "Effort" => SettingKind::Effort,
+    "Fast" => SettingKind::Fast,
+});
+
+kinds!(SettingForm {
+    "Choices" => SettingForm::Choices(_),
+    "Switch" => SettingForm::Switch,
+});
+
+kinds!(SettingValue {
+    "Choice" => SettingValue::Choice(_),
+    "Switch" => SettingValue::Switch(_),
+});
+
+kinds!(KnownSettings {
+    "Unknown" => KnownSettings::Unknown,
+    "Learning" => KnownSettings::Learning,
+    "Known" => KnownSettings::Known(_),
+    "Failed" => KnownSettings::Failed(_),
+});

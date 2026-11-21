@@ -350,6 +350,17 @@ impl<A: AppItem, D: AppData> Link<A, D> {
                 .await;
                 (request, outcome)
             }
+            FromViewer::Set {
+                request,
+                chat,
+                choice,
+            } => {
+                let outcome = act(caf, rules, |caf| async move {
+                    (caf.chat(chat).set_setting(choice).await).map(|()| Outcome::Done)
+                })
+                .await;
+                (request, outcome)
+            }
             FromViewer::Close { request, chat } => {
                 let outcome = act(caf, rules, |caf| async move {
                     caf.chat(chat).close().await.map(|()| Outcome::Done)
@@ -475,6 +486,7 @@ async fn about<A: AppItem, D: AppData>(
         AgentAction::Paste(text) => caf.paste(agent, text).await,
         AgentAction::StopSignIn => caf.stop_sign_in(agent).await,
         AgentAction::SignOut => caf.sign_out(agent).await,
+        AgentAction::LearnSettings => caf.learn_settings(agent).await,
         // One added in a later version of the wire, which this CAF can't
         // do.
         _ => return Outcome::NotAllowed,

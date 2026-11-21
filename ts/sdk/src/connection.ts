@@ -16,6 +16,7 @@ import type {
   Refused,
   Rights,
   SavedChat,
+  SettingChoice,
   Shelf,
   TurnId,
   UserMessage,
@@ -474,6 +475,16 @@ export class Connection {
     return this.#request("Opened", (no) => ({ type: "Restore", value: { request: no, chat, shelf } }));
   }
 
+  /**
+   * Chooses a setting of a chat's agent, such as its model, by the
+   * agent's own id: the chat's `settings` show it waiting until the agent
+   * answers. A change made while the agent is answering applies from the
+   * next message. The host may reject it with `NotAllowed`.
+   */
+  setSetting(chat: ChatId, choice: SettingChoice): Promise<void> {
+    return this.#request("Done", (no) => ({ type: "Set", value: { request: no, chat, choice } }));
+  }
+
   /** Sends a message, resolving with its turn once the core has taken it. */
   send(chat: ChatId, message: UserMessage): Promise<TurnId> {
     return this.#request("Sent", (no) => ({ type: "Send", value: { request: no, chat, message } }));
@@ -531,6 +542,15 @@ export class Connection {
   /** Signs out of an agent. */
   signOut(agent: AgentName): Promise<void> {
     return this.#agent(agent, { type: "SignOut" });
+  }
+
+  /**
+   * Learns what settings an agent offers, such as its models, to offer
+   * them before any chat with it: they show in `agents`. It costs nothing:
+   * no message is sent.
+   */
+  learnSettings(agent: AgentName): Promise<void> {
+    return this.#agent(agent, { type: "LearnSettings" });
   }
 
   /** Ends the link. */

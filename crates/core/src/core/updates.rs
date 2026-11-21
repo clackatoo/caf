@@ -463,6 +463,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 window: Window::unknown(),
                 items: Vec::new(),
                 imported: true,
+                model: None,
             });
         }
     }

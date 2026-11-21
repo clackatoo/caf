@@ -32,6 +32,7 @@ use crate::question::{
     SlowToOpen,
 };
 use crate::save::{CannotRestore, Header, SavedChat, SavedState};
+use crate::settings::{KnownSettings, SettingChoice};
 use crate::time::{End, Wall, Window};
 use crate::viewer::{
     AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
@@ -96,6 +97,7 @@ fn turn(id: u64, starter: Starter, life: TurnLife, window: Window, items: Vec<It
         window,
         items,
         imported: false,
+        model: None,
     }
 }
 
@@ -161,9 +163,11 @@ fn chat() -> Chat {
         Note::NotInstalled,
         Note::InstallFailed,
         Note::SignedIn,
+        Note::AgentChanged(SettingChoice::model("sonnet")),
+        Note::NotOffered(SettingChoice::fast(true)),
     ];
     // 24 to 34 are taken, so the newer notes follow.
-    let notes = (notes.into_iter().zip([21, 22, 23, 41, 42, 43]))
+    let notes = (notes.into_iter().zip([21, 22, 23, 41, 42, 43, 44, 45]))
         .map(|(note, id)| item(id, ended(300, 300), ItemKind::Note(note)))
         .collect();
     let mut imported = turn(
@@ -259,6 +263,7 @@ fn chat() -> Chat {
                 }),
             },
         ],
+        settings: crate::shape::settings(),
     }
 }
 
@@ -308,6 +313,7 @@ fn changes() -> Vec<Change> {
         FailureReason::AgentStopped,
         FailureReason::DidNotStop,
         FailureReason::BadAnswer,
+        FailureReason::SettingNotApplied,
         FailureReason::Other,
     ];
     let remedies = [
@@ -333,6 +339,7 @@ fn changes() -> Vec<Change> {
         end: End::At(wall(900)),
     };
     let mut changes: Vec<Change> = states.into_iter().map(Change::State).collect();
+    changes.push(Change::Settings(crate::shape::settings()));
     changes.push(Change::TurnAdded(turn(
         30,
         Starter::User(UserMessage::text("And the docs")),
@@ -462,6 +469,13 @@ fn agents() -> Vec<AgentStatus> {
         .zip(sign_ins.into_iter().cycle())
         .enumerate())
     .map(|(at, (install, sign_in))| AgentStatus {
+        settings: [
+            KnownSettings::Unknown,
+            KnownSettings::Learning,
+            KnownSettings::Known(crate::shape::settings().offered),
+            KnownSettings::Failed("the agent didn't start".into()),
+        ][at % 4]
+            .clone(),
         name: AgentName(format!("agent-{at}")),
         // Both ways, and always while signing in, as the core says it.
         can_sign_in: matches!(sign_in, SignInState::SigningIn(_)) || at % 2 == 0,
@@ -534,6 +548,7 @@ fn version_1() -> Sample {
         AgentAction::Paste("code#state".into()),
         AgentAction::StopSignIn,
         AgentAction::SignOut,
+        AgentAction::LearnSettings,
     ];
     from_viewer.extend((actions.into_iter().zip(10..)).map(|(action, request)| {
         FromViewer::Agent {
@@ -542,6 +557,11 @@ fn version_1() -> Sample {
             action,
         }
     }));
+    from_viewer.push(FromViewer::Set {
+        request: RequestNo(21),
+        chat: ChatId::from_number(1),
+        choice: SettingChoice::effort("high"),
+    });
     from_viewer.push(FromViewer::Restore {
         request: RequestNo(20),
         chat: ChatId::from_number(2),
@@ -567,6 +587,7 @@ fn version_1() -> Sample {
         Refused::Loaded,
         Refused::BadShelf,
         Refused::OwnTools,
+        Refused::NoSuchSetting,
     ];
     let outcomes = [
         Outcome::Opened(ChatId::from_number(1)),

@@ -196,6 +196,32 @@
       }
     },
     {
+      "type": "Agent",
+      "value": {
+        "request": 16,
+        "agent": "claude",
+        "action": {
+          "type": "LearnSettings"
+        }
+      }
+    },
+    {
+      "type": "Set",
+      "value": {
+        "request": 21,
+        "chat": "00000000-0000-0000-0000-000000000001",
+        "choice": {
+          "kind": {
+            "type": "Effort"
+          },
+          "value": {
+            "type": "Choice",
+            "value": "high"
+          }
+        }
+      }
+    },
+    {
       "type": "Restore",
       "value": {
         "request": 20,
@@ -299,7 +325,8 @@
                   }
                 }
               ],
-              "imported": true
+              "imported": true,
+              "model": null
             },
             {
               "id": 17,
@@ -645,7 +672,8 @@
                   }
                 }
               ],
-              "imported": false
+              "imported": false,
+              "model": null
             },
             {
               "id": 18,
@@ -764,9 +792,62 @@
                       "type": "SignedIn"
                     }
                   }
+                },
+                {
+                  "id": 44,
+                  "window": {
+                    "start": 1800000000300,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000300
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Note",
+                    "value": {
+                      "type": "AgentChanged",
+                      "value": {
+                        "kind": {
+                          "type": "Model"
+                        },
+                        "value": {
+                          "type": "Choice",
+                          "value": "sonnet"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "id": 45,
+                  "window": {
+                    "start": 1800000000300,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000300
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Note",
+                    "value": {
+                      "type": "NotOffered",
+                      "value": {
+                        "kind": {
+                          "type": "Fast"
+                        },
+                        "value": {
+                          "type": "Switch",
+                          "value": true
+                        }
+                      }
+                    }
+                  }
                 }
               ],
-              "imported": false
+              "imported": false,
+              "model": null
             },
             {
               "id": 19,
@@ -798,7 +879,8 @@
                   }
                 }
               ],
-              "imported": false
+              "imported": false,
+              "model": null
             },
             {
               "id": 24,
@@ -826,7 +908,8 @@
                 }
               },
               "items": [],
-              "imported": false
+              "imported": false,
+              "model": null
             },
             {
               "id": 25,
@@ -844,7 +927,8 @@
                 }
               },
               "items": [],
-              "imported": false
+              "imported": false,
+              "model": null
             }
           ],
           "usage": {
@@ -924,7 +1008,104 @@
                 }
               }
             }
-          ]
+          ],
+          "settings": {
+            "offered": [
+              {
+                "kind": {
+                  "type": "Model"
+                },
+                "name": "Model",
+                "form": {
+                  "type": "Choices",
+                  "value": [
+                    {
+                      "id": "default",
+                      "name": "Default",
+                      "description": "Opus 4.7, for most work",
+                      "group": null
+                    },
+                    {
+                      "id": "sonnet",
+                      "name": "Sonnet",
+                      "description": null,
+                      "group": null
+                    },
+                    {
+                      "id": "haiku",
+                      "name": "Haiku",
+                      "description": null,
+                      "group": "Older"
+                    }
+                  ]
+                },
+                "current": {
+                  "type": "Choice",
+                  "value": "default"
+                }
+              },
+              {
+                "kind": {
+                  "type": "Effort"
+                },
+                "name": "Effort",
+                "form": {
+                  "type": "Choices",
+                  "value": [
+                    {
+                      "id": "low",
+                      "name": "Low",
+                      "description": null,
+                      "group": null
+                    },
+                    {
+                      "id": "high",
+                      "name": "High",
+                      "description": null,
+                      "group": null
+                    }
+                  ]
+                },
+                "current": {
+                  "type": "Choice",
+                  "value": "high"
+                }
+              },
+              {
+                "kind": {
+                  "type": "Fast"
+                },
+                "name": "Fast mode",
+                "form": {
+                  "type": "Switch"
+                },
+                "current": {
+                  "type": "Switch",
+                  "value": false
+                }
+              }
+            ],
+            "chosen": [
+              {
+                "kind": {
+                  "type": "Model"
+                },
+                "value": {
+                  "type": "Choice",
+                  "value": "sonnet"
+                }
+              },
+              {
+                "kind": {
+                  "type": "Fast"
+                },
+                "value": {
+                  "type": "Switch",
+                  "value": true
+                }
+              }
+            ]
+          }
         },
         "latest": 5
       }
@@ -1199,6 +1380,109 @@
           {
             "no": 24,
             "change": {
+              "type": "Settings",
+              "value": {
+                "offered": [
+                  {
+                    "kind": {
+                      "type": "Model"
+                    },
+                    "name": "Model",
+                    "form": {
+                      "type": "Choices",
+                      "value": [
+                        {
+                          "id": "default",
+                          "name": "Default",
+                          "description": "Opus 4.7, for most work",
+                          "group": null
+                        },
+                        {
+                          "id": "sonnet",
+                          "name": "Sonnet",
+                          "description": null,
+                          "group": null
+                        },
+                        {
+                          "id": "haiku",
+                          "name": "Haiku",
+                          "description": null,
+                          "group": "Older"
+                        }
+                      ]
+                    },
+                    "current": {
+                      "type": "Choice",
+                      "value": "default"
+                    }
+                  },
+                  {
+                    "kind": {
+                      "type": "Effort"
+                    },
+                    "name": "Effort",
+                    "form": {
+                      "type": "Choices",
+                      "value": [
+                        {
+                          "id": "low",
+                          "name": "Low",
+                          "description": null,
+                          "group": null
+                        },
+                        {
+                          "id": "high",
+                          "name": "High",
+                          "description": null,
+                          "group": null
+                        }
+                      ]
+                    },
+                    "current": {
+                      "type": "Choice",
+                      "value": "high"
+                    }
+                  },
+                  {
+                    "kind": {
+                      "type": "Fast"
+                    },
+                    "name": "Fast mode",
+                    "form": {
+                      "type": "Switch"
+                    },
+                    "current": {
+                      "type": "Switch",
+                      "value": false
+                    }
+                  }
+                ],
+                "chosen": [
+                  {
+                    "kind": {
+                      "type": "Model"
+                    },
+                    "value": {
+                      "type": "Choice",
+                      "value": "sonnet"
+                    }
+                  },
+                  {
+                    "kind": {
+                      "type": "Fast"
+                    },
+                    "value": {
+                      "type": "Switch",
+                      "value": true
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "no": 25,
+            "change": {
               "type": "TurnAdded",
               "value": {
                 "id": 30,
@@ -1223,12 +1507,13 @@
                   }
                 },
                 "items": [],
-                "imported": false
+                "imported": false,
+                "model": null
               }
             }
           },
           {
-            "no": 25,
+            "no": 26,
             "change": {
               "type": "TurnInserted",
               "value": {
@@ -1267,13 +1552,14 @@
                       }
                     }
                   ],
-                  "imported": false
+                  "imported": false,
+                  "model": null
                 }
               }
             }
           },
           {
-            "no": 26,
+            "no": 27,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1288,7 +1574,7 @@
             }
           },
           {
-            "no": 27,
+            "no": 28,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1303,7 +1589,7 @@
             }
           },
           {
-            "no": 28,
+            "no": 29,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1318,7 +1604,7 @@
             }
           },
           {
-            "no": 29,
+            "no": 30,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1334,7 +1620,7 @@
             }
           },
           {
-            "no": 30,
+            "no": 31,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1350,7 +1636,7 @@
             }
           },
           {
-            "no": 31,
+            "no": 32,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1366,7 +1652,7 @@
             }
           },
           {
-            "no": 32,
+            "no": 33,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1391,7 +1677,7 @@
             }
           },
           {
-            "no": 33,
+            "no": 34,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1416,7 +1702,7 @@
             }
           },
           {
-            "no": 34,
+            "no": 35,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1441,7 +1727,7 @@
             }
           },
           {
-            "no": 35,
+            "no": 36,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1464,7 +1750,7 @@
             }
           },
           {
-            "no": 36,
+            "no": 37,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1489,7 +1775,7 @@
             }
           },
           {
-            "no": 37,
+            "no": 38,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1514,7 +1800,7 @@
             }
           },
           {
-            "no": 38,
+            "no": 39,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1539,7 +1825,7 @@
             }
           },
           {
-            "no": 39,
+            "no": 40,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1562,7 +1848,7 @@
             }
           },
           {
-            "no": 40,
+            "no": 41,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1587,7 +1873,7 @@
             }
           },
           {
-            "no": 41,
+            "no": 42,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1612,7 +1898,7 @@
             }
           },
           {
-            "no": 42,
+            "no": 43,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1637,7 +1923,7 @@
             }
           },
           {
-            "no": 43,
+            "no": 44,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1646,7 +1932,7 @@
                   "type": "Failed",
                   "value": {
                     "reason": {
-                      "type": "Other"
+                      "type": "SettingNotApplied"
                     },
                     "agent_said": null,
                     "remedy": null
@@ -1660,7 +1946,32 @@
             }
           },
           {
-            "no": 44,
+            "no": 45,
+            "change": {
+              "type": "TurnLife",
+              "value": {
+                "turn": 19,
+                "life": {
+                  "type": "Failed",
+                  "value": {
+                    "reason": {
+                      "type": "Other"
+                    },
+                    "agent_said": "Try again at 5pm",
+                    "remedy": {
+                      "type": "SendAgain"
+                    }
+                  }
+                },
+                "end": {
+                  "type": "At",
+                  "value": 1800000000900
+                }
+              }
+            }
+          },
+          {
+            "no": 46,
             "change": {
               "type": "ItemAdded",
               "value": {
@@ -1696,7 +2007,7 @@
             }
           },
           {
-            "no": 45,
+            "no": 47,
             "change": {
               "type": "Appended",
               "value": {
@@ -1706,7 +2017,7 @@
             }
           },
           {
-            "no": 46,
+            "no": 48,
             "change": {
               "type": "ToolChanged",
               "value": {
@@ -1729,7 +2040,7 @@
             }
           },
           {
-            "no": 47,
+            "no": 49,
             "change": {
               "type": "ItemEnded",
               "value": {
@@ -1742,7 +2053,7 @@
             }
           },
           {
-            "no": 48,
+            "no": 50,
             "change": {
               "type": "Usage",
               "value": {
@@ -1753,7 +2064,7 @@
             }
           },
           {
-            "no": 49,
+            "no": 51,
             "change": {
               "type": "QuestionAsked",
               "value": {
@@ -1784,7 +2095,7 @@
             }
           },
           {
-            "no": 50,
+            "no": 52,
             "change": {
               "type": "QuestionGone",
               "value": 26
@@ -1811,7 +2122,10 @@
             "type": "Unknown"
           },
           "can_sign_in": true,
-          "own_tools_off": false
+          "own_tools_off": false,
+          "settings": {
+            "type": "Unknown"
+          }
         },
         {
           "name": "agent-1",
@@ -1822,7 +2136,10 @@
             "type": "SignedOut"
           },
           "can_sign_in": false,
-          "own_tools_off": true
+          "own_tools_off": true,
+          "settings": {
+            "type": "Learning"
+          }
         },
         {
           "name": "agent-2",
@@ -1841,7 +2158,85 @@
             }
           },
           "can_sign_in": true,
-          "own_tools_off": true
+          "own_tools_off": true,
+          "settings": {
+            "type": "Known",
+            "value": [
+              {
+                "kind": {
+                  "type": "Model"
+                },
+                "name": "Model",
+                "form": {
+                  "type": "Choices",
+                  "value": [
+                    {
+                      "id": "default",
+                      "name": "Default",
+                      "description": "Opus 4.7, for most work",
+                      "group": null
+                    },
+                    {
+                      "id": "sonnet",
+                      "name": "Sonnet",
+                      "description": null,
+                      "group": null
+                    },
+                    {
+                      "id": "haiku",
+                      "name": "Haiku",
+                      "description": null,
+                      "group": "Older"
+                    }
+                  ]
+                },
+                "current": {
+                  "type": "Choice",
+                  "value": "default"
+                }
+              },
+              {
+                "kind": {
+                  "type": "Effort"
+                },
+                "name": "Effort",
+                "form": {
+                  "type": "Choices",
+                  "value": [
+                    {
+                      "id": "low",
+                      "name": "Low",
+                      "description": null,
+                      "group": null
+                    },
+                    {
+                      "id": "high",
+                      "name": "High",
+                      "description": null,
+                      "group": null
+                    }
+                  ]
+                },
+                "current": {
+                  "type": "Choice",
+                  "value": "high"
+                }
+              },
+              {
+                "kind": {
+                  "type": "Fast"
+                },
+                "name": "Fast mode",
+                "form": {
+                  "type": "Switch"
+                },
+                "current": {
+                  "type": "Switch",
+                  "value": false
+                }
+              }
+            ]
+          }
         },
         {
           "name": "agent-3",
@@ -1861,7 +2256,11 @@
             }
           },
           "can_sign_in": true,
-          "own_tools_off": false
+          "own_tools_off": false,
+          "settings": {
+            "type": "Failed",
+            "value": "the agent didn't start"
+          }
         },
         {
           "name": "agent-4",
@@ -1878,7 +2277,10 @@
             }
           },
           "can_sign_in": true,
-          "own_tools_off": true
+          "own_tools_off": true,
+          "settings": {
+            "type": "Unknown"
+          }
         },
         {
           "name": "agent-5",
@@ -1899,7 +2301,10 @@
             }
           },
           "can_sign_in": false,
-          "own_tools_off": true
+          "own_tools_off": true,
+          "settings": {
+            "type": "Learning"
+          }
         },
         {
           "name": "agent-6",
@@ -1920,7 +2325,85 @@
             }
           },
           "can_sign_in": true,
-          "own_tools_off": false
+          "own_tools_off": false,
+          "settings": {
+            "type": "Known",
+            "value": [
+              {
+                "kind": {
+                  "type": "Model"
+                },
+                "name": "Model",
+                "form": {
+                  "type": "Choices",
+                  "value": [
+                    {
+                      "id": "default",
+                      "name": "Default",
+                      "description": "Opus 4.7, for most work",
+                      "group": null
+                    },
+                    {
+                      "id": "sonnet",
+                      "name": "Sonnet",
+                      "description": null,
+                      "group": null
+                    },
+                    {
+                      "id": "haiku",
+                      "name": "Haiku",
+                      "description": null,
+                      "group": "Older"
+                    }
+                  ]
+                },
+                "current": {
+                  "type": "Choice",
+                  "value": "default"
+                }
+              },
+              {
+                "kind": {
+                  "type": "Effort"
+                },
+                "name": "Effort",
+                "form": {
+                  "type": "Choices",
+                  "value": [
+                    {
+                      "id": "low",
+                      "name": "Low",
+                      "description": null,
+                      "group": null
+                    },
+                    {
+                      "id": "high",
+                      "name": "High",
+                      "description": null,
+                      "group": null
+                    }
+                  ]
+                },
+                "current": {
+                  "type": "Choice",
+                  "value": "high"
+                }
+              },
+              {
+                "kind": {
+                  "type": "Fast"
+                },
+                "name": "Fast mode",
+                "form": {
+                  "type": "Switch"
+                },
+                "current": {
+                  "type": "Switch",
+                  "value": false
+                }
+              }
+            ]
+          }
         },
         {
           "name": "agent-7",
@@ -1937,7 +2420,11 @@
             }
           },
           "can_sign_in": false,
-          "own_tools_off": true
+          "own_tools_off": true,
+          "settings": {
+            "type": "Failed",
+            "value": "the agent didn't start"
+          }
         },
         {
           "name": "agent-8",
@@ -1951,7 +2438,10 @@
             "type": "Unknown"
           },
           "can_sign_in": true,
-          "own_tools_off": true
+          "own_tools_off": true,
+          "settings": {
+            "type": "Unknown"
+          }
         },
         {
           "name": "agent-9",
@@ -1965,7 +2455,10 @@
             "type": "SignedOut"
           },
           "can_sign_in": false,
-          "own_tools_off": false
+          "own_tools_off": false,
+          "settings": {
+            "type": "Learning"
+          }
         },
         {
           "name": "agent-10",
@@ -1987,7 +2480,85 @@
             }
           },
           "can_sign_in": true,
-          "own_tools_off": true
+          "own_tools_off": true,
+          "settings": {
+            "type": "Known",
+            "value": [
+              {
+                "kind": {
+                  "type": "Model"
+                },
+                "name": "Model",
+                "form": {
+                  "type": "Choices",
+                  "value": [
+                    {
+                      "id": "default",
+                      "name": "Default",
+                      "description": "Opus 4.7, for most work",
+                      "group": null
+                    },
+                    {
+                      "id": "sonnet",
+                      "name": "Sonnet",
+                      "description": null,
+                      "group": null
+                    },
+                    {
+                      "id": "haiku",
+                      "name": "Haiku",
+                      "description": null,
+                      "group": "Older"
+                    }
+                  ]
+                },
+                "current": {
+                  "type": "Choice",
+                  "value": "default"
+                }
+              },
+              {
+                "kind": {
+                  "type": "Effort"
+                },
+                "name": "Effort",
+                "form": {
+                  "type": "Choices",
+                  "value": [
+                    {
+                      "id": "low",
+                      "name": "Low",
+                      "description": null,
+                      "group": null
+                    },
+                    {
+                      "id": "high",
+                      "name": "High",
+                      "description": null,
+                      "group": null
+                    }
+                  ]
+                },
+                "current": {
+                  "type": "Choice",
+                  "value": "high"
+                }
+              },
+              {
+                "kind": {
+                  "type": "Fast"
+                },
+                "name": "Fast mode",
+                "form": {
+                  "type": "Switch"
+                },
+                "current": {
+                  "type": "Switch",
+                  "value": false
+                }
+              }
+            ]
+          }
         },
         {
           "name": "agent-11",
@@ -2009,7 +2580,11 @@
             }
           },
           "can_sign_in": true,
-          "own_tools_off": true
+          "own_tools_off": true,
+          "settings": {
+            "type": "Failed",
+            "value": "the agent didn't start"
+          }
         },
         {
           "name": "agent-12",
@@ -2029,7 +2604,10 @@
             }
           },
           "can_sign_in": true,
-          "own_tools_off": false
+          "own_tools_off": false,
+          "settings": {
+            "type": "Unknown"
+          }
         },
         {
           "name": "agent-13",
@@ -2049,7 +2627,10 @@
             }
           },
           "can_sign_in": false,
-          "own_tools_off": true
+          "own_tools_off": true,
+          "settings": {
+            "type": "Learning"
+          }
         },
         {
           "name": "agent-14",
@@ -2070,7 +2651,85 @@
             }
           },
           "can_sign_in": true,
-          "own_tools_off": true
+          "own_tools_off": true,
+          "settings": {
+            "type": "Known",
+            "value": [
+              {
+                "kind": {
+                  "type": "Model"
+                },
+                "name": "Model",
+                "form": {
+                  "type": "Choices",
+                  "value": [
+                    {
+                      "id": "default",
+                      "name": "Default",
+                      "description": "Opus 4.7, for most work",
+                      "group": null
+                    },
+                    {
+                      "id": "sonnet",
+                      "name": "Sonnet",
+                      "description": null,
+                      "group": null
+                    },
+                    {
+                      "id": "haiku",
+                      "name": "Haiku",
+                      "description": null,
+                      "group": "Older"
+                    }
+                  ]
+                },
+                "current": {
+                  "type": "Choice",
+                  "value": "default"
+                }
+              },
+              {
+                "kind": {
+                  "type": "Effort"
+                },
+                "name": "Effort",
+                "form": {
+                  "type": "Choices",
+                  "value": [
+                    {
+                      "id": "low",
+                      "name": "Low",
+                      "description": null,
+                      "group": null
+                    },
+                    {
+                      "id": "high",
+                      "name": "High",
+                      "description": null,
+                      "group": null
+                    }
+                  ]
+                },
+                "current": {
+                  "type": "Choice",
+                  "value": "high"
+                }
+              },
+              {
+                "kind": {
+                  "type": "Fast"
+                },
+                "name": "Fast mode",
+                "form": {
+                  "type": "Switch"
+                },
+                "current": {
+                  "type": "Switch",
+                  "value": false
+                }
+              }
+            ]
+          }
         }
       ]
     },
@@ -2548,6 +3207,18 @@
           "type": "Refused",
           "value": {
             "type": "OwnTools"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 26,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "NoSuchSetting"
           }
         }
       }

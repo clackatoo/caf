@@ -98,6 +98,17 @@
 //! so the chat asks the user to sign in. The user's model choice still
 //! applies.
 //!
+//! Its **settings** ([`settings`](crate::settings)) are ACP's session
+//! config options: `model` (category `model`), `effort` (category
+//! `thought_level`, its levels depending on the model) and fast mode, set
+//! with `session/set_config_option`; it declares that it takes on/off
+//! options (`session.configOptions.boolean`). The rest it offers (its
+//! modes, `ultracode`, `agent`) stay hidden, as it set them. It reads the
+//! user's own `settings.model` even with no settings sources, and on
+//! resume prefers it to the session's own model, so CAF always applies the
+//! chat's choice itself once a session opens. A model the agent changes
+//! by itself, such as on a refusal, it reports in `config_option_update`.
+//!
 //! It declares **nothing of JetBrains AIR**. Any AIR key switches the
 //! adapter into AIR's shapes for the whole connection: reads and searches
 //! arrive without their text, subagents' words stop, failures move into

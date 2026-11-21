@@ -42,6 +42,7 @@ use crate::install::Recipe;
 use crate::profiles::ProfileReport;
 use crate::question::Answer;
 use crate::save::{RestoreChat, SavedChat};
+use crate::settings::SettingChoice;
 use crate::time::{Mono, Now};
 
 /// The most of a change that didn't fit that's reported, in bytes.
@@ -146,6 +147,15 @@ pub struct OpenChat {
     /// saved: the host gives them again when it restores the chat
     /// ([`RestoreChat::instructions`](crate::save::RestoreChat::instructions)).
     pub instructions: Option<String>,
+    /// Choices for the agent's settings, such as its model, by the agent's
+    /// own ids: applied as its session opens, before any message goes,
+    /// over the host's defaults for the agent. One the agent doesn't offer
+    /// fails the chat's first message, saying so (see
+    /// [`settings`](crate::settings)). Empty (the default) leaves the
+    /// host's defaults, then the agent's own. Recordings made before it
+    /// was added read as empty.
+    #[serde(default)]
+    pub settings: Vec<SettingChoice>,
 }
 
 impl OpenChat {
@@ -160,6 +170,7 @@ impl OpenChat {
             mcp_servers: Vec::new(),
             shelf: None,
             instructions: None,
+            settings: Vec::new(),
         }
     }
 }
@@ -241,6 +252,11 @@ pub enum Refused {
     /// A chat with it is refused as it's opened, and, as a restored chat's
     /// agent is known only once it's read, as a message is sent to it.
     OwnTools,
+    /// The agent doesn't offer that setting, or that value of it, as far
+    /// as CAF knows: what it offers is in the chat's
+    /// [`Settings::offered`](crate::settings::Settings::offered), once its
+    /// session has opened.
+    NoSuchSetting,
 }
 
 /// What the host can see of a connection: one adapter process.
@@ -760,6 +776,52 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         Ok(())
     }
 
+    /// Chooses a setting of a chat's agent, such as its model, as the
+    /// [`settings`](crate::settings) module says: sent at once, or when
+    /// the turn running ends, or as the session opens; the chat's
+    /// [`Settings`](crate::settings::Settings) show it waiting until the
+    /// agent answers. It's saved with the chat.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::NoSuchChat`], [`Refused::Closed`], or
+    /// [`Refused::NoSuchSetting`] if the chat's agent has said what it
+    /// offers and that isn't among it. Before it has, any choice is taken,
+    /// and checked as the session opens.
+    pub fn set_setting(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        choice: SettingChoice,
+        out: &mut Vec<Directive<A, D>>,
+    ) -> Result<(), Refused> {
+        self.command(now, HostCommand::SetSetting { chat, choice }, out)?;
+        self.finish(now, out);
+        Ok(())
+    }
+
+    /// Learns what settings an agent offers, such as its models, for
+    /// offering them before any chat with it: starts its adapter if none
+    /// runs, opens a session with none of the agent's own tools, reads what
+    /// it offers, and closes it, sending no message, so it costs nothing.
+    /// Where it stands shows in the agent's
+    /// [`AgentStatus::settings`](crate::agent::AgentStatus::settings).
+    /// CAF never does this by itself: every chat's session also tells it.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::NoSuchAgent`], or [`Refused::OwnTools`].
+    pub fn learn_settings(
+        &mut self,
+        now: Now,
+        agent: &AgentName,
+        out: &mut Vec<Directive<A, D>>,
+    ) -> Result<(), Refused> {
+        self.command(now, HostCommand::LearnSettings(agent.clone()), out)?;
+        self.finish(now, out);
+        Ok(())
+    }
+
     /// A chat's data slot: the default until the app sets it.
     #[must_use]
     pub fn data(&self, chat: ChatId) -> Option<&D> {
@@ -908,6 +970,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             HostCommand::Delete { chat, shelf } => self.delete_chat(now, chat, shelf, out),
             HostCommand::MoveShelf { from, to } => self.move_chats(from, to),
             HostCommand::SetData { chat, data } => self.set_chat_data(chat, data),
+            HostCommand::SetSetting { .. } | HostCommand::LearnSettings(_) => todo!(),
             HostCommand::AddAppItem(_) => {
                 report(
                     out,

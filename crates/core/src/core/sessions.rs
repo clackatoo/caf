@@ -86,6 +86,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 turns: Vec::new(),
                 usage: None,
                 questions: Vec::new(),
+                settings: crate::settings::Settings::default(),
             },
         );
         self.logs.insert(chat, Log::new(self.ids.first));
@@ -575,6 +576,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 window: Window::instant(now),
                 items: vec![item],
                 imported: false,
+                model: None,
             },
         );
     }

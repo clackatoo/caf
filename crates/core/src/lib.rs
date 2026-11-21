@@ -36,9 +36,11 @@
 //! agents CAF has profiles for, and signing in to them, each from its
 //! profile's recipe ([`install`]): [`Core::install`], [`Core::sign_in`]
 //! and the rest, with where each agent stands in [`Core::agents`].
-//! Feature 4 adds saving chats and restoring them ([`save`]):
+//! Feature 4 added saving chats and restoring them ([`save`]):
 //! [`Core::restore`], [`Core::put_away`] and the rest, with the app's own
-//! data on each chat ([`AppData`]).
+//! data on each chat ([`AppData`]). Feature 5 adds choosing the agent's
+//! model, its effort and fast mode, for any agent ([`settings`]):
+//! [`Core::set_setting`] and [`Core::learn_settings`].
 //!
 //! The types already hold everything the architecture fixed, so later
 //! features add behaviour without reshaping them. Items and variants
@@ -182,6 +184,7 @@ mod kinds;
 pub mod profiles;
 pub mod question;
 pub mod save;
+pub mod settings;
 #[cfg(test)]
 mod shape;
 pub mod time;
@@ -197,4 +200,5 @@ pub use event::{Event, HostCommand};
 pub use host::Host;
 pub use ids::{ChatId, ItemId, QuestionId, Shelf, Ticket, TurnId};
 pub use save::{RestoreChat, SavedChat};
+pub use settings::SettingChoice;
 pub use time::{Now, Window};

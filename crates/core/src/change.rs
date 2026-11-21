@@ -16,6 +16,7 @@ use crate::chat::{
 };
 use crate::ids::{ChangeNo, ItemId, QuestionId, TurnId};
 use crate::question::Question;
+use crate::settings::Settings;
 use crate::time::End;
 
 /// A change, with its number.
@@ -41,6 +42,9 @@ pub struct Numbered<A: AppItem = NoAppItems> {
 pub enum Change<A: AppItem = NoAppItems> {
     /// The chat's state changed.
     State(ChatState),
+    /// The chat's settings changed: what the agent offers, or what was
+    /// chosen. The whole of them, each time.
+    Settings(Settings),
     /// A turn was added.
     TurnAdded(Turn<A>),
     /// A turn was added before another, rather than at the end. Turns
@@ -150,6 +154,7 @@ impl<A: AppItem> Chat<A> {
     pub fn apply(&mut self, change: &Change<A>) -> Result<(), Mismatch> {
         match change {
             Change::State(state) => self.state = state.clone(),
+            Change::Settings(settings) => self.settings = settings.clone(),
             Change::TurnAdded(turn) => self.turns.push(turn.clone()),
             Change::TurnInserted { before, turn } => {
                 let at = (self.turns.iter().rposition(|each| each.id == *before))
