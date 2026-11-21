@@ -96,8 +96,8 @@ export function webSocket(url: string): Promise<Transport> {
  *
  * A later CAF may send a reason this SDK doesn't know, here in `Refused`
  * and `CannotRestore`, in a saved chat's `Failed`, and in a chat's `Lost`
- * and `FailureReason`. Give every `switch` on a
- * reason a `default`, and show one it doesn't know by its `type`.
+ * and `FailureReason`. Give every `switch` on a reason a `default`, and
+ * show one it doesn't know by its `type`.
  */
 export class CafError extends Error {
   override readonly name = "CafError";
@@ -185,8 +185,8 @@ export type WatchEvent =
  *
  * A later CAF may also send reasons this SDK doesn't know, inside messages
  * it does: a `Refused` or `CannotRestore`, or a chat's `Lost` or
- * `FailureReason`. Give every
- * `switch` on a reason a `default`. See `CafError`.
+ * `FailureReason`. Give every `switch` on a reason a `default`. See
+ * `CafError`.
  */
 export class Connection {
   readonly #transport: Transport;
@@ -367,7 +367,8 @@ export class Connection {
    * and close), and on `agents` (install, and sign in and out). Offer only
    * what it may: anything else is answered `NotAllowed`. A viewer that may
    * not act on agents gets no sign-in's link or code. Whether it may open
-   * chats isn't said, as the host decides each request.
+   * chats, or restore saved ones, isn't said, as the host decides each
+   * request.
    */
   get may(): Readonly<Rights> {
     return this.#may;

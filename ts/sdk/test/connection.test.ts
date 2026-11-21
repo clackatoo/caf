@@ -1093,6 +1093,7 @@ describe("what CAF sends", () => {
     ["Ended for a chat whose id is a number", JSON.stringify({ type: "Ended", value: { chat: 1000 } })],
     ["Saved that isn't a list", JSON.stringify({ type: "Saved", value: {} })],
     ["a saved chat without its header", JSON.stringify({ type: "Saved", value: [{ shelf: "work", state: { type: "Saved" } }] })],
+    ["a saved chat whose id isn't text", JSON.stringify({ type: "Saved", value: [{ ...saved(1100), header: { ...saved(1100).header, chat: 1100 } }] })],
     ["a saved chat without its shelf", JSON.stringify({ type: "Saved", value: [{ ...saved(1100), shelf: null }] })],
     ["a saved chat whose state isn't tagged", JSON.stringify({ type: "Saved", value: [{ ...saved(1100), state: "Saved" }] })],
     ["a Done without its request", JSON.stringify({ type: "Done", value: { outcome: { type: "Done" } } })],
