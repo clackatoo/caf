@@ -68,7 +68,10 @@ pub enum AgentDirective {
         command: SpawnCommand,
         /// The install folder it runs from, if it's CAF's install of an
         /// agent. The driver holds a shared lock on it while the process
-        /// runs, so no CAF program on the machine removes it meanwhile.
+        /// runs, so no CAF program on the machine removes it meanwhile, and
+        /// as it starts the process it touches the folder's `.used` file
+        /// (making it if need be), so a survey can say when the folder was
+        /// last used ([`SetupEvent::Surveyed`](crate::event::SetupEvent::Surveyed)).
         hold: Option<PathBuf>,
     },
     /// Write these bytes to its standard input: whole messages, each
@@ -255,7 +258,7 @@ pub enum SetupDirective {
     Install {
         /// Its ticket.
         ticket: Ticket,
-        /// The folder's name, such as `claude-0.98.0`.
+        /// The folder's name, such as `claude-agent-acp-0.98.0`.
         folder: String,
         /// What to install.
         install: Install,

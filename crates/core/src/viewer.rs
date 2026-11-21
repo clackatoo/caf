@@ -236,6 +236,12 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
     /// Where every agent stands, installed or not and signed in or not:
     /// after `Welcome`, and again whenever any of it changes. The whole
     /// list, each time.
+    ///
+    /// It goes to every viewer, whatever the host lets viewers do, with a
+    /// sign-in's link and code. That's safe to show: the link only asks
+    /// the user to approve the sign-in in their own browser, where they're
+    /// signed in to the provider, and the code is one to type there. Neither
+    /// signs anyone in by itself.
     Agents(Vec<AgentStatus>),
     /// How a request went.
     Done {

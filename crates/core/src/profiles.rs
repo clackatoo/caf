@@ -106,6 +106,18 @@ pub enum Builtin {
 }
 
 impl Builtin {
+    /// A name for it that never changes, whatever a host calls the agent:
+    /// what its install folders are named after.
+    pub(crate) fn slug(self) -> &'static str {
+        match self {
+            Self::ClaudeAgentAcp => "claude-agent-acp",
+            #[cfg(test)]
+            Self::TestNpm => "test-npm",
+            #[cfg(test)]
+            Self::TestDownload => "test-download",
+        }
+    }
+
     /// The name its adapter gives in `initialize`.
     fn adapter_name(self) -> &'static str {
         match self {

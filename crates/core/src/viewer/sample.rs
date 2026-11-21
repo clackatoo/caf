@@ -426,6 +426,7 @@ fn agents() -> Vec<AgentStatus> {
         }),
         InstallState::Cannot(CannotInstall::Npm),
         InstallState::Cannot(CannotInstall::Platform),
+        InstallState::Cannot(CannotInstall::NoRecipe),
         InstallState::Cannot(CannotInstall::Failed(InstallFailure::Offline)),
         InstallState::Cannot(CannotInstall::Failed(InstallFailure::Corrupt)),
         InstallState::Cannot(CannotInstall::Failed(InstallFailure::NoSpace)),

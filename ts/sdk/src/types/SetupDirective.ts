@@ -34,7 +34,7 @@ ticket: Ticket, } } | { "type": "Install", "value": {
  */
 ticket: Ticket, 
 /**
- * The folder's name, such as `claude-0.98.0`.
+ * The folder's name, such as `claude-agent-acp-0.98.0`.
  */
 folder: string, 
 /**

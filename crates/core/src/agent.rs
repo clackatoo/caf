@@ -213,6 +213,9 @@ pub enum CannotInstall {
     Npm,
     /// There's no build of it for this machine.
     Platform,
+    /// CAF has no recipe for installing it: its profile isn't one CAF
+    /// installs, such as the cautious one.
+    NoRecipe,
     /// The last try failed, saying this. Installing again tries again.
     Failed(InstallFailure),
 }

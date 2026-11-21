@@ -12,11 +12,16 @@
 //! # Where installs live
 //!
 //! Each agent's adapter is installed at the version its profile was checked
-//! at, in a folder of its own, `<agent>-<version>`, under one folder every
+//! at, in a folder of its own, named after its profile, never after what a
+//! host calls the agent: `<profile>-<version>`, such as
+//! `claude-agent-acp-0.98.0`. They live under one folder every
 //! CAF program on the machine shares: `$XDG_DATA_HOME/caf/agents/` (by
-//! default `~/.local/share/caf/agents/`). A version stays while any process
-//! runs from it, in any CAF program, and the previous checked version stays
-//! until the new one has started once.
+//! default `~/.local/share/caf/agents/`), so every CAF program that offers
+//! an agent shares one install of it. A version stays while any process
+//! runs from it, in any CAF program. One older than the version a program
+//! pins is removed once that pinned version has started, and only once no
+//! process has started from it for 14 days, so two programs pinning
+//! different versions don't remove each other's.
 
 use std::path::PathBuf;
 
@@ -166,8 +171,8 @@ pub enum EnvValue {
     Text(String),
     /// The agent's private folder, made by CAF, readable only by the user:
     /// for an agent that keeps its sign-in in a folder CAF gives it, as
-    /// Antigravity does. It's `<agent>-private` beside the installs, and it
-    /// outlives every version.
+    /// Antigravity does. It's `<profile>-private` beside the installs, so
+    /// every CAF program shares it, and it outlives every version.
     PrivateFolder,
 }
 
@@ -204,7 +209,8 @@ pub enum LinkFrom {
     /// It opens a browser through `BROWSER`, which the setup driver
     /// points at a program of its own that hands the link to CAF instead.
     Browser,
-    /// It prints the link on a line of its output, after this text.
+    /// It prints the link on a line of its output, standard output or
+    /// error, after this text.
     Output(String),
 }
 

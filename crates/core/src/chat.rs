@@ -126,10 +126,12 @@ pub enum ChatState {
     },
     /// Closed by the host. Nothing more happens to it.
     Closed,
-    /// Waiting for its agent: to be installed, or signed in to. Where the
-    /// agent stands is in its [`AgentStatus`](crate::agent::AgentStatus);
-    /// a view shows that, with Install or Sign in. Messages sent now wait,
-    /// and stopping the chat stops them, with a note.
+    /// Waiting for its agent: to be installed, or signed in to, when a
+    /// sign-in to it was started while it was signed out. Where the agent
+    /// stands is in its [`AgentStatus`](crate::agent::AgentStatus); a view
+    /// shows that, with Install, or the sign-in's link. Messages sent now
+    /// wait, and stopping the chat stops them, with a note if the agent
+    /// isn't installed.
     WaitingForAgent,
 }
 

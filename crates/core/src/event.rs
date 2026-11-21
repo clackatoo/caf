@@ -14,6 +14,7 @@ use crate::core::OpenChat;
 use crate::ids::{AgentName, ChatId, QuestionId, Ticket, TurnId};
 use crate::install::{Platform, SignedInAs};
 use crate::question::Answer;
+use crate::time::Wall;
 
 /// Something that happened.
 #[non_exhaustive]
@@ -242,6 +243,14 @@ pub enum SetupEvent {
         npm: bool,
         /// The machine's platform.
         platform: Platform,
+        /// When each complete install folder was last used, by name: the
+        /// time its `.used` file was last changed, which happens each time
+        /// a process starts from it (see
+        /// [`AgentDirective::Start`](crate::directive::AgentDirective::Start)),
+        /// or, if it has none, the folder's own, so when it was installed.
+        /// The core never removes a folder missing here.
+        #[serde(default)]
+        used: Vec<(String, Wall)>,
     },
     /// An install moved on.
     Progress {
@@ -268,6 +277,8 @@ pub enum SetupEvent {
         /// Whether it succeeded.
         ok: bool,
     },
-    /// It couldn't be started or run, saying this, cleaned and capped.
+    /// It couldn't be started or run, saying why in the driver's own words,
+    /// such as "no such file". Never anything the command printed, which
+    /// may hold a sign-in link, a code or an email: the core logs this.
     Failed(String),
 }

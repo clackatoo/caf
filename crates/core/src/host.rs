@@ -142,6 +142,19 @@ pub struct Timers {
     /// gone, before starting a new one on the same session. 50 ms.
     #[cfg_attr(feature = "ts", ts(as = "crate::ts::Duration"))]
     pub group_poll: Duration,
+    /// How long a sign-in may wait for the user to finish it before CAF
+    /// stops it, so one nobody finishes doesn't hold chats waiting on it.
+    /// 10 min.
+    /// Recordings made before it was added don't have it: they read as
+    /// the default.
+    #[serde(default = "sign_in_default")]
+    #[cfg_attr(feature = "ts", ts(as = "Option<crate::ts::Duration>", optional))]
+    pub sign_in: Duration,
+}
+
+/// [`Timers::sign_in`]'s default, for hosts written before it.
+fn sign_in_default() -> Duration {
+    Duration::from_mins(10)
 }
 
 impl Host {
@@ -195,6 +208,7 @@ impl Default for Timers {
             gone: Duration::from_secs(2),
             kill_after: Duration::from_secs(2),
             group_poll: Duration::from_millis(50),
+            sign_in: sign_in_default(),
         }
     }
 }
