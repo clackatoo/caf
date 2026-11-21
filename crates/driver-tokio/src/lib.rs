@@ -28,7 +28,7 @@
 //! `~/.local/share/caf/agents`). CAF looks at what's installed as it
 //! starts. A chat opened with an agent that isn't installed yet waits for
 //! it, and the user decides: installing Claude's adapter takes about
-//! 620 MB.
+//! 630 MB.
 //!
 //! ```ignore
 //! let claude = AgentName("claude".into());

@@ -171,7 +171,8 @@ A few things are left out, and replaying doesn't need them:
 
 - the account's email, which Claude's adapter reports in its sign-in status;
 - each agent's arguments, and the values of its environment variables;
-- the values of each MCP server's environment variables and HTTP headers.
+- the values of each MCP server's environment variables and HTTP headers;
+- what you paste into a sign-in, such as a code from the sign-in page.
 
 The inspector itself shows everything, those too: it shows exactly what the
 core was given. Only your browser can see it, but take care with

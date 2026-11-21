@@ -366,8 +366,9 @@ impl<A: AppItem> Caf<A> {
     /// it takes: for debuggers and tests.
     ///
     /// Steps hold secrets, such as the values of MCP servers' variables
-    /// and headers: treat them as private, and never write them out as
-    /// they are. See [`Steps`](crate::Steps).
+    /// and headers, and what the user pastes into a sign-in: treat them as
+    /// private, and never write them out as they are. See
+    /// [`Steps`](crate::Steps).
     ///
     /// # Panics
     ///

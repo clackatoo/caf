@@ -74,7 +74,7 @@ after the user installs Node.
 
 ## Install it
 
-Installing Claude's adapter takes about 620 MB, so it's the user's decision.
+Installing Claude's adapter takes about 630 MB, so it's the user's decision.
 A chat opened with an agent that isn't installed waits for it
 (`ChatState::WaitingForAgent`), with its messages waiting too. Show the
 agent's status beside the chat, with an Install button:
@@ -107,8 +107,10 @@ What CAF does to install it:
   so one cut off partway leaves nothing that looks installed. Two programs
   installing the same agent at once install it once: a lock in the folder
   makes the second wait, and it then finds the first's.
-- **Old versions** are removed once a newer one has started, unless a
-  process, in any CAF program, still runs from one.
+- **Old versions** are removed once the version your program pins has
+  started, but only once no process, in any CAF program, has started from
+  the old one for 14 days, and never while one still runs from it. So two
+  programs pinning different versions don't remove each other's.
 
 ## Sign in
 
