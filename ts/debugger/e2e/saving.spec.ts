@@ -8,7 +8,7 @@ test.use({ serve: [] })
 
 async function openChat(page: Page, cwd: string) {
   await page.getByRole('button', { name: 'New chat' }).click()
-  await page.getByRole('combobox').selectOption('fake')
+  await page.getByRole('combobox', { name: /^Agent/ }).selectOption('fake')
   await page.getByRole('textbox', { name: /Folder/ }).fill(cwd)
   await page.getByRole('button', { name: 'Open' }).click()
   await expect(page.locator('.caf-chat .agent')).toHaveText('fake')
