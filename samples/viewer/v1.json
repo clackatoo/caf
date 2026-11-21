@@ -1104,6 +1104,11 @@
                   "value": true
                 }
               }
+            ],
+            "own": [
+              {
+                "type": "Model"
+              }
             ]
           }
         },
@@ -1475,6 +1480,11 @@
                       "type": "Switch",
                       "value": true
                     }
+                  }
+                ],
+                "own": [
+                  {
+                    "type": "Model"
                   }
                 ]
               }

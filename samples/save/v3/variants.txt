@@ -24,7 +24,7 @@ change<QuestionAsked>.value.window {start, end}
 change<QuestionAsked>.value.window.end<Open> {type}
 change<QuestionGone> {type, value}
 change<Settings> {type, value}
-change<Settings>.value {offered, chosen}
+change<Settings>.value {offered, chosen, own}
 change<Settings>.value.chosen[] {kind, value}
 change<Settings>.value.chosen[].kind<Fast> {type}
 change<Settings>.value.chosen[].kind<Model> {type}
@@ -39,6 +39,7 @@ change<Settings>.value.offered[].form<Switch> {type}
 change<Settings>.value.offered[].kind<Effort> {type}
 change<Settings>.value.offered[].kind<Fast> {type}
 change<Settings>.value.offered[].kind<Model> {type}
+change<Settings>.value.own[]<Model> {type}
 change<State> {type, value}
 change<State>.value<Closed> {type}
 change<State>.value<Idle> {type}
@@ -137,7 +138,7 @@ chat.questions[].kind<SlowToOpen> {type, value}
 chat.questions[].kind<SlowToOpen>.value {adapter_answered}
 chat.questions[].window {start, end}
 chat.questions[].window.end<Open> {type}
-chat.settings {offered, chosen}
+chat.settings {offered, chosen, own}
 chat.settings.chosen[] {kind, value}
 chat.settings.chosen[].kind<Fast> {type}
 chat.settings.chosen[].kind<Model> {type}
@@ -152,6 +153,7 @@ chat.settings.offered[].form<Switch> {type}
 chat.settings.offered[].kind<Effort> {type}
 chat.settings.offered[].kind<Fast> {type}
 chat.settings.offered[].kind<Model> {type}
+chat.settings.own[]<Model> {type}
 chat.state<Open> {type, value}
 chat.state<Open>.value {session}
 chat.turns[] {id, starter, life, window, items, imported, model}

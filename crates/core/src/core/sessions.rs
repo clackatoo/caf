@@ -14,6 +14,7 @@ use super::clean::agent_text;
 use super::frames::Reply;
 use super::procs::Cause;
 use super::record::Log;
+use super::settings::{Choosing, sendable};
 use super::state::{Conn, How, Open, Purpose, Run};
 use super::{Core, OpenChat, Refused, SessionChoice, report};
 use crate::agent::{EnvChange, McpServer};
@@ -60,6 +61,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .collect::<Option<Vec<_>>>()
             .ok_or(Refused::Unsendable)?;
         check_instructions(open.instructions.as_deref())?;
+        if !open.settings.iter().all(sendable) {
+            return Err(Refused::Unsendable);
+        }
         if let Some(shelf) = &open.shelf {
             super::saving::check_shelf(shelf)?;
         }
@@ -76,7 +80,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.data.insert(chat, D::default());
         self.call_off_shutdown(now);
         let conn = self.conn_for(chat, &open.agent);
-        let (chosen, defaults) = self.first_choices(&open.agent, &open.settings);
+        let settings = self.first_settings(&open.agent, &open.settings);
         self.chats.insert(
             chat,
             Chat {
@@ -87,10 +91,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 turns: Vec::new(),
                 usage: None,
                 questions: Vec::new(),
-                settings: crate::settings::Settings {
-                    offered: Vec::new(),
-                    chosen,
-                },
+                settings,
             },
         );
         self.logs.insert(chat, Log::new(self.ids.first));
@@ -121,10 +122,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 note: None,
                 resent: None,
                 restored: false,
-                choosing: super::settings::Choosing {
-                    defaults,
-                    ..Default::default()
-                },
+                choosing: Choosing::default(),
             },
         );
         if let Some(shelf) = open.shelf {

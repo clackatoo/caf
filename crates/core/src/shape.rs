@@ -264,6 +264,7 @@ pub(crate) fn settings() -> Settings {
     Settings {
         offered: offered(),
         chosen: vec![SettingChoice::model("sonnet"), SettingChoice::fast(true)],
+        own: vec![SettingKind::Model],
     }
 }
 

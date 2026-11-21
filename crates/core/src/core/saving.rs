@@ -25,6 +25,7 @@ use serde::Serialize;
 
 use super::record::Log;
 use super::sessions::{check_instructions, mcp_server};
+use super::settings::Choosing;
 use super::state::{Open, Run};
 use super::{Core, Refused, report};
 use crate::change::Change;
@@ -1069,7 +1070,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 note: None,
                 resent: None,
                 restored: true,
-                choosing: super::settings::Choosing::default(),
+                choosing: Choosing::default(),
             },
         );
         // Tidied as changes, so the store gets them as journal entries,

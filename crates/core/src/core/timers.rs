@@ -222,9 +222,20 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     self.lose_process(now, proc, Cause::Restarted, out);
                 }
             }
-            Purpose::Set { chat, ref choice } => {
-                let choice = choice.clone();
+            // Given up on once already: it just ends.
+            Purpose::Set { given_up: true, .. } => {
                 self.pending.remove(&(proc, id));
+            }
+            // Kept, given up on, so a late answer is still read, until a
+            // watchdog of its own ends it.
+            Purpose::Set {
+                chat,
+                ref choice,
+                ref mut given_up,
+            } => {
+                *given_up = true;
+                pending.deadline = Some(now.mono.after(self.host.timers.request));
+                let choice = choice.clone();
                 self.set_overdue(now, (proc, id), chat, &choice, out);
             }
             // As an abandoned open: a session it opens even so is closed.

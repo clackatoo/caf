@@ -5,7 +5,8 @@ use crate::change::{Change, Mismatch, Numbered};
 use crate::chat::{Chat, ChatState, Item, ItemKind, Lost, ToolStatus, TurnLife, Usage};
 use crate::fixtures::{self, After};
 use crate::ids::{ChangeNo, ItemId, QuestionId, TurnId};
-use crate::shape::{chat, item, question, tool, turn, usage};
+use crate::settings::{ModelUsed, SettingChoice};
+use crate::shape::{chat, item, question, settings, tool, turn, usage};
 use crate::time::{End, Wall};
 
 /// The sample chat (turn 2, holding words 3; question 4), with a second
@@ -144,15 +145,15 @@ fn a_turn_moves_on_and_ends() {
 
 #[test]
 fn the_settings_are_replaced_whole() {
-    let mut settings = crate::shape::settings();
-    settings.chosen = vec![crate::settings::SettingChoice::effort("low")];
+    let mut settings = settings();
+    settings.chosen = vec![SettingChoice::effort("low")];
     let chat = applied(Change::Settings(settings.clone()));
     assert_eq!(chat.settings, settings);
 }
 
 #[test]
 fn a_turn_sent_says_its_model() {
-    let model = crate::settings::ModelUsed {
+    let model = ModelUsed {
         id: "haiku".into(),
         name: Some("Haiku".into()),
     };
@@ -258,7 +259,7 @@ fn a_change_naming_what_the_chat_lacks_changes_nothing() {
         "model-of-no-turn",
         Change::TurnModel {
             turn: TurnId(99),
-            model: crate::settings::ModelUsed {
+            model: ModelUsed {
                 id: "sonnet".into(),
                 name: None,
             },

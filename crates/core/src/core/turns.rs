@@ -12,6 +12,7 @@ use super::procs::Cause;
 use super::state::{Open, Purpose, Running};
 use super::{Core, Refused, report};
 use crate::acp::RpcError;
+use crate::change::Change;
 use crate::chat::AppData;
 use crate::chat::{
     AppItem, ChatState, Failure, FailureReason, ItemKind, Part, Remedy, Starter, ToolStatus, Turn,
@@ -137,7 +138,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         self.set_life(now, chat, turn, TurnLife::Running);
         if let Some(model) = self.model_used(chat) {
-            self.record(chat, crate::change::Change::TurnModel { turn, model });
+            self.record(chat, Change::TurnModel { turn, model });
         }
     }
 

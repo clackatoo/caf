@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 
 use super::clean::agent_text;
 use super::frames::Reply;
+use super::settings::lost_why;
 use super::state::{Caps, Conn, Ending, Gone, Group, Init, Learn, Open, Proc, Purpose, Step};
 use super::{Core, report};
 use crate::agent::{InstallState, Launch};
@@ -665,7 +666,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             self.session_lost(now, chat, lost.clone(), reopen, out);
         }
         if learned_on {
-            self.learn_failed(conn, &super::settings::lost_why(&lost));
+            self.learn_failed(conn, &lost_why(&lost));
         }
         self.advance(now, conn, out);
     }

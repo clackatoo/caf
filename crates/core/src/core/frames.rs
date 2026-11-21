@@ -264,7 +264,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     self.prompt_answered(now, chat, turn, reply, out);
                 }
             }
-            super::state::Purpose::Set { chat, choice } => {
+            super::state::Purpose::Set {
+                chat,
+                given_up: true,
+                ..
+            } => self.late_set_answered(now, chat, &reply, out),
+            super::state::Purpose::Set { chat, choice, .. } => {
                 self.set_answered(now, (proc, id), chat, choice, reply, out);
             }
             super::state::Purpose::Learn { conn } => {

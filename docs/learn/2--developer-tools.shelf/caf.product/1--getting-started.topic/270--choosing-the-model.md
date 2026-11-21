@@ -49,13 +49,19 @@ turn is running, and otherwise as the turn ends, so it applies from the
 next message. Only the latest choice of each setting counts.
 
 Choices are matched exactly, by the agent's own ids: `opus` never quietly
-becomes `opus[1m]`. Once the agent has said what it offers, a choice it
-doesn't offer is refused (`Refused::NoSuchSetting`).
+becomes `opus[1m]`. What the agent says it uses counts as offered, even
+if it isn't in its list. Once the agent has said what it offers, in this
+run, a choice it doesn't offer is refused (`Refused::NoSuchSetting`). A
+choice is checked against what's offered when it's made, so an effort
+level only a new model has can be chosen once the model change is
+answered, not with it.
 
 A message never goes on a setting nobody chose. If a choice can't be
-applied, because the agent no longer offers it or refuses it, the messages
-waiting for it fail (`FailureReason::SettingNotApplied`), with Send again,
-and the setting goes back to what the agent uses.
+applied, because the agent no longer offers it or refuses it, every
+message waiting fails (`FailureReason::SettingNotApplied`), with Send
+again, and the setting goes back to what the agent uses. If the agent
+had lost the session, it's opened again and the choice sent to it, as a
+message would be.
 
 ## Choose before the chat opens
 
@@ -72,8 +78,13 @@ open.settings = vec![SettingChoice::effort("high")]; // this chat's own
 
 The chat's own choice comes first, then your program's default, then the
 agent's own. They're sent as the session opens, before any message. A
-default the agent doesn't offer is skipped quietly; a chat's own choice
-that it doesn't offer fails the chat's first message, saying so.
+default the agent doesn't offer is dropped quietly; a chat's own choice
+that it doesn't offer fails every message waiting, saying so.
+
+Which choices are the chat's own is saved with it (`settings.own`). A
+restored chat keeps them, and takes your program's defaults as they are
+then for the rest: what the agent chose by itself in an earlier run never
+outranks them.
 
 Claude reads the user's own default model even with none of their
 settings, so CAF sends a chat's choices again each time its session
@@ -101,7 +112,9 @@ CAF starts the agent if it isn't running, opens a session with none of
 the agent's tools, reads what it offers, and closes it. No message is
 sent, so it costs nothing. Where it stands is in the agent's status from
 `watch_agents`, as `settings`: `Unknown`, `Learning`, `Known(settings)`
-or `Failed(why)`. Every chat's session tells it too. It isn't saved: it
+or `Failed(why)`. What was learned before stays shown while it's learned
+again, and if that fails. If the agent's adapter serves chats and can't
+close sessions, the session stays until the adapter stops. Every chat's session tells it too. It isn't saved: it
 depends on the account and the agent's version, so it's learned again
 each run.
 

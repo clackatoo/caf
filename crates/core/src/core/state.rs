@@ -275,6 +275,9 @@ pub(super) enum Purpose {
         chat: ChatId,
         /// What was asked for.
         choice: SettingChoice,
+        /// It wasn't answered in time, and isn't applied: a late answer
+        /// is read only for what the agent says it offers.
+        given_up: bool,
     },
     /// Opening a session only to learn what settings a connection's agent
     /// offers.
