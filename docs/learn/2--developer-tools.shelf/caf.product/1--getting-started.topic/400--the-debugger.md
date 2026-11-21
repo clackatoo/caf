@@ -143,7 +143,10 @@ debugger offers: whether it's installed, and whether it's signed in.
 - **Install** installs an agent CAF installs itself, showing its size
   first and its progress as it goes; **Stop** stops it. If it can't be
   installed, the panel says why, such as a missing Node or npm.
-- **Sign in** runs the agent's own sign-in, from CAF's profile for it.
+- **Sign in** runs the agent's own sign-in, from CAF's profile for it. It
+  shows only where CAF can sign in now: for an agent the debugger starts
+  itself, once it has answered in a chat as the adapter its profile is
+  for. It shows while signed in too, to switch accounts.
   The panel then shows a link to open in a new tab, a code to type there if
   the agent shows one, and a box to paste a code into, for when the sign-in
   page gives you one instead. **Stop signing in** stops it.

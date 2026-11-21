@@ -11,6 +11,7 @@
     readOnly,
     sendAgain,
     signIn,
+    canSignIn,
     appSummary,
   }: {
     turn: DeepReadonly<Turn>
@@ -18,6 +19,8 @@
     sendAgain: (message: DeepReadonly<UserMessage>) => Promise<unknown> | void
     /** The Sign in remedy: start signing in to the chat's agent. */
     signIn: () => Promise<unknown> | void
+    /** Whether CAF can sign in to the chat's agent now, as its status says. */
+    canSignIn: boolean
     appSummary: (app: unknown) => string
   } = $props()
 
@@ -110,8 +113,11 @@
           {/if}
         {:else if failure.remedy.type === 'SignIn'}
           <!-- Signing in doesn't send it again: once signed in, the user does. -->
+          {#if !canSignIn}<div class="remedy">{remedyText(failure.remedy)}</div>{/if}
           <div class="remedies">
-            <button type="button" disabled={readOnly || sending} onclick={() => act(signIn)}>Sign in</button>
+            {#if canSignIn}
+              <button type="button" disabled={readOnly || sending} onclick={() => act(signIn)}>Sign in</button>
+            {/if}
             {#if message !== null}
               <button type="button" class="quiet" disabled={readOnly || sending} onclick={() => act(() => sendAgain(message))}>
                 Send again

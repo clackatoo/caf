@@ -76,11 +76,13 @@
           {:else if install.type === 'Installing'}
             <button type="button" disabled={working} onclick={() => run(agent.name, actions.stopInstall)}>Stop</button>
           {/if}
-          {#if ready(agent) && signIn.type !== 'SigningIn'}
+          <!-- Only where CAF can sign in now, as the agent's status says; again
+               while signed in, to switch accounts. -->
+          {#if agent.can_sign_in && signIn.type !== 'SigningIn'}
             <button type="button" disabled={working} onclick={() => run(agent.name, actions.signIn)}>Sign in</button>
-            {#if signIn.type === 'SignedIn'}
-              <button type="button" disabled={working} onclick={() => run(agent.name, actions.signOut)}>Sign out</button>
-            {/if}
+          {/if}
+          {#if ready(agent) && signIn.type === 'SignedIn'}
+            <button type="button" disabled={working} onclick={() => run(agent.name, actions.signOut)}>Sign out</button>
           {/if}
         </div>
         {#if signIn.type === 'SigningIn'}

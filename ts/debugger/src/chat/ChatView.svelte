@@ -42,6 +42,8 @@
     appSummary?: (app: unknown) => string
   } = $props()
 
+  /** The status of the chat's agent, if the host gave it, and it's this chat's agent's. */
+  const status = $derived(agent?.name === chat.agent ? agent : undefined)
   const running = $derived(chat.turns.find((turn) => turn.life.type === 'Running' || turn.life.type === 'Stopping'))
   const closed = $derived(chat.state.type === 'Closed')
   let problem = $state<string | null>(null)
@@ -98,7 +100,7 @@
   {#if !closed}
     <AgentBanner
       name={chat.agent}
-      agent={agent?.name === chat.agent ? agent : undefined}
+      agent={status}
       waiting={chat.state.type === 'WaitingForAgent'}
       {readOnly}
       install={actions.install}
@@ -111,7 +113,10 @@
 
   <div class="turns" bind:this={scroller} {onscroll}>
     {#each chat.turns as turn (turn.id)}
-      <Turn {turn} {readOnly} sendAgain={actions.sendAgain} signIn={actions.signIn} {appSummary} />
+      <Turn {turn} {readOnly} sendAgain={actions.sendAgain} signIn={actions.signIn}
+        canSignIn={status?.can_sign_in ?? false}
+        {appSummary}
+      />
     {:else}
       <p class="empty">Nothing said yet.</p>
     {/each}

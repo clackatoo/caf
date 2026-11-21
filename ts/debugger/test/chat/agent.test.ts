@@ -231,9 +231,11 @@ describe("the agent's sign-in", () => {
 
 describe('the Sign in remedy', () => {
   const failed = life('Failed', { reason: { type: 'SignInNeeded' }, agent_said: null, remedy: { type: 'SignIn' } })
+  /** The chat's agent, which CAF can sign in to now. */
+  const can = status({ type: 'Installed', value: { version: '1' } }, { type: 'SignedOut' }, true)
 
   it('signs in, and keeps Send again', async () => {
-    const { actions: given } = draw(chat({ turns: [turn({ life: failed })] }))
+    const { actions: given } = draw(chat({ turns: [turn({ life: failed })] }), { agent: can })
     await fireEvent.click(button('Sign in'))
     expect(given.signIn).toHaveBeenCalledOnce()
     expect(given.sendAgain).not.toHaveBeenCalled()
@@ -244,16 +246,28 @@ describe('the Sign in remedy', () => {
   it('says why signing in was refused', async () => {
     const given = actions()
     given.signIn.mockRejectedValue(new CafError({ type: 'Refused', value: { type: 'CannotSignIn' } }))
-    draw(chat({ turns: [turn({ life: failed })] }), { actions: given })
+    draw(chat({ turns: [turn({ life: failed })] }), { actions: given, agent: can })
     await fireEvent.click(button('Sign in'))
     await waitFor(() => expect(screen.getByText("CAF can't sign in to this agent now.")).toBeTruthy())
   })
 
   it('does nothing while read-only', async () => {
-    const { actions: given } = draw(chat({ turns: [turn({ life: failed })] }), { readOnly: true })
+    const { actions: given } = draw(chat({ turns: [turn({ life: failed })] }), { readOnly: true, agent: can })
     expect(button('Sign in').disabled).toBe(true)
     await fireEvent.click(button('Sign in'))
     expect(given.signIn).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['CAF can\'t sign in to it now', status({ type: 'Host' }, { type: 'SignedOut' }, false)],
+    ['there is no status', undefined],
+    ['the status is another agent\'s', { ...can, name: 'codex' }],
+  ])('offers no Sign in where %s, but says to, and keeps Send again', async (_, agent) => {
+    const { container, actions: given } = draw(chat({ turns: [turn({ life: failed })] }), { ...(agent ? { agent } : {}) })
+    expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull()
+    expect(text(container)).toContain('Sign in to the agent, then send again.')
+    await fireEvent.click(button('Send again'))
+    expect(given.sendAgain).toHaveBeenCalledOnce()
   })
 })
 

@@ -101,6 +101,10 @@ export function statuses(): AgentStatus[] {
 }
 
 /** An agent's status, as `claude`. */
-export function status(install: AgentStatus['install'], signIn: AgentStatus['sign_in'] = { type: 'Unknown' }): AgentStatus {
-  return { name: 'claude', install, sign_in: signIn }
+export function status(
+  install: AgentStatus['install'],
+  signIn: AgentStatus['sign_in'] = { type: 'Unknown' },
+  canSignIn = signIn.type === 'SigningIn',
+): AgentStatus {
+  return { name: 'claude', install, sign_in: signIn, can_sign_in: canSignIn }
 }

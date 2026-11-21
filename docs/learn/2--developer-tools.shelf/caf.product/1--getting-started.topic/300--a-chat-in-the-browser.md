@@ -217,7 +217,10 @@ it. The `install` state is `Missing` with its size, `Installing` with how
 far it has got, `Installed` with its version, `Cannot` with why, `Host` for
 an agent the host starts itself, or `Unknown` until CAF has looked. The
 `sign_in` state is `SignedOut`, `SigningIn` with what the user must do,
-`SignedIn` with how (never who), or `Unknown`.
+`SignedIn` with how (never who), or `Unknown`. `can_sign_in` says whether
+`signIn` would be accepted now, so offer Sign in only while it's true. It
+changes as CAF runs: an agent the host starts itself can be signed in to
+only once it has answered as the adapter its profile is for.
 
 ```ts
 await caf.install("claude");
@@ -341,7 +344,8 @@ when it can't be. While the agent is being signed in to, it shows the link,
 the code, a box to paste a code into if the agent takes one, and Stop. A
 turn that failed for want of signing in offers Sign in, and still offers
 Send again: once signed in, the user sends it again, since CAF never does
-by itself.
+by itself. Sign in shows only while the agent's status says CAF can sign
+in to it now.
 
 It imports only the caf-sdk, Svelte and markdown-it, which a check in CI
 holds it to, so the folder can be lifted out whole. Copy it, or read it for

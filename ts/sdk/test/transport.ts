@@ -70,8 +70,13 @@ export const welcome = {
 export const agents = {
   type: "Agents",
   value: [
-    { name: "claude", install: { type: "Missing", value: { size: 626_797_331 } }, sign_in: { type: "Unknown" } },
-    { name: "fake", install: { type: "Host" }, sign_in: { type: "Unknown" } },
+    {
+      name: "claude",
+      install: { type: "Missing", value: { size: 626_797_331 } },
+      sign_in: { type: "Unknown" },
+      can_sign_in: false,
+    },
+    { name: "fake", install: { type: "Host" }, sign_in: { type: "Unknown" }, can_sign_in: true },
   ],
 } satisfies ToViewer;
 

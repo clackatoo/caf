@@ -86,12 +86,13 @@ test("signs in from the panel, with the link, the code and a paste, then out", a
   await page.goto(server.url)
   const agent = row(page, 'signs-in')
   // CAF runs a host's own command's sign-in only once it has answered as
-  // the profile's adapter in this run.
-  await agent.getByRole('button', { name: 'Sign in' }).click()
-  await expect(agent.getByRole('alert')).toHaveText("CAF can't sign in to this agent now.")
+  // the profile's adapter in this run, so Sign in waits for that.
+  await expect(agent).toContainText('Started by the app')
+  await expect(agent.getByRole('button', { name: 'Sign in' })).toHaveCount(0)
   await openChat(page, 'signs-in')
   await send(page, 'hello')
   await expect(page.locator('.caf-chat .turn .life').last()).toHaveText('Finished')
+  await expect(agent.getByRole('button', { name: 'Sign in' })).toBeVisible()
 
   await agent.getByRole('button', { name: 'Sign in' }).click()
   await expect(agent).toHaveAttribute('data-sign-in', 'SigningIn')

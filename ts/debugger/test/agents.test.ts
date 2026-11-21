@@ -71,10 +71,10 @@ describe('the Agents panel', () => {
 
   it('installs, stops, signs in and out, each agent by name', async () => {
     const { actions: given } = draw([
-      { name: 'a', install: { type: 'Missing', value: { size: 1e9 } }, sign_in: { type: 'Unknown' } },
-      { name: 'b', install: { type: 'Installing', value: { done: 1, size: 2 } }, sign_in: { type: 'Unknown' } },
-      { name: 'c', install: { type: 'Installed', value: { version: '1' } }, sign_in: { type: 'SignedOut' } },
-      { name: 'd', install: { type: 'Host' }, sign_in: { type: 'SignedIn', value: { type: 'ApiKey' } } },
+      { name: 'a', install: { type: 'Missing', value: { size: 1e9 } }, sign_in: { type: 'Unknown' }, can_sign_in: false },
+      { name: 'b', install: { type: 'Installing', value: { done: 1, size: 2 } }, sign_in: { type: 'Unknown' }, can_sign_in: false },
+      { name: 'c', install: { type: 'Installed', value: { version: '1' } }, sign_in: { type: 'SignedOut' }, can_sign_in: true },
+      { name: 'd', install: { type: 'Host' }, sign_in: { type: 'SignedIn', value: { type: 'ApiKey' } }, can_sign_in: true },
     ])
     await fireEvent.click(within(row('a')).getByRole('button', { name: 'Install' }))
     await fireEvent.click(within(row('b')).getByRole('button', { name: 'Stop' }))
@@ -92,6 +92,7 @@ describe('the Agents panel', () => {
         name: 'claude',
         install: { type: 'Installed', value: { version: '0.98.0' } },
         sign_in: { type: 'SigningIn', value: { url: 'https://claude.com/cai/oauth/authorize', code: 'ABCD-1234', paste: true } },
+        can_sign_in: true,
       },
     ])
     const a = screen.getByRole('link') as HTMLAnchorElement
@@ -112,8 +113,8 @@ describe('the Agents panel', () => {
     given.install.mockRejectedValue(new CafError({ type: 'Refused', value: { type: 'NotInstallable' } }))
     draw(
       [
-        { name: 'a', install: { type: 'Missing', value: { size: 1 } }, sign_in: { type: 'Unknown' } },
-        { name: 'b', install: { type: 'Missing', value: { size: 1 } }, sign_in: { type: 'Unknown' } },
+        { name: 'a', install: { type: 'Missing', value: { size: 1 } }, sign_in: { type: 'Unknown' }, can_sign_in: false },
+        { name: 'b', install: { type: 'Missing', value: { size: 1 } }, sign_in: { type: 'Unknown' }, can_sign_in: false },
       ],
       { actions: given },
     )
@@ -129,6 +130,18 @@ describe('the Agents panel', () => {
       await fireEvent.click(button)
     }
     for (const action of Object.values(given)) expect(action).not.toHaveBeenCalled()
+  })
+
+  it("offers Sign in only where CAF can sign in now, as the status says", () => {
+    draw([
+      { name: 'no', install: { type: 'Host' }, sign_in: { type: 'Unknown' }, can_sign_in: false },
+      { name: 'out', install: { type: 'Installed', value: { version: '1' } }, sign_in: { type: 'SignedIn', value: { type: 'Account' } }, can_sign_in: false },
+      { name: 'yes', install: { type: 'Host' }, sign_in: { type: 'SignedOut' }, can_sign_in: true },
+    ])
+    expect(buttons('no')).toEqual([])
+    // Signing out is its own command.
+    expect(buttons('out')).toEqual(['Sign out'])
+    expect(buttons('yes')).toEqual(['Sign in'])
   })
 
   it('says when none are offered', () => {

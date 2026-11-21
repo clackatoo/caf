@@ -31,10 +31,10 @@ test('the Agents panel shows each agent, installed or not', async ({ page, serve
   await expect(row(page, 'fake')).toContainText('Started by the app')
 })
 
-test("signing in to an agent whose profile can't is refused, in CAF's words", async ({ page, server }) => {
+test("an agent whose profile can't sign in offers no Sign in", async ({ page, server }) => {
   await page.goto(server.url)
-  await row(page, 'fake').getByRole('button', { name: 'Sign in' }).click()
-  await expect(row(page, 'fake').getByRole('alert')).toHaveText("CAF can't sign in to this agent now.")
+  await expect(row(page, 'fake')).toContainText('Started by the app')
+  await expect(row(page, 'fake').getByRole('button', { name: 'Sign in' })).toHaveCount(0)
 })
 
 test("a chat with an agent that isn't installed waits for it, and Not now stops its message", async ({ page, server }) => {
