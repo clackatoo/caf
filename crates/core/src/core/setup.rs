@@ -102,6 +102,7 @@ impl<A: AppItem> Core<A> {
                 folder: folder.clone(),
                 install,
                 private,
+                size,
             }));
         }
         for each in self.sharing(&folder) {

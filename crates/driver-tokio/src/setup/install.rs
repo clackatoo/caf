@@ -97,6 +97,8 @@ pub(super) async fn survey(root: PathBuf, reporter: Reporter) {
 pub(super) struct Folders {
     pub(super) folder: String,
     pub(super) private: Option<String>,
+    /// About how many bytes the agent takes once installed.
+    pub(super) size: u64,
 }
 
 /// Installs `install` as `root/folder`, making the agent's private folder
@@ -169,7 +171,9 @@ async fn installing(
     }
     let built = match install {
         Install::Npm(package) => npm(&build, &package, options, reporter, stop).await,
-        Install::Download(artifacts) => download(&build, &artifacts, options, reporter, stop).await,
+        Install::Download(artifacts) => {
+            download(&build, &artifacts, folders.size, options, reporter, stop).await
+        }
         // No other kind is given yet.
         _ => Err(other("CAF doesn't know this kind of install".into())),
     };
@@ -561,6 +565,7 @@ fn npm_failure(said: &str, code: Option<i32>) -> InstallFailure {
 async fn download(
     build: &Path,
     artifacts: &[Artifact],
+    size: u64,
     options: &Options,
     reporter: &Reporter,
     stop: &mut oneshot::Receiver<()>,
@@ -593,25 +598,15 @@ async fn download(
     let done = Arc::new(AtomicU64::new(0));
     let stopped = Arc::new(AtomicBool::new(false));
     let fetching = {
-        let (url, done, stopped) = (
-            artifact.url.clone(),
-            Arc::clone(&done),
-            Arc::clone(&stopped),
-        );
-        let proxy = proxy_for(&artifact.url, |name| env_var(options, name));
-        let https_only = !allowed_http(options);
-        let idle = idle(options);
-        tokio::task::spawn_blocking(move || {
-            fetch(
-                &url,
-                out,
-                proxy.as_ref().map(|(name, value)| (*name, value.as_str())),
-                https_only,
-                idle,
-                &done,
-                &stopped,
-            )
-        })
+        let (done, stopped) = (Arc::clone(&done), Arc::clone(&stopped));
+        let how = Fetch {
+            url: artifact.url.clone(),
+            proxy: proxy_for(&artifact.url, |name| env_var(options, name)),
+            https_only: !allowed_http(options),
+            idle: idle(options),
+            most: most_for(size),
+        };
+        tokio::task::spawn_blocking(move || fetch(&how, out, &done, &stopped))
     };
     tokio::pin!(fetching);
     let mut ticks = tokio::time::interval(PROGRESS);
@@ -787,15 +782,36 @@ fn allowed_url(url: &str, options: &Options) -> bool {
 
 /// Downloads `url` to `file`, counting into `done`, until it's done or
 /// `stopped`. Returns its SHA-256, in hex.
-fn fetch(
-    url: &str,
-    mut out: File,
-    proxy: Option<(&str, &str)>,
+/// How big a download of an agent that takes `size` bytes installed may
+/// be: twice that, and a mebibyte, as what's downloaded is mostly no
+/// bigger than what's installed.
+fn most_for(size: u64) -> u64 {
+    size.saturating_mul(2).saturating_add(1 << 20)
+}
+
+/// A download to fetch.
+struct Fetch {
+    url: String,
+    /// The proxy, and the variable that named it.
+    proxy: Option<(&'static str, String)>,
     https_only: bool,
+    /// How long it may go with nothing coming.
     idle: Duration,
+    /// The most it may be, in bytes: past that, it's cut off.
+    most: u64,
+}
+
+fn fetch(
+    how: &Fetch,
+    mut out: File,
     done: &AtomicU64,
     stopped: &AtomicBool,
 ) -> Result<String, InstallFailure> {
+    let (url, https_only, idle) = (how.url.as_str(), how.https_only, how.idle);
+    let proxy = how
+        .proxy
+        .as_ref()
+        .map(|(name, value)| (*name, value.as_str()));
     // Never the proxy's value in what's said: it may hold a password.
     let proxy = proxy
         .map(|(name, proxy)| {
@@ -827,10 +843,15 @@ fn fetch(
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(io_failure(&error, true)),
         };
+        let so_far = done.fetch_add(n as u64, Ordering::Relaxed) + n as u64;
+        if so_far > how.most {
+            return Err(other(
+                "the download was far bigger than its agent should be".into(),
+            ));
+        }
         hash.update(&buffer[..n]);
         out.write_all(&buffer[..n])
             .map_err(|error| io_failure(&error, false))?;
-        done.fetch_add(n as u64, Ordering::Relaxed);
     }
     out.sync_all().map_err(|error| io_failure(&error, false))?;
     Ok(hex(&hash.finalize()))
@@ -1410,15 +1431,14 @@ mod tests {
             Duration::from_secs(10),
             tokio::task::spawn_blocking(move || {
                 let (done, stopped) = (AtomicU64::new(0), AtomicBool::new(false));
-                fetch(
-                    &url,
-                    out,
-                    None,
-                    false,
-                    Duration::from_millis(500),
-                    &done,
-                    &stopped,
-                )
+                let how = Fetch {
+                    url,
+                    proxy: None,
+                    https_only: false,
+                    idle: Duration::from_millis(500),
+                    most: u64::MAX,
+                };
+                fetch(&how, out, &done, &stopped)
             }),
         )
         .await

@@ -228,7 +228,7 @@ fn a_chat_waits_for_its_agent_to_be_installed_then_starts() {
     let install = one(&out, "install");
     assert_eq!(
         install,
-        json!({ "install": install["install"], "folder": "test-npm-2.0.0", "how": "Npm", "private": "test-npm-private" })
+        json!({ "install": install["install"], "folder": "test-npm-2.0.0", "how": "Npm", "private": "test-npm-private", "size": 40_000_000 })
     );
     let install = install["install"].as_u64().expect("a ticket");
     assert_has(
@@ -329,7 +329,7 @@ fn an_install_makes_the_private_folder_its_recipe_uses() {
     let install = one(&script.install("dl-agent").1, "install");
     assert_eq!(
         install,
-        json!({ "install": install["install"], "folder": "test-download-1.4.0", "how": "Download", "private": "test-download-private" })
+        json!({ "install": install["install"], "folder": "test-download-1.4.0", "how": "Download", "private": "test-download-private", "size": 900_000_000 })
     );
 }
 

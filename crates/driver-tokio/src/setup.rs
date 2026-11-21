@@ -296,11 +296,16 @@ impl SetupDriver {
                 folder,
                 install,
                 private,
+                size,
             } => {
                 let (reporter, stop) = self.stoppable(ticket);
                 tokio::spawn(install::install(
                     self.root.clone(),
-                    install::Folders { folder, private },
+                    install::Folders {
+                        folder,
+                        private,
+                        size,
+                    },
                     install,
                     self.options.clone(),
                     reporter,

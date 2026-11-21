@@ -289,6 +289,7 @@ async fn npm_installs_from_the_lockfile_into_place() {
         folder: "fake-1.0.0".into(),
         install: Install::Npm(package),
         private: None,
+        size: 1 << 30,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert!(
@@ -323,6 +324,7 @@ async fn a_failed_npm_install_leaves_nothing() {
         folder: "fake-1.0.0".into(),
         install: Install::Npm(package),
         private: None,
+        size: 1 << 30,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert!(
@@ -347,6 +349,7 @@ async fn a_package_that_doesnt_match_its_lockfile_is_thrown_away() {
         folder: "fake-1.0.0".into(),
         install: Install::Npm(package),
         private: None,
+        size: 1 << 30,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert_eq!(
@@ -497,6 +500,7 @@ async fn downloads_are_checked_and_unpacked_into_place() {
             folder: folder.clone(),
             install: download(&server.url, &body, unpack),
             private: None,
+            size: 1 << 30,
         });
         let events = done(&mut driver, ticket).await;
         assert!(
@@ -602,6 +606,7 @@ async fn nothing_in_a_download_reaches_outside_its_install() {
                 folder: "fake-1.0.0".into(),
                 install: download(&server.url, &body, unpack),
                 private: None,
+                size: 1 << 30,
             });
             let events = done(&mut driver, ticket).await;
             let what = format!("{unpack:?} of {entries:?}");
@@ -629,6 +634,28 @@ async fn nothing_in_a_download_reaches_outside_its_install() {
 }
 
 #[tokio::test]
+async fn a_download_far_bigger_than_its_agent_is_cut_off() {
+    let dir = Dir::new();
+    let body = vec![7; 4 << 20];
+    let server = serve(body.clone(), false).await;
+    let mut driver = driver(&dir);
+    driver.apply(SetupDirective::Install {
+        ticket: Ticket(1000),
+        folder: "fake-1.0.0".into(),
+        install: download(&server.url, &body, Unpack::No),
+        private: None,
+        // Its agent takes 1,000 bytes: 4 MiB is far past that.
+        size: 1000,
+    });
+    let events = done(&mut driver, Ticket(1000)).await;
+    assert!(
+        matches!(events.last(), Some(Ev(SetupEvent::InstallFailed(InstallFailure::Other(why)))) if why.contains("bigger")),
+        "{events:?}"
+    );
+    assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
+}
+
+#[tokio::test]
 async fn a_download_that_doesnt_match_its_checksum_is_thrown_away() {
     let dir = Dir::new();
     let server = serve(tar_gz(), false).await;
@@ -638,6 +665,7 @@ async fn a_download_that_doesnt_match_its_checksum_is_thrown_away() {
         folder: "fake-1.0.0".into(),
         install: download(&server.url, b"something else", Unpack::TarGz),
         private: None,
+        size: 1 << 30,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert_eq!(
@@ -660,6 +688,7 @@ async fn downloads_must_be_https() {
         folder: "fake-1.0.0".into(),
         install: download(&server.url, &body, Unpack::TarGz),
         private: None,
+        size: 1 << 30,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert!(
@@ -684,6 +713,7 @@ async fn an_install_stopped_partway_leaves_nothing() {
         folder: "fake-1.0.0".into(),
         install: download(&server.url, &body, Unpack::No),
         private: None,
+        size: 1 << 30,
     });
     // Half of it comes, and is told.
     loop {
@@ -750,6 +780,7 @@ async fn a_download_goes_through_the_proxy_the_environment_names() {
             folder: format!("fake-{n}"),
             install: download(url, &body, Unpack::TarGz),
             private: None,
+            size: 1 << 30,
         });
         let events = done(&mut driver, ticket).await;
         let last = events.last().expect("a last report");
@@ -840,6 +871,7 @@ async fn a_download_that_stalls_with_nobody_stopping_it_ends_offline() {
         folder: "fake-1.0.0".into(),
         install: download(&stalled, &body, Unpack::No),
         private: None,
+        size: 1 << 30,
     });
     let events = tokio::time::timeout(Duration::from_secs(10), done(&mut driver, Ticket(1000)))
         .await
@@ -857,6 +889,7 @@ async fn a_download_that_stalls_with_nobody_stopping_it_ends_offline() {
         folder: "fake-1.0.0".into(),
         install: download(&server.url, &good, Unpack::TarGz),
         private: None,
+        size: 1 << 30,
     });
     let events = done(&mut driver, Ticket(1001)).await;
     assert_eq!(
@@ -917,6 +950,7 @@ async fn a_failed_download_says_what_went_wrong_but_not_where() {
             folder: "fake-1.0.0".into(),
             install: download(&url, &body, Unpack::TarGz),
             private: None,
+            size: 1 << 30,
         });
         let events = done(&mut driver, ticket).await;
         let Some(Ev(SetupEvent::InstallFailed(why))) = events.last() else {
@@ -945,6 +979,7 @@ async fn a_download_that_stalls_stops_at_once() {
             folder: "fake-1.0.0".into(),
             install: download(&url, &body, Unpack::No),
             private: None,
+            size: 1 << 30,
         });
         tokio::time::sleep(Duration::from_millis(500)).await;
         driver.apply(SetupDirective::Stop { ticket });
@@ -984,6 +1019,7 @@ async fn two_drivers_installing_one_folder_install_it_once() {
             folder: "fake-1.0.0".into(),
             install: download(&server.url, &body, Unpack::TarGz),
             private: None,
+            size: 1 << 30,
         });
     }
     // One has the lock and is downloading; the other waits for it.
@@ -1026,6 +1062,7 @@ async fn waiting_for_another_install_can_be_stopped() {
         folder: "fake-1.0.0".into(),
         install: Install::Download(Vec::new()),
         private: None,
+        size: 1 << 30,
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
     driver.apply(SetupDirective::Stop {
@@ -1046,6 +1083,7 @@ async fn an_install_makes_its_agents_private_folder_and_never_removes_it() {
         folder: folder.into(),
         install: download(&server.url, &body, Unpack::TarGz),
         private: Some(private.into()),
+        size: 1 << 30,
     };
     driver.apply(install(1000, "fake-1.0.0", "fake-private"));
     let events = done(&mut driver, Ticket(1000)).await;
@@ -1134,6 +1172,7 @@ async fn only_install_folders_can_be_installed_or_removed() {
             folder: folder.into(),
             install: Install::Download(Vec::new()),
             private: None,
+            size: 1 << 30,
         });
         let events = done(&mut driver, ticket).await;
         assert!(

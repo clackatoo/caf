@@ -645,6 +645,7 @@ pub(crate) fn every_type(s: &mut Samples) {
             folder: "claude-agent-acp-0.98.0".into(),
             install: recipe().install,
             private: Some("claude-agent-acp-private".into()),
+            size: 626_797_331,
         },
         SetupDirective::Remove {
             ticket: Ticket(8),

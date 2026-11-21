@@ -50,7 +50,13 @@ install: Install,
  * there, and never removed. One that's a link is refused, and the
  * install fails.
  */
-private: string | null, } } | { "type": "Remove", "value": { 
+private: string | null, 
+/**
+ * About how many bytes it takes once installed, as its recipe
+ * says. A download that goes far past it is cut off and thrown
+ * away, so a bad server can't fill the disk.
+ */
+size: number, } } | { "type": "Remove", "value": { 
 /**
  * Its ticket.
  */
