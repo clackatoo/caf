@@ -78,8 +78,16 @@ export const agents = {
       sign_in: { type: "Unknown" },
       can_sign_in: false,
       own_tools_off: true,
+      settings: { type: "Unknown" },
     },
-    { name: "fake", install: { type: "Host" }, sign_in: { type: "Unknown" }, can_sign_in: true, own_tools_off: true },
+    {
+      name: "fake",
+      install: { type: "Host" },
+      sign_in: { type: "Unknown" },
+      can_sign_in: true,
+      own_tools_off: true,
+      settings: { type: "Unknown" },
+    },
   ],
 } satisfies ToViewer;
 

@@ -32,6 +32,8 @@ export function apply(chat: RChat, change: Change): { chat: RChat } | { mismatch
   switch (change.type) {
     case "State":
       return { chat: { ...chat, state: change.value } };
+    case "Settings":
+      return { chat: { ...chat, settings: change.value } };
     case "TurnAdded":
       return { chat: { ...chat, turns: [...chat.turns, change.value] } };
     case "TurnInserted": {

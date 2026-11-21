@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
-import { apply, type Change, type Chat, type Mismatch } from "../src/index.ts";
-import { busy, chat, question, tool, toolItem, turn, words } from "./chats.ts";
+import { apply, type Change, type Chat, type Mismatch, type Settings } from "../src/index.ts";
+import { busy, chat, model, question, tool, toolItem, turn, words } from "./chats.ts";
 
 /** Freezes a value all the way down, so any change to it throws. */
 function frozen<T>(value: T): T {
@@ -191,6 +191,19 @@ describe("apply", () => {
     const after = applied(before, { type: "Usage", value: usage });
     expect(after.usage).toStrictEqual(usage);
     expect(after.turns).toBe(before.turns);
+  });
+
+  test("Settings replaces the chat's settings whole, sharing everything else", () => {
+    const before: Chat = { ...busy(), settings: { offered: [model("default")], chosen: [] } };
+    const settings: Settings = {
+      offered: [model("sonnet")],
+      chosen: [{ kind: { type: "Model" }, value: { type: "Choice", value: "haiku" } }],
+    };
+    const after = applied(before, { type: "Settings", value: settings });
+    expect(after.settings).toStrictEqual(settings);
+    expect(after.state).toBe(before.state);
+    expect(after.turns).toBe(before.turns);
+    expect(after.questions).toBe(before.questions);
   });
 
   test("QuestionAsked adds a question at the end", () => {

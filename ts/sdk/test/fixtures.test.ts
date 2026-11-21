@@ -79,6 +79,7 @@ function expectShared(before: DeepReadonly<Chat>, after: DeepReadonly<Chat>, cha
   if (change.type !== "QuestionAsked" && change.type !== "QuestionGone") {
     expect(after.questions, `${at}: questions`).toBe(before.questions);
   }
+  if (change.type !== "Settings") expect(after.settings, `${at}: settings`).toBe(before.settings);
   const { turn, item } = named(before, change);
   const turns = new Map(before.turns.map((each) => [each.id, each]));
   for (const each of after.turns) {

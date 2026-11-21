@@ -93,6 +93,8 @@ export function isChange(value: unknown): boolean {
   switch (value.type) {
     case "State":
       return isTagged(held);
+    case "Settings":
+      return isRecord(held);
     case "TurnAdded":
       return isTurn(held);
     case "TurnInserted":

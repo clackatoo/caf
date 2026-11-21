@@ -123,6 +123,8 @@ describe("ChatCopy", () => {
     ["ToolChanged with no tool", { type: "ToolChanged", value: { item: 1006, tool: null } }],
     ["ItemEnded with no end", { type: "ItemEnded", value: { item: 1006 } }],
     ["Usage that isn't usage", { type: "Usage", value: "x" }],
+    ["Settings that aren't settings", { type: "Settings", value: ["sonnet"] }],
+    ["Settings with no value", { type: "Settings" }],
     ["QuestionAsked with no value", { type: "QuestionAsked" }],
     ["QuestionAsked with no id", { type: "QuestionAsked", value: { kind: {} } }],
     ["QuestionGone with no id", { type: "QuestionGone" }],

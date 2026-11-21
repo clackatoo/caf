@@ -48,6 +48,7 @@ describe("version 1's sample", () => {
       "Paste",
       "StopSignIn",
       "SignOut",
+      "LearnSettings",
     ]);
     for (const { value } of expected) {
       const { agent, action } = value;
@@ -69,6 +70,9 @@ describe("version 1's sample", () => {
           break;
         case "SignOut":
           void caf.signOut(agent);
+          break;
+        case "LearnSettings":
+          void caf.learnSettings(agent);
           break;
       }
     }
@@ -115,6 +119,16 @@ describe("version 1's sample", () => {
     for (const { value } of expected) void caf.restore(value.chat, value.shelf).catch(() => {});
     const numbered = (messages: FromViewer[]) =>
       messages.map((message) => (message.type === "Restore" ? { ...message.value, request: 0 } : message));
+    expect(numbered(link.take())).toStrictEqual(numbered(expected));
+  });
+
+  test("choosing a setting is sent as CAF reads it", async () => {
+    const { caf, link } = await opened();
+    const expected = sample.from_viewer.filter((message) => message.type === "Set");
+    expect(expected).toHaveLength(1);
+    for (const { value } of expected) void caf.setSetting(value.chat, value.choice).catch(() => {});
+    const numbered = (messages: FromViewer[]) =>
+      messages.map((message) => (message.type === "Set" ? { ...message.value, request: 0 } : message));
     expect(numbered(link.take())).toStrictEqual(numbered(expected));
   });
 

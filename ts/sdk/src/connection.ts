@@ -364,12 +364,12 @@ export class Connection {
   }
 
   /**
-   * What the host lets this viewer do: `act` on chats (send, stop, answer
-   * and close), and on `agents` (install, and sign in and out). Offer only
-   * what it may: anything else is answered `NotAllowed`. A viewer that may
-   * not act on agents gets no sign-in's link or code. Whether it may open
-   * chats, or restore saved ones, isn't said, as the host decides each
-   * request.
+   * What the host lets this viewer do: `act` on chats (send, stop, answer,
+   * choose their settings and close), and on `agents` (install, sign in
+   * and out, and learn their settings). Offer only what it may: anything
+   * else is answered `NotAllowed`. A viewer that may not act on agents
+   * gets no sign-in's link or code. Whether it may open chats, or restore
+   * saved ones, isn't said, as the host decides each request.
    */
   get may(): Readonly<Rights> {
     return this.#may;
@@ -479,7 +479,10 @@ export class Connection {
    * Chooses a setting of a chat's agent, such as its model, by the
    * agent's own id: the chat's `settings` show it waiting until the agent
    * answers. A change made while the agent is answering applies from the
-   * next message. The host may reject it with `NotAllowed`.
+   * next message. It rejects with `Refused` `NoSuchSetting` if the agent
+   * has said what it offers and that isn't among it; before it has, any
+   * choice is taken, and checked as the session opens. The host may
+   * reject it with `NotAllowed`.
    */
   setSetting(chat: ChatId, choice: SettingChoice): Promise<void> {
     return this.#request("Done", (no) => ({ type: "Set", value: { request: no, chat, choice } }));
