@@ -640,8 +640,8 @@ pub(crate) mod tests {
         adapter.env = vec![("TEST_HOME".to_owned(), EnvValue::PrivateFolder)];
         let mut sign_in = bundled(program(), &["auth", "login"]);
         sign_in.env = adapter.env.clone();
-        let mut status = bundled(program(), &["auth", "status"]);
-        status.env = adapter.env.clone();
+        // Through its adapter: run as it's started, with its variables.
+        let status = bundled(Program::Adapter, &["auth", "status"]);
         Recipe {
             version: "1.4.0".to_owned(),
             install: Install::Download(vec![artifact("x86_64"), artifact("aarch64")]),
