@@ -1539,3 +1539,60 @@ fn a_host_command_never_runs_a_recipe_command_that_needs_the_private_folder() {
         ])
     );
 }
+
+#[test]
+fn a_status_command_from_before_a_sign_in_ended_never_undoes_it() {
+    let mut script = Script::new(host());
+    let out = script.surveyed(&["test-download-1.4.0"]);
+    script.setup(ticket_of(&out, "status"), SetupEvent::Status(None));
+    let sign_in = ticket_of(&script.sign_in("dl-agent").1, "sign_in");
+    // The host looks again while the sign-in runs: a status command starts.
+    let survey = ticket_of(&script.check_agents(), "survey");
+    let status = ticket_of(
+        &script.setup(survey, found(&["test-download-1.4.0"])),
+        "status",
+    );
+    // The sign-in ends, and a fresh status command is asked.
+    let out = script.setup(sign_in, SetupEvent::Ended { ok: true });
+    let fresh = ticket_of(&out, "status");
+    assert_ne!(fresh, status);
+    // The old one read the credentials before they were written.
+    script.setup(status, SetupEvent::Status(None));
+    assert_eq!(
+        script.agent_status("dl-agent")["sign_in"],
+        signed_in("Unknown")
+    );
+    script.setup(fresh, SetupEvent::Status(Some(SignedInAs::Account)));
+    assert_eq!(
+        script.agent_status("dl-agent")["sign_in"],
+        signed_in("Account")
+    );
+}
+
+#[test]
+fn a_status_command_from_before_a_sign_out_ended_never_undoes_it() {
+    let mut script = Script::new(host());
+    let out = script.surveyed(&["test-download-1.4.0"]);
+    script.setup(
+        ticket_of(&out, "status"),
+        SetupEvent::Status(Some(SignedInAs::Account)),
+    );
+    let survey = ticket_of(&script.check_agents(), "survey");
+    let status = ticket_of(
+        &script.setup(survey, found(&["test-download-1.4.0"])),
+        "status",
+    );
+    let run = ticket_of(&script.sign_out("dl-agent").1, "run");
+    script.setup(run, SetupEvent::Ended { ok: true });
+    script.setup(status, SetupEvent::Status(Some(SignedInAs::Account)));
+    assert_eq!(
+        script.agent_status("dl-agent")["sign_in"],
+        json!({ "type": "SignedOut" })
+    );
+    // And it no longer stops another being asked.
+    let survey = ticket_of(&script.check_agents(), "survey");
+    one(
+        &script.setup(survey, found(&["test-download-1.4.0"])),
+        "status",
+    );
+}

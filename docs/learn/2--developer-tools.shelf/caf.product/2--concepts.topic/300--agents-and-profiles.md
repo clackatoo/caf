@@ -157,7 +157,9 @@ command too.
 
 An agent started by the program's own command can be signed in to the same
 way, if its profile says how, once it has started and said it's the adapter
-that profile is for.
+that profile is for. The exception is an agent that keeps its sign-in in a
+private folder CAF gives it: only CAF's own install of it is given one, so
+CAF doesn't run commands that need it for the program's own.
 
 ## Sharing an adapter
 

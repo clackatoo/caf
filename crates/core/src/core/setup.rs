@@ -341,6 +341,7 @@ impl<A: AppItem> Core<A> {
                 } else if ok {
                     // Stopped as it finished: whether it's signed in now
                     // is the status command's to say.
+                    self.forget_status(&agent);
                     self.check_status(&agent, out);
                 } else if !stopped {
                     report(
@@ -365,6 +366,9 @@ impl<A: AppItem> Core<A> {
             }
             (Work::SignOut, SetupEvent::Ended { ok }) => {
                 self.setup.jobs.remove(&ticket);
+                // What a status command already running reads may be from
+                // before.
+                self.forget_status(&agent);
                 if ok {
                     self.set_sign_in(&agent, SignInState::SignedOut);
                 } else {
@@ -374,6 +378,9 @@ impl<A: AppItem> Core<A> {
                         format!("signing out of {} failed", agent.0),
                     );
                 }
+            }
+            (Work::Status, SetupEvent::Status(_)) if stopped => {
+                self.setup.jobs.remove(&ticket);
             }
             (Work::Status, SetupEvent::Status(how)) => {
                 self.setup.jobs.remove(&ticket);
@@ -665,6 +672,8 @@ impl<A: AppItem> Core<A> {
         for chat in chats {
             self.say(now, chat, Note::SignedIn);
         }
+        // One already running may have read it before the sign-in ended.
+        self.forget_status(agent);
         self.check_status(agent, out);
     }
 
@@ -687,6 +696,18 @@ impl<A: AppItem> Core<A> {
             ),
         );
         self.stop_job(ticket, out);
+    }
+
+    /// Lets status commands already running for `agent`'s sign-in go: what
+    /// they report is ignored, as it may be from before a sign-in or
+    /// sign-out that just ended, and a fresh one may run.
+    fn forget_status(&mut self, agent: &AgentName) {
+        let group = self.sign_in_group(agent);
+        for job in self.setup.jobs.values_mut() {
+            if matches!(job.work, Work::Status) && group.contains(&job.agent) {
+                job.stopped = true;
+            }
+        }
     }
 
     /// Runs `agent`'s status command, if it has one that can run now and
