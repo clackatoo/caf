@@ -17,6 +17,8 @@ serde.workspace = true
 serde_json.workspace = true
 # A long shelf name's folder.
 sha2.workspace = true
+# Reading chat ids from file names.
+uuid.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]

@@ -46,9 +46,7 @@
 //! finds repeats across the whole chat, such as a file read many times
 //! ([`FileStore::squeeze`]).
 
-// A draft: the bodies come with the build.
-#![allow(unused_variables, dead_code, clippy::missing_errors_doc)]
-
+use std::borrow::Cow;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -57,6 +55,9 @@ use caf_core::directive::StorageDirective;
 use caf_core::event::StorageEvent;
 use caf_core::save::{CannotRestore, Entry, Header, Saved};
 use caf_core::{AppData, AppItem, ChatId, Shelf, Ticket};
+
+mod files;
+mod format;
 
 /// The version of the format this CAF writes.
 pub const VERSION: u32 = 1;
@@ -73,9 +74,13 @@ pub enum Squeeze {
 }
 
 /// Writes a chat's header.
+///
+/// # Panics
+///
+/// Never: a header always writes.
 #[must_use]
 pub fn encode_header(header: &Header) -> Vec<u8> {
-    todo!()
+    format::header(header).expect("a header writes")
 }
 
 /// Reads a chat's header.
@@ -84,20 +89,30 @@ pub fn encode_header(header: &Header) -> Vec<u8> {
 ///
 /// [`CannotRestore::Newer`] or [`CannotRestore::Damaged`].
 pub fn decode_header(bytes: &[u8]) -> Result<Header, CannotRestore> {
-    todo!()
+    format::read_header(bytes)
 }
 
 /// Writes a chat whole, as its snapshot.
+///
+/// # Panics
+///
+/// If an app item can't be written as JSON, or the app's data as
+/// MessagePack: an [`AppItem`] with keys that aren't text, say.
+/// [`carry_out`] says so as a failed write instead.
 #[must_use]
 pub fn encode_snapshot<A: AppItem, D: AppData>(saved: &Saved<A, D>, squeeze: Squeeze) -> Vec<u8> {
-    todo!()
+    format::snapshot(Cow::Borrowed(saved), squeeze).unwrap_or_else(|why| panic!("{why}"))
 }
 
 /// Writes one record of a chat's journal: what changed since its last
 /// save, in order.
+///
+/// # Panics
+///
+/// As [`encode_snapshot`] does.
 #[must_use]
 pub fn encode_record<A: AppItem, D: AppData>(entries: &[Entry<A, D>]) -> Vec<u8> {
-    todo!()
+    format::record(Cow::Borrowed(entries)).unwrap_or_else(|why| panic!("{why}"))
 }
 
 /// Reads a chat: its snapshot, with its journal applied, as it was saved.
@@ -114,7 +129,7 @@ pub fn decode<A: AppItem, D: AppData>(
     snapshot: &[u8],
     journal: &[u8],
 ) -> Result<Saved<A, D>, CannotRestore> {
-    todo!()
+    format::read(snapshot, journal)
 }
 
 /// Compresses a snapshot again, as `squeeze` says, keeping what it holds
@@ -125,7 +140,7 @@ pub fn decode<A: AppItem, D: AppData>(
 /// [`CannotRestore::Newer`] or [`CannotRestore::Damaged`]: it's left as
 /// it is.
 pub fn recompress(snapshot: &[u8], squeeze: Squeeze) -> Result<Vec<u8>, CannotRestore> {
-    todo!()
+    format::squeeze(snapshot, squeeze)
 }
 
 /// A chat as a store keeps it, read back.
@@ -161,6 +176,17 @@ pub enum StoreError {
 impl From<io::Error> for StoreError {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
+    }
+}
+
+impl StoreError {
+    /// What went wrong, in a line.
+    fn describe(&self) -> String {
+        match self {
+            Self::NotFound => "the store has no such chat".into(),
+            Self::InUse => "another program has the chat open".into(),
+            Self::Io(error) => error.to_string(),
+        }
     }
 }
 
@@ -249,11 +275,110 @@ pub trait Store: Send + 'static {
 /// the directive asks for an answer: the storage driver's work, for any
 /// runtime. Encoding, compressing and decoding happen here, on the
 /// caller's thread, never the core's.
+///
+/// A chat loaded that can't be read is released at once, and left as it
+/// was. A failure to list a shelf is [`StorageEvent::Failed`]. For a
+/// write, [`StorageEvent::Done`] says how big the snapshot or record was:
+/// the header, rewritten each time, isn't counted.
 pub fn carry_out<A: AppItem, D: AppData>(
     store: &mut dyn Store,
     directive: StorageDirective<A, D>,
 ) -> Option<(Ticket, StorageEvent<A, D>)> {
-    todo!()
+    let done = |written| StorageEvent::Done { written };
+    Some(match directive {
+        StorageDirective::List { ticket, shelf } => (ticket, list(store, &shelf)),
+        StorageDirective::Load { ticket, shelf, chat } => {
+            let event = match store.load(&shelf, chat) {
+                Ok(stored) => match decode(&stored.snapshot, &stored.journal) {
+                    Ok(saved) => StorageEvent::Loaded(Box::new(saved)),
+                    Err(why) => {
+                        store.release(&shelf, chat);
+                        StorageEvent::NotLoaded(why)
+                    }
+                },
+                Err(StoreError::NotFound) => StorageEvent::NotLoaded(CannotRestore::NotFound),
+                Err(StoreError::InUse) => StorageEvent::NotLoaded(CannotRestore::InUse),
+                Err(StoreError::Io(error)) => {
+                    StorageEvent::NotLoaded(CannotRestore::Store(error.to_string()))
+                }
+            };
+            (ticket, event)
+        }
+        StorageDirective::Snapshot {
+            ticket,
+            shelf,
+            saved,
+        } => {
+            let chat = saved.header.chat;
+            let written = format::header(&saved.header).and_then(|header| {
+                let snapshot = format::snapshot(Cow::Owned(*saved), Squeeze::Fast)?;
+                (store.snapshot(&shelf, chat, &header, &snapshot))
+                    .map_err(|error| error.describe())?;
+                Ok(snapshot.len() as u64)
+            });
+            (ticket, written.map_or_else(StorageEvent::Failed, done))
+        }
+        StorageDirective::Append {
+            ticket,
+            shelf,
+            header,
+            entries,
+        } => {
+            let written = format::header(&header).and_then(|head| {
+                let record = format::record(Cow::Owned(entries))?;
+                (store.append(&shelf, header.chat, &head, &record))
+                    .map_err(|error| error.describe())?;
+                Ok(record.len() as u64)
+            });
+            (ticket, written.map_or_else(StorageEvent::Failed, done))
+        }
+        StorageDirective::Release { shelf, chat } => {
+            store.release(&shelf, chat);
+            return None;
+        }
+        StorageDirective::Delete {
+            ticket,
+            shelf,
+            chat,
+        } => (ticket, answer(store.delete(&shelf, chat))),
+        StorageDirective::MoveShelf { ticket, from, to } => {
+            (ticket, answer(store.move_shelf(&from, &to)))
+        }
+        // None the core gives yet.
+        _ => return None,
+    })
+}
+
+/// A shelf's chats, read: in the order they were made, and those that
+/// can't be, in the order of their ids.
+fn list<A: AppItem, D: AppData>(store: &mut dyn Store, shelf: &Shelf) -> StorageEvent<A, D> {
+    let heads = match store.list(shelf) {
+        Ok(heads) => heads,
+        Err(error) => return StorageEvent::Failed(error.describe()),
+    };
+    let mut chats = Vec::new();
+    let mut unreadable = Vec::new();
+    for (chat, head) in heads {
+        match decode_header(&head) {
+            Ok(header) if header.chat == chat => chats.push(header),
+            Ok(_) => unreadable.push((
+                chat,
+                CannotRestore::Damaged("its header is another chat's".into()),
+            )),
+            Err(why) => unreadable.push((chat, why)),
+        }
+    }
+    chats.sort_by_key(|header| (header.made, header.chat));
+    unreadable.sort_by_key(|(chat, _)| *chat);
+    StorageEvent::Listed { chats, unreadable }
+}
+
+/// What a deletion or move says.
+fn answer<A: AppItem, D: AppData>(done: Result<(), StoreError>) -> StorageEvent<A, D> {
+    match done {
+        Ok(()) => StorageEvent::Done { written: 0 },
+        Err(error) => StorageEvent::Failed(error.describe()),
+    }
 }
 
 /// CAF's own store: each shelf a folder, and each chat three files in it.
@@ -279,13 +404,18 @@ pub fn carry_out<A: AppItem, D: AppData>(
 #[derive(Debug)]
 pub struct FileStore {
     root: PathBuf,
+    /// The locks it holds, by chat.
+    held: files::Held,
 }
 
 impl FileStore {
     /// A store keeping its shelves in `root`, made if it isn't there.
     #[must_use]
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            held: files::Held::new(),
+        }
     }
 
     /// Where an app keeps its chats by default:
@@ -293,7 +423,14 @@ impl FileStore {
     /// `~/.local/share/<app>/chats`. `None` if there's no home.
     #[must_use]
     pub fn default_root(app: &str) -> Option<PathBuf> {
-        todo!()
+        // XDG says a relative one is ignored.
+        let data = (std::env::var_os("XDG_DATA_HOME").map(PathBuf::from))
+            .filter(|data| data.is_absolute())
+            .or_else(|| {
+                let home = PathBuf::from(std::env::var_os("HOME")?);
+                home.is_absolute().then(|| home.join(".local/share"))
+            })?;
+        Some(data.join(app).join("chats"))
     }
 
     /// The folder it keeps its shelves in.
@@ -313,17 +450,17 @@ impl FileStore {
     /// The first failure that stops it: one chat it can't squeeze is
     /// skipped and left as it was.
     pub fn squeeze(&mut self, after: Duration) -> io::Result<u64> {
-        todo!()
+        files::squeeze(&self.root, after)
     }
 }
 
 impl Store for FileStore {
     fn list(&mut self, shelf: &Shelf) -> Result<Vec<(ChatId, Vec<u8>)>, StoreError> {
-        todo!()
+        files::list(&self.root, shelf)
     }
 
     fn load(&mut self, shelf: &Shelf, chat: ChatId) -> Result<Stored, StoreError> {
-        todo!()
+        files::load(&self.root, &mut self.held, shelf, chat)
     }
 
     fn snapshot(
@@ -333,7 +470,7 @@ impl Store for FileStore {
         header: &[u8],
         snapshot: &[u8],
     ) -> Result<(), StoreError> {
-        todo!()
+        files::snapshot(&self.root, &mut self.held, shelf, chat, header, snapshot)
     }
 
     fn append(
@@ -343,18 +480,18 @@ impl Store for FileStore {
         header: &[u8],
         record: &[u8],
     ) -> Result<(), StoreError> {
-        todo!()
+        files::append(&self.root, &mut self.held, shelf, chat, header, record)
     }
 
     fn release(&mut self, shelf: &Shelf, chat: ChatId) {
-        todo!()
+        self.held.remove(&(shelf.clone(), chat));
     }
 
     fn delete(&mut self, shelf: &Shelf, chat: ChatId) -> Result<(), StoreError> {
-        todo!()
+        files::delete(&self.root, &mut self.held, shelf, chat)
     }
 
     fn move_shelf(&mut self, from: &Shelf, to: &Shelf) -> Result<(), StoreError> {
-        todo!()
+        files::move_shelf(&self.root, &mut self.held, from, to)
     }
 }
