@@ -847,6 +847,71 @@ async fn a_download_that_stalls_with_nobody_stopping_it_ends_offline() {
     );
 }
 
+/// A server on this machine that sends every request elsewhere.
+async fn redirect(to: &str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/fake-adapter", listener.local_addr().unwrap());
+    let to = to.to_owned();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let to = to.clone();
+            tokio::spawn(async move {
+                if head(&mut socket).await.is_some() {
+                    let answer = format!(
+                        "HTTP/1.1 302 Found\r\nLocation: {to}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = socket.write_all(answer.as_bytes()).await;
+                }
+            });
+        }
+    });
+    url
+}
+
+#[tokio::test]
+async fn a_failed_download_says_what_went_wrong_but_not_where() {
+    let dir = Dir::new();
+    let body = tar_gz();
+    let server = serve(body.clone(), false).await;
+    let elsewhere = redirect("ftp://user:s3cret@files.example/agent?token=s3cret").await;
+    let cases = [
+        (
+            "HTTP_PROXY",
+            "socks9://user:s3cret@proxy:1080",
+            server.url.clone(),
+        ),
+        ("HTTP_PROXY", "http://user:s3cret@[::1", server.url.clone()),
+        ("NONE", "", elsewhere),
+    ];
+    for (n, (name, value, url)) in cases.into_iter().enumerate() {
+        let env = [(name.to_owned(), value.to_owned())].into_iter().collect();
+        let mut driver = SetupDriver::with_options(
+            dir.root(),
+            Options {
+                http_to_this_machine: true,
+                env: Some(env),
+                ..Options::default()
+            },
+        );
+        let ticket = Ticket(1000 + n as u64);
+        driver.apply(SetupDirective::Install {
+            ticket,
+            folder: "fake-1.0.0".into(),
+            install: download(&url, &body, Unpack::TarGz),
+            private: None,
+        });
+        let events = done(&mut driver, ticket).await;
+        let Some(Ev(SetupEvent::InstallFailed(why))) = events.last() else {
+            panic!("{n}: it fails: {events:?}")
+        };
+        let said = format!("{why:?}");
+        assert!(!said.contains("s3cret"), "{n}: {said}");
+        if n < 2 {
+            assert!(said.contains("HTTP_PROXY"), "{n}: it says which: {said}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn a_download_that_stalls_stops_at_once() {
     let dir = Dir::new();

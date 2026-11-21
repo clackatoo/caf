@@ -602,7 +602,7 @@ async fn download(
             fetch(
                 &url,
                 out,
-                proxy.as_deref(),
+                proxy.as_ref().map(|(name, value)| (*name, value.as_str())),
                 https_only,
                 idle,
                 &done,
@@ -652,25 +652,56 @@ async fn download(
         .unwrap_or_else(|_| Err(other("unpacking panicked".into())))
 }
 
-/// The proxy a download of `url` goes through, if any, chosen as npm
-/// chooses it, from the variables `var` gives:
-/// - for `https`, `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY` or
-///   `http_proxy`, the first set; for `http`, `HTTP_PROXY` or `http_proxy`;
-/// - none if `NO_PROXY` (or `no_proxy`), a list split by commas, names the
-///   host or a domain it's in: `example.com` and `.example.com` both match
-///   `example.com` and `dl.example.com`.
-pub(crate) fn proxy_for(url: &str, var: impl Fn(&str) -> Option<String>) -> Option<String> {
-    let first = |names: &[&str]| {
-        (names.iter()).find_map(|name| var(name).filter(|value| !value.trim().is_empty()))
+/// The proxy a download of `url` goes through, if any, and the variable
+/// that named it, chosen from the environment variables npm reads, as npm
+/// chooses, from what `var` gives:
+/// - for `https`, npm's own `npm_config_https_proxy` or
+///   `npm_config_proxy` (in either case), then `HTTPS_PROXY`,
+///   `https_proxy`, `HTTP_PROXY` or `http_proxy`, the first set; for
+///   `http`, `npm_config_proxy`, then `HTTP_PROXY` or `http_proxy`;
+/// - none if `npm_config_noproxy`, `NO_PROXY` or `no_proxy`, a list split
+///   by commas, names the host or a domain it's in: `example.com` and
+///   `.example.com` both match `example.com` and `dl.example.com`.
+///
+/// What's set in an `.npmrc` file isn't read.
+pub(crate) fn proxy_for(
+    url: &str,
+    var: impl Fn(&str) -> Option<String>,
+) -> Option<(&'static str, String)> {
+    let first = |names: &[&'static str]| {
+        (names.iter()).find_map(|&name| {
+            let value = var(name).filter(|value| !value.trim().is_empty())?;
+            Some((name, value))
+        })
     };
     let lower = url.to_ascii_lowercase();
     let proxy = if lower.starts_with("https://") {
-        first(&["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"])
+        first(&[
+            "npm_config_https_proxy",
+            "NPM_CONFIG_HTTPS_PROXY",
+            "npm_config_proxy",
+            "NPM_CONFIG_PROXY",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "HTTP_PROXY",
+            "http_proxy",
+        ])
     } else {
-        first(&["HTTP_PROXY", "http_proxy"])
+        first(&[
+            "npm_config_proxy",
+            "NPM_CONFIG_PROXY",
+            "HTTP_PROXY",
+            "http_proxy",
+        ])
     }?;
     let host = host_of(&lower)?;
-    let skipped = first(&["NO_PROXY", "no_proxy"]).is_some_and(|list| {
+    let no_proxy = [
+        "npm_config_noproxy",
+        "NPM_CONFIG_NOPROXY",
+        "NO_PROXY",
+        "no_proxy",
+    ];
+    let skipped = first(&no_proxy).is_some_and(|(_, list)| {
         let host: Vec<&str> = host.split('.').rev().collect();
         (list.split(',')).any(|entry| {
             let entry = entry.trim().to_ascii_lowercase();
@@ -756,16 +787,17 @@ fn allowed_url(url: &str, options: &Options) -> bool {
 fn fetch(
     url: &str,
     mut out: File,
-    proxy: Option<&str>,
+    proxy: Option<(&str, &str)>,
     https_only: bool,
     idle: Duration,
     done: &AtomicU64,
     stopped: &AtomicBool,
 ) -> Result<String, InstallFailure> {
+    // Never the proxy's value in what's said: it may hold a password.
     let proxy = proxy
-        .map(|proxy| {
+        .map(|(name, proxy)| {
             ureq::Proxy::new(proxy)
-                .map_err(|error| other(format!("the proxy {proxy:?} can't be used: {error}")))
+                .map_err(|_| other(format!("the proxy {name} names can't be used")))
         })
         .transpose()?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -777,16 +809,7 @@ fn fetch(
         .http_status_as_error(true)
         .build()
         .into();
-    let response = agent.get(url).call().map_err(|error| match error {
-        ureq::Error::StatusCode(code) => other(format!("the download answered HTTP {code}")),
-        ureq::Error::Io(error) => io_failure(&error, true),
-        ureq::Error::HostNotFound
-        | ureq::Error::ConnectionFailed
-        | ureq::Error::Timeout(_)
-        | ureq::Error::Tls(_)
-        | ureq::Error::Rustls(_) => InstallFailure::Offline,
-        error => other(format!("the download failed: {error}")),
-    })?;
+    let response = agent.get(url).call().map_err(download_failure)?;
     let mut body = response.into_body();
     let mut reader = body.with_config().limit(u64::MAX).reader();
     let mut hash = Sha256::new();
@@ -808,6 +831,39 @@ fn fetch(
     }
     out.sync_all().map_err(|error| io_failure(&error, false))?;
     Ok(hex(&hash.finalize()))
+}
+
+/// Why a download failed, by the kind of failure alone: what ureq says
+/// may hold a URL a redirect gave, with its token.
+fn download_failure(error: ureq::Error) -> InstallFailure {
+    let why = match error {
+        ureq::Error::StatusCode(code) => {
+            return other(format!("the download answered HTTP {code}"));
+        }
+        ureq::Error::Io(error) => return io_failure(&error, true),
+        ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Timeout(_) => {
+            return InstallFailure::Offline;
+        }
+        ureq::Error::Tls(_)
+        | ureq::Error::Rustls(_)
+        | ureq::Error::Pem(_)
+        | ureq::Error::TlsRequired => "its site's certificate couldn't be checked",
+        ureq::Error::RequireHttpsOnly(_) => "it was sent somewhere that isn't https",
+        ureq::Error::TooManyRedirects | ureq::Error::RedirectFailed => {
+            "it was sent elsewhere too often, or somewhere it can't go"
+        }
+        ureq::Error::BadUri(_) | ureq::Error::Http(_) => "it was sent somewhere that isn't a link",
+        ureq::Error::InvalidProxyUrl | ureq::Error::ConnectProxyFailed(_) => {
+            "its proxy wouldn't take it"
+        }
+        ureq::Error::BodyExceedsLimit(_) => "it was bigger than it should be",
+        ureq::Error::BodyStalled => return InstallFailure::Offline,
+        ureq::Error::Protocol(_) | ureq::Error::LargeResponseHeader(..) => {
+            "its site's answer couldn't be read"
+        }
+        _ => "something went wrong",
+    };
+    other(format!("the download failed: {why}"))
 }
 
 /// Unpacks the checked download `file` into `build`, then removes it.
@@ -1247,7 +1303,37 @@ mod tests {
                     .find(|(each, _)| *each == name)
                     .map(|(_, value)| (*value).to_owned())
             })
+            .map(|(_, value)| value)
         };
+        let named = |vars: &[(&str, &str)]| {
+            proxy_for("https://dl.example.com/x", |name| {
+                (vars.iter())
+                    .find(|(each, _)| *each == name)
+                    .map(|(_, value)| (*value).to_owned())
+            })
+        };
+        // npm's own settings come first, and the variable is told.
+        assert_eq!(
+            named(&[
+                ("HTTPS_PROXY", "http://env"),
+                ("npm_config_https_proxy", "http://npm")
+            ]),
+            Some(("npm_config_https_proxy", "http://npm".to_owned()))
+        );
+        assert_eq!(
+            named(&[
+                ("HTTPS_PROXY", "http://env"),
+                ("NPM_CONFIG_PROXY", "http://npm")
+            ]),
+            Some(("NPM_CONFIG_PROXY", "http://npm".to_owned()))
+        );
+        assert_eq!(
+            named(&[
+                ("HTTPS_PROXY", "http://env"),
+                ("npm_config_noproxy", "example.com")
+            ]),
+            None
+        );
         let https = "https://dl.example.com:443/agent.tar.gz";
         assert_eq!(with(&[], https), None);
         assert_eq!(

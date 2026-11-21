@@ -119,13 +119,17 @@ use tokio::sync::{mpsc, oneshot};
 ///   [`InstallFailure::Offline`](caf_core::agent::InstallFailure::Offline)
 ///   when a minute passes with no byte coming, at any point. A slow
 ///   download that keeps coming has no limit.
-/// - **Proxies:** a download goes through the proxy npm would use:
-///   `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY` or `http_proxy`, the first
-///   that's set, unless `NO_PROXY` (or `no_proxy`), a list split by commas,
-///   names its host or a domain the host is in (`example.com` and
-///   `.example.com` both cover `dl.example.com`). npm installs are npm's
-///   own, and read the same. A download asks the proxy for a tunnel
-///   (`CONNECT`), and its `https` is checked end to end through it.
+/// - **Proxies:** a download reads the environment variables npm reads,
+///   and chooses as npm does: npm's own `npm_config_https_proxy` or
+///   `npm_config_proxy`, then `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY` or
+///   `http_proxy`, the first that's set, unless `npm_config_noproxy`,
+///   `NO_PROXY` or `no_proxy`, a list split by commas, names its host or a
+///   domain the host is in (`example.com` and `.example.com` both cover
+///   `dl.example.com`). A proxy set only in an `.npmrc` file is npm's
+///   alone: downloads don't read it. A download asks the proxy for a
+///   tunnel (`CONNECT`), and its `https` is checked end to end through it.
+///   A failure never says the proxy's value, which may hold a password,
+///   only which variable named it.
 /// - **Unpacking** keeps everything inside the install: each file is
 ///   written only once its folder, followed through any links, is found
 ///   inside; links are made after every file, and each must lead, followed
