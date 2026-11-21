@@ -1010,3 +1010,53 @@ fn an_older_save_holding_another_chat_is_never_written_again() {
         assert_eq!(files_in(&work), before, "v{version}: both are as they were");
     }
 }
+
+#[test]
+fn an_older_save_that_couldnt_be_written_again_is_written_whole_at_its_first_write() {
+    for version in 1..VERSION {
+        let copy = copy_files(version, &format!("upgrade-later-v{version}"));
+        let values = sample(version);
+        // Its rewrite fails as it's loaded…
+        let mut store = Broken::new(&copy.0, true, false);
+        assert!(matches!(
+            carry_load(&mut store),
+            Some((_, StorageEvent::Loaded(_)))
+        ));
+        store.snapshots = true;
+        // …so the core's first append is refused, as its snapshot is older…
+        let entries: Vec<Entry<Pin, Notes>> = from(json!([{ "type": "Session", "value": "s3" }]));
+        let append = StorageDirective::Append {
+            ticket: Ticket(2),
+            shelf: shelf(),
+            header: values.header.clone(),
+            entries,
+        };
+        match caf_save::carry_out(&mut store, append) {
+            Some((Ticket(2), StorageEvent::Failed(why))) => {
+                assert!(why.contains(&format!("of version {version}")), "{why}");
+                assert!(!why.contains("damaged"), "{why}");
+            }
+            other => panic!("v{version}: refused, not {other:?}"),
+        }
+        // …and it's written whole, as the core does after a failed write.
+        let mut whole = values.after.clone();
+        whole.header = values.header.clone();
+        whole.session = Some(caf_core::ids::AgentSessionId("s3".to_owned()));
+        let snapshot = StorageDirective::Snapshot {
+            ticket: Ticket(3),
+            shelf: shelf(),
+            saved: Box::new(whole.clone()),
+        };
+        assert!(matches!(
+            caf_save::carry_out(&mut store, snapshot),
+            Some((Ticket(3), StorageEvent::Done { .. }))
+        ));
+        store.release(&shelf(), id());
+        let stored = FileStore::new(&copy.0)
+            .load(&shelf(), id())
+            .expect("it loads");
+        assert_eq!(version_of(&stored.snapshot), VERSION);
+        assert!(stored.journal.is_empty(), "v{version}: its journal is new");
+        assert_eq!(decode(&stored.snapshot, &stored.journal), Ok(whole));
+    }
+}

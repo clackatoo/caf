@@ -332,10 +332,12 @@ pub trait Store: Send + 'static {
     /// # Errors
     ///
     /// [`StoreError::NotFound`] if it has no snapshot, [`StoreError::InUse`]
-    /// if it isn't locked and another has it, [`StoreError::Damaged`] if
-    /// its snapshot is of an older version, or what it keeps can't take the
-    /// record, [`StoreError::Newer`] if its snapshot is of a newer one, or
-    /// [`StoreError::Io`]. A failed append adds nothing.
+    /// if it isn't locked and another has it, [`StoreError::Newer`] if its
+    /// snapshot is of a newer version, [`StoreError::Damaged`] if what it
+    /// keeps can't take the record, or [`StoreError::Io`], which is how
+    /// [`FileStore`] refuses one whose snapshot is of an older version
+    /// (of kind [`InvalidInput`](io::ErrorKind::InvalidInput), saying so).
+    /// A failed append adds nothing.
     fn append(
         &mut self,
         shelf: &Shelf,
