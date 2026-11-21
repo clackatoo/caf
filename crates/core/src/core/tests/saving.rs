@@ -1458,3 +1458,33 @@ fn a_shelf_that_couldnt_be_moved_is_read_again() {
         ]
     );
 }
+
+#[test]
+fn a_restored_chats_header_is_its_own_not_the_snapshots() {
+    let mut script = Script::new(host());
+    let restore = RestoreChat::new(CHAT, Shelf(SHELF.to_owned()));
+    script.restore(restore).0.expect("restoring");
+    // The snapshot's header, from before its journal: older than the
+    // chat it's read with.
+    let mut saved = saved(&mid_turn("claude"), Some("old"), -60_000);
+    saved.header.turns = 0;
+    saved.header.first = None;
+    saved.header.label = Some("Old".to_owned());
+    saved.header.closed = true;
+    let made = saved.header.made;
+    let out = script.storage(1000, StorageEvent::Loaded(Box::new(saved)));
+    assert_has(
+        &one_storage(&out),
+        &json!({ "type": "Append", "value": { "header": {
+            "made": made.0, "turns": 3, "first": "Hello", "label": null, "closed": false,
+            "profile": "claude-agent-acp"
+        } } }),
+    );
+    // What was under way ends when the chat last changed, as it says:
+    // its message waiting since 30 ms after its first turn started.
+    let latest = json!({ "type": "At", "value": EPOCH - 50_000 + 30 });
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "turns": [{}, { "life": { "type": "CutOff" }, "window": { "end": latest } }, { "window": { "end": latest } }] }),
+    );
+}

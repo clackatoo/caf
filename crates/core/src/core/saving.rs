@@ -610,7 +610,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 self.ids.seen(item.id.0);
             }
         }
-        let changes = tidy(&whole, header.changed);
+        // The header read is the snapshot's, older than its journal: only
+        // when it was made, and its agent's profile, which no journal entry
+        // changes, are taken from it. The rest is the chat's own: its
+        // label, first line, turns and whether it's closed are read from
+        // it as each header is made, and when it last changed is its
+        // latest time.
+        let changed = last_change(&whole).map_or(header.changed, |at| at.max(header.changed));
+        let changes = tidy(&whole, changed);
         let mcp_sent = (restore.mcp_servers.iter())
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
@@ -618,7 +625,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let conn = self.conn_for(id, &whole.agent);
         let cwd = whole.cwd.to_string_lossy().into_owned();
         let mut kept = Kept::new(restore.shelf, header.made, true);
-        kept.changed = header.changed;
+        kept.changed = changed;
         kept.profile = header.profile;
         kept.session.clone_from(&session);
         self.saving.kept.insert(id, kept);
@@ -1142,6 +1149,23 @@ pub(super) fn tidy<A: AppItem>(chat: &Chat<A>, at: Wall) -> Vec<Change<A>> {
         changes.push(Change::State(ChatState::Idle));
     }
     changes
+}
+
+/// The latest time `chat` holds: when anything in it started or ended.
+fn last_change<A: AppItem>(chat: &Chat<A>) -> Option<Wall> {
+    let times = |window: &crate::time::Window| {
+        let end = match window.end {
+            End::At(at) => Some(at),
+            _ => None,
+        };
+        window.start.into_iter().chain(end)
+    };
+    let turns = (chat.turns.iter()).flat_map(|turn| {
+        let items = turn.items.iter().flat_map(|item| times(&item.window));
+        times(&turn.window).chain(items)
+    });
+    let questions = (chat.questions.iter()).flat_map(|question| times(&question.window));
+    turns.chain(questions).max()
 }
 
 /// The first line of `chat`'s first message from the user, cut to 200
