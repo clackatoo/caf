@@ -84,6 +84,8 @@ makes CAF hold more than one picture of each chat for it.
 - **`open`** turns a viewer's request to open a chat into an `OpenChat`, or
   refuses it. The default refuses every one, so viewers can only watch and
   use chats the host opened.
+- **`restore`** does the same for a request to restore a saved chat: it
+  gives the chat its tools, or refuses. The default refuses every one.
 - **`act`** says whether viewers may send, stop, answer and close. It's
   `true` by default.
 
@@ -124,7 +126,7 @@ import { Connection, webSocket } from "@clackatoo/caf";
 
 const caf = await Connection.open(await webSocket("ws://127.0.0.1:7320/viewer"));
 caf.agents; // every agent on offer: its name, whether it's installed and signed in
-caf.chats; // the open chats: id, agent and folder
+caf.chats; // the open chats: id, agent, folder, and the app's label and shelf, if any
 caf.onChats((chats) => drawList(chats));
 caf.onAgents((agents) => drawAgents(agents));
 ```
@@ -195,11 +197,12 @@ rejects with a `CafError`, whose `why` says why:
 | `Refused` | The core refused it, and nothing changed. `why.value` says why, such as `QueueFull`. |
 | `NotAllowed` | The host doesn't let viewers do this. |
 | `Gone` | CAF has shut down, or is shutting down: nothing was done. |
+| `CannotRestore` | A saved chat couldn't be restored: see [Saved chats](#saved-chats). |
 | `Unknown` | It went in a way this version of the SDK doesn't know, from a later CAF. `why.value.outcome` is its name. |
 | `Disconnected` | The link ended before the answer came. |
 
-A later CAF may add reasons: to `Refused` here, and to a chat's `Lost` and
-a failed turn's `FailureReason`. The types list only the reasons this
+A later CAF may add reasons: to `Refused` and `CannotRestore` here, and to
+a chat's `Lost` and a failed turn's `FailureReason`. The types list only the reasons this
 version of the SDK knows, but a new one still comes through, by its name.
 So give every `switch` on a reason a `default` that shows it by its `type`:
 
@@ -214,6 +217,56 @@ function refusal(reason: Refused): string {
   }
 }
 ```
+
+### Saved chats
+
+A host that saves its chats keeps them on **shelves**, names of its own
+choosing, and lists the shelves it wants viewers to see. `caf.saved` holds
+the chats saved on them, open or not, in the order they were made:
+
+```ts
+caf.saved; // each: its shelf, its header, and its state
+caf.onSaved((saved) => drawSaved(saved));
+const chat = await caf.restore(saved.header.chat, saved.shelf);
+```
+
+CAF sends the list right after the agents, and again, whole, whenever it
+changes, so it may come just after `open` resolves: read `saved`, and
+follow `onSaved`, which returns a function that stops it. A host that
+lists no shelves never sends it, and `saved` stays empty.
+
+Each chat's `header` is what to show without loading it: its `chat` id,
+`agent`, `cwd`, when it was `made` and last `changed`, the app's `label`
+for it, the `first` line of its first message, how many `turns` it has,
+and whether it was `closed`. Its `state` is `Saved`, `Restoring`, `Loaded`,
+or `Failed`, with why the last restore failed.
+
+`restore` resolves with the chat's id once it's loaded: it's in `chats`,
+and watched like any other. A chat keeps its id when it's saved and
+restored. A restored chat is `Idle`: no session is open until a message is
+sent, which opens one, continuing the agent's session where the agent can.
+
+The host decides each restore, as it does each open, so `may` doesn't say
+whether this page may: one it doesn't allow rejects with `NotAllowed`. One
+that can't be restored rejects with `CannotRestore`, and its save is left as
+it was. `why.value` says why:
+
+| `why.value.type` | Why |
+|---|---|
+| `NotFound` | It isn't on that shelf. |
+| `InUse` | Another program has it open: a chat is never open twice. |
+| `Newer` | A newer CAF saved it, in a version of the format (`why.value.value.version`) this one can't read. |
+| `Damaged` | Its save is damaged: the value says how. |
+| `AppData` | The app can't read the data it saved with it: the value says why. |
+| `Store` | The store failed, such as a disk error: the value says how. |
+
+Trying again may help after `InUse` or `Store`, not after the rest. The
+core may also refuse it: `Loaded`, for a chat that's open or being restored
+already, or `BadShelf`, for a shelf's name it can't take.
+
+An item of the app's own that this version of the app can't read comes
+back as an `Unknown` item whose `what` is `App`, with the `summary` it had:
+show that. Its data is kept exactly as it was, and saved back unchanged.
 
 ### Install and sign in
 
@@ -287,11 +340,12 @@ async function reconnect() {
 `onClose` returns a function that stops it, such as when the page is done
 with the connection.
 
-A restarted CAF numbers its chats, and each chat's changes, from the start
-again, so after a restart chat 3 may be another chat, or none. Each
-connection's `run` names the run of CAF it reached, and is different every
-time CAF starts. So compare it with the old connection's: if it changed, the
-page's chat ids mean nothing now, and it starts again from the new `chats`.
+A chat keeps its id for good, but a restarted CAF numbers each chat's
+changes from the start again, and a chat open before may not be open now.
+Each connection's `run` names the run of CAF it reached, and is different
+every time CAF starts. So compare it with the old connection's: if it
+changed, the page's copies mean nothing now, and it starts again from the
+new `chats`.
 `watch` checks too: it only resumes from a copy one of its watches made on
 a connection to the same run, and otherwise asks for the chat whole. A
 `ChatCopy` the page made itself, such as from storage, isn't resumed from.
@@ -371,6 +425,11 @@ turn that failed for want of signing in offers Sign in, and still offers
 Send again: once signed in, the user sends it again, since CAF never does
 by itself. Sign in shows only while the agent's status says CAF can sign
 in to it now.
+
+Beside it, `ChatList` lists the open chats, by their labels where they have
+them, and `SavedList` lists `caf.saved`: each chat's label or first line,
+its agent, folder, when it last changed and its turns, whether it's loaded
+or why it can't be, and Restore, taking `restore(chat, shelf)` as an action.
 
 It imports only the caf-sdk, Svelte and markdown-it, which a check in CI
 holds it to, so the folder can be lifted out whole. Copy it, or read it for
