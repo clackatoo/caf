@@ -3,6 +3,10 @@
 //! The fake (`caf-fake-agent`) follows a script with no branches or
 //! loops, so this one is in two parts:
 //!
+//! - **Its session** is opened by a handler, new or resumed: it says it
+//!   can resume sessions, so a chat the debugger restores carries on
+//!   with it, as it would with a real agent. It has no memory, so
+//!   resuming is only saying yes.
 //! - **Any message** is answered at once by a handler: a line of thinking,
 //!   then a few words, each a chunk of its own, and the turn ends.
 //! - **The message `fail`**, exactly, is answered at once with an error,
@@ -86,14 +90,19 @@ pub fn script() -> String {
         line(&json!({"on": {"fallback": true, "do": [
             {"respond": {"error": {"code": -32601, "message": "Method not found"}}},
         ]}})),
+        // A chat's session, new or carried on from a saved chat's.
+        line(&json!({"on": {"method": "session/new", "do": [
+            {"respond": {"result": {"sessionId": SESSION}}},
+        ]}})),
+        line(&json!({"on": {"method": "session/resume", "do": [
+            {"respond": {"result": {}}},
+        ]}})),
         line(&json!({"wait": {"method": "initialize", "as": "prompt"}})),
         line(&json!({"respond": {"result": {
             "protocolVersion": 1,
-            "agentCapabilities": {},
+            "agentCapabilities": {"sessionCapabilities": {"resume": {}}},
             "agentInfo": {"name": "caf-fake-agent", "version": env!("CARGO_PKG_VERSION")},
         }}})),
-        line(&json!({"wait": {"method": "session/new"}})),
-        line(&json!({"respond": {"result": {"sessionId": SESSION}}})),
     ];
     for round in 1..=ROUNDS {
         lines.extend(asking(round).iter().map(line));

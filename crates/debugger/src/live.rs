@@ -1,16 +1,20 @@
 //! Running CAF live: its steps go into the book, each checked against two
 //! replays, of the steps' own events and of the recording's lines
-//! ([`Check`]).
+//! ([`Check`]). Chats are kept in a file store, on one shelf
+//! ([`SHELF`]), listed as CAF starts, so a restarted debugger offers to
+//! restore them.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use caf_core::agent::AgentSpec;
 use caf_core::host::Grouping;
+use caf_core::save::RestoreChat;
 use caf_core::time::Now;
-use caf_core::{Core, Host, NoAppItems, OpenChat};
+use caf_core::{Core, Host, NoAppItems, OpenChat, Shelf};
 use caf_driver_tokio::viewer::ViewerRules;
 use caf_driver_tokio::{Caf, Config, Running, Step as CafStep, Steps};
+use caf_save::{FileStore, Store};
 use serde_json::value::RawValue;
 use tokio::sync::mpsc;
 
@@ -30,6 +34,17 @@ pub struct Live {
     pub rules: Arc<ViewerRules>,
     /// The recording, if CAF could make it.
     pub recording: Option<PathBuf>,
+    /// The folder chats are kept in, if they're kept.
+    pub store: Option<PathBuf>,
+}
+
+/// The shelf the debugger keeps its chats on.
+pub const SHELF: &str = "debugger";
+
+/// [`SHELF`], as CAF names it.
+#[must_use]
+pub fn shelf() -> Shelf {
+    Shelf(SHELF.to_owned())
 }
 
 /// The host the debugger is to CAF: it shows permission questions and
@@ -49,9 +64,11 @@ pub fn host() -> Host {
 
 /// What viewers may do: open a chat with any of `agents` in any absolute
 /// folder, with no MCP servers, act on every chat, and install agents and
-/// sign in and out of them.
+/// sign in and out of them. If chats are `saved`, each opened is kept on
+/// [`SHELF`], and viewers may restore those kept there, with no MCP
+/// servers, as new chats have.
 #[must_use]
-pub fn rules(agents: &[AgentSpec]) -> ViewerRules {
+pub fn rules(agents: &[AgentSpec], saved: bool) -> ViewerRules {
     let names: Vec<_> = agents.iter().map(|agent| agent.name.clone()).collect();
     let mut rules = ViewerRules::default();
     rules.agents = true;
@@ -61,24 +78,40 @@ pub fn rules(agents: &[AgentSpec]) -> ViewerRules {
         }
         let mut open = OpenChat::new(request.agent.0.clone(), request.cwd.clone());
         open.session = request.session.clone();
+        open.shelf = saved.then(shelf);
         Some(open)
     });
+    if saved {
+        rules.restore =
+            Box::new(|chat, on| (on.0 == SHELF).then(|| RestoreChat::new(chat, shelf())));
+    }
     rules
 }
 
-/// Starts CAF with `agents`, recording to `record` if given, and checking
-/// every step against replays of it. Must be called on a tokio runtime.
+/// Starts CAF with `agents`, recording to `record` if given, keeping chats
+/// in a file store in `store` if given, and checking every step against
+/// replays of it. With a store, [`SHELF`] is listed at once. Must be
+/// called on a tokio runtime.
 #[must_use]
-pub fn start(agents: Vec<AgentSpec>, record: Option<PathBuf>) -> Live {
+pub fn start(agents: Vec<AgentSpec>, record: Option<PathBuf>, store: Option<PathBuf>) -> Live {
     let base = Base {
         host: host(),
         agents: agents.clone(),
     };
-    let rules = Arc::new(rules(&agents));
+    let rules = Arc::new(rules(&agents, store.is_some()));
     let mut config = Config::new(base.host.clone(), agents);
     config.record.clone_from(&record);
+    config.store = (store.as_ref()).map(|root| Box::new(FileStore::new(root)) as Box<dyn Store>);
     let (tap, steps) = mpsc::unbounded_channel();
     let (caf, running) = Caf::start_watching(config, Tap(tap));
+    if store.is_some() {
+        let listing = caf.clone();
+        tokio::spawn(async move {
+            if let Err(error) = listing.list_saved(shelf()).await {
+                log::warn!("the saved chats can't be listed: {error}");
+            }
+        });
+    }
     // The kit makes the file as CAF starts, or says why it couldn't. The
     // name was free, and has the process's id in it, so a file there now
     // is this run's.
@@ -97,6 +130,7 @@ pub fn start(agents: Vec<AgentSpec>, record: Option<PathBuf>) -> Live {
         book,
         rules,
         recording,
+        store,
     }
 }
 
@@ -245,8 +279,9 @@ fn json(raw: &RawValue) -> Option<serde_json::Value> {
 /// Directives with what a recording hides taken out, so a replay of the
 /// recording and the live run can be compared:
 /// - A recording hides the values of MCP servers' variables and headers
-///   in the host's event that opens a chat, and those reach the agent in
-///   the `mcpServers` of the message that opens or loads its session: so
+///   in the host's event that opens or restores a chat, and those reach
+///   the agent in the `mcpServers` of the message that opens, resumes or
+///   loads its session: so
 ///   in each `Write` to an agent whose message has `params.mcpServers`,
 ///   every server's `env` and `headers` values become `null`. Its `bytes`
 ///   are compared as the JSON they hold; every other `Write`'s bytes stay
@@ -301,7 +336,7 @@ mod tests {
     use serde_json::json;
     use serde_json::value::RawValue;
 
-    use super::{Raw, check_recording, check_steps, hidden, host, rules};
+    use super::{Raw, Shelf, check_recording, check_steps, hidden, host, rules, shelf};
     use crate::inspector::Check;
     use crate::replay::{Base, take, to_json};
 
@@ -452,12 +487,12 @@ mod tests {
 
     #[test]
     fn viewers_may_install_agents_and_sign_in_and_out() {
-        assert!(rules(&agents()).agents);
+        assert!(rules(&agents(), false).agents);
     }
 
     #[test]
     fn viewers_may_open_the_agents_on_offer_in_absolute_folders_with_no_tools() {
-        let rules = rules(&agents());
+        let rules = rules(&agents(), false);
         let open = rules.open.as_ref();
         let mut request = OpenRequest::new("fake", "/home/me/project");
         let chat = open(&request).expect("allowed");
@@ -469,5 +504,26 @@ mod tests {
             open(&OpenRequest::new("claude", "/home/me")).is_none(),
             "not on offer"
         );
+    }
+
+    #[test]
+    fn saved_chats_are_kept_on_the_debuggers_shelf_and_only_those_restored() {
+        let rules = rules(&agents(), true);
+        let chat = (rules.open)(&OpenRequest::new("fake", "/home/me/project")).expect("allowed");
+        assert_eq!(chat.shelf, Some(shelf()));
+        let id = caf_core::ChatId::from_number(1000);
+        let restore = (rules.restore)(id, &shelf()).expect("allowed");
+        assert_eq!((restore.chat, &restore.shelf), (id, &shelf()));
+        assert!(restore.mcp_servers.is_empty(), "the tools new chats have");
+        let elsewhere = Shelf("another app's".into());
+        assert!((rules.restore)(id, &elsewhere).is_none());
+        let unsaved = super::rules(&agents(), false);
+        assert_eq!(
+            (unsaved.open)(&OpenRequest::new("fake", "/home/me"))
+                .unwrap()
+                .shelf,
+            None
+        );
+        assert!((unsaved.restore)(id, &shelf()).is_none());
     }
 }

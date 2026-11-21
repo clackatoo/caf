@@ -2,14 +2,26 @@
 import type { JsonValue } from "./serde_json/JsonValue.ts";
 
 /**
- * Something the agent sent that CAF couldn't read.
+ * Something the agent sent that CAF couldn't read, or an app item a
+ * restored chat held that the app can't read now.
+ *
+ * An app item that can't be read keeps its data exactly as it was saved,
+ * and is saved back as that app item, unchanged, so a version of the app
+ * that can read it gets it back: `what` is `App`, `raw` is its data, and
+ * `summary` is the summary it had. Its data is kept as JSON, which holds
+ * whatever serde writes with text keys and no raw bytes, as an
+ * [`AppItem`] must.
  */
 export type Unknown = { 
 /**
- * What it said it was, such as the update's tag.
+ * What it said it was, such as the update's tag, or `App`.
  */
 what: string, 
 /**
  * The original data, so nothing is lost.
  */
-raw: JsonValue, };
+raw: JsonValue, 
+/**
+ * What it is, in a line, if CAF knows: an app item's summary.
+ */
+summary: string | null, };

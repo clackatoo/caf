@@ -32,10 +32,13 @@
 //! - stop a turn;
 //! - survive the adapter dying or hanging.
 //!
-//! Feature 2 added the [`viewer`] wire. Feature 3 adds installing the
+//! Feature 2 added the [`viewer`] wire. Feature 3 added installing the
 //! agents CAF has profiles for, and signing in to them, each from its
 //! profile's recipe ([`install`]): [`Core::install`], [`Core::sign_in`]
 //! and the rest, with where each agent stands in [`Core::agents`].
+//! Feature 4 adds saving chats and restoring them ([`save`]):
+//! [`Core::restore`], [`Core::put_away`] and the rest, with the app's own
+//! data on each chat ([`AppData`]).
 //!
 //! The types already hold everything the architecture fixed, so later
 //! features add behaviour without reshaping them. Items and variants
@@ -65,7 +68,8 @@
 //!   is always written first.
 //! - **Names are as in Rust**: fields in snake_case, variants in
 //!   PascalCase, so these docs describe the wire exactly.
-//! - **Ids are plain numbers or strings**, such as a [`ChatId`] as `1000`.
+//! - **Ids are plain numbers or strings**, such as a [`TurnId`] as `1000`,
+//!   or a [`ChatId`] as its UUID's text.
 //! - **What isn't CAF's keeps its own shape:** what an agent sent, such as
 //!   a message's params or an [`Unknown`](chat::Unknown) item's data, stays
 //!   exactly as it came; Rust's own types keep serde's shapes, such as
@@ -82,9 +86,9 @@
 //!
 //! Every number CAF itself writes in a chat or on the viewer wire
 //! ([`viewer`]) is below 2^53, so JavaScript reads it exactly: CAF's ids
-//! count up from 1, times are milliseconds ([`Wall`](time::Wall)), and a
-//! number the agent gives that CAF keeps, such as how full its memory is,
-//! is read only if it's below 2^53. An update with a bigger one is
+//! count up from 1 (a chat's is a UUID, as text), times are milliseconds
+//! ([`Wall`](time::Wall)), and a number the agent gives that CAF keeps,
+//! such as how full its memory is, is read only if it's below 2^53. An update with a bigger one is
 //! unreadable, and kept as an [`Unknown`](chat::Unknown) item. A viewer's
 //! own request numbers are quoted back as it sent them.
 //!
@@ -121,9 +125,12 @@
 //!    opens a turn: anything else said outside one, such as a notice, is
 //!    reported, with what it says, as are updates about the whole chat
 //!    (its plan, commands, mode, settings and title) until the features
-//!    that keep them. The one thing CAF drops on purpose is all but the
-//!    kind of an adapter's own sign-in status (`_auth/status_update`):
-//!    the rest holds the account's email, which CAF never keeps.
+//!    that keep them. CAF drops two things on purpose: all but the kind of
+//!    an adapter's own sign-in status (`_auth/status_update`), as the rest
+//!    holds the account's email, which CAF never keeps; and what an agent
+//!    replays when a restored chat's session is loaded, as CAF has the
+//!    chat's record already: reported once each time the session is asked
+//!    to load.
 //! 4. **Every event names what it belongs to**: a turn, an item, a session,
 //!    a process. A late update lands on its own row, never on whatever is
 //!    current.
@@ -137,6 +144,25 @@
 //!    every session it carried is told, not just the one that asked.
 //! 9. **Agent text is never passed off as CAF's.** Failure text from the
 //!    agent is cleaned, capped and kept apart from CAF's own words.
+//! 10. **A saved chat is let go in the store only once it's written
+//!     whole**, when it's put away, closed or CAF shuts down, and a write
+//!     that fails is tried again until it's done. The exceptions are
+//!     chats the core has no use for: one a restore found damaged, one
+//!     that couldn't be deleted, and one whose load came after it was
+//!     deleted, if the deletion failed: they're let go as the store has
+//!     them
+//!     (`shutting_down_writes_an_idle_chat_whole_before_letting_it_go_though_nothing_changed`,
+//!     `a_failed_put_away_is_tried_again_and_let_go_once_written`).
+//! 11. **What's saved reads back as the chat was**: its snapshot with its
+//!     journal applied is the chat, and restored, it's the chat tidied
+//!     (`a_saved_chat_reads_back_as_it_is_and_restores_tidied`).
+//! 12. **Nothing is sent for a shelf while it's being moved**, and a move
+//!     is sent only once nothing for either shelf is under way
+//!     (`a_move_waits_for_work_on_its_shelves_and_a_failed_one_leaves_its_chats_where_they_were`,
+//!     `loads_deletions_and_lists_wait_for_a_move_of_their_shelf_and_go_where_it_says`).
+//! 13. **Every chat the store holds locked for this run is let go** once
+//!     nothing has a use for it, whatever order the store answers in
+//!     (`saved_chats_restored_put_away_deleted_and_moved_in_any_order_settle_as_they_should`).
 
 // `acp`'s framer and parser are being written apart from the rest.
 pub mod acp;
@@ -155,6 +181,7 @@ pub mod install;
 mod kinds;
 pub mod profiles;
 pub mod question;
+pub mod save;
 #[cfg(test)]
 mod shape;
 pub mod time;
@@ -164,9 +191,10 @@ pub mod viewer;
 
 pub use crate::core::{Core, OpenChat, Refused, SessionChoice};
 pub use change::{Change, Mismatch, Numbered, Read};
-pub use chat::{AppItem, Chat, Item, ItemKind, NoAppItems, Turn};
+pub use chat::{AppData, AppItem, Chat, Item, ItemKind, NoAppData, NoAppItems, Turn};
 pub use directive::{Directive, Report};
 pub use event::{Event, HostCommand};
 pub use host::Host;
-pub use ids::{ChatId, ItemId, QuestionId, Ticket, TurnId};
+pub use ids::{ChatId, ItemId, QuestionId, Shelf, Ticket, TurnId};
+pub use save::{RestoreChat, SavedChat};
 pub use time::{Now, Window};

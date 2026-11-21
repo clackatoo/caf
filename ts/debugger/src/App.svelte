@@ -5,9 +5,18 @@
   // Live and following, the chat view shows `/viewer`'s chats, as any
   // host's does. Looking back, or replaying, it shows the chats as they
   // were, from the inspector channel's `Past` messages, read-only.
-  import type { AgentName, Answer, Chat, ChatId, DeepReadonly, QuestionId, UserMessage } from '@clackatoo/caf'
+  import type { AgentName, Answer, Chat, ChatId, DeepReadonly, QuestionId, Shelf, UserMessage } from '@clackatoo/caf'
   import AgentsPanel, { type AgentActions } from './AgentsPanel.svelte'
-  import { ChatList, ChatView, showsAgent, type ChatActions, type ListActions } from './chat/index.ts'
+  import {
+    ChatList,
+    ChatView,
+    SavedList,
+    restoreOnceFree,
+    showsAgent,
+    type ChatActions,
+    type ListActions,
+    type SavedActions,
+  } from './chat/index.ts'
   import { PROTOCOL } from './inspector/channel.ts'
   import { Inspector } from './inspector/client.svelte.ts'
   import InspectorView from './inspector/Inspector.svelte'
@@ -43,6 +52,10 @@
   const chat = $derived(
     selected === null ? null : lookingBack ? (inspector.past.chats.get(selected) ?? null) : (live?.chat ?? null),
   )
+  /** The app's line for the chat shown, from the list of chats. */
+  const label = $derived(summaries.find((summary) => summary.id === selected)?.label ?? null)
+  /** The saved chats, live. Looking back, or replaying, there are none to show, as for the agents. */
+  const saved = $derived(lookingBack ? [] : (live?.saved ?? []))
 
   // The live watch follows the chat chosen, link up or not: while it's
   // down, the chat chosen is remembered, and watched once it's back.
@@ -109,6 +122,15 @@
     open: async (agent: AgentName, cwd: string) => {
       if (live === null) throw new Error('Not live.')
       selected = await live.caf.open({ agent, cwd, session: { type: 'New' } })
+    },
+  }
+
+  const savedActions: SavedActions = {
+    select: (chat: ChatId) => (selected = chat),
+    restore: async (chat: ChatId, shelf: Shelf) => {
+      if (live === null) throw new Error('Not live.')
+      const caf = live.caf
+      selected = await restoreOnceFree(() => caf.restore(chat, shelf))
     },
   }
 
@@ -209,6 +231,11 @@
         <div class="chats">
           <ChatList chats={summaries} agents={agents.map((agent) => agent.name)} {selected} actions={listActions} readOnly={!actable} />
         </div>
+        {#if saved.length > 0}
+          <div class="saved">
+            <SavedList {saved} actions={savedActions} readOnly={!actable} />
+          </div>
+        {/if}
         {#if mode === 'Live' && !lookingBack}
           <AgentsPanel
             {agents}
@@ -223,6 +250,7 @@
         {#if chat !== null}
           <ChatView
             {chat}
+            {label}
             agent={agentStatus}
             may={lookingBack ? undefined : live?.may}
             actions={chatActions}
@@ -234,9 +262,9 @@
             {#if selected === null}
               {lookingBack ? 'No chats at this step.' : 'No chat yet: open one with New chat.'}
             {:else if lookingBack && !summaries.some((summary) => summary.id === selected)}
-              Chat {selected} didn't exist at this step.
+              The chat chosen didn't exist at this step.
             {:else}
-              Loading chat {selected}…
+              Loading the chat…
             {/if}
           </p>
         {/if}
@@ -383,6 +411,11 @@
   }
   .chats {
     flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .saved {
+    max-height: 45%;
     min-height: 0;
     overflow-y: auto;
   }

@@ -17,6 +17,7 @@ use super::frames::Reply;
 use super::state::{Caps, Conn, Ending, Gone, Group, Init, Open, Proc, Purpose, Step};
 use super::{Core, report};
 use crate::agent::Launch;
+use crate::chat::AppData;
 use crate::chat::{AppItem, ChatState, Incompatible, Lost};
 use crate::directive::{AgentDirective, Directive, Level, Signal};
 use crate::event::AgentEvent;
@@ -45,14 +46,14 @@ pub(super) enum Cause {
     Failed(Lost),
 }
 
-impl<A: AppItem> Core<A> {
+impl<A: AppItem, D: AppData> Core<A, D> {
     /// Takes in what happened to an adapter process.
     pub(super) fn agent_event(
         &mut self,
         now: Now,
         proc: Ticket,
         event: AgentEvent,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let Some(each) = self.procs.get_mut(&proc) else {
             report(
@@ -86,7 +87,7 @@ impl<A: AppItem> Core<A> {
     /// Makes progress for a connection: asks for the sessions its chats
     /// want, starting a process for them if it must, or stops its process
     /// if no chat needs it.
-    pub(super) fn advance(&mut self, now: Now, conn: ConnectionId, out: &mut Vec<Directive>) {
+    pub(super) fn advance(&mut self, now: Now, conn: ConnectionId, out: &mut Vec<Directive<A, D>>) {
         let Some(each) = self.conns.get(&conn) else {
             return;
         };
@@ -158,7 +159,13 @@ impl<A: AppItem> Core<A> {
     /// on it that isn't being asked whether to keep waiting is asked now.
     /// If none waits any more, it's stopped: nobody needs it, and it
     /// seems stuck.
-    fn still_slow(&mut self, now: Now, proc: Ticket, wanted: &[ChatId], out: &mut Vec<Directive>) {
+    fn still_slow(
+        &mut self,
+        now: Now,
+        proc: Ticket,
+        wanted: &[ChatId],
+        out: &mut Vec<Directive<A, D>>,
+    ) {
         if wanted.is_empty() {
             report(
                 out,
@@ -177,7 +184,7 @@ impl<A: AppItem> Core<A> {
 
     /// Makes progress for every connection: what one chat or process does
     /// can free a session another chat waits for.
-    pub(super) fn advance_all(&mut self, now: Now, out: &mut Vec<Directive>) {
+    pub(super) fn advance_all(&mut self, now: Now, out: &mut Vec<Directive<A, D>>) {
         let conns: Vec<ConnectionId> = self.conns.keys().copied().collect();
         for conn in conns {
             self.advance(now, conn, out);
@@ -185,7 +192,7 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Starts a process for `conn`, and introduces CAF to it.
-    fn start_process(&mut self, now: Now, conn: ConnectionId, out: &mut Vec<Directive>) {
+    fn start_process(&mut self, now: Now, conn: ConnectionId, out: &mut Vec<Directive<A, D>>) {
         let Some(each) = self.conns.get(&conn) else {
             return;
         };
@@ -251,7 +258,13 @@ impl<A: AppItem> Core<A> {
 
     /// The process couldn't be started: its chats are told, and it's let
     /// go, as there's nothing to stop.
-    fn start_failed(&mut self, now: Now, proc: Ticket, error: &str, out: &mut Vec<Directive>) {
+    fn start_failed(
+        &mut self,
+        now: Now,
+        proc: Ticket,
+        error: &str,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
         report(
             out,
             Level::Warn,
@@ -282,7 +295,7 @@ impl<A: AppItem> Core<A> {
         now: Now,
         proc: Ticket,
         reply: Reply,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let Some(conn) = self.procs.get(&proc).map(|each| each.conn) else {
             return;
@@ -366,7 +379,7 @@ impl<A: AppItem> Core<A> {
     /// writing to it failed. What it said last is still read, until its
     /// output closes or `gone` passes; its group is ended firmly at once,
     /// so nothing it started goes on with a session.
-    fn went(&mut self, now: Now, proc: Ticket, out: &mut Vec<Directive>) {
+    fn went(&mut self, now: Now, proc: Ticket, out: &mut Vec<Directive<A, D>>) {
         let gone = self.host.timers.gone;
         let Some(each) = self.procs.get_mut(&proc) else {
             return;
@@ -401,7 +414,7 @@ impl<A: AppItem> Core<A> {
 
     /// The gone process's last words are in: everything that hung on it
     /// is told, and its group is watched until it's empty.
-    pub(super) fn finalize(&mut self, now: Now, proc: Ticket, out: &mut Vec<Directive>) {
+    pub(super) fn finalize(&mut self, now: Now, proc: Ticket, out: &mut Vec<Directive<A, D>>) {
         let Some(each) = self.procs.get_mut(&proc) else {
             return;
         };
@@ -414,7 +427,7 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Asks whether anything is left in `proc`'s group.
-    pub(super) fn check_group(&mut self, proc: Ticket, out: &mut Vec<Directive>) {
+    pub(super) fn check_group(&mut self, proc: Ticket, out: &mut Vec<Directive<A, D>>) {
         if let Some(each) = self.procs.get_mut(&proc) {
             each.group = Group::Asked;
             out.push(Directive::Agent(AgentDirective::CheckGroup {
@@ -425,7 +438,7 @@ impl<A: AppItem> Core<A> {
 
     /// The agent driver said whether `proc`'s group is empty. Once it is,
     /// the process is let go, and its connection may start another.
-    fn group_said(&mut self, now: Now, proc: Ticket, empty: bool, out: &mut Vec<Directive>) {
+    fn group_said(&mut self, now: Now, proc: Ticket, empty: bool, out: &mut Vec<Directive<A, D>>) {
         let poll = self.host.timers.group_poll;
         let Some(each) = self.procs.get_mut(&proc) else {
             return;
@@ -460,7 +473,7 @@ impl<A: AppItem> Core<A> {
 
     /// A gone process's time is up: it's let go, killed again first in
     /// case its group never emptied.
-    pub(super) fn forget_now(&mut self, now: Now, proc: Ticket, out: &mut Vec<Directive>) {
+    pub(super) fn forget_now(&mut self, now: Now, proc: Ticket, out: &mut Vec<Directive<A, D>>) {
         self.finalize(now, proc, out);
         let Some(each) = self.procs.remove(&proc) else {
             return;
@@ -500,7 +513,7 @@ impl<A: AppItem> Core<A> {
         now: Now,
         proc: Ticket,
         firm: bool,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let wait = self.host.timers.kill_after;
         let Some(each) = self.procs.get_mut(&proc) else {
@@ -535,7 +548,7 @@ impl<A: AppItem> Core<A> {
     }
 
     /// The next step in stopping `proc` is due.
-    pub(super) fn end_step(&mut self, now: Now, proc: Ticket, out: &mut Vec<Directive>) {
+    pub(super) fn end_step(&mut self, now: Now, proc: Ticket, out: &mut Vec<Directive<A, D>>) {
         let wait = self.host.timers.kill_after;
         let Some(ending) = self
             .procs
@@ -562,7 +575,7 @@ impl<A: AppItem> Core<A> {
         now: Now,
         proc: Ticket,
         cause: Cause,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let Some(each) = self.procs.get(&proc) else {
             return;
@@ -696,7 +709,7 @@ fn caps(result: &Value) -> Caps {
 }
 
 /// A directive sending `signal` to `proc`'s group.
-fn signal(proc: Ticket, signal: Signal) -> Directive {
+fn signal<A: AppItem, D: AppData>(proc: Ticket, signal: Signal) -> Directive<A, D> {
     Directive::Agent(AgentDirective::Signal {
         process: proc,
         signal,

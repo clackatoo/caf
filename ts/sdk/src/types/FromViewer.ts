@@ -7,6 +7,7 @@ import type { ChatId } from "./ChatId.ts";
 import type { OpenRequest } from "./OpenRequest.ts";
 import type { QuestionId } from "./QuestionId.ts";
 import type { RequestNo } from "./RequestNo.ts";
+import type { Shelf } from "./Shelf.ts";
 import type { UserMessage } from "./UserMessage.ts";
 
 /**
@@ -82,7 +83,19 @@ request: RequestNo,
 /**
  * The chat.
  */
-chat: ChatId, } } | { "type": "Agent", "value": { 
+chat: ChatId, } } | { "type": "Restore", "value": { 
+/**
+ * The viewer's number for this request.
+ */
+request: RequestNo, 
+/**
+ * The chat.
+ */
+chat: ChatId, 
+/**
+ * Where it's kept.
+ */
+shelf: Shelf, } } | { "type": "Agent", "value": { 
 /**
  * The viewer's number for this request.
  */

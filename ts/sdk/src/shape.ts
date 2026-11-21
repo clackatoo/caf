@@ -2,7 +2,7 @@
 // looks things up, lists where it adds to them, and the type of whatever
 // it reads. What it never reads is the app's to draw, so isn't checked.
 
-import type { AgentStatus, Chat, ChatSummary, Item, Rights, Turn } from "./types.ts";
+import type { AgentStatus, Chat, ChatSummary, Item, Rights, SavedChat, Turn } from "./types.ts";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -42,11 +42,24 @@ export function isTurn(value: unknown): value is Turn {
 }
 
 export function isChat(value: unknown): value is Chat {
-  return hasId(value) && isArrayOf(value.turns, isTurn) && isArrayOf(value.questions, hasId);
+  return (
+    isRecord(value) && isString(value.id) && isArrayOf(value.turns, isTurn) && isArrayOf(value.questions, hasId)
+  );
 }
 
 export function isSummary(value: unknown): value is ChatSummary {
-  return isRecord(value) && isNumber(value.id) && isString(value.agent) && isString(value.cwd);
+  return isRecord(value) && isString(value.id) && isString(value.agent) && isString(value.cwd);
+}
+
+/** A saved chat, as `Saved` lists them. */
+export function isSaved(value: unknown): value is SavedChat {
+  return (
+    isRecord(value) &&
+    isString(value.shelf) &&
+    isRecord(value.header) &&
+    isString(value.header.chat) &&
+    isTagged(value.state)
+  );
 }
 
 /**

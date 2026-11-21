@@ -9,7 +9,9 @@ use std::time::{Duration, Instant};
 /// fake agent, and Claude, installed by CAF), keeping its state and any
 /// installs in a folder of its own; sends it `signal` the moment it says
 /// it's serving, straight from this process, as fast as a script could;
-/// and returns how it exited and the last event its recording holds.
+/// and returns how it exited and the last event its recording holds but
+/// the store's answers: listing the saved chats as it starts may be
+/// answered after it's told to stop.
 fn stopped_by(signal: libc::c_int) -> (std::process::ExitStatus, serde_json::Value) {
     let state =
         std::env::temp_dir().join(format!("caf-debugger-cli-{signal}-{}", std::process::id()));
@@ -60,9 +62,11 @@ fn stopped_by(signal: libc::c_int) -> (std::process::ExitStatus, serde_json::Val
         std::thread::sleep(Duration::from_millis(20));
     };
     let text = std::fs::read_to_string(&recording).unwrap();
-    let last: serde_json::Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+    let events = (text.lines().skip(1))
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()["event"].clone());
+    let last = (events.filter(|event| event["type"] != "Storage")).last();
     std::fs::remove_dir_all(&state).unwrap();
-    (status, last["event"].clone())
+    (status, last.unwrap_or_default())
 }
 
 #[test]
@@ -78,4 +82,27 @@ fn sigterm_and_sighup_shut_caf_down_as_ctrl_c_does() {
             "{signal}: the recording ends with CAF shutting down"
         );
     }
+}
+
+#[test]
+fn a_store_it_cant_write_in_stops_it_before_it_starts() {
+    let state = std::env::temp_dir().join(format!("caf-debugger-cli-store-{}", std::process::id()));
+    std::fs::create_dir_all(&state).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_caf-debugger"))
+        .args(["--port", "0", "--store", "/proc/caf-debugger-nowhere"])
+        .env("XDG_STATE_HOME", &state)
+        .env("XDG_DATA_HOME", &state)
+        .env(caf_fake_agent::BIN_VAR, caf_fake_agent::binary())
+        .env("PATH", "/usr/bin:/bin")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(&state).unwrap();
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{said}");
+    assert!(
+        said.contains("can't keep chats in /proc/caf-debugger-nowhere"),
+        "{said}"
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("Open http"));
 }

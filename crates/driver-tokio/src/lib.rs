@@ -63,6 +63,33 @@
 //! [`AgentSpec::installed`]: caf_core::agent::AgentSpec::installed
 //! [`AgentStatus`]: caf_core::agent::AgentStatus
 //!
+//! # Saving chats
+//!
+//! Give CAF a store ([`Config::store`]), such as caf-save's `FileStore`,
+//! and a chat opened with a shelf ([`OpenChat::shelf`]) is saved as it
+//! goes, and comes back in a later run:
+//!
+//! ```ignore
+//! config.store = Some(Box::new(FileStore::new(FileStore::default_root("eyespy").unwrap())));
+//! let (caf, running) = Caf::<NoAppItems>::start(config);
+//! let mut saved = caf.watch_saved();
+//! caf.list_saved(Shelf("project-x".into())).await?;
+//! let chats = saved.next().await; // each with its header and state
+//! let chat = caf.restore(RestoreChat::new(id, Shelf("project-x".into()))).await?;
+//! ```
+//!
+//! - [`Caf::restore`] returns once the chat is loaded, idle: its agent
+//!   starts, carrying on its session, when a message is sent.
+//! - [`ChatHandle::put_away`] saves a chat whole and lets it go from
+//!   memory; closing a saved chat does too. [`Caf::delete`] deletes one
+//!   for good, and [`Caf::move_shelf`] moves a shelf's chats.
+//! - [`ChatHandle::set_data`] keeps the app's own data on a chat, saved
+//!   with it, and its label shows in [`Caf::watch_chats`].
+//! - The store runs on a thread of its own, and [`Caf::shutdown`] returns
+//!   once every saved chat is written whole and let go.
+//!
+//! [`OpenChat::shelf`]: caf_core::OpenChat::shelf
+//!
 //! # Serving viewers
 //!
 //! A viewer is anything that shows chats from outside the host's own
@@ -96,6 +123,9 @@
 //!   time it changes. Installing and signing in from a viewer is the
 //!   host's decision too: [`agents`](viewer::ViewerRules::agents) is off
 //!   by default.
+//! - Every viewer hears the saved chats on every shelf the host has
+//!   listed, and may restore one if [`restore`](viewer::ViewerRules::restore)
+//!   allows it, which by default it doesn't.
 //! - A viewer doesn't keep CAF running, and `serve` ends when CAF does,
 //!   after telling the viewer each watched chat has ended.
 //!
@@ -114,18 +144,23 @@
 //! host that wires the core up itself: [`AgentDriver`] runs adapter
 //! processes, [`TimerDriver`] wakes the core, [`SetupDriver`] installs
 //! agents and signs in to them, and a [`Policy`] answers permission
-//! requests.
+//! requests. The storage driver's work is `caf_save::carry_out`, which
+//! does one directive to a store, on any thread, with no runtime: the kit
+//! runs it on a thread of its own.
 
 mod agent;
 mod caf;
 mod policy;
 mod setup;
 mod steps;
+mod storage;
 mod timer;
 pub mod viewer;
 
 pub use agent::{AgentDriver, AgentLimits};
-pub use caf::{AgentsWatch, Caf, ChatHandle, ChatsWatch, Config, Error, Running, Update, Watch};
+pub use caf::{
+    AgentsWatch, Caf, ChatHandle, ChatsWatch, Config, Error, Running, SavedWatch, Update, Watch,
+};
 pub use policy::{AlwaysAsk, Policy, RefuseAll};
 pub use setup::SetupDriver;
 pub use steps::{Step, Steps};

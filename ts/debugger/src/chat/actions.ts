@@ -5,7 +5,7 @@
 // Each may return a promise: if it rejects, the view shows why (a
 // `CafError` in CAF's words), and the user can try again.
 
-import type { AgentName, Answer, ChatId, DeepReadonly, QuestionId, UserMessage } from '@clackatoo/caf'
+import { CafError, type AgentName, type Answer, type ChatId, type DeepReadonly, type QuestionId, type Shelf, type UserMessage } from '@clackatoo/caf'
 
 /** What the user can do in one chat. */
 export interface ChatActions {
@@ -41,6 +41,35 @@ export interface ListActions {
   select(chat: ChatId): void
   /** Open a new chat with an agent, in a folder (a full path). */
   open(agent: AgentName, cwd: string): Promise<unknown> | void
+}
+
+/** What the user can do with the list of saved chats. */
+export interface SavedActions {
+  /** Show this chat, once it's open. */
+  select(chat: ChatId): void
+  /** Restore a saved chat from its shelf, and show it. */
+  restore(chat: ChatId, shelf: Shelf): Promise<unknown> | void
+}
+
+/**
+ * Restores a chat with `restore`, trying again for a moment while CAF
+ * refuses it as loaded: a chat just put away, or closed, is listed as
+ * saved at once, but CAF holds it until its last write is done, which
+ * takes moments. Any other failure, or one that lasts, is the caller's.
+ */
+export async function restoreOnceFree<T>(
+  restore: () => Promise<T>,
+  { tries = 20, wait = 100 }: { tries?: number; wait?: number } = {},
+): Promise<T> {
+  for (let tried = 1; ; tried++) {
+    try {
+      return await restore()
+    } catch (error) {
+      const loaded = error instanceof CafError && error.why.type === 'Refused' && error.why.value.type === 'Loaded'
+      if (!loaded || tried >= tries) throw error
+      await new Promise((done) => setTimeout(done, wait))
+    }
+  }
 }
 
 /**

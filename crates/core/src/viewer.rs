@@ -75,8 +75,9 @@ use crate::agent::AgentStatus;
 use crate::change::Numbered;
 use crate::chat::{AppItem, Chat, NoAppItems, UserMessage};
 use crate::core::{Refused, SessionChoice};
-use crate::ids::{AgentName, ChangeNo, ChatId, QuestionId, TurnId};
+use crate::ids::{AgentName, ChangeNo, ChatId, QuestionId, Shelf, TurnId};
 use crate::question::Answer;
+use crate::save::{CannotRestore, SavedChat};
 
 /// The versions of the viewer wire this CAF speaks.
 pub const VERSIONS: RangeInclusive<u32> = 1..=1;
@@ -148,6 +149,16 @@ pub enum FromViewer {
         request: RequestNo,
         /// The chat.
         chat: ChatId,
+    },
+    /// Ask to restore a saved chat, as [`ToViewer::Saved`] lists them.
+    /// The host decides, as for opening one.
+    Restore {
+        /// The viewer's number for this request.
+        request: RequestNo,
+        /// The chat.
+        chat: ChatId,
+        /// Where it's kept.
+        shelf: Shelf,
     },
     /// Do something about an agent: install it, sign in or out. The host
     /// decides whether viewers may.
@@ -250,6 +261,13 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
     /// watch could sign CAF's agent in to its own account, and see the
     /// user's prompts go there.
     Agents(Vec<AgentStatus>),
+    /// The saved chats on the shelves the host has listed
+    /// ([`Core::list_saved`](crate::Core::list_saved)), loaded or not, in
+    /// the order they were made: right after `Agents` if the host has
+    /// listed any, and again whenever it changes. The whole list, each
+    /// time. Each says what it is with its header, which holds the app's
+    /// [label](crate::chat::AppData::label) but never the app's data.
+    Saved(Vec<SavedChat>),
     /// How a request went.
     Done {
         /// The viewer's number for it.
@@ -271,6 +289,13 @@ pub struct ChatSummary {
     pub agent: AgentName,
     /// The folder the agent works in.
     pub cwd: PathBuf,
+    /// The app's line for it, such as its title
+    /// ([`AppData::label`](crate::chat::AppData::label)).
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Where it's kept, if it's saved.
+    #[serde(default)]
+    pub shelf: Option<Shelf>,
 }
 
 /// What the host lets a viewer do, as [`ToViewer::Welcome`] says it, so
@@ -297,13 +322,16 @@ impl Rights {
 }
 
 impl ChatSummary {
-    /// A chat's summary.
+    /// A chat's summary, from its record alone: with no label or shelf,
+    /// which the core knows ([`Core::summaries`](crate::Core::summaries)).
     #[must_use]
     pub fn of<A: AppItem>(chat: &Chat<A>) -> Self {
         Self {
             id: chat.id,
             agent: chat.agent.clone(),
             cwd: chat.cwd.clone(),
+            label: None,
+            shelf: None,
         }
     }
 }
@@ -347,7 +375,7 @@ impl OpenRequest {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum Outcome {
-    /// The chat was opened, with this id. It's in the next
+    /// The chat was opened, or restored, with this id. It's in the next
     /// [`ToViewer::Chats`] too.
     Opened(ChatId),
     /// The message was taken, as this turn.
@@ -360,6 +388,8 @@ pub enum Outcome {
     NotAllowed,
     /// CAF has shut down, or is shutting down: nothing was done.
     Gone,
+    /// The saved chat couldn't be restored, and its save is as it was.
+    CannotRestore(CannotRestore),
 }
 
 /// A viewer's copy of one chat, and how far it has read: what a viewer

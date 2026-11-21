@@ -18,7 +18,7 @@ use crate::ids::{AgentSessionId, ChatId, QuestionId};
 use crate::question::{Answer, OptionId, SlowChoice};
 
 /// The second chat, opened after the first's session.
-const OTHER: ChatId = ChatId(1003);
+const OTHER: ChatId = ChatId::from_number(1003);
 
 /// How many answers to the agent's request `id` are in `out`.
 fn answered(out: &[Value], id: &Value) -> usize {

@@ -10,6 +10,7 @@ import {
   type ChatSummary,
   type DeepReadonly,
   type Rights,
+  type SavedChat,
   type Transport,
   type Watching,
 } from '@clackatoo/caf'
@@ -22,6 +23,8 @@ export class Live {
   /** What the host lets this page do, once connected. */
   may = $state.raw<Readonly<Rights>>({ act: false, agents: false })
   chats = $state.raw<readonly Readonly<ChatSummary>[]>([])
+  /** The saved chats on the shelves the host lists, open or not. */
+  saved = $state.raw<readonly DeepReadonly<SavedChat>[]>([])
   /** The chat being watched, once it has come. */
   chat = $state.raw<DeepReadonly<Chat> | null>(null)
   /** Why connecting failed, if it did. */
@@ -45,8 +48,12 @@ export class Live {
       this.agents = caf.agents
       this.may = caf.may
       this.chats = caf.chats
+      // CAF says them right after the agents, which may be before `open`
+      // resolves or after: both are followed.
+      this.saved = caf.saved
       caf.onChats((chats) => (this.chats = chats))
       caf.onAgents((agents) => (this.agents = agents))
+      caf.onSaved((saved) => (this.saved = saved))
       caf.onClose(() => {
         if (this.#caf !== caf) return
         // The chat shown stays as it was, read-only (see `canAct`) until

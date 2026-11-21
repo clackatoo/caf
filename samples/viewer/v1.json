@@ -11,21 +11,21 @@
     {
       "type": "Watch",
       "value": {
-        "chat": 1,
+        "chat": "00000000-0000-0000-0000-000000000001",
         "since": null
       }
     },
     {
       "type": "Watch",
       "value": {
-        "chat": 1,
+        "chat": "00000000-0000-0000-0000-000000000001",
         "since": 5
       }
     },
     {
       "type": "Unwatch",
       "value": {
-        "chat": 1
+        "chat": "00000000-0000-0000-0000-000000000001"
       }
     },
     {
@@ -59,7 +59,7 @@
       "type": "Send",
       "value": {
         "request": 3,
-        "chat": 1,
+        "chat": "00000000-0000-0000-0000-000000000001",
         "message": {
           "parts": [
             {
@@ -74,7 +74,7 @@
       "type": "Stop",
       "value": {
         "request": 4,
-        "chat": 1
+        "chat": "00000000-0000-0000-0000-000000000001"
       }
     },
     {
@@ -131,7 +131,7 @@
       "type": "Close",
       "value": {
         "request": 9,
-        "chat": 1
+        "chat": "00000000-0000-0000-0000-000000000001"
       }
     },
     {
@@ -194,6 +194,14 @@
           "type": "SignOut"
         }
       }
+    },
+    {
+      "type": "Restore",
+      "value": {
+        "request": 20,
+        "chat": "00000000-0000-0000-0000-000000000002",
+        "shelf": "work"
+      }
     }
   ],
   "to_viewer": [
@@ -206,9 +214,11 @@
         ],
         "chats": [
           {
-            "id": 1,
+            "id": "00000000-0000-0000-0000-000000000001",
             "agent": "claude",
-            "cwd": "/work"
+            "cwd": "/work",
+            "label": "Fix the tests",
+            "shelf": "work"
           }
         ],
         "run": "7f3a9c2e",
@@ -229,9 +239,11 @@
       "type": "Chats",
       "value": [
         {
-          "id": 1,
+          "id": "00000000-0000-0000-0000-000000000001",
           "agent": "claude",
-          "cwd": "/work"
+          "cwd": "/work",
+          "label": "Fix the tests",
+          "shelf": "work"
         }
       ]
     },
@@ -239,7 +251,7 @@
       "type": "Picture",
       "value": {
         "chat": {
-          "id": 1,
+          "id": "00000000-0000-0000-0000-000000000001",
           "agent": "claude",
           "cwd": "/work",
           "state": {
@@ -627,7 +639,8 @@
                       "raw": {
                         "sessionUpdate": "plan",
                         "entries": []
-                      }
+                      },
+                      "summary": null
                     }
                   }
                 }
@@ -792,7 +805,7 @@
               "starter": {
                 "type": "OtherChat",
                 "value": {
-                  "from": 9,
+                  "from": "00000000-0000-0000-0000-000000000009",
                   "message": {
                     "parts": [
                       {
@@ -919,7 +932,7 @@
     {
       "type": "Changes",
       "value": {
-        "chat": 1,
+        "chat": "00000000-0000-0000-0000-000000000001",
         "changes": [
           {
             "no": 6,
@@ -1160,6 +1173,15 @@
           {
             "no": 22,
             "change": {
+              "type": "State",
+              "value": {
+                "type": "Idle"
+              }
+            }
+          },
+          {
+            "no": 23,
+            "change": {
               "type": "TurnAdded",
               "value": {
                 "id": 30,
@@ -1189,7 +1211,7 @@
             }
           },
           {
-            "no": 23,
+            "no": 24,
             "change": {
               "type": "TurnInserted",
               "value": {
@@ -1234,7 +1256,7 @@
             }
           },
           {
-            "no": 24,
+            "no": 25,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1249,7 +1271,7 @@
             }
           },
           {
-            "no": 25,
+            "no": 26,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1264,7 +1286,7 @@
             }
           },
           {
-            "no": 26,
+            "no": 27,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1279,7 +1301,7 @@
             }
           },
           {
-            "no": 27,
+            "no": 28,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1295,7 +1317,7 @@
             }
           },
           {
-            "no": 28,
+            "no": 29,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1311,7 +1333,7 @@
             }
           },
           {
-            "no": 29,
+            "no": 30,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1327,7 +1349,7 @@
             }
           },
           {
-            "no": 30,
+            "no": 31,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1352,7 +1374,7 @@
             }
           },
           {
-            "no": 31,
+            "no": 32,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1377,7 +1399,7 @@
             }
           },
           {
-            "no": 32,
+            "no": 33,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1402,7 +1424,7 @@
             }
           },
           {
-            "no": 33,
+            "no": 34,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1425,7 +1447,7 @@
             }
           },
           {
-            "no": 34,
+            "no": 35,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1450,7 +1472,7 @@
             }
           },
           {
-            "no": 35,
+            "no": 36,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1475,7 +1497,7 @@
             }
           },
           {
-            "no": 36,
+            "no": 37,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1500,7 +1522,7 @@
             }
           },
           {
-            "no": 37,
+            "no": 38,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1523,7 +1545,7 @@
             }
           },
           {
-            "no": 38,
+            "no": 39,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1548,7 +1570,7 @@
             }
           },
           {
-            "no": 39,
+            "no": 40,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1573,7 +1595,7 @@
             }
           },
           {
-            "no": 40,
+            "no": 41,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1598,7 +1620,7 @@
             }
           },
           {
-            "no": 41,
+            "no": 42,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1621,7 +1643,7 @@
             }
           },
           {
-            "no": 42,
+            "no": 43,
             "change": {
               "type": "ItemAdded",
               "value": {
@@ -1657,7 +1679,7 @@
             }
           },
           {
-            "no": 43,
+            "no": 44,
             "change": {
               "type": "Appended",
               "value": {
@@ -1667,7 +1689,7 @@
             }
           },
           {
-            "no": 44,
+            "no": 45,
             "change": {
               "type": "ToolChanged",
               "value": {
@@ -1690,7 +1712,7 @@
             }
           },
           {
-            "no": 45,
+            "no": 46,
             "change": {
               "type": "ItemEnded",
               "value": {
@@ -1703,7 +1725,7 @@
             }
           },
           {
-            "no": 46,
+            "no": 47,
             "change": {
               "type": "Usage",
               "value": {
@@ -1714,7 +1736,7 @@
             }
           },
           {
-            "no": 47,
+            "no": 48,
             "change": {
               "type": "QuestionAsked",
               "value": {
@@ -1745,7 +1767,7 @@
             }
           },
           {
-            "no": 48,
+            "no": 49,
             "change": {
               "type": "QuestionGone",
               "value": 26
@@ -1757,7 +1779,7 @@
     {
       "type": "Ended",
       "value": {
-        "chat": 1
+        "chat": "00000000-0000-0000-0000-000000000001"
       }
     },
     {
@@ -2021,12 +2043,203 @@
       ]
     },
     {
+      "type": "Saved",
+      "value": [
+        {
+          "shelf": "work",
+          "header": {
+            "chat": "00000000-0000-0000-0000-000000000001",
+            "agent": "claude",
+            "profile": "claude-agent-acp",
+            "cwd": "/work",
+            "made": 1700000000000,
+            "changed": 1700000060000,
+            "label": "Fix the tests",
+            "first": "Fix the tests",
+            "turns": 3,
+            "closed": false
+          },
+          "state": {
+            "type": "Saved"
+          }
+        },
+        {
+          "shelf": "work",
+          "header": {
+            "chat": "00000000-0000-0000-0000-000000000002",
+            "agent": "claude",
+            "profile": "claude-agent-acp",
+            "cwd": "/work",
+            "made": 1700000000000,
+            "changed": 1700000060000,
+            "label": "Fix the tests",
+            "first": "Fix the tests",
+            "turns": 3,
+            "closed": true
+          },
+          "state": {
+            "type": "Restoring"
+          }
+        },
+        {
+          "shelf": "work",
+          "header": {
+            "chat": "00000000-0000-0000-0000-000000000003",
+            "agent": "claude",
+            "profile": "claude-agent-acp",
+            "cwd": "/work",
+            "made": 1700000000000,
+            "changed": 1700000060000,
+            "label": "Fix the tests",
+            "first": "Fix the tests",
+            "turns": 3,
+            "closed": false
+          },
+          "state": {
+            "type": "Loaded"
+          }
+        },
+        {
+          "shelf": "work",
+          "header": {
+            "chat": "00000000-0000-0000-0000-000000000004",
+            "agent": "claude",
+            "profile": "claude-agent-acp",
+            "cwd": "/work",
+            "made": 1700000000000,
+            "changed": 1700000060000,
+            "label": "Fix the tests",
+            "first": "Fix the tests",
+            "turns": 3,
+            "closed": false
+          },
+          "state": {
+            "type": "Failed",
+            "value": {
+              "type": "NotFound"
+            }
+          }
+        },
+        {
+          "shelf": "work",
+          "header": {
+            "chat": "00000000-0000-0000-0000-000000000005",
+            "agent": "claude",
+            "profile": "claude-agent-acp",
+            "cwd": "/work",
+            "made": 1700000000000,
+            "changed": 1700000060000,
+            "label": "Fix the tests",
+            "first": "Fix the tests",
+            "turns": 3,
+            "closed": false
+          },
+          "state": {
+            "type": "Failed",
+            "value": {
+              "type": "InUse"
+            }
+          }
+        },
+        {
+          "shelf": "work",
+          "header": {
+            "chat": "00000000-0000-0000-0000-000000000006",
+            "agent": "claude",
+            "profile": "claude-agent-acp",
+            "cwd": "/work",
+            "made": 1700000000000,
+            "changed": 1700000060000,
+            "label": "Fix the tests",
+            "first": "Fix the tests",
+            "turns": 3,
+            "closed": false
+          },
+          "state": {
+            "type": "Failed",
+            "value": {
+              "type": "Newer",
+              "value": {
+                "version": 2
+              }
+            }
+          }
+        },
+        {
+          "shelf": "work",
+          "header": {
+            "chat": "00000000-0000-0000-0000-000000000007",
+            "agent": "claude",
+            "profile": "claude-agent-acp",
+            "cwd": "/work",
+            "made": 1700000000000,
+            "changed": 1700000060000,
+            "label": "Fix the tests",
+            "first": "Fix the tests",
+            "turns": 3,
+            "closed": false
+          },
+          "state": {
+            "type": "Failed",
+            "value": {
+              "type": "Damaged",
+              "value": "a checksum doesn't match"
+            }
+          }
+        },
+        {
+          "shelf": "work",
+          "header": {
+            "chat": "00000000-0000-0000-0000-000000000008",
+            "agent": "claude",
+            "profile": "claude-agent-acp",
+            "cwd": "/work",
+            "made": 1700000000000,
+            "changed": 1700000060000,
+            "label": "Fix the tests",
+            "first": "Fix the tests",
+            "turns": 3,
+            "closed": false
+          },
+          "state": {
+            "type": "Failed",
+            "value": {
+              "type": "AppData",
+              "value": "missing field `title`"
+            }
+          }
+        },
+        {
+          "shelf": "work",
+          "header": {
+            "chat": "00000000-0000-0000-0000-000000000009",
+            "agent": "claude",
+            "profile": "claude-agent-acp",
+            "cwd": "/work",
+            "made": 1700000000000,
+            "changed": 1700000060000,
+            "label": "Fix the tests",
+            "first": "Fix the tests",
+            "turns": 3,
+            "closed": false
+          },
+          "state": {
+            "type": "Failed",
+            "value": {
+              "type": "Store",
+              "value": "No space left on device"
+            }
+          }
+        }
+      ]
+    },
+    {
       "type": "Done",
       "value": {
         "request": 1,
         "outcome": {
           "type": "Opened",
-          "value": 1
+          "value": "00000000-0000-0000-0000-000000000001"
         }
       }
     },
@@ -2072,9 +2285,9 @@
       "value": {
         "request": 6,
         "outcome": {
-          "type": "Refused",
+          "type": "CannotRestore",
           "value": {
-            "type": "NoSuchChat"
+            "type": "InUse"
           }
         }
       }
@@ -2086,7 +2299,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "Closed"
+            "type": "NoSuchChat"
           }
         }
       }
@@ -2098,7 +2311,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "NoSuchAgent"
+            "type": "Closed"
           }
         }
       }
@@ -2110,7 +2323,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "RelativeFolder"
+            "type": "NoSuchAgent"
           }
         }
       }
@@ -2122,7 +2335,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "Unsendable"
+            "type": "RelativeFolder"
           }
         }
       }
@@ -2134,7 +2347,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "QueueFull"
+            "type": "Unsendable"
           }
         }
       }
@@ -2146,7 +2359,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "Unsupported"
+            "type": "QueueFull"
           }
         }
       }
@@ -2158,7 +2371,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "CommandNotAlone"
+            "type": "Unsupported"
           }
         }
       }
@@ -2170,7 +2383,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "NoSuchQuestion"
+            "type": "CommandNotAlone"
           }
         }
       }
@@ -2182,7 +2395,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "WrongAnswer"
+            "type": "NoSuchQuestion"
           }
         }
       }
@@ -2194,7 +2407,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "NothingToStop"
+            "type": "WrongAnswer"
           }
         }
       }
@@ -2206,7 +2419,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "NotInstallable"
+            "type": "NothingToStop"
           }
         }
       }
@@ -2218,7 +2431,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "AlreadyInstalled"
+            "type": "NotInstallable"
           }
         }
       }
@@ -2230,7 +2443,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "CannotSignIn"
+            "type": "AlreadyInstalled"
           }
         }
       }
@@ -2242,7 +2455,55 @@
         "outcome": {
           "type": "Refused",
           "value": {
+            "type": "CannotSignIn"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 21,
+        "outcome": {
+          "type": "Refused",
+          "value": {
             "type": "NotSigningIn"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 22,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "NotSaved"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 23,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "Loaded"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 24,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "BadShelf"
           }
         }
       }

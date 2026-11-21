@@ -3,7 +3,7 @@
   // and a folder for it to work in.
   import type { AgentName, ChatId, ChatSummary, DeepReadonly } from '@clackatoo/caf'
   import { attempt, type ListActions } from './actions.ts'
-  import { errorText } from './words.ts'
+  import { errorText, folderName, shortId } from './words.ts'
   import './theme.css'
 
   let {
@@ -44,11 +44,6 @@
     opening = false
     if (error === null) adding = false
     else problem = errorText(error)
-  }
-
-  function folder(path: string): string {
-    const parts = path.split(/[\\/]/).filter((part) => part !== '')
-    return parts.at(-1) ?? path
   }
 </script>
 
@@ -94,8 +89,9 @@
           title={chat.cwd}
           onclick={() => actions.select(chat.id)}
         >
-          <span class="name">{folder(chat.cwd)}</span>
-          <span class="meta">{chat.agent} · #{chat.id}</span>
+          <!-- The app's line for it if it has one, or else its folder. -->
+          <span class="name">{chat.label ?? folderName(chat.cwd)}</span>
+          <span class="meta">{chat.agent} · {chat.label == null ? shortId(chat.id) : folderName(chat.cwd)}</span>
         </button>
       </li>
     {:else}

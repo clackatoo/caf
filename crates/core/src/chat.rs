@@ -25,6 +25,29 @@ use crate::time::Window;
 ///
 /// Only the app adds them, never the agent. CAF keeps them in order,
 /// saves them with the chat, and never looks inside.
+///
+/// Its serialized form must use text keys and no raw bytes, as derived
+/// structs and enums do, its floats must be finite, and its integers fit
+/// in 64 bits: what JSON holds. So one CAF can't read is kept, unchanged,
+/// as an [`Unknown`] item. Read old items leniently, with `#[serde(default)]`
+/// on fields added later.
+///
+/// One the type reads but wouldn't write back as it was saved, as an
+/// older version of the app reading what a newer one added, is kept
+/// unchanged as an [`Unknown`] item too. An item is the app's again only
+/// if what the type writes back holds all of what was saved: every key of
+/// every map, with what it held; every list, as long, with what it held;
+/// and everything else equal. Keys the type adds are fine; nothing else
+/// may differ. So never drop, shorten, narrow or replace what the type
+/// read, as `skip_serializing_if`, `#[serde(other)]` or a lossy
+/// `deserialize_with` would; and keep sets in a stable order, as a
+/// `BTreeSet` or `Vec` does, not a `HashSet`, whose order changes from
+/// one run to the next. Change a field's type with care: what the old
+/// type wrote must be held in what the new one writes of it. A whole
+/// number read as a float of the same value is; a float read as a whole
+/// number isn't, nor is anything read as a struct that writes it
+/// differently, such as a field that was `NoAppData`'s `null` read as a
+/// struct.
 pub trait AppItem:
     Clone + Debug + PartialEq + Serialize + DeserializeOwned + Send + 'static
 {
@@ -43,6 +66,44 @@ pub enum NoAppItems {}
 impl AppItem for NoAppItems {
     fn summary(&self) -> String {
         match *self {}
+    }
+}
+
+/// An app's own data about each chat, such as clackatoo's title and
+/// settings, or which of framewright's projects it's about: the chat's
+/// data slot.
+///
+/// CAF saves it with the chat, in MessagePack with field names, and never
+/// looks inside; nor does it check what it points at, such as a clip
+/// since deleted. It isn't sent to viewers: only its
+/// [`label`](AppData::label) is. Keep it small, as it's saved whole each
+/// time it's set ([`Core::set_data`](crate::Core::set_data)): what's big
+/// belongs in the chat's record, as app items.
+///
+/// A new chat's is the default. Read old data leniently, with
+/// `#[serde(default)]` on fields added later: a chat whose data can't be
+/// read isn't restored, and its save is left as it was
+/// ([`CannotRestore::AppData`](crate::save::CannotRestore::AppData)), for
+/// a version of the app that can. Nor is one the type reads but wouldn't
+/// write back as it was saved, as an older version of the app reading
+/// what a newer one added: the same rule as [`AppItem`]'s.
+pub trait AppData:
+    Clone + Debug + Default + PartialEq + Serialize + DeserializeOwned + Send + 'static
+{
+    /// One line to show for the chat, such as its title: in lists of
+    /// saved chats, which show it without loading them, and in viewers,
+    /// which don't know the app's type. `None` to show none.
+    fn label(&self) -> Option<String>;
+}
+
+/// The data slot of an app with no data of its own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct NoAppData;
+
+impl AppData for NoAppData {
+    fn label(&self) -> Option<String> {
+        None
     }
 }
 
@@ -124,8 +185,15 @@ pub enum ChatState {
         /// Why.
         reason: Lost,
     },
-    /// Closed by the host. Nothing more happens to it.
+    /// Closed by the host: the user is done with it. Nothing more happens
+    /// to it. A saved chat that's closed is put away too
+    /// ([`Core::put_away`](crate::Core::put_away)); restoring it brings it
+    /// back [`Idle`](ChatState::Idle).
     Closed,
+    /// No session is open, and none is wanted until a message is sent,
+    /// which opens it, continuing the agent's session where the agent
+    /// can: as a restored chat is. Nothing went wrong.
+    Idle,
     /// Waiting for its agent: to be installed, or signed in to, when a
     /// sign-in to it was started while it was signed out. Where the agent
     /// stands is in its [`AgentStatus`](crate::agent::AgentStatus); a view
@@ -513,13 +581,24 @@ pub enum Note {
     SignedIn,
 }
 
-/// Something the agent sent that CAF couldn't read.
+/// Something the agent sent that CAF couldn't read, or an app item a
+/// restored chat held that the app can't read now.
+///
+/// An app item that can't be read keeps its data exactly as it was saved,
+/// and is saved back as that app item, unchanged, so a version of the app
+/// that can read it gets it back: `what` is `App`, `raw` is its data, and
+/// `summary` is the summary it had. Its data is kept as JSON, which holds
+/// whatever serde writes with text keys and no raw bytes, as an
+/// [`AppItem`] must.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Unknown {
-    /// What it said it was, such as the update's tag.
+    /// What it said it was, such as the update's tag, or `App`.
     pub what: String,
     /// The original data, so nothing is lost.
     pub raw: serde_json::Value,
+    /// What it is, in a line, if CAF knows: an app item's summary.
+    #[serde(default)]
+    pub summary: Option<String>,
 }

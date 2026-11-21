@@ -270,7 +270,10 @@ async fn the_inspector_sends_the_replay_and_answers_what_the_app_asks() {
     assert_eq!(past(&mut socket, 71).await["type"], "Chats");
     let picture = past(&mut socket, 71).await;
     assert_eq!(picture["type"], "Picture");
-    assert_eq!(picture["value"]["chat"]["id"], 1);
+    assert_eq!(
+        picture["value"]["chat"]["id"],
+        "00000000-0000-0000-0000-000000000001"
+    );
 
     // Back: whole again.
     send(&mut socket, &FromInspector::Seek { step: 3 }).await;

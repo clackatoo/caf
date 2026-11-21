@@ -228,7 +228,9 @@ describe('states', () => {
 describe('the chats as they were', () => {
   const fixture = fixtures().find((each) => each.steps.length >= 6)!
   const id = fixture.picture.chat.id
-  const summary = { id, agent: fixture.picture.chat.agent, cwd: fixture.picture.chat.cwd }
+  const summary = { id, agent: fixture.picture.chat.agent, cwd: fixture.picture.chat.cwd, label: null, shelf: null }
+  /** Another chat's id. */
+  const otherId = '00000000-0000-0000-0000-00000000ffff'
 
   function past(socket: FakeSocket, at: number, message: ToViewer) {
     socket.say({ type: 'Past', value: { at, message } })
@@ -266,12 +268,12 @@ describe('the chats as they were', () => {
 
   it('drops the copy of any chat the list of chats leaves out', () => {
     const { socket, inspector } = open()
-    const other = { ...fixture.picture, chat: { ...fixture.picture.chat, id: id + 100 } }
+    const other = { ...fixture.picture, chat: { ...fixture.picture.chat, id: otherId } }
     socket.say({ type: 'Position', value: { live: false, at: 8, end: 9 } })
-    past(socket, 8, { type: 'Chats', value: [summary, { ...summary, id: id + 100 }] })
+    past(socket, 8, { type: 'Chats', value: [summary, { ...summary, id: otherId }] })
     past(socket, 8, { type: 'Picture', value: fixture.picture })
     past(socket, 8, { type: 'Picture', value: other })
-    expect([...inspector.past.chats.keys()]).toEqual([id, id + 100])
+    expect([...inspector.past.chats.keys()]).toEqual([id, otherId])
 
     socket.say({ type: 'Position', value: { live: false, at: 2, end: 9 } })
     past(socket, 2, { type: 'Chats', value: [summary] })
@@ -304,8 +306,8 @@ describe('the chats as they were', () => {
 
   it("keeps every chat's copy while moving back, between one Picture and the next", () => {
     const { socket, inspector } = open()
-    const other = { ...fixture.picture, chat: { ...fixture.picture.chat, id: id + 100 } }
-    const both = [summary, { ...summary, id: id + 100 }]
+    const other = { ...fixture.picture, chat: { ...fixture.picture.chat, id: otherId } }
+    const both = [summary, { ...summary, id: otherId }]
     socket.say({ type: 'Position', value: { live: false, at: 8, end: 9 } })
     past(socket, 8, { type: 'Chats', value: both })
     past(socket, 8, { type: 'Picture', value: fixture.picture })
@@ -313,8 +315,8 @@ describe('the chats as they were', () => {
     socket.say({ type: 'Position', value: { live: false, at: 7, end: 9 } })
     past(socket, 7, { type: 'Chats', value: both })
     past(socket, 7, { type: 'Picture', value: fixture.picture })
-    // Chat id + 100's Picture hasn't come yet: its copy from before stays.
-    expect([...inspector.past.chats.keys()]).toEqual([id, id + 100])
+    // The other chat's Picture hasn't come yet: its copy from before stays.
+    expect([...inspector.past.chats.keys()]).toEqual([id, otherId])
   })
 
   it('takes nothing as Past while following', () => {

@@ -9,16 +9,24 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::agent::SpawnCommand;
-use crate::ids::{ChangeNo, ChatId, Ticket};
+use crate::chat::{AppData, AppItem, NoAppData, NoAppItems};
+use crate::ids::{ChangeNo, ChatId, Shelf, Ticket};
 use crate::install::{Install, LinkFrom, SignedInAs};
+use crate::save::{Entry, Header, Saved};
 use crate::time::{Mono, Wall};
 
-/// Work for a driver.
+/// Work for a driver. `A` and `D` are the app's item and data types,
+/// which saving carries.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(concrete(A = NoAppItems, D = NoAppData), bound = "A: ts_rs::TS, D: ts_rs::TS")
+)]
 #[serde(tag = "type", content = "value")]
-pub enum Directive {
+#[serde(bound = "A: AppItem, D: AppData")]
+pub enum Directive<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     /// For the agent driver.
     Agent(AgentDirective),
     /// For the timer driver.
@@ -27,8 +35,8 @@ pub enum Directive {
     Policy(PolicyDirective),
     /// For the viewer driver.
     Viewer(ViewerDirective),
-    /// For the storage driver. *Later.*
-    Storage(StorageDirective),
+    /// For the storage driver: keeping chats.
+    Storage(StorageDirective<A, D>),
     /// For the setup driver: installing agents and signing in to them.
     Setup(SetupDirective),
     /// For the host's log.
@@ -190,12 +198,117 @@ pub enum ViewerDirective {
     },
 }
 
-/// Work for the storage driver. *Later.*
+/// Work for the storage driver: keeping chats.
+///
+/// The driver's side of the contract:
+/// - **Work on one chat is done in the order it's given.** A chat's
+///   journal entries are added in order, after the snapshot before them.
+/// - **A chat is locked from when it's loaded or first written until it's
+///   released**, across every program using the store: a second program
+///   loading it gets [`CannotRestore::InUse`](crate::save::CannotRestore::InUse).
+/// - **A write is whole or not there**: a cut-off journal entry is found
+///   and dropped when the chat's read, and a snapshot replaces the old
+///   one in one step, with its journal.
+/// - **A save it can't read is never overwritten or removed**, unless the
+///   core deletes it.
+/// - **Every directive with a ticket is answered**, once. A
+///   [`Release`](StorageDirective::Release) has none: it's done as it's
+///   given, before any work given after it.
+///
+/// And the core's: **while a shelf is being moved, no work for a chat on
+/// it, or on the shelf it goes to, is given**, and a move is given only
+/// once all work for chats on both is answered. So a store needn't order
+/// a move against other work.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(concrete(A = NoAppItems, D = NoAppData), bound = "A: ts_rs::TS, D: ts_rs::TS")
+)]
 #[serde(tag = "type", content = "value")]
-pub enum StorageDirective {}
+#[serde(bound = "A: AppItem, D: AppData")]
+pub enum StorageDirective<A: AppItem = NoAppItems, D: AppData = NoAppData> {
+    /// List a shelf's chats: [`StorageEvent::Listed`](crate::event::StorageEvent::Listed).
+    List {
+        /// Its ticket.
+        ticket: Ticket,
+        /// The shelf.
+        shelf: Shelf,
+    },
+    /// Lock a chat and read it: [`StorageEvent::Loaded`](crate::event::StorageEvent::Loaded).
+    Load {
+        /// Its ticket.
+        ticket: Ticket,
+        /// Where it's kept.
+        shelf: Shelf,
+        /// The chat.
+        chat: ChatId,
+    },
+    /// Write a chat whole, locking it if it isn't yet, and empty its
+    /// journal.
+    Snapshot {
+        /// Its ticket.
+        ticket: Ticket,
+        /// Where it's kept.
+        shelf: Shelf,
+        /// The chat, whole.
+        saved: Box<Saved<A, D>>,
+    },
+    /// Add to a chat's journal, and replace its header.
+    ///
+    /// Only to a chat the store holds on that shelf, locked by this
+    /// program: one it doesn't isn't added to, and the write fails
+    /// ([`StorageEvent::Failed`](crate::event::StorageEvent::Failed)). The
+    /// core never asks for one: a chat's first write, and its first after
+    /// a write failed or it was let go, is a
+    /// [`Snapshot`](StorageDirective::Snapshot).
+    Append {
+        /// Its ticket.
+        ticket: Ticket,
+        /// Where it's kept.
+        shelf: Shelf,
+        /// Its header now.
+        header: Header,
+        /// What changed, in order.
+        entries: Vec<Entry<A, D>>,
+    },
+    /// Unlock a chat: it's put away, or CAF is shutting down, and it's
+    /// written whole already. Or the core has no use for its lock left,
+    /// and it's let go as the store has it: a restore found it damaged, it
+    /// couldn't be deleted, or it was deleted while its load was under
+    /// way and the deletion failed.
+    Release {
+        /// Where it's kept.
+        shelf: Shelf,
+        /// The chat.
+        chat: ChatId,
+    },
+    /// Remove a chat for good.
+    Delete {
+        /// Its ticket.
+        ticket: Ticket,
+        /// Where it's kept.
+        shelf: Shelf,
+        /// The chat.
+        chat: ChatId,
+    },
+    /// Move every chat on a shelf to another, such as when framewright
+    /// saves a project under a new name. Chats that are loaded move with
+    /// their locks. All of the shelf moves, or none of it: a move that
+    /// fails leaves every chat where it was. A store refuses a move onto a
+    /// shelf that already has chats, as merging shelves isn't supported,
+    /// and one chat on `from` open in another program stops the whole
+    /// move; either way, it fails and nothing moves.
+    MoveShelf {
+        /// Its ticket.
+        ticket: Ticket,
+        /// The shelf.
+        from: Shelf,
+        /// Where they go.
+        to: Shelf,
+    },
+}
 
 /// Something the host should log.
 #[non_exhaustive]

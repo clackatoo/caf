@@ -6,6 +6,7 @@ use serde::Serialize;
 
 use super::Core;
 use crate::change::{Change, Numbered, Read};
+use crate::chat::AppData;
 use crate::chat::{AppItem, Chat, ChatState, Item, ItemKind, ToolCall, Turn, TurnLife, Usage};
 use crate::ids::{ChangeNo, ChatId, ItemId, QuestionId, TurnId};
 use crate::question::{Question, QuestionKind};
@@ -69,7 +70,7 @@ impl<A: AppItem> Log<A> {
     }
 }
 
-impl<A: AppItem> Core<A> {
+impl<A: AppItem, D: AppData> Core<A, D> {
     /// Applies `change` to `chat`'s record and, if it fits, adds it to
     /// the chat's list: the record is built only from the changes viewers
     /// are sent, so the two can't disagree. A change that doesn't fit is
@@ -92,6 +93,19 @@ impl<A: AppItem> Core<A> {
             );
             self.misfits.push((chat, change, mismatch));
             return;
+        }
+        // A saved chat's journal has every change, as the store's copy is
+        // built from them too; a turn ending saves it at once.
+        if let Some(kept) = self.saving.kept.get_mut(&chat) {
+            if let Change::TurnLife { life, .. } = &change
+                && !matches!(
+                    life,
+                    TurnLife::Waiting | TurnLife::Running | TurnLife::Stopping
+                )
+            {
+                kept.urgent = true;
+            }
+            kept.add_with(|| crate::save::Entry::Change(change.clone()));
         }
         log.push(change, self.host.limits.kept_changes);
         #[cfg(test)]

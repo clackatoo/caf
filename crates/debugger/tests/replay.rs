@@ -47,7 +47,7 @@ fn the_live_claude_trace_replays_to_the_state_the_core_tests_expect() {
         has(
             chat,
             &json!({
-                "id": 1,
+                "id": "00000000-0000-0000-0000-000000000001",
                 "state": { "type": "Lost", "value": { "reason": { "type": "ShutDown" } } },
                 "turns": [
                     { "starter": { "type": "User", "value": { "parts": [{ "type": "Text", "value": "Reply with exactly the word pong." }] } }, "life": { "type": "Finished" }, "items": [{ "kind": { "type": "Words", "value": "pong" } }] },
@@ -300,7 +300,7 @@ fn a_chat_not_yet_open_isnt_in_the_list() {
     assert!(copies.open.is_empty(), "nothing open before the first step");
     player.go(1);
     copies.take(player.past());
-    assert_eq!(copies.open, [ChatId(1)]);
+    assert_eq!(copies.open, [ChatId::from_number(1)]);
 }
 
 #[test]

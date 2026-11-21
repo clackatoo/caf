@@ -17,11 +17,12 @@
   import StateBanner from './StateBanner.svelte'
   import Turn from './Turn.svelte'
   import Usage from './Usage.svelte'
-  import { errorText, stateLabel } from './words.ts'
+  import { errorText, shortId, stateLabel } from './words.ts'
   import './theme.css'
 
   let {
     chat,
+    label = null,
     agent,
     may = { act: true, agents: true },
     actions,
@@ -30,6 +31,8 @@
     appSummary = () => "An item of the app's own",
   }: {
     chat: DeepReadonly<Chat>
+    /** The app's line for the chat, such as its title, from its `ChatSummary`, if it has one. */
+    label?: string | null
     /**
      * The status of the chat's agent, from `Connection.agents`: whether
      * it's installed and signed in. Without it, a chat waiting for its
@@ -91,9 +94,10 @@
 <!-- Drawn afresh for another chat, so nothing typed or shown for one (a
      draft, why something failed) carries over to the next. -->
 {#key chat.id}
-<section class="caf-chat" aria-label="Chat {chat.id}">
+<section class="caf-chat" aria-label={label ?? `Chat ${shortId(chat.id)}`}>
   <header>
     <div class="who">
+      {#if label !== null}<span class="label" title={label}>{label}</span>{/if}
       <span class="agent">{chat.agent}</span>
       <!-- Cut from the left, so the end of the path shows. -->
       <span class="cwd" title={chat.cwd}><bdi>{chat.cwd}</bdi></span>
@@ -177,6 +181,17 @@
     display: flex;
     gap: 0.6em;
     align-items: baseline;
+  }
+  .label {
+    font-weight: 600;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .label + .agent {
+    font-weight: normal;
+    color: var(--caf-muted);
   }
   .agent {
     font-weight: 600;

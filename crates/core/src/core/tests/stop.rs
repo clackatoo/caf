@@ -32,7 +32,7 @@ fn stop_answers_the_agents_questions_then_tells_it_and_waits() {
     let out = script.says(PROC, &permission(7, "tool-1"));
     assert_has(
         &json!(with(&out, "decide")),
-        &json!([{ "decide": 1005, "chat": CHAT.0, "title": "Run `cargo test`", "input": "{\"command\":\"cargo test\"}" }]),
+        &json!([{ "decide": 1005, "chat": CHAT, "title": "Run `cargo test`", "input": "{\"command\":\"cargo test\"}" }]),
     );
 
     script.at(500);

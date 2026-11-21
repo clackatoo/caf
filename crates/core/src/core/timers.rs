@@ -7,6 +7,7 @@
 use super::procs::Cause;
 use super::state::{Group, Init, Open, Purpose};
 use super::{Core, report};
+use crate::chat::AppData;
 use crate::chat::AppItem;
 use crate::directive::{Directive, Level};
 use crate::ids::{ChatId, Ticket};
@@ -39,9 +40,13 @@ enum Due {
     Held(ChatId),
     /// A sign-in nobody finished in time.
     SignIn(Ticket),
+    /// A saved chat's changes are due to be written.
+    Save(ChatId),
+    /// A chat put away is due to be written again, after a write failed.
+    Away(ChatId),
 }
 
-impl<A: AppItem> Core<A> {
+impl<A: AppItem, D: AppData> Core<A, D> {
     /// The earliest deadline the core has, if any.
     pub(super) fn next_deadline(&self) -> Option<Mono> {
         self.deadlines().map(|(at, _)| at).min()
@@ -82,16 +87,22 @@ impl<A: AppItem> Core<A> {
         let sign_ins = (self.setup.jobs.iter())
             .filter(|(_, job)| !job.stopped)
             .filter_map(|(&ticket, job)| Some((job.deadline?, Due::SignIn(ticket))));
+        let saves = (self.saving.kept.keys())
+            .filter_map(|&chat| Some((self.save_at(chat)?, Due::Save(chat))));
+        let away = (self.saving.away.keys())
+            .filter_map(|&chat| Some((self.away_at(chat)?, Due::Away(chat))));
         procs
             .chain(requests)
             .chain(stops)
             .chain(quiet)
             .chain(held)
             .chain(sign_ins)
+            .chain(saves)
+            .chain(away)
     }
 
     /// The timer driver woke the core: whatever is due is done.
-    pub(super) fn woken(&mut self, now: Now, out: &mut Vec<Directive>) {
+    pub(super) fn woken(&mut self, now: Now, out: &mut Vec<Directive<A, D>>) {
         if self.wake.is_some_and(|wake| wake <= now.mono) {
             self.wake = None;
         }
@@ -111,7 +122,7 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Does what's due.
-    fn fire(&mut self, now: Now, due: Due, out: &mut Vec<Directive>) {
+    fn fire(&mut self, now: Now, due: Due, out: &mut Vec<Directive<A, D>>) {
         match due {
             Due::Init(proc) => self.init_slow(now, proc),
             Due::Gone(proc) => self.finalize(now, proc, out),
@@ -122,6 +133,8 @@ impl<A: AppItem> Core<A> {
             Due::Stop(chat) => self.stop_overdue(now, chat, out),
             Due::Quiet(chat) => self.quiet(now, chat),
             Due::SignIn(ticket) => self.sign_in_overdue(ticket, out),
+            Due::Save(chat) => self.write(now, chat, out),
+            Due::Away(chat) => self.write_away(chat, out),
             Due::Held(chat) => {
                 if let Some(run) = self.runs.get_mut(&chat) {
                     run.held_by = None;
@@ -149,7 +162,7 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Request `id` of `proc` is overdue.
-    fn overdue(&mut self, now: Now, proc: Ticket, id: i64, out: &mut Vec<Directive>) {
+    fn overdue(&mut self, now: Now, proc: Ticket, id: i64, out: &mut Vec<Directive<A, D>>) {
         let Some(pending) = self.pending.get_mut(&(proc, id)) else {
             return;
         };

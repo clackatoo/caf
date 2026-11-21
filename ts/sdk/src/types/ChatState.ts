@@ -13,4 +13,4 @@ session: AgentSessionId, } } | { "type": "Lost", "value": {
 /**
  * Why.
  */
-reason: Lost, } } | { "type": "Closed" } | { "type": "WaitingForAgent" };
+reason: Lost, } } | { "type": "Closed" } | { "type": "Idle" } | { "type": "WaitingForAgent" };

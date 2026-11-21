@@ -2,9 +2,12 @@
 import type { AgentName } from "./AgentName.ts";
 import type { Answer } from "./Answer.ts";
 import type { ChatId } from "./ChatId.ts";
+import type { NoAppData } from "./NoAppData.ts";
 import type { NoAppItems } from "./NoAppItems.ts";
 import type { OpenChat } from "./OpenChat.ts";
 import type { QuestionId } from "./QuestionId.ts";
+import type { RestoreChat } from "./RestoreChat.ts";
+import type { Shelf } from "./Shelf.ts";
 import type { TurnId } from "./TurnId.ts";
 import type { UserMessage } from "./UserMessage.ts";
 
@@ -47,7 +50,35 @@ answer: Answer, } } | { "type": "CloseChat", "value": {
 /**
  * The chat.
  */
-chat: ChatId, } } | { "type": "Shutdown" } | { "type": "CheckAgents" } | { "type": "Install", "value": AgentName } | { "type": "StopInstall", "value": AgentName } | { "type": "SignIn", "value": AgentName } | { "type": "Paste", "value": { 
+chat: ChatId, } } | { "type": "ListSaved", "value": Shelf } | { "type": "Restore", "value": RestoreChat } | { "type": "PutAway", "value": { 
+/**
+ * The chat.
+ */
+chat: ChatId, } } | { "type": "Delete", "value": { 
+/**
+ * The chat.
+ */
+chat: ChatId, 
+/**
+ * Where it's kept.
+ */
+shelf: Shelf, } } | { "type": "MoveShelf", "value": { 
+/**
+ * The shelf.
+ */
+from: Shelf, 
+/**
+ * Where they go.
+ */
+to: Shelf, } } | { "type": "SetData", "value": { 
+/**
+ * The chat.
+ */
+chat: ChatId, 
+/**
+ * Its data now.
+ */
+data: NoAppData, } } | { "type": "Shutdown" } | { "type": "CheckAgents" } | { "type": "Install", "value": AgentName } | { "type": "StopInstall", "value": AgentName } | { "type": "SignIn", "value": AgentName } | { "type": "Paste", "value": { 
 /**
  * The agent.
  */

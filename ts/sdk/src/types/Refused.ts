@@ -4,4 +4,4 @@
  * Why the core refused a host's command. A refused command changes
  * nothing.
  */
-export type Refused = { "type": "NoSuchChat" } | { "type": "Closed" } | { "type": "NoSuchAgent" } | { "type": "RelativeFolder" } | { "type": "Unsendable" } | { "type": "QueueFull" } | { "type": "Unsupported" } | { "type": "CommandNotAlone" } | { "type": "NoSuchQuestion" } | { "type": "WrongAnswer" } | { "type": "NothingToStop" } | { "type": "NotInstallable" } | { "type": "AlreadyInstalled" } | { "type": "CannotSignIn" } | { "type": "NotSigningIn" };
+export type Refused = { "type": "NoSuchChat" } | { "type": "Closed" } | { "type": "NoSuchAgent" } | { "type": "RelativeFolder" } | { "type": "Unsendable" } | { "type": "QueueFull" } | { "type": "Unsupported" } | { "type": "CommandNotAlone" } | { "type": "NoSuchQuestion" } | { "type": "WrongAnswer" } | { "type": "NothingToStop" } | { "type": "NotInstallable" } | { "type": "AlreadyInstalled" } | { "type": "CannotSignIn" } | { "type": "NotSigningIn" } | { "type": "NotSaved" } | { "type": "Loaded" } | { "type": "BadShelf" };

@@ -835,7 +835,7 @@ async fn refusals_and_unknown_chats() {
     let (caf, running) = start(Config::new(host(), Vec::new()));
     let refused = caf.open_chat(OpenChat::new("nobody", "/tmp")).await;
     assert!(matches!(refused, Err(Error::Refused(_))));
-    let nobody = caf.chat(ChatId(4242));
+    let nobody = caf.chat(ChatId::from_number(4242));
     assert!(matches!(
         nobody.send(UserMessage::text("hi")).await,
         Err(Error::Refused(_))
@@ -1229,7 +1229,7 @@ async fn watches_left_partway_through_a_read_dont_hold_caf_up() {
     // as they are: never asked again, and never dropped.
     let mut left = Vec::new();
     for id in 5000..5200 {
-        let mut watch = caf.chat(ChatId(id)).watch();
+        let mut watch = caf.chat(ChatId::from_number(id)).watch();
         let mut next = Box::pin(async move { watch.next().await });
         std::future::poll_fn(|cx| {
             let _ = next.as_mut().poll(cx);
