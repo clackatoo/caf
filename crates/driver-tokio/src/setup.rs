@@ -211,6 +211,10 @@ pub(crate) struct Options {
     /// up, instead of a minute.
     #[cfg(test)]
     pub(crate) idle: Option<std::time::Duration>,
+    /// How long ureq itself waits for each read, instead of `idle`: so a
+    /// test can leave the install's own watch to give up.
+    #[cfg(test)]
+    pub(crate) per_read: Option<std::time::Duration>,
     /// The npm to run, instead of the one on `PATH`.
     #[cfg(test)]
     pub(crate) npm: Option<PathBuf>,

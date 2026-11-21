@@ -641,7 +641,7 @@ async fn download(
             url: artifact.url.clone(),
             proxy: proxy_for(&artifact.url, |name| env_var(options, name)),
             https_only: !allowed_http(options),
-            idle: idle(options),
+            idle: per_read(options),
             most: most_for(size),
         };
         tokio::task::spawn_blocking(move || fetch(&how, out, &done, &stopped))
@@ -782,6 +782,16 @@ fn env_var(options: &Options, name: &str) -> Option<String> {
     }
     let _ = options;
     std::env::var(name).ok()
+}
+
+/// How long ureq waits for each read: as long as a download may go with
+/// nothing coming.
+fn per_read(options: &Options) -> Duration {
+    #[cfg(test)]
+    if let Some(per_read) = options.per_read {
+        return per_read;
+    }
+    idle(options)
 }
 
 /// How long a download may go with nothing coming.

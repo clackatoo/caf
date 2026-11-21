@@ -70,6 +70,7 @@ fn driver(dir: &Dir) -> SetupDriver {
             temp: Some(dir.path("temp")),
             env: Some(std::collections::HashMap::new()),
             idle: None,
+            per_read: None,
             npm: None,
         },
     )
@@ -742,6 +743,47 @@ async fn a_download_far_bigger_than_its_agent_is_cut_off() {
 }
 
 #[tokio::test]
+async fn a_tar_holding_a_pipe_or_a_device_is_refused() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    for (n, kind) in [
+        tar::EntryType::Fifo,
+        tar::EntryType::Char,
+        tar::EntryType::Block,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut archive = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::default(),
+        ));
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(kind);
+        header.set_mode(0o644);
+        header.set_size(0);
+        header.set_cksum();
+        archive.append_data(&mut header, "odd", &[][..]).unwrap();
+        let body = archive.into_inner().unwrap().finish().unwrap();
+        let server = serve(body.clone(), false).await;
+        let ticket = Ticket(1000 + n as u64);
+        driver.apply(SetupDirective::Install {
+            ticket,
+            folder: "fake-1.0.0".into(),
+            install: download(&server.url, &body, Unpack::TarGz),
+            private: None,
+            size: 1 << 30,
+        });
+        let events = done(&mut driver, ticket).await;
+        assert!(
+            matches!(events.last(), Some(Ev(SetupEvent::InstallFailed(InstallFailure::Other(why)))) if why.contains("isn't a file")),
+            "{kind:?}: {events:?}"
+        );
+        assert!(installs(&dir).is_empty(), "{kind:?}: {:?}", installs(&dir));
+    }
+}
+
+#[tokio::test]
 async fn a_download_that_doesnt_match_its_checksum_is_thrown_away() {
     let dir = Dir::new();
     let server = serve(tar_gz(), false).await;
@@ -1011,6 +1053,8 @@ async fn a_failed_download_says_what_went_wrong_but_not_where() {
     let body = tar_gz();
     let server = serve(body.clone(), false).await;
     let elsewhere = redirect("ftp://user:s3cret@files.example/agent?token=s3cret").await;
+    // A Location ureq can't read: its error quotes the whole header.
+    let malformed = redirect("http://s3cret host/agent?token=s3cret").await;
     let cases = [
         (
             "HTTP_PROXY",
@@ -1019,6 +1063,7 @@ async fn a_failed_download_says_what_went_wrong_but_not_where() {
         ),
         ("HTTP_PROXY", "http://user:s3cret@[::1", server.url.clone()),
         ("NONE", "", elsewhere),
+        ("NONE", "", malformed),
     ];
     for (n, (name, value, url)) in cases.into_iter().enumerate() {
         let env = [(name.to_owned(), value.to_owned())].into_iter().collect();
@@ -1048,6 +1093,40 @@ async fn a_failed_download_says_what_went_wrong_but_not_where() {
             assert!(said.contains("HTTP_PROXY"), "{n}: it says which: {said}");
         }
     }
+}
+
+#[tokio::test]
+async fn a_download_ureq_wont_give_up_on_is_given_up_by_the_install() {
+    // As while finding its host, which ureq's timeouts don't cover: here,
+    // a stalled body with ureq told to wait an hour for each read.
+    let dir = Dir::new();
+    let body = vec![7; 4 << 20];
+    let stalled = serve(body.clone(), true).await.url;
+    let mut driver = SetupDriver::with_options(
+        dir.root(),
+        Options {
+            http_to_this_machine: true,
+            idle: Some(Duration::from_millis(500)),
+            per_read: Some(Duration::from_secs(60 * 60)),
+            env: Some(std::collections::HashMap::new()),
+            ..Options::default()
+        },
+    );
+    driver.apply(SetupDirective::Install {
+        ticket: Ticket(1000),
+        folder: "fake-1.0.0".into(),
+        install: download(&stalled, &body, Unpack::No),
+        private: None,
+        size: 1 << 30,
+    });
+    let events = tokio::time::timeout(Duration::from_secs(10), done(&mut driver, Ticket(1000)))
+        .await
+        .expect("the install's own watch gives up");
+    assert_eq!(
+        events.last().expect("a last report"),
+        &SetupEvent::InstallFailed(InstallFailure::Offline)
+    );
+    assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
 }
 
 #[tokio::test]
