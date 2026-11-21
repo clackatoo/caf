@@ -146,7 +146,8 @@ each return a function that stops them.
 stop, answer and close), and on `agents` (install them, and sign in and
 out). Offer only what it may: anything else is answered `NotAllowed`. A
 page that may not act on agents gets no sign-in's link or code. Whether it
-may open chats isn't said, as the host decides each request.
+may open chats, or restore saved ones, isn't said, as the host decides each
+request.
 
 ### Watch a chat
 
@@ -189,8 +190,9 @@ await caf.close(chat);
 `open` resolves once the chat is open, and `send` once the core has taken
 the message, with the turn it will be: not once the turn has run, which
 the watch shows. `stop`, `answer` and `close` resolve once they're done.
-Questions waiting for an answer are on the chat, in `chat.questions`. When something isn't done, the promise
-rejects with a `CafError`, whose `why` says why:
+Questions waiting for an answer are on the chat, in `chat.questions`. When
+something isn't done, the promise rejects with a `CafError`, whose `why`
+says why:
 
 | `why.type` | What it means |
 |---|---|
@@ -202,9 +204,10 @@ rejects with a `CafError`, whose `why` says why:
 | `Disconnected` | The link ended before the answer came. |
 
 A later CAF may add reasons: to `Refused` and `CannotRestore` here, and to
-a chat's `Lost` and a failed turn's `FailureReason`. The types list only the reasons this
-version of the SDK knows, but a new one still comes through, by its name.
-So give every `switch` on a reason a `default` that shows it by its `type`:
+a chat's `Lost` and a failed turn's `FailureReason`. The types list only
+the reasons this version of the SDK knows, but a new one still comes
+through, by its name. So give every `switch` on a reason a `default` that
+shows it by its `type`:
 
 ```ts
 function refusal(reason: Refused): string {
@@ -227,7 +230,8 @@ the chats saved on them, open or not, in the order they were made:
 ```ts
 caf.saved; // each: its shelf, its header, and its state
 caf.onSaved((saved) => drawSaved(saved));
-const chat = await caf.restore(saved.header.chat, saved.shelf);
+const [first] = caf.saved;
+const chat = await caf.restore(first.header.chat, first.shelf);
 ```
 
 CAF sends the list right after the agents, and again, whole, whenever it
@@ -241,8 +245,9 @@ for it, the `first` line of its first message, how many `turns` it has,
 and whether it was `closed`. Its `state` is `Saved`, `Restoring`, `Loaded`,
 or `Failed`, with why the last restore failed.
 
-`restore` resolves with the chat's id once it's loaded: it's in `chats`,
-and watched like any other. A chat keeps its id when it's saved and
+`restore` resolves with the chat's id once it's loaded. It's then in the
+next `Chats`, so in `chats` once `onChats` hears it, and watched like any
+other. A chat keeps its id when it's saved and
 restored. A restored chat is `Idle`: no session is open until a message is
 sent, which opens one, continuing the agent's session where the agent can.
 
@@ -394,6 +399,7 @@ care where the chat came from:
 
 <ChatView
   {chat}
+  label={caf.chats.find((each) => each.id === chat.id)?.label ?? null}
   agent={agents.find((agent) => agent.name === chat.agent)}
   may={caf.may}
   actions={{
@@ -426,10 +432,27 @@ Send again: once signed in, the user sends it again, since CAF never does
 by itself. Sign in shows only while the agent's status says CAF can sign
 in to it now.
 
-Beside it, `ChatList` lists the open chats, by their labels where they have
-them, and `SavedList` lists `caf.saved`: each chat's label or first line,
-its agent, folder, when it last changed and its turns, whether it's loaded
-or why it can't be, and Restore, taking `restore(chat, shelf)` as an action.
+Given its `label`, from the chat's summary in `caf.chats`, the view heads
+the chat with it. Beside it, `ChatList` lists the open chats, by their
+labels where they have them, and `SavedList` lists `caf.saved`: each
+chat's label or first line, its agent, folder, when it last changed and its
+turns, whether it's loaded or why it can't be, and Restore. Its actions are
+`select(chat)`, to show a loaded one, and `restore(chat, shelf)`:
+
+```svelte
+<script lang="ts">
+  let saved = $state.raw(caf.saved);
+  $effect(() => caf.onSaved((now) => (saved = now)));
+</script>
+
+<SavedList
+  {saved}
+  actions={{
+    select: (chat) => show(chat),
+    restore: async (chat, shelf) => show(await caf.restore(chat, shelf)),
+  }}
+/>
+```
 
 It imports only the caf-sdk, Svelte and markdown-it, which a check in CI
 holds it to, so the folder can be lifted out whole. Copy it, or read it for
@@ -437,8 +460,8 @@ what a good chat on CAF shows.
 
 The agent's words are untrusted: an agent may repeat a web page or a file,
 and HTML in it could script the page. So the view renders Markdown with
-HTML off, links only `http` and `https` addresses, opening each in a new tab
-with `rel="noopener noreferrer"`, and links to images rather than loading
-them. A sign-in link isn't the agent's words, but it opens one the same way,
-and only if it's `https`. Whatever a page built on CAF draws the agent's words with, it should
-do the same.
+HTML off, links only `http` and `https` addresses, opening each in a new
+tab with `rel="noopener noreferrer"`, and links to images rather than
+loading them. A sign-in link isn't the agent's words, but it opens one the
+same way, and only if it's `https`. Whatever a page built on CAF draws the
+agent's words with, it should do the same.
