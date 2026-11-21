@@ -112,9 +112,11 @@ fn keep<A: AppItem, D: AppData>(
         let ticket = ticket_of(&directive);
         // A load that panics may have taken the chat's lock: it's let go,
         // unless the store held it already, as a failed load takes none.
+        // Asking may panic too: then it's taken as not held.
         let loading = match &directive {
-            StorageDirective::Load { shelf, chat, .. } if !store.holds(shelf, *chat) => {
-                Some((shelf.clone(), *chat))
+            StorageDirective::Load { shelf, chat, .. } => {
+                let held = std::panic::catch_unwind(AssertUnwindSafe(|| store.holds(shelf, *chat)));
+                (!held.unwrap_or(false)).then(|| (shelf.clone(), *chat))
             }
             _ => None,
         };

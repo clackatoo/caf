@@ -1130,7 +1130,12 @@ impl<A: AppItem> Watch<A> {
     fn last_words(&mut self) -> Option<Update<A>> {
         self.ended = true;
         let last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
-        let (chat, latest) = last.chats.get(&self.chat)?;
+        let Some((chat, latest)) = last.chats.get(&self.chat) else {
+            // Put away before CAF ended, and not yet seen.
+            let left = (last.left.get(&self.chat)).filter(|left| self.serial < left.before)?;
+            self.since = left.latest.max(self.since);
+            return Some(Update::Picture(left.chat.clone()));
+        };
         if self.since.is_some_and(|since| since >= *latest) {
             return None;
         }
@@ -1272,6 +1277,9 @@ struct Last<A: AppItem> {
     watched: HashMap<ChatId, usize>,
     /// Each of them as CAF left it. Empty until the task ends.
     chats: HashMap<ChatId, (Chat<A>, ChangeNo)>,
+    /// Each of them put away, as it was left, that some watch made before
+    /// hadn't seen yet. Empty until the task ends.
+    left: HashMap<ChatId, Left<A>>,
     /// The task has ended, and `chats` is filled in.
     ended: bool,
     /// How many watches have been made: the next one's serial.
@@ -1283,6 +1291,7 @@ impl<A: AppItem> Default for Last<A> {
         Self {
             watched: HashMap::new(),
             chats: HashMap::new(),
+            left: HashMap::new(),
             ended: false,
             made: 0,
         }
@@ -1455,8 +1464,8 @@ struct Task<A: AppItem, D: AppData> {
     /// The restores the host waits for.
     restores: Restores,
     /// Each chat some watch follows that was put away, as it was left,
-    /// for its watches' last picture: kept until they're dropped, or it's
-    /// loaded again or deleted.
+    /// for its watches' last picture: kept until it's loaded again or
+    /// deleted, or the step after its last watch is dropped.
     put_away: HashMap<ChatId, Left<A>>,
     /// The number of each loaded chat's latest change, as viewers were
     /// last told: what a chat put away was shown up to.
@@ -1512,6 +1521,7 @@ impl<A: AppItem, D: AppData> Task<A, D> {
             let Last {
                 watched,
                 chats,
+                left,
                 ended,
                 ..
             } = &mut *last;
@@ -1523,6 +1533,8 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 }) = self.core.read(chat, None)
                 {
                     chats.insert(chat, (whole.clone(), latest));
+                } else if let Some(away) = self.put_away.remove(&chat) {
+                    left.insert(chat, away);
                 }
             }
         }
@@ -1928,23 +1940,26 @@ impl<A: AppItem, D: AppData> Task<A, D> {
         // it was left if it was put away. That's taken from the core now,
         // before its write is done, which may wait for a move of its shelf.
         let core = &self.core;
-        {
+        let (left, before) = {
             let last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
-            for &chat in last.watched.keys() {
-                if self.put_away.contains_key(&chat) || core.chat(chat).is_some() {
-                    continue;
-                }
-                if let Some(left) = core.away(chat) {
-                    let left = Left {
-                        chat: left.clone(),
-                        latest: self.numbered.get(&chat).copied(),
-                        before: last.made,
-                    };
-                    self.put_away.insert(chat, left);
-                }
-            }
             (self.put_away)
                 .retain(|chat, _| last.watched.contains_key(chat) && core.chat(*chat).is_none());
+            let left: Vec<ChatId> = (last.watched.keys())
+                .filter(|chat| !self.put_away.contains_key(chat) && core.chat(**chat).is_none())
+                .copied()
+                .collect();
+            (left, last.made)
+        };
+        // Copied with the lock let go, as a chat may be big.
+        for chat in left {
+            if let Some(away) = core.away(chat) {
+                let left = Left {
+                    chat: away.clone(),
+                    latest: self.numbered.get(&chat).copied(),
+                    before,
+                };
+                self.put_away.insert(chat, left);
+            }
         }
         self.feeds.retain(|chat, _| core.chat(*chat).is_some());
         self.numbered.retain(|chat, _| core.chat(*chat).is_some());

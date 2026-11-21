@@ -783,6 +783,7 @@ impl Store for Spying {
             .push((shelf.clone(), chat));
     }
     fn holds(&self, shelf: &Shelf, chat: ChatId) -> bool {
+        self.spy.panic("holds");
         self.files.holds(shelf, chat)
     }
     fn delete(&mut self, shelf: &Shelf, chat: ChatId) -> Result<(), StoreError> {
@@ -840,6 +841,49 @@ async fn a_store_that_panics_loading_a_chat_lets_it_go() {
         .unwrap();
     assert_eq!(picture(&chat).await.turns.len(), 1);
     stop(&caf, running).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_store_that_panics_saying_whether_it_holds_a_chat_still_answers_its_load() {
+    let dir = Dir::new();
+    let id = a_chat_saved_by_another_run(&dir).await;
+    let spy = Spy::default();
+    spy.panic_on("holds");
+    let (caf, running) =
+        start_with::<NoAppData>(&dir, &first_script(&dir), Some(spy.store(&dir)), None);
+    let restored = tokio::time::timeout(PATIENCE, caf.restore(RestoreChat::new(id, shelf(SHELF))))
+        .await
+        .expect("answered");
+    let chat = restored.expect("the panic was asking, before the load");
+    assert_eq!(picture(&chat).await.turns.len(), 1);
+    assert!(spy.0.lock().unwrap().panic.is_none(), "it panicked");
+    stop(&caf, running).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_chat_closed_just_before_shutting_down_is_shown_as_it_was_left() {
+    let dir = Dir::new();
+    let (caf, running) = start::<NoAppData>(&dir, &first_script(&dir));
+    let chat = caf.open_chat(saved_open(&dir, SHELF)).await.unwrap();
+    let id = chat.id;
+    let mut watch = chat.watch();
+    chat.send(UserMessage::text("Hi")).await.unwrap();
+    until(&chat, &mut watch, "the answer", finished).await;
+    chat.close().await.unwrap();
+    // Not read until CAF has ended.
+    stop(&caf, running).await;
+    let mut last = None;
+    while let Some(update) = watch.next().await {
+        last = Some(update);
+    }
+    match last {
+        Some(caf_driver_tokio::Update::Picture(left)) => {
+            assert_eq!(left.state, ChatState::Closed);
+        }
+        other => panic!("the chat as it was left, not {other:?}"),
+    }
+    // A watch made after shows nothing.
+    assert!(caf.chat(id).watch().next().await.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

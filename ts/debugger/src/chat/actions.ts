@@ -52,10 +52,6 @@ export interface SavedActions {
 }
 
 /**
- * Runs an action, and gives back why it failed, or null. A host's action
- * that throws instead of rejecting counts too.
- */
-/**
  * Restores a chat with `restore`, trying again for a moment while CAF
  * refuses it as loaded: a chat just put away, or closed, is listed as
  * saved at once, but CAF holds it until its last write is done, which
@@ -76,6 +72,10 @@ export async function restoreOnceFree<T>(
   }
 }
 
+/**
+ * Runs an action, and gives back why it failed, or null. A host's action
+ * that throws instead of rejecting counts too.
+ */
 export async function attempt(action: () => Promise<unknown> | void): Promise<unknown> {
   try {
     await action()

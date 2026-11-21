@@ -47,7 +47,12 @@ pub fn check_store(dir: &Path) -> std::io::Result<()> {
         .recursive(true)
         .mode(0o700)
         .create(dir)?;
-    let probe = dir.join(format!(".caf-debugger-check-{}", std::process::id()));
+    // Named for this process and this moment, so no file left by one
+    // that crashed is in the way.
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let probe = dir.join(format!(".caf-debugger-check-{}-{now}", std::process::id()));
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
