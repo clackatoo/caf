@@ -94,6 +94,19 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             self.misfits.push((chat, change, mismatch));
             return;
         }
+        // A saved chat's journal has every change, as the store's copy is
+        // built from them too; a turn ending saves it at once.
+        if let Some(kept) = self.saving.kept.get_mut(&chat) {
+            if let Change::TurnLife { life, .. } = &change
+                && !matches!(
+                    life,
+                    TurnLife::Waiting | TurnLife::Running | TurnLife::Stopping
+                )
+            {
+                kept.urgent = true;
+            }
+            kept.add(crate::save::Entry::Change(change.clone()));
+        }
         log.push(change, self.host.limits.kept_changes);
         #[cfg(test)]
         if let Some(last) = log.changes.last() {

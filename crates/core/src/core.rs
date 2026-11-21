@@ -742,6 +742,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             && self.pending.is_empty()
             && self.asks.is_empty()
             && self.runs.values().all(|run| run.running.is_none())
+            && self.saving.settled()
     }
 
     /// A chat, by id.
@@ -759,7 +760,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// app's label for each, and its shelf if it's saved.
     #[must_use]
     pub fn summaries(&self) -> Vec<crate::viewer::ChatSummary> {
-        todo!()
+        (self.chats.values())
+            .map(|whole| {
+                let mut summary = crate::viewer::ChatSummary::of(whole);
+                summary.label = self.data.get(&whole.id).and_then(AppData::label);
+                summary.shelf = (self.saving.kept.get(&whole.id)).map(|kept| kept.shelf.clone());
+                summary
+            })
+            .collect()
     }
 
     /// A chat's changes after `since`, or the whole chat if `since` is
@@ -823,7 +831,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             HostCommand::PutAway { chat } => self.put_chat_away(now, chat, out),
             HostCommand::Delete { chat, shelf } => self.delete_chat(now, chat, shelf, out),
             HostCommand::MoveShelf { from, to } => self.move_chats(from, to, out),
-            HostCommand::SetData { chat, data } => self.set_chat_data(now, chat, data),
+            HostCommand::SetData { chat, data } => self.set_chat_data(chat, data),
             HostCommand::AddAppItem(_) => {
                 report(
                     out,
@@ -840,6 +848,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// when to wake the core next.
     fn finish(&mut self, now: Now, out: &mut Vec<Directive<A, D>>) {
         self.advance_all(now, out);
+        self.save_due(now, out);
         for (chat, change, mismatch) in std::mem::take(&mut self.misfits) {
             // What it said may be the agent's, and long.
             let change = clean::agent_text(&format!("{change:?}"), MOST_MISFIT);
