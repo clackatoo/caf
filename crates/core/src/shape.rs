@@ -356,7 +356,6 @@ fn answered() -> Message {
 fn header() -> Header {
     Header {
         chat: ChatId::from_number(1),
-        shelf: Shelf("work".into()),
         agent: AgentName("claude".into()),
         profile: Some("claude-agent-acp".into()),
         cwd: "/work".into(),
@@ -596,6 +595,7 @@ pub(crate) fn every_type(s: &mut Samples) {
         Shelf("work".into()),
     ));
     s.both(&SavedChat {
+        shelf: Shelf("work".into()),
         header: header(),
         state: SavedState::Failed(CannotRestore::Newer { version: 2 }),
     });

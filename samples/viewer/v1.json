@@ -2046,9 +2046,9 @@
       "type": "Saved",
       "value": [
         {
+          "shelf": "work",
           "header": {
             "chat": "00000000-0000-0000-0000-000000000001",
-            "shelf": "work",
             "agent": "claude",
             "profile": "claude-agent-acp",
             "cwd": "/work",
@@ -2064,9 +2064,9 @@
           }
         },
         {
+          "shelf": "work",
           "header": {
             "chat": "00000000-0000-0000-0000-000000000002",
-            "shelf": "work",
             "agent": "claude",
             "profile": "claude-agent-acp",
             "cwd": "/work",
@@ -2082,9 +2082,9 @@
           }
         },
         {
+          "shelf": "work",
           "header": {
             "chat": "00000000-0000-0000-0000-000000000003",
-            "shelf": "work",
             "agent": "claude",
             "profile": "claude-agent-acp",
             "cwd": "/work",
@@ -2100,9 +2100,9 @@
           }
         },
         {
+          "shelf": "work",
           "header": {
             "chat": "00000000-0000-0000-0000-000000000004",
-            "shelf": "work",
             "agent": "claude",
             "profile": "claude-agent-acp",
             "cwd": "/work",
@@ -2121,9 +2121,9 @@
           }
         },
         {
+          "shelf": "work",
           "header": {
             "chat": "00000000-0000-0000-0000-000000000005",
-            "shelf": "work",
             "agent": "claude",
             "profile": "claude-agent-acp",
             "cwd": "/work",
@@ -2142,9 +2142,9 @@
           }
         },
         {
+          "shelf": "work",
           "header": {
             "chat": "00000000-0000-0000-0000-000000000006",
-            "shelf": "work",
             "agent": "claude",
             "profile": "claude-agent-acp",
             "cwd": "/work",
@@ -2166,9 +2166,9 @@
           }
         },
         {
+          "shelf": "work",
           "header": {
             "chat": "00000000-0000-0000-0000-000000000007",
-            "shelf": "work",
             "agent": "claude",
             "profile": "claude-agent-acp",
             "cwd": "/work",
@@ -2188,9 +2188,9 @@
           }
         },
         {
+          "shelf": "work",
           "header": {
             "chat": "00000000-0000-0000-0000-000000000008",
-            "shelf": "work",
             "agent": "claude",
             "profile": "claude-agent-acp",
             "cwd": "/work",
@@ -2210,9 +2210,9 @@
           }
         },
         {
+          "shelf": "work",
           "header": {
             "chat": "00000000-0000-0000-0000-000000000009",
-            "shelf": "work",
             "agent": "claude",
             "profile": "claude-agent-acp",
             "cwd": "/work",

@@ -15,6 +15,8 @@ rmp-serde.workspace = true
 rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# A long shelf name's folder.
+sha2.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]

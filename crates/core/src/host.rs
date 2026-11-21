@@ -187,6 +187,11 @@ impl Host {
     /// and a fresh [`seed`](Host::seed), drawn from the randomness the
     /// standard library seeds its hash maps with. Change any other field
     /// by setting it.
+    ///
+    /// Drawing the seed is the one thing caf-core asks of the system, and
+    /// it's here, as the host describes itself, never in the core's rules:
+    /// a seed every host had to remember to draw would, the one time it
+    /// wasn't, give two runs the same chat ids.
     #[must_use]
     pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
         Self {

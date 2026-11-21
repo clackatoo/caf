@@ -621,7 +621,6 @@ fn version_1() -> Sample {
 fn saved() -> Vec<SavedChat> {
     let header = |no| Header {
         chat: ChatId::from_number(no),
-        shelf: Shelf("work".into()),
         agent: AgentName("claude".into()),
         profile: Some("claude-agent-acp".into()),
         cwd: "/work".into(),
@@ -645,6 +644,7 @@ fn saved() -> Vec<SavedChat> {
         .chain(failures.into_iter().map(SavedState::Failed))
         .zip(1..)
         .map(|(state, no)| SavedChat {
+            shelf: Shelf("work".into()),
             header: header(no),
             state,
         })

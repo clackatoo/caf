@@ -623,10 +623,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     ///
     /// # Errors
     ///
-    /// [`Refused::Loaded`], [`Refused::NoSuchAgent`] if the host no longer
-    /// offers its agent and nothing else does under its profile,
-    /// [`Refused::BadShelf`], or [`Refused::Unsendable`] for its MCP
-    /// servers.
+    /// [`Refused::Loaded`], [`Refused::BadShelf`], or
+    /// [`Refused::Unsendable`] for its MCP servers. A chat whose agent the
+    /// host no longer offers is still restored, and sending to it is
+    /// refused ([`Refused::NoSuchAgent`]): see [`save`](crate::save).
     pub fn restore(
         &mut self,
         now: Now,

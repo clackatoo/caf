@@ -122,7 +122,9 @@ pub struct Config {
     /// character; folders; each MCP server's name, program, arguments and
     /// URL; and what the setup driver reported, with the folder installs
     /// live in, and a sign-in's link and code (each good for one sign-in
-    /// only, and of no use without the command that asked for it). So don't put secrets in MCP arguments or URLs, and treat a
+    /// only, and of no use without the command that asked for it); every
+    /// chat restored, whole, as the store read it; and the app's data on
+    /// each chat, each time it's set, so don't put secrets in it either. So don't put secrets in MCP arguments or URLs, and treat a
     /// recording as private: read it through before sharing it. Names of
     /// variables and arguments are written as arrays of bytes, as Rust
     /// writes them.

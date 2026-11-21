@@ -34,6 +34,13 @@
 //! - questions are dropped, as what asked them is gone;
 //! - the chat is [idle](crate::chat::ChatState::Idle).
 //!
+//! **A chat whose agent the host no longer offers still comes back**, with
+//! its record, and sending to it is refused
+//! ([`Refused::NoSuchAgent`](crate::Refused::NoSuchAgent)). If the host
+//! offers no agent by its name but exactly one with its built-in profile
+//! ([`Header::profile`]), as when the host renamed it, the chat comes back
+//! with that one, under its new name.
+//!
 //! [`Chat::apply`]: crate::Chat::apply
 
 use std::path::PathBuf;
@@ -68,14 +75,15 @@ pub struct Saved<A: AppItem = NoAppItems, D: AppData = NoAppData> {
 }
 
 /// What a list of saved chats shows of each, read without loading it.
+///
+/// It doesn't name its shelf: a store lists a shelf at a time, and moves
+/// a shelf's chats without reading them.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Header {
     /// The chat.
     pub chat: ChatId,
-    /// Where it's kept.
-    pub shelf: Shelf,
     /// The agent, by the name the host gave it.
     pub agent: AgentName,
     /// The agent's built-in profile, if it has one, such as
@@ -150,6 +158,8 @@ impl RestoreChat {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SavedChat {
+    /// Where it's kept.
+    pub shelf: Shelf,
     /// What's shown of it.
     pub header: Header,
     /// Whether it's loaded.

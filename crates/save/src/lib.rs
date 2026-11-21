@@ -267,8 +267,11 @@ pub fn carry_out<A: AppItem, D: AppData>(
 ///
 /// A shelf's folder is its name with anything but letters, digits, `-`
 /// and `_` written as `%` and two hex digits, so any name is one folder,
-/// and different names are different folders. Folders and files are
-/// readable only by the user.
+/// and different names are different folders. A name that would make a
+/// folder name longer than 200 bytes, such as a long path, is cut to its
+/// first 136 bytes so written, then `~` and the SHA-256 of the whole name
+/// in hex: still one folder per name. Folders and files are readable only
+/// by the user.
 ///
 /// Snapshots and headers are written to a new file and renamed into
 /// place, then synced with their folder; appends are synced before they
