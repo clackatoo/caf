@@ -124,6 +124,8 @@ impl Builtin {
             Self::TestNpm => "test-npm",
             #[cfg(test)]
             Self::TestDownload => "test-download",
+            #[cfg(feature = "fake")]
+            Self::Fake => "caf-fake-agent",
         }
     }
 
