@@ -93,9 +93,12 @@ impl<A: AppItem, D: AppData> Default for Saving<A, D> {
 
 impl<A: AppItem, D: AppData> Saving<A, D> {
     /// Whether every chat that's to be written whole and let go has been:
-    /// nothing put away or shutting down waits on the store.
+    /// nothing put away, being restored or shutting down waits on the
+    /// store.
     pub(super) fn settled(&self) -> bool {
-        self.away.is_empty() && self.kept.values().all(|kept| !kept.releasing)
+        self.away.is_empty()
+            && self.restoring.is_empty()
+            && self.kept.values().all(|kept| !kept.releasing)
     }
 }
 
@@ -178,6 +181,19 @@ impl<A: AppItem, D: AppData> Kept<A, D> {
     /// Adds `entry` to what's unsaved: words streamed to the item the last
     /// entry grew are added to that entry.
     pub(super) fn add(&mut self, entry: Entry<A, D>) {
+        self.add_with(|| entry);
+    }
+
+    /// Adds the entry `entry` makes to what's unsaved, as
+    /// [`Kept::add`]: or, if it's written whole next anyway, notes only
+    /// that it changed, as the chat itself holds the change.
+    pub(super) fn add_with(&mut self, entry: impl FnOnce() -> Entry<A, D>) {
+        self.touched = true;
+        if self.whole {
+            self.behind = true;
+            return;
+        }
+        let entry = entry();
         if let (
             Some(Entry::Change(Change::Appended { item, text })),
             Entry::Change(Change::Appended {
@@ -191,7 +207,6 @@ impl<A: AppItem, D: AppData> Kept<A, D> {
         } else {
             self.unsaved.push(entry);
         }
-        self.touched = true;
     }
 }
 
@@ -226,13 +241,27 @@ pub(super) enum Job {
     /// Writing a chat put away whole, to let it go once it's written.
     Away(ChatId),
     /// Deleting a chat.
-    Delete(ChatId),
+    Delete {
+        /// The chat.
+        chat: ChatId,
+        /// Its shelf.
+        shelf: Shelf,
+        /// It was loaded or put away, so its lock was this run's: let go
+        /// if it couldn't be deleted.
+        held: bool,
+    },
     /// Moving a shelf.
     Move {
         /// From.
         from: Shelf,
         /// To.
         to: Shelf,
+        /// The chats loaded or put away that moved with it: moved back if
+        /// it couldn't be.
+        chats: Vec<ChatId>,
+        /// The loads, of restores and of chats deleted while restored,
+        /// that moved with it.
+        loads: Vec<Ticket>,
     },
 }
 
@@ -266,6 +295,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return match event {
                 StorageEvent::Loaded(saved) => self.restored(restore, *saved, out),
                 StorageEvent::NotLoaded(why) => self.restore_failed(restore, why, false, out),
+                StorageEvent::Failed(why) => {
+                    self.restore_failed(restore, CannotRestore::Store(why), false, out);
+                }
                 other => {
                     let what = kind(&other);
                     let why = CannotRestore::Damaged(format!("the store answered with {what}"));
@@ -375,23 +407,38 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     ),
                 );
             }
-            (Job::Delete(chat), StorageEvent::Done { .. }) => {
+            (Job::Delete { chat, .. }, StorageEvent::Done { .. }) => {
                 // Gone, with any lock a load took.
                 self.saving.deleted.retain(|_, each| each.chat != chat);
             }
-            (Job::Move { to, .. }, StorageEvent::Done { .. }) => {
-                // What the shelf they went to holds now is the store's:
-                // it's read again, if it's listed.
-                if self.saving.shelves.contains_key(&to) {
-                    self.list_again(to, out);
+            (Job::Move { from, to, .. }, StorageEvent::Done { .. }) => {
+                // What each holds now is the store's: read again, if
+                // listed, as a list read before the move may hold what
+                // moved.
+                for shelf in [from, to] {
+                    if self.saving.shelves.contains_key(&shelf) {
+                        self.list_again(shelf, out);
+                    }
                 }
             }
-            (Job::Delete(chat), StorageEvent::Failed(why)) => {
+            (Job::Delete { chat, shelf, held }, StorageEvent::Failed(why)) => {
                 report(
                     out,
                     Level::Warn,
                     format!("chat {chat} couldn't be deleted: {why}"),
                 );
+                // It's still there, held by this run: let go, and listed
+                // again.
+                if held {
+                    let shelf = shelf.clone();
+                    out.push(Directive::Storage(StorageDirective::Release {
+                        shelf,
+                        chat,
+                    }));
+                }
+                if self.saving.shelves.contains_key(&shelf) {
+                    self.list_again(shelf, out);
+                }
                 // A load that came meanwhile took a lock: it's let go.
                 let loads: Vec<Ticket> = (self.saving.deleted.iter())
                     .filter(|(_, each)| each.chat == chat)
@@ -411,12 +458,21 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     }
                 }
             }
-            (Job::Move { from, to }, StorageEvent::Failed(why)) => {
+            (
+                Job::Move {
+                    from,
+                    to,
+                    chats,
+                    loads,
+                },
+                StorageEvent::Failed(why),
+            ) => {
                 report(
                     out,
                     Level::Warn,
                     format!("shelf {:?} couldn't be moved to {:?}: {why}", from.0, to.0),
                 );
+                self.unmove(now, &from, &to, &chats, &loads);
                 for shelf in [from, to] {
                     if self.saving.shelves.contains_key(&shelf) {
                         self.list_again(shelf, out);
@@ -457,7 +513,18 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// The store listed `shelf`: its chats, each loaded one as it is now,
     /// with those loaded that it doesn't have yet.
     fn listed(&mut self, shelf: Shelf, headers: Vec<Header>) {
+        // A chat being deleted is gone, if a list read before the deletion
+        // still has it.
+        let deleting: BTreeSet<ChatId> = (self.saving.jobs.values())
+            .filter_map(|job| match job {
+                Job::Delete {
+                    chat, shelf: on, ..
+                } if *on == shelf => Some(*chat),
+                _ => None,
+            })
+            .collect();
         let mut list: Vec<SavedChat> = (headers.into_iter())
+            .filter(|header| !deleting.contains(&header.chat))
             .map(|header| {
                 let state = self.saved_state(&shelf, header.chat);
                 // Loaded or put away, it's as it is now, not as it was
@@ -618,21 +685,27 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             data,
         } = saved;
         let id = restore.chat;
-        let damage = if whole.id != id || header.chat != id {
-            Some(format!("it holds chat {} instead", whole.id))
+        let checked = if whole.id != id || header.chat != id {
+            Err(format!("it holds chat {} instead", whole.id))
         } else if !numbered_within_bounds(&whole) {
-            Some("a turn or item in it is numbered past 2^53".to_owned())
-        } else if whole.cwd.to_str().is_none() {
-            Some("its folder isn't UTF-8".to_owned())
+            Err("a turn or item in it is numbered too near 2^53".to_owned())
         } else {
-            None
+            match whole.cwd.to_str() {
+                None => Err("its folder isn't UTF-8".to_owned()),
+                Some(_) if !whole.cwd.is_absolute() => Err("its folder isn't absolute".to_owned()),
+                Some(cwd) => Ok(cwd.to_owned()),
+            }
         };
-        if let Some(damage) = damage {
-            let why = CannotRestore::Damaged(damage);
-            return self.restore_failed(restore, why, true, out);
-        }
+        let cwd = match checked {
+            Ok(cwd) => cwd,
+            Err(damage) => {
+                let why = CannotRestore::Damaged(damage);
+                return self.restore_failed(restore, why, true, out);
+            }
+        };
         // Renamed by the host: found again by its built-in profile, if
         // exactly one agent has it.
+        let mut renamed = false;
         if !self.agents.contains_key(&whole.agent)
             && let Some(profile) = &header.profile
         {
@@ -647,6 +720,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     ),
                 );
                 whole.agent = name.clone();
+                renamed = true;
             }
         }
         // Its turns and items keep their numbers: new ones count on from
@@ -670,11 +744,20 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .collect::<Option<Vec<_>>>()
             .unwrap_or_default();
         let conn = self.conn_for(id, &whole.agent);
-        let cwd = whole.cwd.to_string_lossy().into_owned();
         let mut kept = Kept::new(restore.shelf, header.made, true);
         kept.changed = changed;
         // Tidied, it's written at once.
         kept.urgent = !changes.is_empty();
+        // Its agent's new name is in no journal entry: it's written whole,
+        // at once, so the store has it. And as CAF shuts down, it's
+        // written whole and let go, as every saved chat is.
+        if renamed || self.shutting_down {
+            kept.whole = true;
+            kept.behind = true;
+            kept.touched = true;
+            kept.urgent = true;
+            kept.releasing = self.shutting_down;
+        }
         kept.profile = header.profile;
         kept.session.clone_from(&session);
         self.saving.kept.insert(id, kept);
@@ -769,23 +852,18 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// Writes saved `chat`, wound down already, whole, and lets it go from
     /// memory. It's let go in the store once it's written.
     pub(super) fn put_away_now(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
+        if !self.saving.kept.contains_key(&chat) {
+            return;
+        }
         self.note_session(chat);
         self.note_changed(now, chat);
-        let saved = self.saved_whole(chat);
+        let Some(saved) = self.saved_whole(chat) else {
+            return;
+        };
         let Some(kept) = self.forget(chat) else {
             return;
         };
-        let Some(saved) = saved else {
-            return;
-        };
         let shelf = kept.shelf;
-        let ticket = Ticket(self.ids.take());
-        self.saving.jobs.insert(ticket, Job::Away(chat));
-        out.push(Directive::Storage(StorageDirective::Snapshot {
-            ticket,
-            shelf: shelf.clone(),
-            saved: Box::new(saved.clone()),
-        }));
         self.relist(
             &shelf,
             chat,
@@ -796,11 +874,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Away {
                 shelf,
                 saved: Box::new(saved),
-                writing: Some(ticket),
+                writing: None,
                 retry: None,
                 failures: 0,
             },
         );
+        // At once, unless its shelf is being moved: then once it's said
+        // whether it moved.
+        if !self.moving(chat) {
+            self.write_away(chat, out);
+        }
     }
 
     /// Lets `chat` go from memory, with everything kept for it, and
@@ -843,15 +926,18 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         check_shelf(&shelf)?;
+        let mut held = false;
         if self.chats.contains_key(&chat) {
             if (self.saving.kept.get(&chat)).is_none_or(|kept| kept.shelf != shelf) {
                 return Err(Refused::NoSuchChat);
             }
             self.close_session(now, chat, out);
             self.forget(chat);
+            held = true;
         }
         if (self.saving.away.get(&chat)).is_some_and(|away| away.shelf == shelf) {
             self.saving.away.remove(&chat);
+            held = true;
         }
         let loads: Vec<Ticket> = (self.saving.restoring.iter())
             .filter(|(_, each)| each.chat == chat && each.shelf == shelf)
@@ -868,7 +954,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         self.relist(&shelf, chat, None);
         let ticket = Ticket(self.ids.take());
-        self.saving.jobs.insert(ticket, Job::Delete(chat));
+        let job = Job::Delete {
+            chat,
+            shelf: shelf.clone(),
+            held,
+        };
+        self.saving.jobs.insert(ticket, job);
         out.push(Directive::Storage(StorageDirective::Delete {
             ticket,
             shelf,
@@ -889,24 +980,30 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if from == to {
             return Ok(());
         }
-        for kept in self.saving.kept.values_mut() {
+        let mut chats = Vec::new();
+        let mut loads = Vec::new();
+        for (&chat, kept) in &mut self.saving.kept {
             if kept.shelf == from {
                 kept.shelf = to.clone();
+                chats.push(chat);
             }
         }
-        for away in self.saving.away.values_mut() {
+        for (&chat, away) in &mut self.saving.away {
             if away.shelf == from {
                 away.shelf = to.clone();
+                chats.push(chat);
             }
         }
-        for restore in self.saving.restoring.values_mut() {
+        for (&load, restore) in &mut self.saving.restoring {
             if restore.shelf == from {
                 restore.shelf = to.clone();
+                loads.push(load);
             }
         }
-        for deleted in self.saving.deleted.values_mut() {
+        for (&load, deleted) in &mut self.saving.deleted {
             if deleted.shelf == from {
                 deleted.shelf = to.clone();
+                loads.push(load);
             }
         }
         // What's listed of the one goes to the other, if that's listed
@@ -932,6 +1029,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let job = Job::Move {
             from: from.clone(),
             to: to.clone(),
+            chats,
+            loads,
         };
         self.saving.jobs.insert(ticket, job);
         out.push(Directive::Storage(StorageDirective::MoveShelf {
@@ -940,6 +1039,35 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             to,
         }));
         Ok(())
+    }
+
+    /// A move from `from` to `to` failed: what moved with it moves back.
+    /// What the store holds of each chat is in doubt, so each loaded one
+    /// is written whole, at once.
+    fn unmove(&mut self, now: Now, from: &Shelf, to: &Shelf, chats: &[ChatId], loads: &[Ticket]) {
+        for chat in chats {
+            if let Some(kept) = (self.saving.kept.get_mut(chat)).filter(|kept| kept.shelf == *to) {
+                kept.shelf = from.clone();
+                kept.whole = true;
+                kept.behind = true;
+                kept.due = Some(now.mono);
+            }
+            if let Some(away) = (self.saving.away.get_mut(chat)).filter(|away| away.shelf == *to) {
+                away.shelf = from.clone();
+            }
+        }
+        for load in loads {
+            if let Some(restore) =
+                (self.saving.restoring.get_mut(load)).filter(|each| each.shelf == *to)
+            {
+                restore.shelf = from.clone();
+            }
+            if let Some(deleted) =
+                (self.saving.deleted.get_mut(load)).filter(|each| each.shelf == *to)
+            {
+                deleted.shelf = from.clone();
+            }
+        }
     }
 
     /// Sets a chat's data slot.
@@ -1013,8 +1141,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
         }
         let away: Vec<ChatId> = (self.saving.away.iter())
-            .filter(|(_, away)| {
-                away.writing.is_none() && away.retry.is_none_or(|at| at <= now.mono)
+            .filter(|&(&chat, away)| {
+                away.writing.is_none()
+                    && away.retry.is_none_or(|at| at <= now.mono)
+                    && !self.moving(chat)
             })
             .map(|(&chat, _)| chat)
             .collect();
@@ -1027,7 +1157,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// write of it is under way.
     pub(super) fn save_at(&self, chat: ChatId) -> Option<Mono> {
         let kept = self.saving.kept.get(&chat)?;
-        if kept.writing.is_some() {
+        if kept.writing.is_some() || self.moving(chat) {
             return None;
         }
         let due = kept.due?;
@@ -1037,7 +1167,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// When a chat put away is next written, after a write of it failed.
     pub(super) fn away_at(&self, chat: ChatId) -> Option<Mono> {
         let away = self.saving.away.get(&chat)?;
-        away.writing.is_none().then_some(away.retry?)
+        (away.writing.is_none() && !self.moving(chat)).then_some(away.retry?)
+    }
+
+    /// Whether `chat`'s shelf is being moved: until the store says whether
+    /// it moved, it isn't written, as a write could land on the shelf it
+    /// didn't move to.
+    fn moving(&self, chat: ChatId) -> bool {
+        (self.saving.jobs.values())
+            .any(|job| matches!(job, Job::Move { chats, .. } if chats.contains(&chat)))
     }
 
     /// Writes what's changed of `chat`: whole if it must be or its journal
@@ -1245,10 +1383,11 @@ pub(super) fn tidy<A: AppItem>(chat: &Chat<A>, at: Wall) -> Vec<Change<A>> {
     changes
 }
 
-/// Whether every turn and item of `chat` is numbered below 2^53, as every
-/// number CAF gives out is: one past it would have new ones go past too.
+/// Whether every turn and item of `chat` is numbered far enough below
+/// 2^53 that what's numbered after it, counting on from past them, is
+/// below 2^53 too, as every number CAF gives out is: 2^32 to spare.
 fn numbered_within_bounds<A: AppItem>(chat: &Chat<A>) -> bool {
-    const MOST: u64 = 1 << 53;
+    const MOST: u64 = (1 << 53) - (1 << 32);
     (chat.turns.iter())
         .all(|turn| turn.id.0 < MOST && turn.items.iter().all(|item| item.id.0 < MOST))
 }

@@ -248,6 +248,13 @@ pub enum StorageDirective<A: AppItem = NoAppItems, D: AppData = NoAppData> {
         saved: Box<Saved<A, D>>,
     },
     /// Add to a chat's journal, and replace its header.
+    ///
+    /// Only to a chat the store holds on that shelf, locked by this
+    /// program: one it doesn't isn't added to, and the write fails
+    /// ([`StorageEvent::Failed`](crate::event::StorageEvent::Failed)). The
+    /// core never asks for one: a chat's first write, and its first after
+    /// a write failed, it was let go, or a move of its shelf failed, is a
+    /// [`Snapshot`](StorageDirective::Snapshot).
     Append {
         /// Its ticket.
         ticket: Ticket,

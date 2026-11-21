@@ -227,6 +227,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if how == How::New && run.session.take().is_some() {
             run.note = Some(Note::CannotContinue);
         }
+        if how == How::Load && run.restored {
+            report(
+                out,
+                Level::Debug,
+                format!(
+                    "chat {}: what the agent replays of its session is thrown away, as CAF has its record",
+                    chat.0
+                ),
+            );
+        }
         let mut params = json!({
             "cwd": run.cwd,
             "mcpServers": run.mcp_sent,

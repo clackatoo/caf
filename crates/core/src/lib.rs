@@ -125,9 +125,11 @@
 //!    opens a turn: anything else said outside one, such as a notice, is
 //!    reported, with what it says, as are updates about the whole chat
 //!    (its plan, commands, mode, settings and title) until the features
-//!    that keep them. The one thing CAF drops on purpose is all but the
-//!    kind of an adapter's own sign-in status (`_auth/status_update`):
-//!    the rest holds the account's email, which CAF never keeps.
+//!    that keep them. CAF drops two things on purpose: all but the kind of
+//!    an adapter's own sign-in status (`_auth/status_update`), as the rest
+//!    holds the account's email, which CAF never keeps; and what an agent
+//!    replays when a restored chat's session is loaded, as CAF has the
+//!    chat's record already, with a report that it did.
 //! 4. **Every event names what it belongs to**: a turn, an item, a session,
 //!    a process. A late update lands on its own row, never on whatever is
 //!    current.

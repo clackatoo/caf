@@ -591,6 +591,10 @@ fn a_restored_chat_the_agent_can_only_load_throws_away_what_it_replays() {
     let out = script.answers(proc, init, &plain_init(true));
     let load = sent(&out, "session/load");
     assert_eq!(load["params"]["sessionId"], "old");
+    assert!(with(&out, "report").contains(&json!({
+        "report": "Debug",
+        "message": format!("chat {CHAT}: what the agent replays of its session is thrown away, as CAF has its record")
+    })));
     let id = load["id"].as_u64().expect("an id");
     let chunk = |kind: &str, text: &str| json!({ "sessionUpdate": kind, "content": { "type": "text", "text": text } });
     script.update(proc, "old", &chunk("user_message_chunk", "Hello"));
@@ -745,6 +749,13 @@ fn a_chat_whose_agent_was_renamed_comes_back_with_the_one_agent_of_its_profile()
         &json!([{ "report": "Info", "message": format!("chat {CHAT}: its agent \"claude\" is now called \"claude-renamed\"") }]),
     );
     assert_eq!(script.chat(CHAT)["agent"], "claude-renamed");
+    // Written whole at once, so the store has the new name.
+    assert_has(
+        &one_storage(&out),
+        &json!({ "type": "Snapshot", "value": { "saved": {
+            "header": { "agent": "claude-renamed" }, "chat": { "agent": "claude-renamed" }
+        } } }),
+    );
     let out = script.send(CHAT, "Go on").1;
     assert_eq!(with(&out, "start").len(), 1);
 }
@@ -1023,11 +1034,14 @@ fn moving_a_shelf_moves_its_loaded_chats_and_its_list() {
     );
     assert_eq!(script.core.summaries()[0].shelf.as_ref(), Some(&renamed));
     store.take(&out);
-    // Once moved, the shelf it went to is read again.
+    // Once moved, both shelves are read again.
     let out = script.serve(&mut store, false);
     assert_has(
         &json!(storage(&out)),
-        &json!([{ "type": "List", "value": { "shelf": "renamed" } }]),
+        &json!([
+            { "type": "List", "value": { "shelf": SHELF } },
+            { "type": "List", "value": { "shelf": "renamed" } }
+        ]),
     );
     // Its next write goes to its new shelf.
     script.at(2000);
@@ -1773,18 +1787,24 @@ fn a_chat_saved_by_a_clean_shutdown_is_written_at_once_as_its_restore_makes_it_i
 fn a_damaged_save_isnt_restored_and_is_let_go() {
     /// What's wrong, and the damage.
     type Case = (&'static str, fn(&mut Saved));
-    let cases: [Case; 3] = [
+    let cases: [Case; 5] = [
         (
             "it holds chat 00000000-0000-0000-0000-00000000162e instead",
             |saved| {
                 saved.chat.id = ChatId::from_number(5678);
             },
         ),
-        ("a turn or item in it is numbered past 2^53", |saved| {
-            saved.chat.turns[0].id = crate::TurnId(1 << 53);
+        ("a turn or item in it is numbered too near 2^53", |saved| {
+            saved.chat.turns[0].id = crate::TurnId((1 << 53) - 1);
         }),
-        ("a turn or item in it is numbered past 2^53", |saved| {
+        ("a turn or item in it is numbered too near 2^53", |saved| {
             saved.chat.turns[1].items[0].id = crate::ItemId(u64::MAX);
+        }),
+        ("a turn or item in it is numbered too near 2^53", |saved| {
+            saved.chat.turns[2].id = crate::TurnId((1 << 53) - (1 << 32));
+        }),
+        ("its folder isn't absolute", |saved| {
+            saved.chat.cwd = "work".into();
         }),
     ];
     for (why, damage) in cases {
@@ -1937,5 +1957,187 @@ fn shutting_down_writes_an_idle_chat_whole_before_letting_it_go_though_nothing_c
     assert_eq!(
         storage(&out),
         [json!({ "type": "Release", "value": { "shelf": SHELF, "chat": CHAT } })]
+    );
+}
+
+#[test]
+fn a_chat_numbered_up_to_2_to_the_53_less_2_to_the_32_is_restored() {
+    let mut script = Script::new(host());
+    script
+        .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
+        .0
+        .expect("restoring");
+    let mut stored = saved(&mid_turn("claude"), Some("old"), 0);
+    let last = (1 << 53) - (1 << 32) - 1;
+    stored.chat.turns[2].id = crate::TurnId(last);
+    script.storage(1000, StorageEvent::Loaded(Box::new(stored)));
+    assert!(script.core.chat(CHAT).is_some());
+    // Counted on from past it, still below 2^53.
+    assert!(script.core.ids.next > last && script.core.ids.next < 1 << 53);
+}
+
+#[test]
+fn a_restore_in_flight_as_caf_shuts_down_is_written_whole_and_let_go() {
+    let mut script = Script::new(host());
+    let mut store = Store::default();
+    let shelf = Shelf(SHELF.to_owned());
+    let stored = saved(&mid_turn("claude"), Some("old"), 0);
+    store
+        .chats
+        .insert((shelf.clone(), CHAT), (stored, Vec::new()));
+    store.take(&script.restore(RestoreChat::new(CHAT, shelf)).1);
+    script.shutdown();
+    assert!(!script.core.is_idle(), "it waits for the restore");
+    let (load, loaded) = store.next(false).expect("the load");
+    let out = script.storage(load, loaded);
+    assert_eq!(one_storage(&out)["type"], "Snapshot");
+    assert!(!script.core.is_idle(), "it waits for the write");
+    store.take(&out);
+    script.serve(&mut store, false);
+    assert!(store.locked.is_empty(), "let go");
+    assert!(script.core.is_idle());
+}
+
+#[test]
+fn a_shelf_that_couldnt_be_moved_takes_its_chats_back_written_whole() {
+    let mut script = Script::new(host());
+    // A chat written, and another put away whose write is under way.
+    script.open_saved("claude");
+    script.at(1000);
+    let snapshot = ticket(&one_storage(&script.woken()));
+    script.storage(snapshot, done(10_000));
+    let (other, _) = script.open(saved_open("claude"));
+    let other = other.expect("opened");
+    let away = ticket(&one_storage(&script.put_away(other).1));
+    let out = script.move_shelf(SHELF, "renamed").1;
+    let moving = ticket(&one_storage(&out));
+    let shelves = |script: &Script| {
+        let state = script.state();
+        (
+            state["saving"]["kept"][CHAT.to_string()]["shelf"].clone(),
+            state["saving"]["away"][other.to_string()]["shelf"].clone(),
+        )
+    };
+    assert_eq!(shelves(&script), (json!("renamed"), json!("renamed")));
+    let out = script.storage(moving, StorageEvent::Failed("in use".to_owned()));
+    assert_eq!(shelves(&script), (json!(SHELF), json!(SHELF)));
+    // What the store holds of it is in doubt: it's written whole, where
+    // it was.
+    assert_has(
+        &json!(storage(&out)),
+        &json!([{ "type": "Snapshot", "value": { "shelf": SHELF, "saved": { "header": { "chat": CHAT } } } }]),
+    );
+    let out = script.storage(away, done(10_000));
+    assert_eq!(
+        storage(&out),
+        [json!({ "type": "Release", "value": { "shelf": SHELF, "chat": other } })]
+    );
+}
+
+#[test]
+fn a_loaded_or_put_away_chat_that_couldnt_be_deleted_is_let_go_and_listed_again() {
+    for put_away in [false, true] {
+        let mut script = Script::new(host());
+        script.open_saved("claude");
+        script.at(1000);
+        let snapshot = one_storage(&script.woken());
+        script.storage(ticket(&snapshot), done(10_000));
+        let list = ticket(&one_storage(&script.list_saved(SHELF).1));
+        let header =
+            serde_json::from_value(snapshot["value"]["saved"]["header"].clone()).expect("a header");
+        let (chats, unreadable) = (vec![header], Vec::new());
+        script.storage(list, StorageEvent::Listed { chats, unreadable });
+        if put_away {
+            script.put_away(CHAT).0.expect("put away");
+        }
+        let delete = (storage(&script.delete(CHAT, SHELF).1).into_iter())
+            .find(|each| each["type"] == "Delete")
+            .expect("a deletion");
+        let out = script.storage(
+            ticket(&delete),
+            StorageEvent::Failed("read-only".to_owned()),
+        );
+        assert_has(
+            &json!(storage(&out)),
+            &json!([
+                { "type": "Release", "value": { "shelf": SHELF, "chat": CHAT } },
+                { "type": "List", "value": { "shelf": SHELF } }
+            ]),
+        );
+    }
+}
+
+#[test]
+fn a_list_read_before_a_deletion_or_move_doesnt_bring_back_what_it_moved() {
+    let mut script = Script::new(host());
+    let header = saved(&mid_turn("claude"), Some("old"), 0).header;
+    // Listed, then deleted before the list is answered.
+    let list = ticket(&one_storage(&script.list_saved(SHELF).1));
+    script.delete(CHAT, SHELF).0.expect("deleting");
+    let (chats, unreadable) = (vec![header.clone()], Vec::new());
+    script.storage(list, StorageEvent::Listed { chats, unreadable });
+    assert_eq!(
+        script.core.saved(&Shelf(SHELF.to_owned())),
+        Some(Vec::new())
+    );
+
+    // Listed, then moved before the list is answered: once moved, both
+    // are read again.
+    let list = ticket(&one_storage(&script.list_saved("other").1));
+    let moving = ticket(&one_storage(&script.move_shelf("other", SHELF).1));
+    let (chats, unreadable) = (vec![header], Vec::new());
+    script.storage(list, StorageEvent::Listed { chats, unreadable });
+    let out = script.storage(moving, done(0));
+    assert_has(
+        &json!(storage(&out)),
+        &json!([
+            { "type": "List", "value": { "shelf": "other" } },
+            { "type": "List", "value": { "shelf": SHELF } }
+        ]),
+    );
+}
+
+#[test]
+fn a_load_the_store_fails_says_so_in_its_words() {
+    let mut script = Script::new(host());
+    store_listed(&mut script);
+    script
+        .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
+        .0
+        .expect("restoring");
+    script.storage(1001, StorageEvent::Failed("I/O error".to_owned()));
+    assert_has(
+        &serde_json::to_value(script.core.saved(&Shelf(SHELF.to_owned()))).expect("JSON"),
+        &json!([{ "state": { "type": "Failed", "value": { "type": "Store", "value": "I/O error" } } }]),
+    );
+}
+
+#[test]
+fn a_chat_written_whole_next_keeps_no_entries_meanwhile() {
+    let mut script = Script::new(host());
+    script.open_saved("claude");
+    script.send(CHAT, "Run the tests").0.expect("sent");
+    let kept = &script.state()["saving"]["kept"][CHAT.to_string()];
+    assert_eq!(kept["unsaved"], json!([]));
+    assert_eq!(kept["behind"], json!(true));
+}
+
+#[test]
+fn a_chat_isnt_written_while_its_shelf_is_being_moved() {
+    let mut script = Script::new(host());
+    script.open_saved("claude");
+    script.at(1000);
+    let snapshot = ticket(&one_storage(&script.woken()));
+    script.storage(snapshot, done(10_000));
+    let moving = ticket(&one_storage(&script.move_shelf(SHELF, "renamed").1));
+    script.at(2000);
+    script.send(CHAT, "Run the tests").0.expect("sent");
+    script.at(3000);
+    assert!(storage(&script.woken()).is_empty(), "it waits for the move");
+    // Moved: written where it went, as the call ends.
+    let out = script.storage(moving, done(0));
+    assert_has(
+        &json!(storage(&out)),
+        &json!([{ "type": "Append", "value": { "shelf": "renamed" } }]),
     );
 }

@@ -105,7 +105,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             {
                 kept.urgent = true;
             }
-            kept.add(crate::save::Entry::Change(change.clone()));
+            kept.add_with(|| crate::save::Entry::Change(change.clone()));
         }
         log.push(change, self.host.limits.kept_changes);
         #[cfg(test)]
