@@ -125,7 +125,7 @@ describe("version 1's sample", () => {
     for (const { value } of toViewer("Done")) {
       const { outcome } = value;
       const asked =
-        outcome.type === "Opened"
+        outcome.type === "Opened" || outcome.type === "CannotRestore"
           ? caf.restore(chat, "work")
           : outcome.type === "Sent"
             ? caf.send(chat, { parts: [] })

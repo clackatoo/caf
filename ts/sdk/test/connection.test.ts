@@ -775,6 +775,22 @@ describe("requests", () => {
     await expect(restoring).resolves.toBe(chatId(1100));
   });
 
+  test("a restore answered CannotRestore without its reason ends the link", async () => {
+    const { caf, link } = await connected();
+    const restoring = held(caf.restore(chatId(1100), "work"));
+    link.deliver({ type: "Done", value: { request: 1, outcome: { type: "CannotRestore", value: "InUse" } } });
+    expect(await rejection(restoring)).toStrictEqual({ type: "Disconnected" });
+    expect(link.closed).toBe(true);
+  });
+
+  test("any other request answered CannotRestore ends the link", async () => {
+    const { caf, link } = await connected();
+    const stopping = held(caf.stop(CHAT));
+    link.deliver({ type: "Done", value: { request: 1, outcome: { type: "CannotRestore", value: { type: "InUse" } } } });
+    expect(await rejection(stopping)).toStrictEqual({ type: "Disconnected" });
+    expect(link.closed).toBe(true);
+  });
+
   test("restore rejects with why it couldn't be, or that it isn't allowed, and the link goes on", async () => {
     const { caf, link } = await connected();
     const inUse = held(caf.restore(chatId(1100), "work"));
@@ -930,7 +946,7 @@ describe("requests", () => {
     ["an outcome whose type isn't text", { type: 7 }],
     ["Opened without its chat", { type: "Opened" }],
     ["Opened with a chat that's a number", { type: "Opened", value: 1100 }],
-    ["a CannotRestore without its reason", { type: "CannotRestore", value: "InUse" }],
+    ["an Open answered CannotRestore", { type: "CannotRestore", value: { type: "InUse" } }],
     ["a Refused without its reason", { type: "Refused", value: "QueueFull" }],
   ])("%s ends the link", async (_, bad) => {
     const { caf, link } = await connected();

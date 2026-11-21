@@ -547,9 +547,10 @@ export class Connection {
     return new Promise((resolve, reject) => {
       if (this.#closed) return reject(new CafError({ type: "Disconnected" }));
       const request = this.#nextRequest++;
-      const pending: Pending = { expect, resolve: resolve as (value: unknown) => void, reject };
+      const sent = message(request);
+      const pending: Pending = { asked: sent.type, expect, resolve: resolve as (value: unknown) => void, reject };
       this.#pending.set(request, pending);
-      this.#send(message(request));
+      this.#send(sent);
     });
   }
 
@@ -651,7 +652,7 @@ export class Connection {
       case "Gone":
         return pending.reject(new CafError({ type: "Gone" }));
       case "CannotRestore":
-        if (!isTagged(value)) return broken();
+        if (pending.asked !== "Restore" || !isTagged(value)) return broken();
         return pending.reject(new CafError({ type: "CannotRestore", value: value as CannotRestore }));
       case pending.expect:
         if (pending.expect === "Done") return pending.resolve(undefined);
@@ -719,6 +720,8 @@ type AnswerOf<E extends Answered> = E extends "Done"
 
 /** A request waiting for its `Done`. */
 interface Pending {
+  /** What was asked: an Open and a Restore both expect `Opened`, and only a Restore may be answered `CannotRestore`. */
+  asked: FromViewer["type"];
   expect: Answered;
   resolve(value: unknown): void;
   reject(error: CafError): void;
