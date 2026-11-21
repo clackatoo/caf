@@ -265,17 +265,21 @@ pub enum StorageEvent<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     /// A chat, read and locked: its snapshot with its journal applied, as
     /// it was saved, before it's tidied. A recording holds it whole.
     Loaded(Box<Saved<A, D>>),
-    /// A chat couldn't be read.
+    /// A chat couldn't be read: no lock is taken.
     NotLoaded(CannotRestore),
-    /// A write, deletion or move is done.
+    /// A write, deletion or move is done. A chat deleted goes with its
+    /// lock; one written whole is locked.
     Done {
         /// How many bytes a write took in the store, compressed: what
         /// tells the core when a chat's journal has outgrown its snapshot.
         /// 0 for anything else.
         written: u64,
     },
-    /// A write, deletion or move failed, as the system says. The core
-    /// tries a write again later, and says so in a report.
+    /// A write, deletion, move, load or list failed, as the system says,
+    /// and changed nothing: a failed load takes no lock, a failed write
+    /// leaves the lock as it was, and a failed deletion leaves the chat and
+    /// its lock. The core tries a write again later, and says so in a
+    /// report.
     Failed(String),
 }
 

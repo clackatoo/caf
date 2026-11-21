@@ -272,7 +272,11 @@ pub enum StorageDirective<A: AppItem = NoAppItems, D: AppData = NoAppData> {
         /// What changed, in order.
         entries: Vec<Entry<A, D>>,
     },
-    /// Unlock a chat: it's put away, and written whole already.
+    /// Unlock a chat: it's put away, or CAF is shutting down, and it's
+    /// written whole already. Or the core has no use for its lock left,
+    /// and it's let go as the store has it: a restore found it damaged, it
+    /// couldn't be deleted, or it was deleted while its load was under
+    /// way and the deletion failed.
     Release {
         /// Where it's kept.
         shelf: Shelf,

@@ -51,7 +51,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return Err(Refused::QueueFull);
         }
         self.ids.seen(turn.0);
-        self.shutting_down = false;
+        self.call_off_shutdown();
         self.end_agent_turn(now, chat);
         self.add_turn(
             chat,

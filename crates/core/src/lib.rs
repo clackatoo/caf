@@ -146,7 +146,11 @@
 //!    agent is cleaned, capped and kept apart from CAF's own words.
 //! 10. **A saved chat is let go in the store only once it's written
 //!     whole**, when it's put away, closed or CAF shuts down, and a write
-//!     that fails is tried again until it's done
+//!     that fails is tried again until it's done. The exceptions are
+//!     chats the core has no use for: one a restore found damaged, one
+//!     that couldn't be deleted, and one whose load came after it was
+//!     deleted, if the deletion failed: they're let go as the store has
+//!     them
 //!     (`shutting_down_writes_an_idle_chat_whole_before_letting_it_go_though_nothing_changed`,
 //!     `a_failed_put_away_is_tried_again_and_let_go_once_written`).
 //! 11. **What's saved reads back as the chat was**: its snapshot with its

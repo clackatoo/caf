@@ -60,6 +60,9 @@ struct Store {
     chats: BTreeMap<(Shelf, ChatId), (Saved, Vec<Entry>)>,
     /// The chats locked, on their shelves.
     locked: BTreeSet<(Shelf, ChatId)>,
+    /// What was last done to each chat it has, on its shelf: what its
+    /// being let go is checked against.
+    last: BTreeMap<(Shelf, ChatId), Last>,
     /// Work given and not done yet, oldest first.
     work: VecDeque<StorageDirective>,
     /// How many snapshots, journal entries, failures, loads and releases
@@ -144,6 +147,9 @@ impl Store {
                 | StorageDirective::MoveShelf { ticket, .. } => Some(ticket.0),
             };
             if let (true, Some(ticket)) = (fail, ticket) {
+                if let StorageDirective::Delete { shelf, chat, .. } = &work {
+                    self.last.insert((shelf.clone(), *chat), Last::NotDeleted);
+                }
                 self.counts[2] += 1;
                 return Some((ticket, StorageEvent::Failed("disk full".to_owned())));
             }
@@ -162,6 +168,8 @@ impl Store {
                     );
                     let written = serde_json::to_vec(&saved).expect("JSON").len();
                     self.locked.insert((shelf.clone(), saved.chat.id));
+                    self.last
+                        .insert((shelf.clone(), saved.chat.id), Last::Whole);
                     self.chats
                         .insert((shelf, saved.chat.id), (*saved, Vec::new()));
                     (ticket, done(written as u64))
@@ -178,6 +186,8 @@ impl Store {
                         self.locked.contains(&(shelf.clone(), header.chat)),
                         "added to while locked, on its shelf"
                     );
+                    self.last
+                        .insert((shelf.clone(), header.chat), Last::Journal);
                     let (saved, journal) = (self.chats.get_mut(&(shelf, header.chat)))
                         .expect("a journal is added to after its snapshot");
                     saved.header = header;
@@ -186,6 +196,14 @@ impl Store {
                 }
                 StorageDirective::Release { shelf, chat } => {
                     self.counts[4] += 1;
+                    // Let go once written whole, or as the store has it if
+                    // the core has no use for it: loaded but damaged, or
+                    // not deleted.
+                    let last = self.last.get(&(shelf.clone(), chat)).copied();
+                    assert!(
+                        matches!(last, Some(Last::Whole | Last::Loaded | Last::NotDeleted)),
+                        "chat {chat} let go after {last:?}"
+                    );
                     assert!(
                         self.locked.remove(&(shelf.clone(), chat)),
                         "chat {chat} let go only if locked on {shelf:?}"
@@ -201,7 +219,8 @@ impl Store {
                     let locked = self.locked.iter().any(|(_, each)| *each == chat);
                     let event = match self.read(&shelf, chat) {
                         Some(saved) if !locked => {
-                            self.locked.insert((shelf, chat));
+                            self.locked.insert((shelf.clone(), chat));
+                            self.last.insert((shelf, chat), Last::Loaded);
                             StorageEvent::Loaded(Box::new(saved))
                         }
                         Some(_) => StorageEvent::NotLoaded(crate::save::CannotRestore::InUse),
@@ -224,6 +243,7 @@ impl Store {
                 } => {
                     // From a shelf it isn't on, nothing goes.
                     self.locked.remove(&(shelf.clone(), chat));
+                    self.last.remove(&(shelf.clone(), chat));
                     self.chats.remove(&(shelf, chat));
                     (ticket, done(0))
                 }
@@ -236,6 +256,9 @@ impl Store {
                         let stored = self.chats.remove(&key).expect("there");
                         if self.locked.remove(&key) {
                             self.locked.insert((to.clone(), key.1));
+                        }
+                        if let Some(last) = self.last.remove(&key) {
+                            self.last.insert((to.clone(), key.1), last);
                         }
                         self.chats.insert((to.clone(), key.1), stored);
                     }
@@ -262,6 +285,19 @@ impl Store {
         }
         Some(saved)
     }
+}
+
+/// What a store last did to a chat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Last {
+    /// Wrote it whole.
+    Whole,
+    /// Added to its journal.
+    Journal,
+    /// Loaded it.
+    Loaded,
+    /// Failed to delete it.
+    NotDeleted,
 }
 
 /// Applies a journal entry to a chat as it's saved.
@@ -2563,45 +2599,68 @@ fn a_move_done_lists_its_chats_on_the_shelf_they_went_to_at_once() {
     assert_eq!(script.core.summaries()[0].shelf, Some(renamed));
 }
 
-/// Restores, puts away, deletes, moves and lists two saved chats in an
-/// order made at random from `seed`, while the store answers in any order
-/// the contract lets it and fails some; then checks that, settled, the
-/// core is idle, holds locked exactly the chats it has loaded, each where
-/// the store has it.
+/// Restores, puts away, closes, deletes, moves, lists and changes saved
+/// chats (two of another run's, one damaged, and any opened), opens new
+/// ones and shuts down, in an order made at random from `seed`, while the
+/// store answers in any order the contract lets it and fails some; then
+/// checks that, settled, the store holds locked exactly what the core
+/// says it holds for this run, each a chat it has loaded, where the store
+/// has it; and that, shut down, it's idle with nothing locked.
 fn random_lives(seed: u64) {
     let mut dice = Dice(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
     let mut script = Script::new(host());
     script.without_fixtures();
     let mut store = Store::default();
-    let chats = [ChatId::from_number(9000), ChatId::from_number(9001)];
-    for chat in chats {
+    let mut chats = vec![
+        ChatId::from_number(9000),
+        ChatId::from_number(9001),
+        ChatId::from_number(9002),
+    ];
+    for &chat in &chats {
         let mut theirs = saved(&mid_turn("claude"), Some("old"), 0);
         theirs.chat.id = chat;
         theirs.header.chat = chat;
-        store
-            .chats
-            .insert((Shelf(SHELF.to_owned()), chat), (theirs, Vec::new()));
+        // The third is damaged.
+        if chat == ChatId::from_number(9002) {
+            theirs.chat.turns[0].id = crate::TurnId(u64::MAX);
+        }
+        let shelf = Shelf(SHELF.to_owned());
+        store.chats.insert((shelf, chat), (theirs, Vec::new()));
     }
     let shelves = [SHELF, "else"];
+    let mut procs = BTreeSet::new();
     let mut ms = 0;
     for _ in 0..80 {
         ms += dice.roll(3000);
         script.at(ms);
-        let chat = chats[usize::try_from(dice.roll(2)).unwrap_or(0)];
+        let chat = chats[usize::try_from(dice.roll(chats.len() as u64)).unwrap_or(0)];
         let shelf = shelves[usize::try_from(dice.roll(2)).unwrap_or(0)];
         let elsewhere = if shelf == SHELF { "else" } else { SHELF };
-        let out = match dice.roll(6) {
-            0 => {
+        let out = match dice.roll(11) {
+            0 | 1 => {
                 script
                     .restore(RestoreChat::new(chat, Shelf(shelf.to_owned())))
                     .1
             }
-            1 => script.put_away(chat).1,
-            2 => script.delete(chat, shelf).1,
-            3 => script.move_shelf(shelf, elsewhere).1,
-            4 => script.list_saved(shelf).1,
+            2 => script.put_away(chat).1,
+            3 => script.close(chat).1,
+            4 => script.delete(chat, shelf).1,
+            5 => script.move_shelf(shelf, elsewhere).1,
+            6 => script.list_saved(shelf).1,
+            7 => script.set_data(chat).1,
+            8 => {
+                let mut open = OpenChat::new("claude", "/work");
+                open.shelf = Some(Shelf(shelf.to_owned()));
+                let (opened, out) = script.open(open);
+                chats.push(opened.expect("opened"));
+                out
+            }
+            9 if dice.roll(3) == 0 => script.shutdown(),
             _ => script.woken(),
         };
+        for started in with(&out, "start") {
+            procs.insert(started["start"].as_u64().expect("a process"));
+        }
         store.take(&out);
         while dice.roll(2) == 0 {
             let Some((ticket, event)) = store.next_any(dice.roll(1000), dice.roll(6) == 0) else {
@@ -2611,39 +2670,42 @@ fn random_lives(seed: u64) {
             store.take(&out);
         }
     }
-    loop {
-        script.serve_any(&mut store, &mut dice, u64::MAX);
+    let settle = |script: &mut Script, store: &mut Store, dice: &mut Dice, ms: &mut u64| loop {
+        script.serve_any(store, dice, u64::MAX);
         if script.core.saving.settled() && store.work.is_empty() {
             break;
         }
-        ms += 61_000;
-        script.at(ms);
+        *ms += 61_000;
+        script.at(*ms);
         let out = script.woken();
         store.take(&out);
+    };
+    settle(&mut script, &mut store, &mut dice, &mut ms);
+    let saving = script.state()["saving"].clone();
+    let held: BTreeSet<(Shelf, ChatId)> =
+        serde_json::from_value(saving["locks"].clone()).expect("locks");
+    assert_eq!(
+        held, store.locked,
+        "seed {seed}: the core knows what it holds"
+    );
+    for (shelf, chat) in &held {
+        assert_eq!(
+            saving["kept"][chat.to_string()]["shelf"],
+            json!(shelf.0),
+            "seed {seed}: chat {chat} is held, loaded, where it's kept"
+        );
     }
+    // Shut down, everything is let go.
+    let out = script.shutdown();
+    store.take(&out);
+    for proc in procs {
+        script.agent(proc, AgentEvent::Exited(Exit::Code(0)));
+        script.agent(proc, AgentEvent::OutputClosed);
+        script.agent(proc, AgentEvent::Group { empty: true });
+    }
+    settle(&mut script, &mut store, &mut dice, &mut ms);
     assert!(script.core.is_idle(), "seed {seed}");
-    for chat in chats {
-        let kept = &script.state()["saving"]["kept"][chat.to_string()];
-        let locked: Vec<&Shelf> = (store.locked.iter())
-            .filter(|(_, each)| *each == chat)
-            .map(|(shelf, _)| shelf)
-            .collect();
-        match kept["shelf"].as_str() {
-            Some(shelf) => {
-                assert_eq!(
-                    locked,
-                    [&Shelf(shelf.to_owned())],
-                    "seed {seed}: chat {chat}"
-                );
-                assert_eq!(
-                    store.shelf_of(chat),
-                    Some(Shelf(shelf.to_owned())),
-                    "seed {seed}"
-                );
-            }
-            None => assert!(locked.is_empty(), "seed {seed}: chat {chat} let go"),
-        }
-    }
+    assert!(store.locked.is_empty(), "seed {seed}: {:?}", store.locked);
 }
 
 #[test]
@@ -2651,4 +2713,65 @@ fn saved_chats_restored_put_away_deleted_and_moved_in_any_order_settle_as_they_s
     for seed in 1..=200 {
         random_lives(seed);
     }
+}
+
+#[test]
+fn a_write_answered_with_anything_but_done_or_failed_is_tried_again() {
+    let mut script = Script::new(host());
+    let append = appending(&mut script);
+    let listed = StorageEvent::Listed {
+        chats: Vec::new(),
+        unreadable: Vec::new(),
+    };
+    let out = script.storage(append, listed);
+    assert!(with(&out, "report").iter().any(|each| {
+        each["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("the store answered with a list"))
+    }));
+    // Shutting down, it's written whole at once; answered wrongly too,
+    // it's tried again until it's done: then it's let go, and the core is
+    // idle.
+    let snapshot = ticket(&one_storage(&script.shutdown()));
+    script.agent(PROC, AgentEvent::Exited(Exit::Code(0)));
+    script.agent(PROC, AgentEvent::OutputClosed);
+    script.agent(PROC, AgentEvent::Group { empty: true });
+    let wrong = StorageEvent::NotLoaded(crate::save::CannotRestore::NotFound);
+    script.storage(snapshot, wrong);
+    assert!(!script.core.is_idle());
+    script.at(10_000);
+    let again = ticket(&one_storage(&script.woken()));
+    let out = script.storage(again, done(10_000));
+    assert_eq!(
+        storage(&out),
+        [json!({ "type": "Release", "value": { "shelf": SHELF, "chat": CHAT } })]
+    );
+    assert!(script.core.is_idle());
+}
+
+#[test]
+fn a_chat_in_use_again_after_shutting_down_is_called_off_isnt_let_go() {
+    let mut script = Script::new(host());
+    script.open_saved("claude");
+    script.at(1000);
+    let snapshot = ticket(&one_storage(&script.woken()));
+    script.storage(snapshot, done(10_000));
+    let snapshot = ticket(&one_storage(&script.shutdown()));
+    // The host sends a message after all: it's in use.
+    script.at(2000);
+    script.send(CHAT, "One more thing").0.expect("sent");
+    let out = script.storage(snapshot, done(10_000));
+    assert!(storage(&out).is_empty(), "not let go: {out:#?}");
+    assert_eq!(
+        script.state()["saving"]["kept"][CHAT.to_string()]["releasing"],
+        false
+    );
+}
+
+#[test]
+fn a_chat_put_away_isnt_deleted_from_another_shelf() {
+    let mut script = Script::new(host());
+    script.open_saved("claude");
+    script.put_away(CHAT).0.expect("put away");
+    assert_eq!(script.delete(CHAT, "elsewhere").0, Err(Refused::NoSuchChat));
 }

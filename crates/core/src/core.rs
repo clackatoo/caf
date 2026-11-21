@@ -668,6 +668,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// Deletes a chat for good, loaded or not: a loaded one is closed
     /// first, and let go from memory.
     ///
+    /// That happens as the deletion is sent to the store, which may wait
+    /// for a move of its shelf ([`Core::move_shelf`]): meanwhile, the chat
+    /// stays loaded, and isn't listed. A restore of it on that shelf asked
+    /// for before is dropped.
+    ///
     /// # Errors
     ///
     /// [`Refused::BadShelf`], or [`Refused::NoSuchChat`] if it's loaded,
@@ -742,9 +747,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.finish(now, out);
     }
 
-    /// Whether nothing is running: no adapters, nothing waiting, and
-    /// every saved chat put away or saved as CAF shuts down written whole
-    /// and let go in the store.
+    /// Whether nothing is running: no adapter processes, no requests or
+    /// questions waiting, no turn running; and nothing waiting on the
+    /// store: no chat being put away, restored, deleted or moved, nor
+    /// saved as CAF shuts down and not yet let go, nor any lock this run
+    /// has no use for left.
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.procs.is_empty()
