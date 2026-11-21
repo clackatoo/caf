@@ -1444,12 +1444,30 @@ fn a_sign_in_stopped_as_it_succeeded_asks_whether_its_signed_in() {
     script.at(10 * 60 * 1000);
     ticket_of(&script.woken(), "stop");
     let out = script.setup(ticket, SetupEvent::Ended { ok: true });
-    one(&out, "status");
+    let status = ticket_of(&out, "status");
+    script.setup(status, SetupEvent::Status(Some(SignedInAs::Account)));
     // One that failed as it was stopped asks nothing.
     let ticket = ticket_of(&script.sign_in("dl-agent").1, "sign_in");
     script.stop_sign_in("dl-agent").0.expect("stopped");
     let out = script.setup(ticket, SetupEvent::Ended { ok: false });
     assert!(with(&out, "status").is_empty());
+    // A status command running as it's stopped, then ends signed in, may
+    // have read the credentials before they were written: a fresh one is
+    // asked, and the old one's answer changes nothing.
+    let survey = ticket_of(&script.check_agents(), "survey");
+    let old = ticket_of(
+        &script.setup(survey, found(&["test-download-1.4.0"])),
+        "status",
+    );
+    let ticket = ticket_of(&script.sign_in("dl-agent").1, "sign_in");
+    script.stop_sign_in("dl-agent").0.expect("stopped");
+    let out = script.setup(ticket, SetupEvent::Ended { ok: true });
+    let fresh = ticket_of(&out, "status");
+    assert_ne!(fresh, old);
+    let before = script.agent_status("dl-agent");
+    assert_eq!(before["sign_in"], signed_in("Account"));
+    script.setup(old, SetupEvent::Status(None));
+    assert_eq!(script.agent_status("dl-agent"), before);
 }
 
 #[test]
