@@ -133,7 +133,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Due::Stop(chat) => self.stop_overdue(now, chat, out),
             Due::Quiet(chat) => self.quiet(now, chat),
             Due::SignIn(ticket) => self.sign_in_overdue(ticket, out),
-            Due::Save(chat) => self.write(chat, out),
+            Due::Save(chat) => self.write(now, chat, out),
             Due::Away(chat) => self.write_away(chat, out),
             Due::Held(chat) => {
                 if let Some(run) = self.runs.get_mut(&chat) {

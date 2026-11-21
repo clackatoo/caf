@@ -86,9 +86,9 @@
 //!
 //! Every number CAF itself writes in a chat or on the viewer wire
 //! ([`viewer`]) is below 2^53, so JavaScript reads it exactly: CAF's ids
-//! count up from 1 (a chat's is a UUID, as text), times are milliseconds ([`Wall`](time::Wall)), and a
-//! number the agent gives that CAF keeps, such as how full its memory is,
-//! is read only if it's below 2^53. An update with a bigger one is
+//! count up from 1 (a chat's is a UUID, as text), times are milliseconds
+//! ([`Wall`](time::Wall)), and a number the agent gives that CAF keeps,
+//! such as how full its memory is, is read only if it's below 2^53. An update with a bigger one is
 //! unreadable, and kept as an [`Unknown`](chat::Unknown) item. A viewer's
 //! own request numbers are quoted back as it sent them.
 //!

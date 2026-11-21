@@ -62,8 +62,9 @@ struct Store {
     locked: BTreeSet<ChatId>,
     /// Work given and not done yet, oldest first.
     work: VecDeque<StorageDirective>,
-    /// How many snapshots, journal entries and failures it has seen.
-    counts: [usize; 3],
+    /// How many snapshots, journal entries, failures, loads and releases
+    /// it has seen.
+    counts: [usize; 5],
 }
 
 impl Store {
@@ -117,6 +118,7 @@ impl Store {
                     (ticket, done(written as u64))
                 }
                 StorageDirective::Release { chat, .. } => {
+                    self.counts[4] += 1;
                     assert!(self.locked.remove(&chat), "released only if locked");
                     continue;
                 }
@@ -125,6 +127,7 @@ impl Store {
                     shelf,
                     chat,
                 } => {
+                    self.counts[3] += 1;
                     let event = match self.read(&shelf, chat) {
                         Some(saved) if !self.locked.contains(&chat) => {
                             self.locked.insert(chat);
@@ -948,18 +951,47 @@ fn deleting_a_chat_closes_it_lets_it_go_and_removes_it() {
 }
 
 #[test]
-fn a_chat_deleted_while_it_was_being_restored_is_let_go_when_it_comes() {
+fn a_chat_deleted_while_it_was_being_restored_goes_with_its_lock() {
+    let mut script = Script::new(host());
+    let mut store = Store::default();
+    let shelf = Shelf(SHELF.to_owned());
+    let stored = saved(&mid_turn("claude"), Some("old"), 0);
+    store
+        .chats
+        .insert((shelf.clone(), CHAT), (stored, Vec::new()));
+    store.take(&script.restore(RestoreChat::new(CHAT, shelf.clone())).1);
+    store.take(&script.delete(CHAT, SHELF).1);
+    // The store loads it, locking it, then deletes it, lock and all: the
+    // store would refuse letting go of what it no longer has.
+    let out = script.serve(&mut store, false);
+    assert!(storage(&out).is_empty(), "{out:#?}");
+    assert!(store.chats.is_empty() && store.locked.is_empty());
+    assert!(script.core.chat(CHAT).is_none());
+    assert_eq!(script.state()["saving"]["deleted"], json!({}));
+}
+
+#[test]
+fn a_chat_that_couldnt_be_deleted_while_it_was_being_restored_is_let_go() {
     let mut script = Script::new(host());
     let restore = RestoreChat::new(CHAT, Shelf(SHELF.to_owned()));
     script.restore(restore).0.expect("restoring");
-    script.delete(CHAT, SHELF).0.expect("deleted");
-    let saved = saved(&mid_turn("claude"), Some("old"), 0);
-    let out = script.storage(1000, StorageEvent::Loaded(Box::new(saved)));
+    let delete = ticket(&one_storage(&script.delete(CHAT, SHELF).1));
+    let stored = saved(&mid_turn("claude"), Some("old"), 0);
+    let out = script.storage(1000, StorageEvent::Loaded(Box::new(stored)));
+    assert!(storage(&out).is_empty());
+    let out = script.storage(delete, StorageEvent::Failed("read-only".to_owned()));
     assert_eq!(
         storage(&out),
         [json!({ "type": "Release", "value": { "shelf": SHELF, "chat": CHAT } })]
     );
     assert!(script.core.chat(CHAT).is_none());
+    // A load that fails is forgotten too.
+    let restore = RestoreChat::new(CHAT, Shelf(SHELF.to_owned()));
+    let load = ticket(&one_storage(&script.restore(restore).1));
+    script.delete(CHAT, SHELF).0.expect("deleted");
+    let missing = crate::save::CannotRestore::NotFound;
+    script.storage(load, StorageEvent::NotLoaded(missing));
+    assert_eq!(script.state()["saving"]["deleted"], json!({}));
 }
 
 #[test]
@@ -1254,7 +1286,50 @@ fn prompt_in(out: &[Value]) -> Option<u64> {
 /// with its store answering late and sometimes failing; then checks the
 /// store's copy, its snapshot with its journal applied, is the chat, and
 /// that restoring it gives the chat tidied.
-fn random_script(seed: u64) -> [usize; 3] {
+/// Takes in `out` as the store and the agent would: the store takes its
+/// work, unless it has (`taken`), and an adapter started is answered as
+/// Claude's, its session resumed. Notes the process and prompt running.
+fn follow(
+    script: &mut Script,
+    store: &mut Store,
+    (out, taken): (Vec<Value>, bool),
+    proc: &mut u64,
+    prompt: &mut Option<u64>,
+) {
+    let mut outs = vec![(out, taken)];
+    while let Some((out, taken)) = outs.pop() {
+        if !taken {
+            store.take(&out);
+        }
+        if let Some(id) = prompt_in(&out) {
+            *prompt = Some(id);
+        }
+        if let Some(started) = with(&out, "start").first() {
+            *proc = started["start"].as_u64().expect("a process");
+        }
+        for (to, message) in super::harness::writes(&out) {
+            let Some(id) = message["id"].as_u64() else {
+                continue;
+            };
+            let answer = match message["method"].as_str() {
+                Some("initialize") => claude_init(),
+                Some("session/resume") => json!({}),
+                Some("session/new") => json!({ "sessionId": SESSION }),
+                _ => continue,
+            };
+            outs.push((script.answers(to, id, &answer), false));
+        }
+    }
+}
+
+/// Process `proc` ends, as asked.
+fn end_process(script: &mut Script, proc: u64) {
+    script.agent(proc, AgentEvent::Exited(Exit::Code(0)));
+    script.agent(proc, AgentEvent::OutputClosed);
+    script.agent(proc, AgentEvent::Group { empty: true });
+}
+
+fn random_script(seed: u64) -> [usize; 5] {
     let mut dice = Dice(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
     let mut host = host();
     host.limits.kept_changes = 3;
@@ -1264,9 +1339,75 @@ fn random_script(seed: u64) -> [usize; 3] {
     script.open_saved("claude");
     let words = ["Run", "ning ", "the ", "tests", ".\n", "All ", "pass."];
     let (mut ms, mut prompt, mut tools, mut asked) = (0, None, 0, 0);
+    let mut proc = PROC;
     for _ in 0..150 {
         ms += dice.roll(700);
         script.at(ms);
+        // Now and then, put away and restored, or shut down, part-way.
+        if dice.roll(25) == 0 {
+            let out = script.put_away(CHAT).1;
+            prompt = None;
+            follow(
+                &mut script,
+                &mut store,
+                (out, false),
+                &mut proc,
+                &mut prompt,
+            );
+            end_process(&mut script, proc);
+            while script.state()["saving"]["away"] != json!({}) {
+                let served = script.serve(&mut store, dice.roll(4) == 0);
+                follow(
+                    &mut script,
+                    &mut store,
+                    (served, true),
+                    &mut proc,
+                    &mut prompt,
+                );
+                ms += 61_000;
+                script.at(ms);
+                let out = script.woken();
+                follow(
+                    &mut script,
+                    &mut store,
+                    (out, false),
+                    &mut proc,
+                    &mut prompt,
+                );
+            }
+            let out = script
+                .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
+                .1;
+            follow(
+                &mut script,
+                &mut store,
+                (out, false),
+                &mut proc,
+                &mut prompt,
+            );
+            let served = script.serve(&mut store, false);
+            follow(
+                &mut script,
+                &mut store,
+                (served, true),
+                &mut proc,
+                &mut prompt,
+            );
+            continue;
+        }
+        if dice.roll(40) == 0 {
+            let out = script.shutdown();
+            prompt = None;
+            follow(
+                &mut script,
+                &mut store,
+                (out, false),
+                &mut proc,
+                &mut prompt,
+            );
+            end_process(&mut script, proc);
+            continue;
+        }
         let chunk = |kind: &str, dice: &mut Dice| {
             let text = words[usize::try_from(dice.roll(7)).unwrap_or(0)];
             json!({ "sessionUpdate": kind, "content": { "type": "text", "text": text } })
@@ -1276,21 +1417,21 @@ fn random_script(seed: u64) -> [usize; 3] {
                 let text = format!("message {}\nmore", dice.roll(100));
                 script.send(CHAT, &text).1
             }
-            2..=4 => script.update(PROC, SESSION, &chunk("agent_message_chunk", &mut dice)),
-            5 => script.update(PROC, SESSION, &chunk("agent_thought_chunk", &mut dice)),
+            2..=4 => script.update(proc, SESSION, &chunk("agent_message_chunk", &mut dice)),
+            5 => script.update(proc, SESSION, &chunk("agent_thought_chunk", &mut dice)),
             6 => {
                 tools += 1;
                 let call = json!({ "sessionUpdate": "tool_call", "toolCallId": format!("t{tools}"), "title": "Run", "kind": "execute", "status": "pending" });
-                script.update(PROC, SESSION, &call)
+                script.update(proc, SESSION, &call)
             }
             7 if tools > 0 => {
                 let tool = 1 + dice.roll(tools);
                 let update = json!({ "sessionUpdate": "tool_call_update", "toolCallId": format!("t{tool}"), "status": "completed", "rawOutput": "ok" });
-                script.update(PROC, SESSION, &update)
+                script.update(proc, SESSION, &update)
             }
             8 if prompt.is_some() && asked < 3 => {
                 asked += 1;
-                let out = script.says(PROC, &super::stop::permission(900 + asked, "t-ask"));
+                let out = script.says(proc, &super::stop::permission(900 + asked, "t-ask"));
                 let decide = with(&out, "decide");
                 let ticket = decide.first().and_then(|each| each["decide"].as_u64());
                 let mut all = out.clone();
@@ -1310,26 +1451,32 @@ fn random_script(seed: u64) -> [usize; 3] {
                 } else {
                     "end_turn"
                 };
-                out.extend(script.answers(PROC, id, &json!({ "stopReason": stop })));
+                out.extend(script.answers(proc, id, &json!({ "stopReason": stop })));
                 out
             }
             10 => script.set_data(CHAT).1,
             _ => script.woken(),
         };
-        if let Some(id) = prompt_in(&out) {
-            prompt = Some(id);
-        }
-        store.take(&out);
+        follow(
+            &mut script,
+            &mut store,
+            (out, false),
+            &mut proc,
+            &mut prompt,
+        );
         // The store answers some of its work, late, and fails some.
         while dice.roll(3) == 0 {
             let Some((ticket, event)) = store.next(dice.roll(8) == 0) else {
                 break;
             };
             let out = script.storage(ticket, event);
-            if let Some(id) = prompt_in(&out) {
-                prompt = Some(id);
-            }
-            store.take(&out);
+            follow(
+                &mut script,
+                &mut store,
+                (out, false),
+                &mut proc,
+                &mut prompt,
+            );
         }
     }
     // Everything written, retries and all.
@@ -1337,11 +1484,21 @@ fn random_script(seed: u64) -> [usize; 3] {
         ms += 61_000;
         script.at(ms);
         let out = script.woken();
-        if let Some(id) = prompt_in(&out) {
-            prompt = Some(id);
-        }
-        store.take(&out);
-        script.serve(&mut store, false);
+        follow(
+            &mut script,
+            &mut store,
+            (out, false),
+            &mut proc,
+            &mut prompt,
+        );
+        let served = script.serve(&mut store, false);
+        follow(
+            &mut script,
+            &mut store,
+            (served, true),
+            &mut proc,
+            &mut prompt,
+        );
     }
     let shelf = Shelf(SHELF.to_owned());
     let stored = store.read(&shelf, CHAT).expect("it's stored");
@@ -1373,21 +1530,22 @@ fn random_script(seed: u64) -> [usize; 3] {
 
     // The agent's questions are answered as its turn ends.
     if let Some(id) = prompt {
-        script.answers(PROC, id, &json!({ "stopReason": "end_turn" }));
+        script.answers(proc, id, &json!({ "stopReason": "end_turn" }));
     }
     store.counts
 }
 
 #[test]
 fn a_saved_chat_reads_back_as_it_is_and_restores_tidied() {
-    let mut counts = [0; 3];
+    let mut counts = [0; 5];
     for seed in 1..=60 {
         let each = random_script(seed);
         for (all, each) in counts.iter_mut().zip(each) {
             *all += each;
         }
     }
-    // Snapshots and journals both, and failures to try again.
+    // Snapshots and journals both, failures to try again, and chats put
+    // away, restored and let go.
     assert!(counts.iter().all(|&count| count > 60), "{counts:?}");
 }
 
@@ -1486,5 +1644,298 @@ fn a_restored_chats_header_is_its_own_not_the_snapshots() {
     assert_has(
         &script.chat(CHAT),
         &json!({ "turns": [{}, { "life": { "type": "CutOff" }, "window": { "end": latest } }, { "window": { "end": latest } }] }),
+    );
+}
+
+/// A script with a saved Claude chat written whole (as 10 000 bytes) and
+/// a message's changes being added to its journal, not yet done: returns
+/// that write's ticket.
+fn appending(script: &mut Script) -> u64 {
+    script.open_saved("claude");
+    script.at(1000);
+    let snapshot = ticket(&one_storage(&script.woken()));
+    script.storage(snapshot, done(10_000));
+    script.at(2000);
+    script.send(CHAT, "Run the tests").0.expect("sent");
+    script.at(3000);
+    let append = one_storage(&script.woken());
+    assert_eq!(append["type"], "Append");
+    ticket(&append)
+}
+
+#[test]
+fn shutting_down_with_a_journal_write_under_way_writes_the_chat_whole_before_letting_it_go() {
+    let mut script = Script::new(host());
+    let append = appending(&mut script);
+    let out = script.shutdown();
+    assert!(storage(&out).is_empty(), "one write at a time");
+    let out = script.storage(append, done(10));
+    let snapshot = one_storage(&out);
+    assert_eq!(snapshot["type"], "Snapshot");
+    let out = script.storage(ticket(&snapshot), done(10_000));
+    assert_eq!(
+        storage(&out),
+        [json!({ "type": "Release", "value": { "shelf": SHELF, "chat": CHAT } })]
+    );
+}
+
+#[test]
+fn shutting_down_writes_a_chat_whose_write_failed_at_once() {
+    let mut script = Script::new(host());
+    let append = appending(&mut script);
+    let out = script.storage(append, StorageEvent::Failed("disk full".to_owned()));
+    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 4000 })]);
+    let out = script.shutdown();
+    assert_eq!(one_storage(&out)["type"], "Snapshot", "not after the wait");
+}
+
+#[test]
+fn putting_away_or_closing_with_a_journal_write_under_way_writes_the_chat_whole_at_once() {
+    for close in [false, true] {
+        let mut script = Script::new(host());
+        let append = appending(&mut script);
+        let out = if close {
+            script.close(CHAT).1
+        } else {
+            script.put_away(CHAT).1
+        };
+        let snapshot = one_storage(&out);
+        assert_eq!(snapshot["type"], "Snapshot");
+        // The store does them in order: the journal's answer changes
+        // nothing, and the chat is let go once it's whole.
+        assert!(storage(&script.storage(append, done(10))).is_empty());
+        let out = script.storage(ticket(&snapshot), done(10_000));
+        assert_eq!(
+            storage(&out),
+            [json!({ "type": "Release", "value": { "shelf": SHELF, "chat": CHAT } })]
+        );
+    }
+}
+
+#[test]
+fn deleting_a_chat_with_a_write_under_way_deletes_it_after() {
+    let mut script = Script::new(host());
+    let append = appending(&mut script);
+    let out = script.delete(CHAT, SHELF).1;
+    assert_eq!(one_storage(&out)["type"], "Delete");
+    let out = script.storage(append, done(10));
+    assert!(storage(&out).is_empty());
+    assert!(script.core.chat(CHAT).is_none());
+}
+
+#[test]
+fn an_answer_to_a_write_no_longer_under_way_changes_nothing() {
+    let mut script = Script::new(host());
+    let append = appending(&mut script);
+    let snapshot = ticket(&one_storage(&script.put_away(CHAT).1));
+    // Answered out of order: the chat is let go, and restored.
+    script.storage(snapshot, done(10_000));
+    let out = script
+        .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
+        .1;
+    let load = ticket(&one_storage(&out));
+    let mut stored = saved(&mid_turn("claude"), Some("old"), 0);
+    stored.chat.turns.truncate(1);
+    stored.chat.questions.clear();
+    let out = script.storage(load, StorageEvent::Loaded(Box::new(stored)));
+    let tidy = ticket(&one_storage(&out));
+    // The old journal write's answer comes last.
+    script.storage(append, StorageEvent::Failed("too late".to_owned()));
+    assert_eq!(
+        script.state()["saving"]["kept"][CHAT.to_string()]["writing"],
+        json!(tidy)
+    );
+}
+
+#[test]
+fn a_chat_saved_by_a_clean_shutdown_is_written_at_once_as_its_restore_makes_it_idle() {
+    let mut script = Script::new(host());
+    let mut chat = mid_turn("claude");
+    chat["state"] = json!({ "type": "Lost", "value": { "reason": { "type": "ShutDown" } } });
+    if let Some(turns) = chat["turns"].as_array_mut() {
+        turns.truncate(1);
+    }
+    chat["questions"] = json!([]);
+    script
+        .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
+        .0
+        .expect("restoring");
+    let out = script.storage(1000, StorageEvent::Loaded(Box::new(saved(&chat, None, 0))));
+    assert_has(
+        &one_storage(&out),
+        &json!({ "type": "Append", "value": { "entries": [
+            { "type": "Change", "value": { "type": "State", "value": { "type": "Idle" } } }
+        ] } }),
+    );
+}
+
+#[test]
+fn a_damaged_save_isnt_restored_and_is_let_go() {
+    /// What's wrong, and the damage.
+    type Case = (&'static str, fn(&mut Saved));
+    let cases: [Case; 3] = [
+        (
+            "it holds chat 00000000-0000-0000-0000-00000000162e instead",
+            |saved| {
+                saved.chat.id = ChatId::from_number(5678);
+            },
+        ),
+        ("a turn or item in it is numbered past 2^53", |saved| {
+            saved.chat.turns[0].id = crate::TurnId(1 << 53);
+        }),
+        ("a turn or item in it is numbered past 2^53", |saved| {
+            saved.chat.turns[1].items[0].id = crate::ItemId(u64::MAX);
+        }),
+    ];
+    for (why, damage) in cases {
+        let mut script = Script::new(host());
+        store_listed(&mut script);
+        script
+            .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
+            .0
+            .expect("restoring");
+        let mut stored = saved(&mid_turn("claude"), Some("old"), 0);
+        damage(&mut stored);
+        let load = 1001;
+        let out = script.storage(load, StorageEvent::Loaded(Box::new(stored)));
+        assert_eq!(
+            storage(&out),
+            [json!({ "type": "Release", "value": { "shelf": SHELF, "chat": CHAT } })]
+        );
+        assert!(script.core.chat(CHAT).is_none());
+        assert_has(
+            &serde_json::to_value(script.core.saved(&Shelf(SHELF.to_owned()))).expect("JSON"),
+            &json!([{ "state": { "type": "Failed", "value": { "type": "Damaged", "value": why } } }]),
+        );
+        // Nothing went past 2^53.
+        assert!(script.core.ids.next < 1 << 53);
+    }
+}
+
+/// Lists [`SHELF`], holding [`CHAT`] as [`mid_turn`] saved it.
+fn store_listed(script: &mut Script) {
+    script.list_saved(SHELF).0.expect("listing");
+    let header = saved(&mid_turn("claude"), Some("old"), 0).header;
+    let chats = vec![header];
+    let unreadable = Vec::new();
+    script.storage(1000, StorageEvent::Listed { chats, unreadable });
+}
+
+#[test]
+fn a_restore_the_store_answers_wrongly_fails() {
+    let mut script = Script::new(host());
+    store_listed(&mut script);
+    script
+        .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
+        .0
+        .expect("restoring");
+    let out = script.storage(1001, done(0));
+    assert!(storage(&out).is_empty());
+    assert_has(
+        &serde_json::to_value(script.core.saved(&Shelf(SHELF.to_owned()))).expect("JSON"),
+        &json!([{ "state": { "type": "Failed", "value": { "type": "Damaged", "value": "the store answered with done" } } }]),
+    );
+    // It can be tried again.
+    script
+        .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
+        .0
+        .expect("restoring again");
+}
+
+#[test]
+fn a_chat_put_away_before_it_was_ever_written_is_listed_once_it_is() {
+    let mut script = Script::new(host());
+    script.open_saved("claude");
+    let snapshot = ticket(&one_storage(&script.put_away(CHAT).1));
+    script.storage(snapshot, StorageEvent::Failed("disk full".to_owned()));
+    // Listed while the store doesn't have it yet.
+    let list = ticket(&one_storage(&script.list_saved(SHELF).1));
+    let (chats, unreadable) = (Vec::new(), Vec::new());
+    script.storage(list, StorageEvent::Listed { chats, unreadable });
+    let listed = || json!([{ "header": { "chat": CHAT }, "state": { "type": "Saved" } }]);
+    assert_has(
+        &serde_json::to_value(script.core.saved(&Shelf(SHELF.to_owned()))).expect("JSON"),
+        &listed(),
+    );
+    script.at(1000);
+    let again = ticket(&one_storage(&script.woken()));
+    script.storage(again, done(10_000));
+    assert_has(
+        &serde_json::to_value(script.core.saved(&Shelf(SHELF.to_owned()))).expect("JSON"),
+        &listed(),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_save_whose_folder_isnt_utf_8_isnt_restored() {
+    use std::os::unix::ffi::OsStrExt as _;
+    // No format CAF writes holds one, so this is a store of the app's own,
+    // given it in memory: not a script, as a recording can't hold it.
+    let mut core: crate::core::Core =
+        crate::core::Core::starting_ids_at(host(), super::harness::agents(), super::harness::FIRST);
+    let now = crate::time::Now {
+        wall: Wall(EPOCH),
+        mono: crate::time::Mono(0),
+    };
+    let mut out = Vec::new();
+    let restore = RestoreChat::new(CHAT, Shelf(SHELF.to_owned()));
+    core.restore(now, restore, &mut out).expect("restoring");
+    let mut stored = saved(&mid_turn("claude"), Some("old"), 0);
+    stored.chat.cwd = std::ffi::OsStr::from_bytes(b"/work/\xff").into();
+    let mut out = Vec::new();
+    let event = StorageEvent::Loaded(Box::new(stored));
+    core.handle(
+        now,
+        crate::Event::Storage {
+            ticket: crate::Ticket(1000),
+            event,
+        },
+        &mut out,
+    );
+    assert!(core.chat(CHAT).is_none());
+    let reports: Vec<String> = (out.iter())
+        .filter_map(|directive| match directive {
+            crate::Directive::Report(report) => Some(report.message.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reports,
+        [format!(
+            "chat {CHAT} couldn't be restored: Damaged(\"its folder isn't UTF-8\")"
+        )]
+    );
+    assert!(out.iter().any(|directive| matches!(
+        directive,
+        crate::Directive::Storage(StorageDirective::Release { .. })
+    )));
+}
+
+#[test]
+fn shutting_down_writes_an_idle_chat_whole_before_letting_it_go_though_nothing_changed() {
+    let mut script = Script::new(host());
+    script
+        .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
+        .0
+        .expect("restoring");
+    let out = script.storage(
+        1000,
+        StorageEvent::Loaded(Box::new(saved(&mid_turn("claude"), Some("old"), 0))),
+    );
+    let append = ticket(&one_storage(&out));
+    // Idle, it has nothing to wind down.
+    let out = script.shutdown();
+    assert!(storage(&out).is_empty());
+    let out = script.storage(append, done(10));
+    let snapshot = one_storage(&out);
+    assert_eq!(
+        snapshot["type"], "Snapshot",
+        "never let go after a journal write alone"
+    );
+    let out = script.storage(ticket(&snapshot), done(10_000));
+    assert_eq!(
+        storage(&out),
+        [json!({ "type": "Release", "value": { "shelf": SHELF, "chat": CHAT } })]
     );
 }

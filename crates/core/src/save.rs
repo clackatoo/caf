@@ -2,10 +2,12 @@
 //!
 //! **Everything a chat is, is saved**: its record, the agent's session to
 //! continue, and the app's data slot ([`AppData`]). What belongs to one
-//! run isn't: processes, requests in flight, timers, questions. A rule,
-//! not a judgement: nothing that holds a [`Ticket`](crate::Ticket) or a
+//! run isn't: processes, requests in flight, timers. A rule, not a
+//! judgement: nothing that holds a [`Ticket`](crate::Ticket) or a
 //! [`Mono`](crate::time::Mono) is saved. The chat's own types are what's
-//! saved, so there's no second copy to forget a field in.
+//! saved, so there's no second copy to forget a field in. Its questions
+//! are saved with its record, and dropped when it's restored, as what
+//! asked them is gone.
 //!
 //! **The storage driver stores; the core decides when**
 //! ([`StorageDirective`](crate::directive::StorageDirective)). Soon after a chat changes

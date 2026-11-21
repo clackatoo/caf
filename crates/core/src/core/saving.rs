@@ -59,9 +59,22 @@ pub(super) struct Saving<A: AppItem, D: AppData> {
     /// Chats put away whose last snapshot isn't written yet: each is let
     /// go in the store once it is, and kept until then to try again.
     pub(super) away: BTreeMap<ChatId, Away<A, D>>,
-    /// Chats deleted while being restored, with their shelves: the lock
-    /// their load takes, if it comes, is let go.
-    pub(super) deleted: BTreeMap<ChatId, Shelf>,
+    /// Chats deleted while being restored, by the ticket of their load:
+    /// the lock it takes, if it comes, goes with them, or is let go if the
+    /// deletion fails.
+    pub(super) deleted: BTreeMap<Ticket, Deleted>,
+}
+
+/// A chat deleted while it was being restored.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
+pub(super) struct Deleted {
+    /// The chat.
+    pub(super) chat: ChatId,
+    /// Its shelf.
+    pub(super) shelf: Shelf,
+    /// Its load came, and took its lock.
+    pub(super) loaded: bool,
 }
 
 impl<A: AppItem, D: AppData> Default for Saving<A, D> {
@@ -104,8 +117,8 @@ pub(super) struct Kept<A: AppItem, D: AppData> {
     pub(super) snapshot_size: u64,
     /// When to write what's changed, if anything has.
     pub(super) due: Option<Mono>,
-    /// Writes under way: one at most.
-    pub(super) writing: BTreeSet<Ticket>,
+    /// The write under way, if any: one at a time.
+    pub(super) writing: Option<Ticket>,
     /// The last write failed: when to try again.
     pub(super) retry: Option<Mono>,
     /// When it was made.
@@ -146,7 +159,7 @@ impl<A: AppItem, D: AppData> Kept<A, D> {
             unsaved: Vec::new(),
             snapshot_size: 0,
             due: None,
-            writing: BTreeSet::new(),
+            writing: None,
             retry: None,
             made,
             changed: made,
@@ -252,34 +265,25 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if let Some(restore) = self.saving.restoring.remove(&ticket) {
             return match event {
                 StorageEvent::Loaded(saved) => self.restored(restore, *saved, out),
-                StorageEvent::NotLoaded(why) => {
-                    report(
-                        out,
-                        Level::Info,
-                        format!("chat {} couldn't be restored: {why:?}", restore.chat),
-                    );
-                    self.relist_state(&restore.shelf, restore.chat, SavedState::Failed(why));
+                StorageEvent::NotLoaded(why) => self.restore_failed(restore, why, false, out),
+                other => {
+                    let what = kind(&other);
+                    let why = CannotRestore::Damaged(format!("the store answered with {what}"));
+                    self.restore_failed(restore, why, false, out);
                 }
-                other => report(
-                    out,
-                    Level::Warn,
-                    format!("the store answered a load with {}", kind(&other)),
-                ),
             };
         }
-        let Some(job) = self.saving.jobs.remove(&ticket) else {
-            // A load nobody waits for any more, as its chat was deleted
-            // meanwhile: the lock it took is let go.
-            if let StorageEvent::Loaded(saved) = event {
-                let chat = saved.chat.id;
-                if let Some(shelf) = self.saving.deleted.remove(&chat) {
-                    out.push(Directive::Storage(StorageDirective::Release {
-                        shelf,
-                        chat,
-                    }));
-                }
-                return;
+        // The load of a chat deleted meanwhile: the deletion takes its
+        // lock with it.
+        if let Some(deleted) = self.saving.deleted.get_mut(&ticket) {
+            if matches!(event, StorageEvent::Loaded(_)) {
+                deleted.loaded = true;
+            } else {
+                self.saving.deleted.remove(&ticket);
             }
+            return;
+        }
+        let Some(job) = self.saving.jobs.remove(&ticket) else {
             return report(
                 out,
                 Level::Debug,
@@ -297,9 +301,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 }
                 self.listed(shelf, chats);
             }
+            // A write of a chat that's gone, or isn't the one under way,
+            // changes nothing.
+            (Job::Write(chat) | Job::Snapshot(chat), _)
+                if (self.saving.kept.get(&chat))
+                    .is_none_or(|kept| kept.writing != Some(ticket)) => {}
             (Job::Write(chat), StorageEvent::Done { written }) => {
                 if let Some(kept) = self.saving.kept.get_mut(&chat) {
-                    kept.writing.remove(&ticket);
+                    kept.writing = None;
                     kept.journal = kept.journal.saturating_add(written);
                     kept.failures = 0;
                 }
@@ -307,7 +316,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
             (Job::Snapshot(chat), StorageEvent::Done { written }) => {
                 if let Some(kept) = self.saving.kept.get_mut(&chat) {
-                    kept.writing.remove(&ticket);
+                    kept.writing = None;
                     kept.snapshot_size = written;
                     kept.journal = 0;
                     kept.failures = 0;
@@ -318,7 +327,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 let Some(kept) = self.saving.kept.get_mut(&chat) else {
                     return;
                 };
-                kept.writing.remove(&ticket);
+                kept.writing = None;
                 kept.whole = true;
                 kept.behind = true;
                 let wait = retry_after(self.host.timers.save, kept.failures);
@@ -334,9 +343,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     ),
                 );
             }
+            (Job::Away(chat), _)
+                if (self.saving.away.get(&chat))
+                    .is_none_or(|away| away.writing != Some(ticket)) => {}
             (Job::Away(chat), StorageEvent::Done { .. }) => {
                 if let Some(away) = self.saving.away.remove(&chat) {
-                    let shelf = away.shelf;
+                    let Away { shelf, saved, .. } = away;
+                    // Listed as written, even if it wasn't when the shelf
+                    // was read.
+                    self.relist(&shelf, chat, Some((saved.header, SavedState::Saved)));
                     out.push(Directive::Storage(StorageDirective::Release {
                         shelf,
                         chat,
@@ -360,7 +375,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     ),
                 );
             }
-            (Job::Delete(_), StorageEvent::Done { .. }) => {}
+            (Job::Delete(chat), StorageEvent::Done { .. }) => {
+                // Gone, with any lock a load took.
+                self.saving.deleted.retain(|_, each| each.chat != chat);
+            }
             (Job::Move { to, .. }, StorageEvent::Done { .. }) => {
                 // What the shelf they went to holds now is the store's:
                 // it's read again, if it's listed.
@@ -368,11 +386,31 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     self.list_again(to, out);
                 }
             }
-            (Job::Delete(chat), StorageEvent::Failed(why)) => report(
-                out,
-                Level::Warn,
-                format!("chat {chat} couldn't be deleted: {why}"),
-            ),
+            (Job::Delete(chat), StorageEvent::Failed(why)) => {
+                report(
+                    out,
+                    Level::Warn,
+                    format!("chat {chat} couldn't be deleted: {why}"),
+                );
+                // A load that came meanwhile took a lock: it's let go.
+                let loads: Vec<Ticket> = (self.saving.deleted.iter())
+                    .filter(|(_, each)| each.chat == chat)
+                    .map(|(&load, _)| load)
+                    .collect();
+                for load in loads {
+                    if let Some(Deleted {
+                        shelf,
+                        loaded: true,
+                        ..
+                    }) = self.saving.deleted.remove(&load)
+                    {
+                        out.push(Directive::Storage(StorageDirective::Release {
+                            shelf,
+                            chat,
+                        }));
+                    }
+                }
+            }
             (Job::Move { from, to }, StorageEvent::Failed(why)) => {
                 report(
                     out,
@@ -438,6 +476,18 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 }
             })
             .collect();
+        // Put away, and not written yet: as it was put away.
+        let away: Vec<SavedChat> = (self.saving.away.iter())
+            .filter(|(chat, away)| {
+                away.shelf == shelf && !list.iter().any(|each| each.header.chat == **chat)
+            })
+            .map(|(_, away)| SavedChat {
+                shelf: shelf.clone(),
+                header: away.saved.header.clone(),
+                state: SavedState::Saved,
+            })
+            .collect();
+        list.extend(away);
         let unlisted: Vec<ChatId> = (self.saving.kept.iter())
             .filter(|(chat, kept)| {
                 kept.shelf == shelf && !list.iter().any(|each| each.header.chat == **chat)
@@ -534,7 +584,6 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if self.is_loaded(restore.chat) {
             return Err(Refused::Loaded);
         }
-        self.saving.deleted.remove(&restore.chat);
         let ticket = Ticket(self.ids.take());
         out.push(Directive::Storage(StorageDirective::Load {
             ticket,
@@ -569,20 +618,18 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             data,
         } = saved;
         let id = restore.chat;
-        if whole.id != id || header.chat != id {
-            let why = CannotRestore::Damaged(format!("it holds chat {} instead", whole.id));
-            report(
-                out,
-                Level::Warn,
-                format!("chat {id} couldn't be restored: {why:?}"),
-            );
-            self.relist_state(&restore.shelf, id, SavedState::Failed(why));
-            let shelf = restore.shelf;
-            out.push(Directive::Storage(StorageDirective::Release {
-                shelf,
-                chat: id,
-            }));
-            return;
+        let damage = if whole.id != id || header.chat != id {
+            Some(format!("it holds chat {} instead", whole.id))
+        } else if !numbered_within_bounds(&whole) {
+            Some("a turn or item in it is numbered past 2^53".to_owned())
+        } else if whole.cwd.to_str().is_none() {
+            Some("its folder isn't UTF-8".to_owned())
+        } else {
+            None
+        };
+        if let Some(damage) = damage {
+            let why = CannotRestore::Damaged(damage);
+            return self.restore_failed(restore, why, true, out);
         }
         // Renamed by the host: found again by its built-in profile, if
         // exactly one agent has it.
@@ -610,12 +657,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 self.ids.seen(item.id.0);
             }
         }
-        // The header read is the snapshot's, older than its journal: only
-        // when it was made, and its agent's profile, which no journal entry
-        // changes, are taken from it. The rest is the chat's own: its
-        // label, first line, turns and whether it's closed are read from
-        // it as each header is made, and when it last changed is its
-        // latest time.
+        // The header read may be the snapshot's, from before its journal:
+        // only when the chat was made, and its agent's profile, which no
+        // journal entry changes, are taken from it. Its label, first line,
+        // turns and whether it's closed are the chat's, as each header is
+        // made; and when it last changed is the later of the header's word
+        // and the latest time the chat holds.
         let changed = last_change(&whole).map_or(header.changed, |at| at.max(header.changed));
         let changes = tidy(&whole, changed);
         let mcp_sent = (restore.mcp_servers.iter())
@@ -626,6 +673,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let cwd = whole.cwd.to_string_lossy().into_owned();
         let mut kept = Kept::new(restore.shelf, header.made, true);
         kept.changed = changed;
+        // Tidied, it's written at once.
+        kept.urgent = !changes.is_empty();
         kept.profile = header.profile;
         kept.session.clone_from(&session);
         self.saving.kept.insert(id, kept);
@@ -667,6 +716,31 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             self.record(id, change);
         }
         self.relist_loaded(id);
+    }
+
+    /// `restore` failed, as `why` says, and its save is left as it was: let
+    /// go in the store, if `locked`, as its load locked it.
+    fn restore_failed(
+        &mut self,
+        restore: RestoreChat,
+        why: CannotRestore,
+        locked: bool,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
+        let RestoreChat { chat, shelf, .. } = restore;
+        let level = if locked { Level::Warn } else { Level::Info };
+        report(
+            out,
+            level,
+            format!("chat {chat} couldn't be restored: {why:?}"),
+        );
+        self.relist_state(&shelf, chat, SavedState::Failed(why));
+        if locked {
+            out.push(Directive::Storage(StorageDirective::Release {
+                shelf,
+                chat,
+            }));
+        }
     }
 
     /// Puts a chat away.
@@ -779,10 +853,18 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if (self.saving.away.get(&chat)).is_some_and(|away| away.shelf == shelf) {
             self.saving.away.remove(&chat);
         }
-        let restoring = self.saving.restoring.len();
-        (self.saving.restoring).retain(|_, each| !(each.chat == chat && each.shelf == shelf));
-        if self.saving.restoring.len() != restoring {
-            self.saving.deleted.insert(chat, shelf.clone());
+        let loads: Vec<Ticket> = (self.saving.restoring.iter())
+            .filter(|(_, each)| each.chat == chat && each.shelf == shelf)
+            .map(|(&load, _)| load)
+            .collect();
+        for load in loads {
+            self.saving.restoring.remove(&load);
+            let deleted = Deleted {
+                chat,
+                shelf: shelf.clone(),
+                loaded: false,
+            };
+            self.saving.deleted.insert(load, deleted);
         }
         self.relist(&shelf, chat, None);
         let ticket = Ticket(self.ids.take());
@@ -822,9 +904,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 restore.shelf = to.clone();
             }
         }
-        for shelf in self.saving.deleted.values_mut() {
-            if *shelf == from {
-                *shelf = to.clone();
+        for deleted in self.saving.deleted.values_mut() {
+            if deleted.shelf == from {
+                deleted.shelf = to.clone();
             }
         }
         // What's listed of the one goes to the other, if that's listed
@@ -878,7 +960,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     pub(super) fn save_all(&mut self, now: Now) {
         for kept in self.saving.kept.values_mut() {
             kept.releasing = true;
+            kept.whole = true;
             kept.due = Some(now.mono);
+            // At once, not after a failure's wait.
+            kept.retry = None;
+        }
+        for away in self.saving.away.values_mut() {
+            away.retry = away.retry.map(|_| now.mono);
         }
     }
 
@@ -921,7 +1009,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             self.note_session(chat);
             self.note_changed(now, chat);
             if self.save_at(chat).is_some_and(|at| at <= now.mono) {
-                self.write(chat, out);
+                self.write(now, chat, out);
             }
         }
         let away: Vec<ChatId> = (self.saving.away.iter())
@@ -939,7 +1027,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// write of it is under way.
     pub(super) fn save_at(&self, chat: ChatId) -> Option<Mono> {
         let kept = self.saving.kept.get(&chat)?;
-        if !kept.writing.is_empty() {
+        if kept.writing.is_some() {
             return None;
         }
         let due = kept.due?;
@@ -955,7 +1043,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// Writes what's changed of `chat`: whole if it must be or its journal
     /// has outgrown its snapshot, and otherwise added to its journal.
     /// Nothing, if nothing changed.
-    pub(super) fn write(&mut self, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
+    pub(super) fn write(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
+        // What changed this call, and its session, go with it.
+        self.note_session(chat);
+        self.note_changed(now, chat);
         let Some(kept) = self.saving.kept.get_mut(&chat) else {
             return;
         };
@@ -965,12 +1056,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return;
         }
         let whole = kept.whole || kept.releasing || kept.journal > kept.snapshot_size;
-        let ticket = Ticket(self.ids.take());
         let (saved, header) = if whole {
             (self.saved_whole(chat), None)
         } else {
             (None, self.header(chat))
         };
+        if saved.is_none() && header.is_none() {
+            return;
+        }
+        let ticket = Ticket(self.ids.take());
         let Some(kept) = self.saving.kept.get_mut(&chat) else {
             return;
         };
@@ -1000,7 +1094,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             (None, None) => return,
         };
         kept.behind = false;
-        kept.writing.insert(ticket);
+        kept.writing = Some(ticket);
         self.saving.jobs.insert(ticket, job);
         out.push(Directive::Storage(directive));
         self.relist_loaded(chat);
@@ -1012,7 +1106,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(kept) = self.saving.kept.get_mut(&chat) else {
             return;
         };
-        if !kept.releasing || !kept.writing.is_empty() {
+        if !kept.releasing || kept.writing.is_some() {
             return;
         }
         if !kept.unsaved.is_empty() || kept.behind || kept.whole {
@@ -1149,6 +1243,14 @@ pub(super) fn tidy<A: AppItem>(chat: &Chat<A>, at: Wall) -> Vec<Change<A>> {
         changes.push(Change::State(ChatState::Idle));
     }
     changes
+}
+
+/// Whether every turn and item of `chat` is numbered below 2^53, as every
+/// number CAF gives out is: one past it would have new ones go past too.
+fn numbered_within_bounds<A: AppItem>(chat: &Chat<A>) -> bool {
+    const MOST: u64 = 1 << 53;
+    (chat.turns.iter())
+        .all(|turn| turn.id.0 < MOST && turn.items.iter().all(|item| item.id.0 < MOST))
 }
 
 /// The latest time `chat` holds: when anything in it started or ended.
