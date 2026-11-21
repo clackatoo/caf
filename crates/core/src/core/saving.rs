@@ -152,6 +152,15 @@ impl<A: AppItem, D: AppData> Saving<A, D> {
             && (self.jobs.values()).all(|job| !matches!(job, Job::Delete { .. }))
     }
 
+    /// Whether every saved chat that's loaded is written as it is, with
+    /// no write of it under way: as CAF shuts down, it isn't idle until
+    /// they are.
+    pub(super) fn all_written(&self) -> bool {
+        (self.kept.values()).all(|kept| {
+            !kept.behind && kept.unsaved.is_empty() && kept.due.is_none() && kept.writing.is_none()
+        })
+    }
+
     /// Whether a move of `shelf` waits or is under way: work for chats on
     /// it waits until it's answered.
     pub(super) fn blocked(&self, shelf: &Shelf) -> bool {
@@ -420,12 +429,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 format!("ignored the store's answer to ticket {}", ticket.0),
             );
         };
-        // Anything but done or failed, from a write, is a failure: the
-        // chat is written again, rather than wait for an answer that won't
-        // come.
+        // Anything but done or failed, from a write or a deletion, is a
+        // failure: the chat is written again, or let go, rather than wait
+        // for an answer that won't come.
         let event = match (&job, event) {
             (
-                Job::Append(_) | Job::Snapshot(_) | Job::Away(_),
+                Job::Append(_) | Job::Snapshot(_) | Job::Away(_) | Job::Delete { .. },
                 event @ (StorageEvent::Listed { .. }
                 | StorageEvent::Loaded(_)
                 | StorageEvent::NotLoaded(_)),
@@ -585,7 +594,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 ticket,
                 shelf: shelf.clone(),
             },
-            (None, Some(Job::Delete { chat, shelf, .. })) => StorageDirective::Delete {
+            (None, Some(Job::Delete { chat, shelf })) => StorageDirective::Delete {
                 ticket,
                 shelf: shelf.clone(),
                 chat: *chat,
@@ -678,7 +687,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     if let Some(restore) = self.saving.restoring.get_mut(ticket) {
                         on(&mut restore.shelf);
                     }
-                    if let Some(Job::Delete { shelf, .. }) = self.saving.jobs.get_mut(ticket) {
+                    if let Some(Job::Delete { chat: _, shelf }) = self.saving.jobs.get_mut(ticket) {
                         on(shelf);
                     }
                 }
@@ -721,19 +730,25 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// and no write or deletion of it waits or is under way.
     fn let_go_orphans(&mut self, out: &mut Vec<Directive<A, D>>) {
         let saving = &self.saving;
-        let used = |chat: ChatId| {
-            saving.kept.contains_key(&chat)
-                || saving.away.contains_key(&chat)
-                || (saving.restoring.values()).any(|each| each.chat == chat)
-                || (saving.deleted.values()).any(|each| each.chat == chat)
-                || (saving.jobs.values()).any(|job| match job {
-                    Job::Append(each) | Job::Snapshot(each) | Job::Away(each) => *each == chat,
-                    Job::Delete { chat: each, .. } => *each == chat,
+        let used = |shelf: &Shelf, chat: ChatId| {
+            (saving.kept.get(&chat)).is_some_and(|kept| kept.shelf == *shelf)
+                || (saving.away.get(&chat)).is_some_and(|away| away.shelf == *shelf)
+                || (saving.restoring.values()).any(|each| each.chat == chat && each.shelf == *shelf)
+                || (saving.deleted.values()).any(|each| each.chat == chat && each.shelf == *shelf)
+                || (saving.jobs.iter()).any(|(ticket, job)| match job {
+                    // A write is always under way: its shelf is noted.
+                    Job::Append(each) | Job::Snapshot(each) | Job::Away(each) => {
+                        *each == chat && saving.flights.get(ticket) == Some(shelf)
+                    }
+                    Job::Delete {
+                        chat: each,
+                        shelf: on,
+                    } => *each == chat && on == shelf,
                     Job::List(_) => false,
                 })
         };
         let orphans: Vec<(ChatId, Shelf)> = (saving.locks.iter())
-            .filter(|&(_, chat)| !used(*chat))
+            .filter(|&(shelf, chat)| !used(shelf, *chat))
             .map(|(shelf, chat)| (*chat, shelf.clone()))
             .collect();
         for (chat, shelf) in orphans {
@@ -773,9 +788,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         // still has it.
         let deleting: BTreeSet<ChatId> = (self.saving.jobs.values())
             .filter_map(|job| match job {
-                Job::Delete {
-                    chat, shelf: on, ..
-                } if *on == shelf => Some(*chat),
+                Job::Delete { chat, shelf: on } if *on == shelf => Some(*chat),
                 _ => None,
             })
             .collect();
@@ -1278,10 +1291,20 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// The host asked for something new, calling shutting down off: saved
     /// chats aren't let go after all, as they're in use.
-    pub(super) fn call_off_shutdown(&mut self) {
+    /// One let go already is written whole at once, which locks it again.
+    pub(super) fn call_off_shutdown(&mut self, now: Now) {
+        if !self.shutting_down {
+            return;
+        }
         self.shutting_down = false;
-        for kept in self.saving.kept.values_mut() {
+        for (&chat, kept) in &mut self.saving.kept {
             kept.releasing = false;
+            let held = self.saving.locks.contains(&(kept.shelf.clone(), chat));
+            if !held && kept.writing.is_none() {
+                kept.whole = true;
+                kept.behind = true;
+                kept.due = Some(now.mono);
+            }
         }
     }
 
@@ -1322,6 +1345,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if kept.touched {
             kept.touched = false;
             kept.changed = now.wall;
+            // Changed as CAF shuts down: written whole at once, and let go
+            // again.
+            if self.shutting_down {
+                kept.releasing = true;
+                kept.whole = true;
+                kept.behind = true;
+                kept.urgent = true;
+            }
             let soon = if kept.urgent {
                 now.mono
             } else {

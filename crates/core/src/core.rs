@@ -750,8 +750,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// Whether nothing is running: no adapter processes, no requests or
     /// questions waiting, no turn running; and nothing waiting on the
     /// store: no chat being put away, restored, deleted or moved, nor
-    /// saved as CAF shuts down and not yet let go, nor any lock this run
-    /// has no use for left.
+    /// saved as CAF shuts down and not yet let go, nor, while it's shutting
+    /// down, any saved chat with a change not yet written, nor any lock
+    /// this run has no use for left.
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.procs.is_empty()
@@ -759,6 +760,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             && self.asks.is_empty()
             && self.runs.values().all(|run| run.running.is_none())
             && self.saving.settled()
+            && (!self.shutting_down || self.saving.all_written())
     }
 
     /// A chat, by id.

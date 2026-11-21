@@ -68,7 +68,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         self.made_chat(chat);
         self.data.insert(chat, D::default());
-        self.call_off_shutdown();
+        self.call_off_shutdown(now);
         let conn = self.conn_for(chat, &open.agent);
         self.chats.insert(
             chat,

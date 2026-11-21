@@ -63,6 +63,9 @@ struct Store {
     /// What was last done to each chat it has, on its shelf: what its
     /// being let go is checked against.
     last: BTreeMap<(Shelf, ChatId), Last>,
+    /// The chats it has that a restore finds damaged: the only ones let go
+    /// just as they're loaded.
+    damaged: BTreeSet<ChatId>,
     /// Work given and not done yet, oldest first.
     work: VecDeque<StorageDirective>,
     /// How many snapshots, journal entries, failures, loads and releases
@@ -200,8 +203,9 @@ impl Store {
                     // the core has no use for it: loaded but damaged, or
                     // not deleted.
                     let last = self.last.get(&(shelf.clone(), chat)).copied();
+                    let damaged = last == Some(Last::Loaded) && self.damaged.contains(&chat);
                     assert!(
-                        matches!(last, Some(Last::Whole | Last::Loaded | Last::NotDeleted)),
+                        matches!(last, Some(Last::Whole | Last::NotDeleted)) || damaged,
                         "chat {chat} let go after {last:?}"
                     );
                     assert!(
@@ -1301,14 +1305,39 @@ fn shutting_down_writes_every_saved_chat_whole_and_lets_it_go() {
     script.serve(&mut store, false);
     assert!(store.locked.is_empty(), "let go");
     assert!(script.core.is_idle());
-    // It's still loaded: changed again, it's written whole, taking it
-    // again.
+    // It's still loaded: in use again, calling shutting down off, it's
+    // written whole at once, which locks it again.
     script.at(2000);
-    script.send(CHAT, "Again").0.expect("sent");
-    script.at(3000);
-    let out = script.woken();
-    let snapshot = one_storage(&out);
-    assert_eq!(snapshot["type"], "Snapshot");
+    let out = script.send(CHAT, "Again").1;
+    assert_eq!(one_storage(&out)["type"], "Snapshot");
+    store.take(&out);
+    script.serve(&mut store, false);
+    assert_eq!(store.locked.len(), 1, "locked again");
+}
+
+#[test]
+fn a_chat_changed_after_its_let_go_as_caf_shuts_down_is_written_whole_and_let_go_again() {
+    let mut script = Script::new(host());
+    let mut store = Store::default();
+    script.open_saved("claude");
+    let out = script.shutdown();
+    store.take(&out);
+    script.agent(PROC, AgentEvent::Exited(Exit::Code(0)));
+    script.agent(PROC, AgentEvent::OutputClosed);
+    script.agent(PROC, AgentEvent::Group { empty: true });
+    let out = script.serve(&mut store, false);
+    assert_has(&json!(storage(&out)), &json!([{ "type": "Release" }]));
+    assert!(script.core.is_idle());
+    // Changed now: written whole at once, and let go again; idle only
+    // then.
+    let out = script.set_data(CHAT).1;
+    assert_eq!(one_storage(&out)["type"], "Snapshot");
+    assert!(!script.core.is_idle(), "until it's written");
+    store.take(&out);
+    let out = script.serve(&mut store, false);
+    assert_has(&json!(storage(&out)), &json!([{ "type": "Release" }]));
+    assert!(store.locked.is_empty());
+    assert!(script.core.is_idle());
 }
 
 #[test]
@@ -2623,6 +2652,7 @@ fn random_lives(seed: u64) {
         // The third is damaged.
         if chat == ChatId::from_number(9002) {
             theirs.chat.turns[0].id = crate::TurnId(u64::MAX);
+            store.damaged.insert(chat);
         }
         let shelf = Shelf(SHELF.to_owned());
         store.chats.insert((shelf, chat), (theirs, Vec::new()));
@@ -2655,7 +2685,16 @@ fn random_lives(seed: u64) {
                 chats.push(opened.expect("opened"));
                 out
             }
-            9 if dice.roll(3) == 0 => script.shutdown(),
+            9 if dice.roll(3) == 0 => {
+                // Sometimes the store answers at once, so the chats are
+                // let go before anything else changes them.
+                let out = script.shutdown();
+                store.take(&out);
+                if dice.roll(2) == 0 {
+                    script.serve_any(&mut store, &mut dice, 6);
+                }
+                Vec::new()
+            }
             _ => script.woken(),
         };
         for started in with(&out, "start") {
@@ -2672,7 +2711,8 @@ fn random_lives(seed: u64) {
     }
     let settle = |script: &mut Script, store: &mut Store, dice: &mut Dice, ms: &mut u64| loop {
         script.serve_any(store, dice, u64::MAX);
-        if script.core.saving.settled() && store.work.is_empty() {
+        let written = !script.core.shutting_down || script.core.saving.all_written();
+        if script.core.saving.settled() && written && store.work.is_empty() {
             break;
         }
         *ms += 61_000;
@@ -2695,9 +2735,12 @@ fn random_lives(seed: u64) {
             "seed {seed}: chat {chat} is held, loaded, where it's kept"
         );
     }
-    // Shut down, everything is let go.
-    let out = script.shutdown();
-    store.take(&out);
+    // Shut down, everything is let go: by the shutdown already asked for,
+    // if it wasn't called off, which must see to changes since by itself.
+    if !script.core.shutting_down {
+        let out = script.shutdown();
+        store.take(&out);
+    }
     for proc in procs {
         script.agent(proc, AgentEvent::Exited(Exit::Code(0)));
         script.agent(proc, AgentEvent::OutputClosed);
@@ -2774,4 +2817,26 @@ fn a_chat_put_away_isnt_deleted_from_another_shelf() {
     script.open_saved("claude");
     script.put_away(CHAT).0.expect("put away");
     assert_eq!(script.delete(CHAT, "elsewhere").0, Err(Refused::NoSuchChat));
+}
+
+#[test]
+fn a_deletion_answered_with_anything_but_done_or_failed_has_failed() {
+    let mut script = Script::new(host());
+    script.open_saved("claude");
+    script.at(1000);
+    let snapshot = ticket(&one_storage(&script.woken()));
+    script.storage(snapshot, done(10_000));
+    let delete = ticket(&one_storage(&script.delete(CHAT, SHELF).1));
+    let wrong = StorageEvent::NotLoaded(crate::save::CannotRestore::NotFound);
+    let out = script.storage(delete, wrong);
+    assert!(with(&out, "report").iter().any(|each| {
+        each["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("couldn't be deleted"))
+    }));
+    // It's still there, locked by this run, which has no use for it.
+    assert_eq!(
+        storage(&out),
+        [json!({ "type": "Release", "value": { "shelf": SHELF, "chat": CHAT } })]
+    );
 }
