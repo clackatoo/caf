@@ -34,10 +34,13 @@
 //! whole and synced before the next, so only a journal's last record can
 //! be cut off: short of its length, or, on a file system that writes a
 //! file's size before its data, as long as it should be but zeros or
-//! garbage. So a last record that's short, fails its checksum or doesn't
-//! decompress, or a run of zeros at the end, is dropped, as it was never
-//! wholly written, and the next append is written over it. Anything else
-//! that's wrong is [`CannotRestore::Damaged`].
+//! garbage. So the first place a record can't be read, being short,
+//! zeros, or failing its checksum, is the journal's end, cut off, and
+//! dropped, as it was never wholly written, *unless* a whole record that
+//! reads follows it somewhere: then it's damage, such as a length gone
+//! wrong in the middle, and nothing after it is ever dropped. The next
+//! append is written over a cut-off end. Anything else that's wrong is
+//! [`CannotRestore::Damaged`].
 //!
 //! **Saves stay readable forever, and a CAF never changes one it can't
 //! read.**
@@ -323,6 +326,15 @@ pub trait Store: Send + 'static {
     /// Unlocks a chat.
     fn release(&mut self, shelf: &Shelf, chat: ChatId);
 
+    /// Whether this store has a chat locked already: so [`carry_out`]
+    /// lets go of a chat it loaded and couldn't read only if loading it
+    /// took the lock. A store that can't say says no, and a chat it
+    /// can't read is let go of however it was locked.
+    fn holds(&self, shelf: &Shelf, chat: ChatId) -> bool {
+        let _ = (shelf, chat);
+        false
+    }
+
     /// Removes a chat for good, unlocking it if it's locked.
     ///
     /// # Errors
@@ -346,8 +358,8 @@ pub trait Store: Send + 'static {
 /// runtime. Encoding, compressing and decoding happen here, on the
 /// caller's thread, never the core's.
 ///
-/// A chat loaded that can't be read is released at once, and left as it
-/// was. A failure to list a shelf is [`StorageEvent::Failed`]. For a
+/// A chat loaded that can't be read is left as it was, and released at
+/// once if loading it took its lock ([`Store::holds`]). A failure to list a shelf is [`StorageEvent::Failed`]. For a
 /// write, [`StorageEvent::Done`] says how big the snapshot or record was:
 /// the header, rewritten each time, isn't counted.
 pub fn carry_out<A: AppItem, D: AppData>(
@@ -362,11 +374,14 @@ pub fn carry_out<A: AppItem, D: AppData>(
             shelf,
             chat,
         } => {
+            let held = store.holds(&shelf, chat);
             let event = match store.load(&shelf, chat) {
                 Ok(stored) => match decode(&stored.snapshot, &stored.journal) {
                     Ok(saved) => StorageEvent::Loaded(Box::new(saved)),
                     Err(why) => {
-                        store.release(&shelf, chat);
+                        if !held {
+                            store.release(&shelf, chat);
+                        }
                         StorageEvent::NotLoaded(why)
                     }
                 },
@@ -530,6 +545,14 @@ fn answer<A: AppItem, D: AppData>(done: Result<(), StoreError>) -> StorageEvent<
 /// another program has open, or onto a shelf that has one of its chats
 /// already, is [`StoreError::InUse`].
 ///
+/// Its locks are `flock`s, so its root must be on a local file system:
+/// on a network one, such as NFS, they may not hold between machines.
+/// Where another program holds a lock, it tries again for about 200 ms,
+/// long enough for a squeeze's rename, then says [`StoreError::InUse`].
+/// Two programs moving shelves into each other at once take the two
+/// shelves' locks in opposite orders: one gives up after its 200 ms with
+/// [`StoreError::InUse`], so neither waits for good.
+///
 /// It never follows a link inside its root, nor opens anything but a file
 /// as one: a shelf's folder or a chat's file that's a link is an error,
 /// and isn't listed. [`squeeze`](FileStore::squeeze) also removes what
@@ -578,6 +601,12 @@ impl FileStore {
     /// meanwhile waits or finds it whole. Slow: run it on a thread of its
     /// own, now and then. Returns how many bytes it saved.
     ///
+    /// zstd's strongest sizes its tables to what it's given, up to its
+    /// 128 MiB window: a snapshot of a few MB takes some tens of MB while
+    /// it's squeezed, and one of 128 MiB or more as much as about 1 GB.
+    /// Snapshots that big are rare, as the core keeps a chat's record, not
+    /// files', so the window isn't capped.
+    ///
     /// # Errors
     ///
     /// The first failure that stops it: one chat it can't squeeze is
@@ -618,6 +647,10 @@ impl Store for FileStore {
 
     fn release(&mut self, shelf: &Shelf, chat: ChatId) {
         self.held.remove(&(shelf.clone(), chat));
+    }
+
+    fn holds(&self, shelf: &Shelf, chat: ChatId) -> bool {
+        self.held.contains_key(&(shelf.clone(), chat))
     }
 
     fn delete(&mut self, shelf: &Shelf, chat: ChatId) -> Result<(), StoreError> {

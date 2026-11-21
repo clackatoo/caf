@@ -572,8 +572,16 @@ fn bless(folder: &Path) {
     fs::write(folder.join("journal"), records.concat()).expect("written");
     fs::write(folder.join("shapes.ts"), shapes()).expect("written");
     fs::write(folder.join("variants.txt"), variants()).expect("written");
-    let files = folder.join("files");
-    let mut store = FileStore::new(&files);
+    write_files(&folder.join("files"), &values);
+}
+
+/// Keeps a sample's chats in a file store at `files`, as `files/` has
+/// them: the first, written whole and then added to, and the second,
+/// squeezed.
+fn write_files(files: &Path, values: &Sample) {
+    let header = encode_header(&values.header);
+    let snapshot = encode_snapshot(&values.before, Squeeze::Fast);
+    let mut store = FileStore::new(files);
     store
         .snapshot(
             &shelf(),
@@ -582,9 +590,9 @@ fn bless(folder: &Path) {
             &snapshot,
         )
         .expect("written");
-    for record in &records {
+    for record in &values.records {
         store
-            .append(&shelf(), id(), &header, record)
+            .append(&shelf(), id(), &header, &encode_record(record))
             .expect("written");
     }
     let other = &values.squeezed;
@@ -598,7 +606,7 @@ fn bless(folder: &Path) {
         .expect("written");
     store.release(&shelf(), squeezed_id());
     // The first held, so only the second is squeezed.
-    FileStore::new(&files)
+    FileStore::new(files)
         .squeeze(std::time::Duration::ZERO)
         .expect("squeezed");
     store.release(&shelf(), id());
@@ -692,4 +700,37 @@ fn this_version_writes_what_its_sample_holds() {
         insides(&records) == insides(&read("journal")),
         "journal: {SHAPE_CHANGED}"
     );
+}
+
+#[test]
+fn this_version_keeps_files_as_its_sample_has_them() {
+    let fresh = Scratch::new("sample-layout");
+    write_files(&fresh.0, &sample(VERSION));
+    let kept = folder(VERSION).join("files/work");
+    let names = |folder: &Path| {
+        let mut names: Vec<_> = (fs::read_dir(folder).expect("a shelf"))
+            .map(|entry| entry.expect("a file").file_name())
+            .collect();
+        names.sort();
+        names
+    };
+    let fresh = fresh.0.join("work");
+    assert_eq!(names(&fresh), names(&kept), "{SHAPE_CHANGED}");
+    for name in names(&kept) {
+        let name = name.to_str().expect("text").to_owned();
+        let (made, pinned) = (
+            fs::read(fresh.join(&name)).expect("made"),
+            fs::read(kept.join(&name)).expect("pinned"),
+        );
+        // The store's own prefix byte for byte, what's compressed by what
+        // it holds.
+        let same = if name.ends_with(".caf") {
+            made[..9] == pinned[..9] && inside(&made[9..]) == inside(&pinned[9..])
+        } else if name.ends_with(".journal") {
+            made[..8] == pinned[..8] && insides(&made[8..]) == insides(&pinned[8..])
+        } else {
+            inside(&made) == inside(&pinned)
+        };
+        assert!(same, "{name}: {SHAPE_CHANGED}");
+    }
 }

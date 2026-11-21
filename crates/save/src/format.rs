@@ -418,6 +418,9 @@ fn envelop<A: AppItem>(item: &mut Item<A>) -> Result<(), String> {
     let ItemKind::App(app) = &item.kind else {
         return Ok(());
     };
+    // A number in `raw` is written as MessagePack's own, unless something
+    // in the build turns on serde_json's `arbitrary_precision`, which
+    // would write it as a map, changing the format: a test makes sure.
     let raw = serde_json::to_value(app)
         .map_err(|error| format!("an app item can't be written as JSON: {error}"))?;
     // What JSON can't hold comes back as something else, with no error:

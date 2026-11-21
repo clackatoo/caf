@@ -830,22 +830,26 @@ fn a_lock_taken_from_under_a_store_is_not_written_through() {
 }
 
 #[test]
-fn a_squeeze_never_writes_over_another_s_new_file() {
-    let folder = Folder::new("exclusive");
+fn looking_whether_a_chat_is_free_makes_no_lock() {
+    let folder = Folder::new("probe");
     let root = folder.path();
     let mut store = FileStore::new(root);
     save(&mut store, &shelf("work"), 1);
-    store.release(&shelf("work"), ChatId::from_number(1));
+    // Squeezed already, and with no lock: squeezing looks, and leaves it.
     age(root, 1);
-    // Every name a squeeze in this program could take, taken.
-    let chat = ChatId::from_number(1);
-    for count in 0..1000 {
-        let name = format!("work/{chat}.caf.squeeze-{}-{count}.new", std::process::id());
-        fs::write(root.join(name), b"another's").expect("written");
-    }
-    let caf = fs::read(file(root, "work", 1, "caf")).expect("one");
-    assert_eq!(store.squeeze(Duration::ZERO).expect("it squeezes"), 0);
-    assert_eq!(fs::read(file(root, "work", 1, "caf")).expect("one"), caf);
-    let name = format!("work/{chat}.caf.squeeze-{}-0.new", std::process::id());
-    assert_eq!(fs::read(root.join(name)).expect("there"), b"another's");
+    store.squeeze(Duration::ZERO).expect("it squeezes");
+    let lock = file(root, "work", 1, "lock");
+    fs::remove_file(&lock).expect("no lock");
+    age(root, 1);
+    store.squeeze(Duration::ZERO).expect("it squeezes");
+    assert!(!lock.exists());
+    // A shelf with nothing on it but its lock: the lock goes.
+    fs::create_dir(root.join("empty")).expect("a shelf");
+    fs::write(root.join("empty/.shelf.lock"), b"").expect("its lock");
+    store.squeeze(Duration::ZERO).expect("it squeezes");
+    assert!(!root.join("empty/.shelf.lock").exists());
+    assert!(
+        root.join("work/.shelf.lock").exists(),
+        "one with chats keeps it"
+    );
 }

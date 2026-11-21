@@ -135,3 +135,81 @@ fn a_deletion_cut_off_at_any_step_is_seen_and_finished() {
         assert_eq!(left, [SHELF_LOCK], "cut at {cut}");
     }
 }
+
+/// Links all of chat 1's files from `work` to `done`, as a move cut off
+/// once it had, and writes it again whole on `written`, a snapshot of
+/// what's there now, by a store that then holds it, or lets it go.
+fn half_moved_then_written(root: &Path, written: &Shelf, let_go: bool) -> FileStore {
+    let (work, done) = (Shelf("work".into()), Shelf("done".into()));
+    save(root, &work, 1);
+    save(root, &done, 2);
+    for extension in MOVE_LINKS {
+        let (here, there) = (
+            root.join("work").join(name(1, extension)),
+            root.join("done").join(name(1, extension)),
+        );
+        fs::hard_link(&here, &there).expect("linked");
+    }
+    let mut store = FileStore::new(root);
+    let chat = ChatId::from_number(1);
+    store.load(written, chat).expect("it loads");
+    let head = encode_header(&from::<Header>(common::header(1)));
+    let snapshot = crate::encode_snapshot(&saved(1), Squeeze::Fast);
+    store
+        .snapshot(written, chat, &head, &snapshot)
+        .expect("it's written");
+    if let_go {
+        store.release(written, chat);
+    }
+    store
+}
+
+#[test]
+fn a_move_cut_off_and_written_since_is_finished_with_what_was_written() {
+    let (work, done) = (Shelf("work".into()), Shelf("done".into()));
+    let chat = ChatId::from_number(1);
+    for (written, let_go) in [(&done, false), (&done, true), (&work, true)] {
+        let folder = Folder::new("half-moved");
+        let root = folder.path();
+        let mut store = half_moved_then_written(root, written, let_go);
+        store
+            .move_shelf(&work, &done)
+            .unwrap_or_else(|error| panic!("on {written:?}: {error:?}"));
+        assert!(!root.join("work").exists(), "one copy, on {written:?}");
+        store.release(&done, chat);
+        let stored = FileStore::new(root).load(&done, chat).expect("it's moved");
+        // What was written: the chat whole, in a snapshot of the next
+        // generation, with an empty journal.
+        assert!(stored.journal.is_empty(), "on {written:?}");
+        assert_eq!(decode(&stored.snapshot, &stored.journal), Ok(saved(1)));
+        let caf = fs::read(root.join("done").join(name(1, "caf"))).expect("it's there");
+        assert_eq!(caf[..8], 2_u64.to_le_bytes(), "on {written:?}");
+    }
+}
+
+#[test]
+fn a_new_file_made_exclusive_is_never_another_s() {
+    let folder = Folder::new("exclusive");
+    fs::create_dir_all(folder.path()).expect("a folder");
+    let dir = rustix::fs::open(
+        folder.path(),
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY,
+        rustix::fs::Mode::empty(),
+    )
+    .expect("it opens");
+    fs::write(folder.path().join("taken.new"), b"another's").expect("written");
+    let made = super::write_new(&dir, "taken.new", &[b"mine"], None, true);
+    assert_eq!(
+        made.map_err(|error| error.kind()),
+        Err(std::io::ErrorKind::AlreadyExists)
+    );
+    assert_eq!(
+        fs::read(folder.path().join("taken.new")).expect("there"),
+        b"another's"
+    );
+    super::write_new(&dir, "free.new", &[b"mine"], None, true).expect("made");
+    assert_eq!(
+        fs::read(folder.path().join("free.new")).expect("there"),
+        b"mine"
+    );
+}

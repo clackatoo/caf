@@ -504,3 +504,13 @@ fn data_an_older_app_would_lose_some_of_is_not_restored() {
     let read = decode::<Pin, OldNotes>(&snapshot, &journal).expect("it reads");
     assert_eq!(read.data.title, "Again");
 }
+
+#[test]
+fn an_app_item_s_numbers_are_saved_as_numbers() {
+    // serde_json's `arbitrary_precision`, if anything in a build turned it
+    // on, would write a JSON number as a map, changing the format: the
+    // envelope's number must be MessagePack's own.
+    let snapshot = inside(&encode_snapshot(&small(1), Squeeze::Fast));
+    let zoom: &[u8] = &[0xa4, b'z', b'o', b'o', b'm', 0x09];
+    assert!(snapshot.windows(zoom.len()).any(|at| at == zoom));
+}

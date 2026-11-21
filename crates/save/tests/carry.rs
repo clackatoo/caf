@@ -220,3 +220,68 @@ fn deleting_and_moving_say_they_are_done() {
         .collect();
     assert_eq!(left, [ChatId::from_number(2)]);
 }
+
+#[test]
+fn a_chat_a_newer_caf_kept_without_its_header_lists_as_newer() {
+    let folder = Folder::new("headless-newer");
+    let mut store = FileStore::new(folder.path());
+    let work = Shelf("work".into());
+    for id in [1, 2] {
+        written(carry(&mut store, snapshot(&work, small(id))));
+        carry(&mut store, release(&work, id));
+        let path = |extension| {
+            folder
+                .path()
+                .join(format!("work/{}.{extension}", ChatId::from_number(id)))
+        };
+        fs::remove_file(path("head")).expect("a header a crash took");
+        let mut caf = fs::read(path("caf")).expect("it's there");
+        if id == 1 {
+            caf[12..16].copy_from_slice(&(caf_save::VERSION + 4).to_le_bytes());
+        } else {
+            caf[8] = 0x80;
+        }
+        fs::write(path("caf"), caf).expect("newer");
+    }
+    let Some((_, StorageEvent::Listed { chats, unreadable })) = carry(
+        &mut store,
+        StorageDirective::List {
+            ticket: Ticket(1),
+            shelf: work,
+        },
+    ) else {
+        panic!("not listed");
+    };
+    assert!(chats.is_empty());
+    let newer = |version| CannotRestore::Newer { version };
+    assert_eq!(
+        unreadable,
+        [
+            (ChatId::from_number(1), newer(caf_save::VERSION + 4)),
+            (ChatId::from_number(2), newer(caf_save::VERSION + 1)),
+        ]
+    );
+}
+
+#[test]
+fn a_chat_held_before_a_load_it_cannot_read_stays_held() {
+    let folder = Folder::new("held-unreadable");
+    let mut store = FileStore::new(folder.path());
+    let work = Shelf("work".into());
+    written(carry(&mut store, snapshot(&work, small(1))));
+    let caf = folder
+        .path()
+        .join(format!("work/{}.caf", ChatId::from_number(1)));
+    let mut bytes = fs::read(&caf).expect("it's there");
+    let middle = bytes.len() / 2;
+    bytes[middle] ^= 0x40;
+    fs::write(&caf, &bytes).expect("damaged");
+    let loaded = carry(&mut store, load(&work, 1));
+    assert!(matches!(
+        loaded,
+        Some((_, StorageEvent::NotLoaded(CannotRestore::Damaged(_))))
+    ));
+    assert!(store.holds(&work, ChatId::from_number(1)), "still its");
+    let other = FileStore::new(folder.path()).load(&work, ChatId::from_number(1));
+    assert!(matches!(other, Err(caf_save::StoreError::InUse)));
+}
