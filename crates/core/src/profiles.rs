@@ -83,8 +83,11 @@
 //! with other instructions is started again with them.
 //!
 //! What can't be turned off this way: settings an organisation manages on
-//! the machine, the adapter's own hooks (which only report), and the
-//! plugins built into Claude Code. Sign-in is untouched (its credentials
+//! the machine, the adapter's own hooks (which only report), the plugins
+//! built into Claude Code, and the adapter's own two commands, `/mcp` and
+//! `/remote-control`, which it offers whatever Claude Code does and runs
+//! itself when the user's message is one of them: they're the user's, not
+//! tools the agent can call. Sign-in is untouched (its credentials
 //! live in `~/.claude`), but a sign-in that lives in the user's
 //! `settings.json` (an API key helper, a gateway's variables) isn't seen,
 //! so the chat asks the user to sign in. The user's model choice still

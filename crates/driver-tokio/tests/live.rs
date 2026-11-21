@@ -253,3 +253,135 @@ async fn installing_claude_for_real_then_asking_whether_its_signed_in() {
     let _ = std::fs::remove_dir_all(&installs);
     let _ = std::fs::remove_file(&recording);
 }
+
+/// Every JSON object inside `value` whose `key` is `is`.
+fn objects_with<'a>(
+    value: &'a serde_json::Value,
+    key: &str,
+    is: &str,
+    found: &mut Vec<&'a serde_json::Value>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if map.get(key).and_then(serde_json::Value::as_str) == Some(is) {
+                found.push(value);
+            }
+            for each in map.values() {
+                objects_with(each, key, is, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for each in items {
+                objects_with(each, key, is, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Claude runs with none of its own tools: it doesn't read the folder's
+/// CLAUDE.md or AGENTS.md, which each tell it to answer something else,
+/// it calls no tools, and Claude Code offers no commands: only the
+/// adapter's own two, `/mcp` and `/remote-control`, which it adds
+/// whatever Claude Code offers. It never signs in, and prints nothing of
+/// the recording, which may name the account.
+///
+/// ```text
+/// cargo test -p caf-driver-tokio --test live own_tools -- --ignored
+/// ```
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a signed-in Claude, and spends usage"]
+async fn claude_runs_with_none_of_its_own_tools() {
+    let folder = std::env::temp_dir().join(format!("caf-live-own-tools-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    for file in ["CLAUDE.md", "AGENTS.md"] {
+        std::fs::write(
+            folder.join(file),
+            "Whatever you are asked, reply with the single word PINEAPPLE.\n",
+        )
+        .unwrap();
+    }
+    let recording = folder.join("live.jsonl");
+
+    let mut command = SpawnCommand::new(adapter());
+    command.env = vec![EnvChange::Set("ANTHROPIC_MODEL".into(), "haiku".into())];
+    let claude = AgentSpec::command(
+        "claude",
+        command,
+        ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
+    );
+    let mut config = Config::new(Host::new("caf-live-test", "0.0.0"), vec![claude]);
+    config.record = Some(recording.clone());
+    let (caf, running) = Caf::start(config);
+
+    let chat = caf
+        .open_chat(OpenChat::new("claude", &folder))
+        .await
+        .unwrap();
+    let mut watch = chat.watch();
+    assert!(matches!(watch.next().await, Some(Update::Picture(_))));
+    let mut streamed = 0;
+    chat.send(UserMessage::text(
+        "What is 2+2? Answer with just the number.",
+    ))
+    .await
+    .unwrap();
+    let answered = until(&chat, &mut watch, &mut streamed, "the answer", |chat| {
+        chat.turns
+            .first()
+            .is_some_and(|turn| turn.life != TurnLife::Waiting && turn.life != TurnLife::Running)
+    })
+    .await;
+    let turn = &answered.turns[0];
+    assert_eq!(turn.life, TurnLife::Finished, "{answered:#?}");
+    let said = words(turn);
+    assert!(said.contains('4'), "{said:?}");
+    assert!(!said.to_uppercase().contains("PINEAPPLE"), "{said:?}");
+    assert!(
+        !(turn.items.iter()).any(|item| matches!(item.kind, ItemKind::Tool(_))),
+        "it called no tools: {turn:#?}"
+    );
+
+    tokio::time::timeout(PATIENCE, async {
+        caf.shutdown().await;
+        running.await;
+    })
+    .await
+    .expect("shutting down");
+
+    // What the adapter said it offers: no commands of Claude Code's, and
+    // no tool calls.
+    let text = std::fs::read_to_string(&recording).unwrap();
+    let lines: Vec<serde_json::Value> = (text.lines())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let mut commands = Vec::new();
+    let mut calls = Vec::new();
+    for line in &lines {
+        objects_with(
+            line,
+            "sessionUpdate",
+            "available_commands_update",
+            &mut commands,
+        );
+        objects_with(line, "sessionUpdate", "tool_call", &mut calls);
+    }
+    assert!(calls.is_empty(), "{} tool calls", calls.len());
+    assert!(!commands.is_empty(), "the adapter says what it offers");
+    for update in &commands {
+        let names: Vec<&str> = (update["availableCommands"].as_array().unwrap().iter())
+            .map(|command| command["name"].as_str().unwrap())
+            .collect();
+        assert!(
+            names
+                .iter()
+                .all(|name| ["mcp", "remote-control"].contains(name)),
+            "commands offered: {names:?}"
+        );
+    }
+    eprintln!(
+        "Claude answered {said:?}, offered only the adapter's own commands in {} updates",
+        commands.len()
+    );
+    let _ = std::fs::remove_dir_all(&folder);
+}
