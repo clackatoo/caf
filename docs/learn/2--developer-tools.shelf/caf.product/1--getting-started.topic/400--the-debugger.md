@@ -4,6 +4,7 @@ type: how
 description: Run caf-debugger to chat with an agent beside an inspector of every step CAF takes, install agents and sign in to them, record each run, replay a recording, and move back and forth through it, with what its token is for, what a recording holds, and what "replay diverged" means.
 related:
   - caf/getting-started/a-chat-in-the-browser
+  - caf/getting-started/installing-and-signing-in
   - caf/concepts/the-core
   - caf/concepts/viewers
 ---
@@ -72,7 +73,8 @@ With no `--agents`, the debugger offers:
   at once with a few words. Send it exactly `ask`, and it asks permission
   to run a command: answer it, or try Stop while it waits. Send it exactly
   `fail`, and the turn fails, the first time in each chat, so sending it
-  again shows Send again working.
+  again shows Send again working. Send it exactly `sign in`, and the turn
+  fails for want of signing in, the first time in each chat.
 
 The fake agent is built by Cargo as the debugger starts, so start the
 debugger with `cargo run`. Started any other way, it offers the fake agent
@@ -105,15 +107,28 @@ profile = "cautious"
 cargo run -p caf-debugger -- --agents agents.toml
 ```
 
-`profile` is `claude-agent-acp`, CAF's profile for Claude's adapter, or
-`cautious`, plain ACP with nothing risky switched on, for any other
-adapter. Each agent is either:
+`profile` is one of:
+
+- `claude-agent-acp`, CAF's profile for Claude's adapter;
+- `cautious`, plain ACP with nothing risky switched on, for any other
+  adapter;
+- `fake`, a profile for CAF's fake agent, for trying installs and
+  sign-ins with no real agent. Installed, its install always fails at
+  once, as if offline, so nothing is ever installed. Started from
+  `caf-fake-agent` (with its script as its argument), it signs in, out and
+  says whether it's signed in with `caf-fake-agent auth`, which does what
+  the file `CAF_FAKE_AGENT_AUTH` names says. Its sign-in link must be to
+  `caf.example`.
+
+Each agent is either:
 
 - **`installed = true`**: CAF installs it, and starts it from its install.
   Only an agent with one of CAF's own profiles can be, since the profile
   says how, so not `cautious`. It has no `program` or `args`.
 - **started by its `program`**: an absolute path, or a bare name looked up
-  on `PATH` as the debugger starts, with any `args`.
+  on `PATH` as the debugger starts, with any `args`. CAF signs in to one
+  only once it has answered as the adapter its profile is for, so open a
+  chat with it first.
 
 In the chat view, "New chat" opens a chat with any of these agents in any
 folder, given as an absolute path. The debugger gives chats no MCP servers,
