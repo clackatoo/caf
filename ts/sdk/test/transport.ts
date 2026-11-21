@@ -1,7 +1,8 @@
 // An in-memory transport: the test plays CAF's side.
 
-import type { FromViewer, ToViewer, Transport } from "../src/index.ts";
+import type { FromViewer, SavedChat, ToViewer, Transport } from "../src/index.ts";
 import { Connection } from "../src/index.ts";
+import { CHAT, chatId } from "./chats.ts";
 
 export class FakeTransport implements Transport {
   /** What the viewer sent, parsed. */
@@ -61,7 +62,7 @@ export const welcome = {
   value: {
     version: 1,
     agents: ["claude", "fake"],
-    chats: [{ id: 1000, agent: "claude", cwd: "/home/me/project" }],
+    chats: [{ id: CHAT, agent: "claude", cwd: "/home/me/project", label: null, shelf: null }],
     run: "run-1",
     may: { act: true, agents: true },
   },
@@ -80,6 +81,26 @@ export const agents = {
     { name: "fake", install: { type: "Host" }, sign_in: { type: "Unknown" }, can_sign_in: true },
   ],
 } satisfies ToViewer;
+
+/** Chat `number` as a saved chat on the shelf `work`, as `Saved` lists it. */
+export function saved(number: number, state: SavedChat["state"] = { type: "Saved" }): SavedChat {
+  return {
+    shelf: "work",
+    header: {
+      chat: chatId(number),
+      agent: "claude",
+      profile: "claude-agent-acp",
+      cwd: "/home/me/project",
+      made: 1_800_000_000_000,
+      changed: 1_800_000_060_000,
+      label: null,
+      first: "Fix the tests",
+      turns: 3,
+      closed: false,
+    },
+    state,
+  };
+}
 
 /** A Welcome from a run of CAF. */
 export function welcomeFrom(run: string): ToViewer {

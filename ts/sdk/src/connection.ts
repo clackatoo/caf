@@ -95,8 +95,9 @@ export function webSocket(url: string): Promise<Transport> {
  * such as `Refused: QueueFull`.
  *
  * A later CAF may send a reason this SDK doesn't know, here in `Refused`
- * and in a chat's `Lost` and `FailureReason`. Give every `switch` on a
- * reason a `default`, and show one it doesn't know by its `type`.
+ * and `CannotRestore`, in a saved chat's `Failed`, and in a chat's `Lost`
+ * and `FailureReason`. Give every `switch` on a reason a `default`, and
+ * show one it doesn't know by its `type`.
  */
 export class CafError extends Error {
   override readonly name = "CafError";
@@ -183,8 +184,9 @@ export type WatchEvent =
  * other listeners are still called.
  *
  * A later CAF may also send reasons this SDK doesn't know, inside messages
- * it does: a `Refused`, or a chat's `Lost` or `FailureReason`. Give every
- * `switch` on a reason a `default`. See `CafError`.
+ * it does: a `Refused` or `CannotRestore`, or a chat's `Lost` or
+ * `FailureReason`. Give every `switch` on a reason a `default`. See
+ * `CafError`.
  */
 export class Connection {
   readonly #transport: Transport;
@@ -343,7 +345,8 @@ export class Connection {
   /**
    * The saved chats on the shelves the host has listed, loaded or not, in
    * the order they were made: empty until CAF says, which it does right
-   * after the agents if the host has listed any. Read-only.
+   * after the agents if the host has listed any, so possibly only after
+   * `open` has resolved: follow it with `onSaved`. Read-only.
    */
   get saved(): readonly DeepReadonly<SavedChat>[] {
     return this.#saved;
@@ -364,7 +367,8 @@ export class Connection {
    * and close), and on `agents` (install, and sign in and out). Offer only
    * what it may: anything else is answered `NotAllowed`. A viewer that may
    * not act on agents gets no sign-in's link or code. Whether it may open
-   * chats isn't said, as the host decides each request.
+   * chats, or restore saved ones, isn't said, as the host decides each
+   * request.
    */
   get may(): Readonly<Rights> {
     return this.#may;
@@ -544,9 +548,10 @@ export class Connection {
     return new Promise((resolve, reject) => {
       if (this.#closed) return reject(new CafError({ type: "Disconnected" }));
       const request = this.#nextRequest++;
-      const pending: Pending = { expect, resolve: resolve as (value: unknown) => void, reject };
+      const sent = message(request);
+      const pending: Pending = { asked: sent.type, expect, resolve: resolve as (value: unknown) => void, reject };
       this.#pending.set(request, pending);
-      this.#send(message(request));
+      this.#send(sent);
     });
   }
 
@@ -648,7 +653,7 @@ export class Connection {
       case "Gone":
         return pending.reject(new CafError({ type: "Gone" }));
       case "CannotRestore":
-        if (!isTagged(value)) return broken();
+        if (pending.asked !== "Restore" || !isTagged(value)) return broken();
         return pending.reject(new CafError({ type: "CannotRestore", value: value as CannotRestore }));
       case pending.expect:
         if (pending.expect === "Done") return pending.resolve(undefined);
@@ -697,6 +702,7 @@ export class Connection {
     for (const listener of closes) call(listener, undefined);
     this.#chatListeners.clear();
     this.#agentListeners.clear();
+    this.#savedListeners.clear();
     try {
       this.#transport.close();
     } catch {
@@ -715,6 +721,8 @@ type AnswerOf<E extends Answered> = E extends "Done"
 
 /** A request waiting for its `Done`. */
 interface Pending {
+  /** What was asked: an Open and a Restore both expect `Opened`, and only a Restore may be answered `CannotRestore`. */
+  asked: FromViewer["type"];
   expect: Answered;
   resolve(value: unknown): void;
   reject(error: CafError): void;

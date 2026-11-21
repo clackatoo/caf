@@ -5,7 +5,7 @@
 // Each may return a promise: if it rejects, the view shows why (a
 // `CafError` in CAF's words), and the user can try again.
 
-import type { AgentName, Answer, ChatId, DeepReadonly, QuestionId, UserMessage } from '@clackatoo/caf'
+import type { AgentName, Answer, ChatId, DeepReadonly, QuestionId, Shelf, UserMessage } from '@clackatoo/caf'
 
 /** What the user can do in one chat. */
 export interface ChatActions {
@@ -41,6 +41,14 @@ export interface ListActions {
   select(chat: ChatId): void
   /** Open a new chat with an agent, in a folder (a full path). */
   open(agent: AgentName, cwd: string): Promise<unknown> | void
+}
+
+/** What the user can do with the list of saved chats. */
+export interface SavedActions {
+  /** Show this chat, once it's open. */
+  select(chat: ChatId): void
+  /** Restore a saved chat from its shelf, and show it. */
+  restore(chat: ChatId, shelf: Shelf): Promise<unknown> | void
 }
 
 /**

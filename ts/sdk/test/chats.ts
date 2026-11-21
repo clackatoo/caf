@@ -1,6 +1,17 @@
 // Small chats to test with. Ids start at 1000, as in caf-core's tests.
 
-import type { Change, Chat, Item, Numbered, Question, ToolCall, Turn } from "../src/index.ts";
+import type { Change, Chat, ChatId, Item, Numbered, Question, ToolCall, Turn } from "../src/index.ts";
+
+/**
+ * Chat `number`'s id, as caf-core's tests number chats (`ChatId::from_number`):
+ * the UUID whose value is the number.
+ */
+export function chatId(number: number): ChatId {
+  return `00000000-0000-0000-0000-${number.toString(16).padStart(12, "0")}`;
+}
+
+/** The chat the tests watch. */
+export const CHAT = chatId(1000);
 
 export function words(id: number, text: string): Item {
   return { id, window: { start: 1, end: { type: "Open" } }, parent: null, kind: { type: "Words", value: text } };
@@ -49,7 +60,7 @@ export function question(id: number): Question {
 
 export function chat(turns: Turn[] = [], questions: Question[] = []): Chat {
   return {
-    id: 1000,
+    id: CHAT,
     agent: "claude",
     cwd: "/home/me/project",
     state: { type: "Open", value: { session: "s-1" } },

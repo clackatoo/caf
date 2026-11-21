@@ -82,7 +82,9 @@ describe('agent traffic', () => {
 describe('summaries', () => {
   it('summarises events', () => {
     expect(eventSummary({ type: 'Woken' })).toBe('Woken by its timer')
-    expect(eventSummary({ type: 'Host', value: { type: 'Stop', value: { chat: 2 } } })).toBe('Host: stop chat 2')
+    expect(eventSummary({ type: 'Host', value: { type: 'Stop', value: { chat: '00000000-0000-0000-0000-000000000002' } } })).toBe(
+      'Host: stop chat 00000000-0000-0000-0000-000000000002',
+    )
     expect(
       eventSummary({
         type: 'Agent',

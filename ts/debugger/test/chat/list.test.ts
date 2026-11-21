@@ -7,14 +7,16 @@ import ChatList from '../../src/chat/ChatList.svelte'
 
 afterEach(cleanup)
 
+const one = '00000000-0000-0000-0000-000000000001'
+const two = '00000000-0000-0000-0000-000000000002'
 const chats = [
-  { id: 1, agent: 'claude', cwd: '/home/me/app' },
-  { id: 2, agent: 'fake', cwd: '/home/me/lib' },
+  { id: one, agent: 'claude', cwd: '/home/me/app', label: null, shelf: null },
+  { id: two, agent: 'fake', cwd: '/home/me/lib', label: null, shelf: null },
 ]
 
 function draw(options: { readOnly?: boolean; open?: () => Promise<unknown> } = {}) {
   const actions = { select: vi.fn(), open: vi.fn(options.open ?? (async () => {})) }
-  const view = render(ChatList, { chats, agents: ['claude', 'fake'], selected: 2, actions, readOnly: options.readOnly ?? false })
+  const view = render(ChatList, { chats, agents: ['claude', 'fake'], selected: two, actions, readOnly: options.readOnly ?? false })
   return { ...view, actions }
 }
 
@@ -25,7 +27,17 @@ describe('the chat list', () => {
     expect(items.map((item) => item.querySelector('.name')?.textContent)).toEqual(['app', 'lib'])
     expect(items[1]!.getAttribute('aria-current')).toBe('true')
     await fireEvent.click(items[0]!)
-    expect(actions.select).toHaveBeenCalledWith(1)
+    expect(actions.select).toHaveBeenCalledWith(one)
+  })
+
+  it("names a chat by the app's line for it, with its folder, or else by its folder, with its id's end", () => {
+    const labelled = [{ ...chats[0]!, label: 'Fix the tests', shelf: 'work' }, chats[1]!]
+    const { container } = render(ChatList, { chats: labelled, agents: [], selected: null, actions: { select: vi.fn(), open: vi.fn() } })
+    const [first, second] = [...container.querySelectorAll('li button')]
+    expect(first!.querySelector('.name')?.textContent).toBe('Fix the tests')
+    expect(first!.querySelector('.meta')?.textContent).toBe('claude · app')
+    expect(second!.querySelector('.name')?.textContent).toBe('lib')
+    expect(second!.querySelector('.meta')?.textContent).toBe('fake · #000002')
   })
 
   it('opens a new chat with an agent and a full path', async () => {
