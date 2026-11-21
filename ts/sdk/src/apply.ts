@@ -46,6 +46,10 @@ export function apply(chat: RChat, change: Change): { chat: RChat } | { mismatch
       const { turn, life, end } = change.value;
       return withTurn(chat, turn, (each) => ({ ...each, life, window: { ...each.window, end } }));
     }
+    case "TurnModel": {
+      const { turn, model } = change.value;
+      return withTurn(chat, turn, (each) => ({ ...each, model }));
+    }
     case "ItemAdded": {
       const { turn, item } = change.value;
       return withTurn(chat, turn, (each) => ({ ...each, items: [...each.items, item] }));

@@ -95,6 +95,21 @@ describe("apply", () => {
     expect(mismatch(busy(), change)).toStrictEqual({ type: "NoTurn", value: 9 });
   });
 
+  test("TurnModel sets a turn's model, sharing its items and every other turn", () => {
+    const before = busy();
+    const model = { id: "sonnet", name: "Sonnet 4.6" };
+    const after = applied(before, { type: "TurnModel", value: { turn: 1003, model } });
+    expect(after.turns[1]!.model).toStrictEqual(model);
+    expect(after.turns[1]!.items).toBe(before.turns[1]!.items);
+    expect(after.turns[0]).toBe(before.turns[0]);
+    expect(after.questions).toBe(before.questions);
+  });
+
+  test("TurnModel of a turn the chat doesn't have", () => {
+    const model = { id: "haiku", name: null };
+    expect(mismatch(busy(), { type: "TurnModel", value: { turn: 9, model } })).toStrictEqual({ type: "NoTurn", value: 9 });
+  });
+
   test("ItemAdded adds an item to the end of a turn", () => {
     const before = busy();
     const after = applied(before, { type: "ItemAdded", value: { turn: 1001, item: words(1100, "more") } });

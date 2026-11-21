@@ -38,6 +38,8 @@
         return `turn ${change.value.turn.id} before ${change.value.before}`
       case 'TurnLife':
         return `turn ${change.value.turn}: ${change.value.life.type}`
+      case 'TurnModel':
+        return `turn ${change.value.turn}: ${change.value.model.name ?? change.value.model.id}`
       case 'ItemAdded':
         return `item ${change.value.item.id} (${change.value.item.kind.type}) in turn ${change.value.turn}`
       case 'Appended':
