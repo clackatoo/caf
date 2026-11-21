@@ -20,4 +20,10 @@ shelf: Shelf,
  * hold tokens and things that last one run, such as sockets: the
  * host gives them again.
  */
-mcp_servers: Array<McpServer>, };
+mcp_servers: Array<McpServer>, 
+/**
+ * What the app tells the agent, as
+ * [`OpenChat::instructions`](crate::OpenChat::instructions): given
+ * again, as it isn't saved.
+ */
+instructions: string | null, };

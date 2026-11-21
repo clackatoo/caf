@@ -27,6 +27,8 @@ zip.workspace = true
 tokio = { workspace = true, features = ["net"] }
 
 [dev-dependencies]
+# fake: Builtin::Fake, the profile the fake agent runs with.
+caf-core = { workspace = true, features = ["fake"] }
 caf-fake-agent = { path = "../fake-agent" }
 serde_json.workspace = true
 # rt-multi-thread: races between a process's task and the driver.

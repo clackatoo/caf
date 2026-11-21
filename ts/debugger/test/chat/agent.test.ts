@@ -366,6 +366,7 @@ describe("CAF's notes and refusals", () => {
     ['AlreadyInstalled', 'The agent is already installed.'],
     ['CannotSignIn', "CAF can't sign in to or out of this agent now."],
     ['NotSigningIn', "The agent isn't being signed in to."],
+    ['OwnTools', "CAF can't turn off this agent's own tools, so it won't run it."],
   ])('says %s', (reason, says) => {
     expect(refusedText({ type: reason } as never)).toContain(says)
     expect(errorText(new CafError({ type: 'Refused', value: { type: reason } as never }))).toContain(says)

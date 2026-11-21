@@ -15,7 +15,7 @@ use caf_core::chat::{ChatState, FailureReason, ItemKind, Lost, Turn, TurnLife, U
 use caf_core::directive::PermissionRequest;
 use caf_core::event::{Event, PolicyAnswer};
 use caf_core::host::Host;
-use caf_core::profiles::ProfileChoice;
+use caf_core::profiles::{Builtin, ProfileChoice};
 use caf_core::question::{Answer, OptionId, QuestionKind, SlowChoice};
 use caf_core::{Chat, ChatId, Core, Now, OpenChat};
 use caf_driver_tokio::{Caf, ChatHandle, Config, Error, Policy, Update, Watch};
@@ -76,19 +76,22 @@ fn fake(dir: &Dir, script: &Path) -> AgentSpec {
             dir.path("record.jsonl").into(),
         ),
     ];
-    AgentSpec::command("fake", command, ProfileChoice::Cautious)
+    AgentSpec::command("fake", command, ProfileChoice::Builtin(Builtin::Fake))
 }
 
 /// The fake started by a shell that runs it as it is told: for tests
-/// that need its pid, or a different script the second time.
+/// that need its pid, or a different script the second time. Its
+/// profile's status command, which CAF runs as this command with `auth
+/// status` after it, runs the fake's own.
 fn fake_by_shell(dir: &Dir, shell: &str) -> AgentSpec {
     let mut command = SpawnCommand::new("/bin/sh");
+    let shell = format!(r#"if [ "$0" = auth ]; then exec "$FAKE" auth "$@"; fi; {shell}"#);
     command.args = vec!["-c".into(), shell.into()];
     command.env = vec![
         EnvChange::Set("FAKE".into(), caf_fake_agent::binary().into()),
         EnvChange::Set("DIR".into(), dir.0.clone().into()),
     ];
-    AgentSpec::command("fake", command, ProfileChoice::Cautious)
+    AgentSpec::command("fake", command, ProfileChoice::Builtin(Builtin::Fake))
 }
 
 /// A host for tests: an adapter that has gone is waited for briefly.
@@ -109,7 +112,7 @@ fn handshake(session: &str) -> Vec<Value> {
     vec![
         fallback(),
         json!({"wait": {"method": "initialize"}}),
-        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true}, "agentInfo": {"name": "fake", "version": "1.0.0"}}}}),
+        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true}, "agentInfo": {"name": "caf-fake-agent", "version": "1.0.0"}}}}),
         json!({"wait": {"method": "session/new"}}),
         json!({"respond": {"result": {"sessionId": session}}}),
     ]
@@ -437,7 +440,7 @@ async fn an_adapter_dying_mid_turn_is_started_again_by_the_next_message() {
     let mut second = vec![
         fallback(),
         json!({"wait": {"method": "initialize"}}),
-        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true}, "agentInfo": {"name": "fake", "version": "1.0.0"}}}}),
+        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true}, "agentInfo": {"name": "caf-fake-agent", "version": "1.0.0"}}}}),
         json!({"wait": {"method": "session/load", "match": {"params": {"sessionId": "s1"}}}}),
         json!({"respond": {"result": {}}}),
     ];
@@ -488,7 +491,7 @@ async fn a_slow_adapter_is_asked_about_and_waited_for() {
         fallback(),
         json!({"wait": {"method": "initialize"}}),
         json!({"sleep": 1500}),
-        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {}, "agentInfo": {"name": "fake", "version": "1.0.0"}}}}),
+        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {}, "agentInfo": {"name": "caf-fake-agent", "version": "1.0.0"}}}}),
         json!({"wait": {"method": "session/new"}}),
         json!({"respond": {"result": {"sessionId": "s1"}}}),
         prompt(),
@@ -560,7 +563,7 @@ async fn two_chats_share_one_adapter() {
     let mut steps = vec![
         fallback(),
         json!({"wait": {"method": "initialize"}}),
-        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {}, "agentInfo": {"name": "fake", "version": "1.0.0"}}}}),
+        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {}, "agentInfo": {"name": "caf-fake-agent", "version": "1.0.0"}}}}),
     ];
     steps.extend(new_in(&one, "s1"));
     steps.extend(new_in(&two, "s2"));

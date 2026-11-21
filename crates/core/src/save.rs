@@ -38,7 +38,10 @@
 //!
 //! **A chat whose agent the host no longer offers still comes back**, with
 //! its record, and sending to it is refused
-//! ([`Refused::NoSuchAgent`](crate::Refused::NoSuchAgent)). If the host
+//! ([`Refused::NoSuchAgent`](crate::Refused::NoSuchAgent)). So does one
+//! whose agent now has the cautious profile, whose own tools CAF can't
+//! turn off: sending to it is refused
+//! ([`Refused::OwnTools`](crate::Refused::OwnTools)). If the host
 //! offers no agent by its name but exactly one with its built-in profile
 //! ([`Header::profile`]), as when the host renamed it, the chat comes back
 //! with that one, under its new name.
@@ -141,6 +144,10 @@ pub struct RestoreChat {
     /// hold tokens and things that last one run, such as sockets: the
     /// host gives them again.
     pub mcp_servers: Vec<McpServer>,
+    /// What the app tells the agent, as
+    /// [`OpenChat::instructions`](crate::OpenChat::instructions): given
+    /// again, as it isn't saved.
+    pub instructions: Option<String>,
 }
 
 impl RestoreChat {
@@ -151,6 +158,7 @@ impl RestoreChat {
             chat,
             shelf,
             mcp_servers: Vec::new(),
+            instructions: None,
         }
     }
 }

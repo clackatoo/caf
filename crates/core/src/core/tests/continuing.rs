@@ -52,7 +52,7 @@ fn an_agent_that_cant_continue_sessions_gets_a_new_one_and_the_chat_says_so() {
     let mut script = Script::new(host());
     script.open(continuing("plain", "old")).0.expect("opened");
     let out = script.answers(PROC, 1000, &plain_init(false));
-    // The cautious profile declares nothing risky.
+    // A new session, as the adapter can't load one.
     sent(&out, "session/new");
     script.answers(PROC, 1001, &json!({ "sessionId": "fresh" }));
     assert_has(

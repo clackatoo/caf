@@ -24,7 +24,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use super::record::Log;
-use super::sessions::mcp_server;
+use super::sessions::{check_instructions, mcp_server};
 use super::state::{Open, Run};
 use super::{Core, Refused, report};
 use crate::change::Change;
@@ -927,6 +927,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
             .ok_or(Refused::Unsendable)?;
+        check_instructions(restore.instructions.as_deref())?;
         if self.is_loaded(restore.chat) {
             return Err(Refused::Loaded);
         }
@@ -1052,6 +1053,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 cwd,
                 mcp: restore.mcp_servers,
                 mcp_sent,
+                instructions: restore.instructions,
                 session,
                 open: Open::Idle,
                 running: None,
@@ -1543,6 +1545,8 @@ fn saved_session<A: AppItem>(run: &Run<A>) -> Option<AgentSessionId> {
         // tokens and sockets that last one run.
         mcp: _,
         mcp_sent: _,
+        // So is what the app tells the agent: the host gives it again.
+        instructions: _,
         session,
         open: _,
         running: _,

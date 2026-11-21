@@ -7,4 +7,4 @@ export type Incompatible = { "type": "Protocol", "value": {
 /**
  * The version it answered with.
  */
-version: number | null, } } | { "type": "HttpMcp" } | { "type": "BadAnswer" };
+version: number | null, } } | { "type": "HttpMcp" } | { "type": "BadAnswer" } | { "type": "OwnTools" };

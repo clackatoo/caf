@@ -87,14 +87,14 @@ fn every_agent_stands_somewhere_in_the_order_offered_and_a_survey_says_where() {
     assert_eq!(
         script.agents(),
         json!([
-            { "name": "claude", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
-            { "name": "plain", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
-            { "name": "npm-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
-            { "name": "dl-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
-            { "name": "npm-twin", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
-            { "name": "npm-host", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
-            { "name": "dl-host", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
-            { "name": "claude-npx", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
+            { "name": "claude", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true },
+            { "name": "plain", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true },
+            { "name": "npm-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true },
+            { "name": "dl-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true },
+            { "name": "npm-twin", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true },
+            { "name": "npm-host", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true },
+            { "name": "dl-host", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true },
+            { "name": "claude-npx", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true },
         ])
     );
     let out = script.surveyed(&["test-download-1.4.0", "someone-else-1.0.0"]);
@@ -673,7 +673,7 @@ fn a_sign_in_that_fails_or_is_stopped_leaves_things_as_they_were() {
 fn caf_signs_in_only_with_a_recipe_it_can_run_now() {
     let mut script = Script::new(host());
     assert_eq!(script.sign_in("nobody").0, Err(Refused::NoSuchAgent));
-    // The cautious profile has no recipe.
+    // The plain agent's profile has no sign-in.
     assert_eq!(script.sign_in("plain").0, Err(Refused::CannotSignIn));
     assert_eq!(script.sign_out("plain").0, Err(Refused::CannotSignIn));
     // A file of an install that isn't there yet.
@@ -703,22 +703,12 @@ fn a_host_command_that_isnt_its_profiles_adapter_is_never_run_to_sign_in() {
     let mut other = claude_init();
     other["agentInfo"]["name"] = json!("someone-elses-acp");
     let out = script.answers(PROC, init, &other);
-    let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
-    script.fails(
-        PROC,
-        new,
-        &json!({ "code": -32000, "message": "Authentication required" }),
-    );
+    assert_eq!(with(&out, "sign_in"), Vec::<Value>::new());
     assert_eq!(script.sign_in("claude").0, Err(Refused::CannotSignIn));
-    // So it isn't offered: the turn-less chat is just lost, and the agent
-    // signed out.
+    // Nor is it asked for a session, as CAF can't turn its tools off.
     assert_has(
         &script.chat(CHAT),
-        &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "SignInNeeded" } } } }),
-    );
-    assert_eq!(
-        script.agent_status("claude")["sign_in"],
-        json!({ "type": "SignedOut" })
+        &json!({ "state": { "type": "Lost", "value": { "reason": { "type": "Incompatible", "value": { "type": "OwnTools" } } } } }),
     );
 }
 

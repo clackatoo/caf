@@ -774,10 +774,14 @@ fn add(
     }
     match format::version(&caf[CAF_PREFIX..]) {
         Ok(VERSION) => {}
+        // Not damage: the chat is written whole in this version first.
         Ok(version) => {
-            return Err(damaged(&format!(
-                "its snapshot is of version {version}: a snapshot of version {VERSION} is \
-                 written before anything's added to its journal"
+            return Err(StoreError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "its snapshot is of version {version}, not this CAF's {VERSION}: it's \
+                     written whole in version {VERSION} before anything's added to its journal"
+                ),
             )));
         }
         Err(CannotRestore::Newer { version }) => return Err(StoreError::Newer { version }),

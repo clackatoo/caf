@@ -14,7 +14,8 @@
               "type": "New"
             },
             "mcp_servers": [],
-            "shelf": null
+            "shelf": null,
+            "instructions": null
           }
         }
       }

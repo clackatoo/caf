@@ -231,12 +231,13 @@ fn a_failed_initialize_fails_the_connection_with_a_typed_reason() {
 fn capabilities_are_read_leniently() {
     let mut script = Script::new(host());
     script
-        .open(OpenChat::new("claude", "/work"))
+        .open(OpenChat::new("plain", "/work"))
         .0
         .expect("opened");
     let init = json!({
         "protocolVersion": 1,
         "agentCapabilities": { "loadSession": "yes", "sessionCapabilities": { "resume": true, "close": null }, "mcpCapabilities": 7 },
+        "agentInfo": { "name": "plain-acp", "version": "1.0.0" },
     });
     let out = script.answers(PROC, 1000, &init);
     sent(&out, "session/new");
@@ -244,7 +245,17 @@ fn capabilities_are_read_leniently() {
         script.state()["procs"]["1002"]["init"],
         json!({ "type": "Ready", "value": { "load": false, "resume": false, "close": false, "mcp_http": false } })
     );
-    // No agentInfo: the cautious profile.
+}
+
+#[test]
+fn an_adapter_that_doesnt_say_what_it_is_gets_the_cautious_profile() {
+    let mut script = Script::new(host());
+    script
+        .open(OpenChat::new("claude", "/work"))
+        .0
+        .expect("opened");
+    let init = json!({ "protocolVersion": 1, "agentCapabilities": {} });
+    script.answers(PROC, 1000, &init);
     assert_has(
         &script.state(),
         &json!({ "conns": { "1001": { "profile": { "profile": { "type": "Cautious" }, "adapter": null, "checked": { "type": "Mismatch" } } } } }),
@@ -420,6 +431,24 @@ fn retrying_an_adapter_that_hasnt_answered_restarts_it() {
     script.agent(PROC, AgentEvent::OutputClosed);
     let out = script.agent(PROC, AgentEvent::Group { empty: true });
     assert_has(&json!(with(&out, "start")), &json!([{ "start": 1004 }]));
+}
+
+#[test]
+fn an_adapter_let_go_that_answers_late_changes_nothing() {
+    let mut script = Script::new(host());
+    script
+        .open(OpenChat::new("claude", "/work"))
+        .0
+        .expect("opened");
+    // Its only chat closes before it answers: it's let go.
+    script.close(CHAT).0.expect("closed");
+    // It answers after all, as another adapter, as it's being stopped.
+    let mut other = claude_init();
+    other["agentInfo"]["name"] = json!("someone-elses-acp");
+    let out = script.answers(PROC, 1000, &other);
+    assert!(writes(&out).is_empty(), "nothing asked of it: {out:#?}");
+    assert!(with(&out, "status").is_empty(), "nothing run: {out:#?}");
+    assert_eq!(script.agent_status("claude")["own_tools_off"], true);
 }
 
 #[test]

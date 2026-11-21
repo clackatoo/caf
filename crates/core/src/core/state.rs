@@ -306,6 +306,9 @@ pub(super) struct Run<A: AppItem> {
     pub(super) mcp: Vec<McpServer>,
     /// The tools given to it, as they're sent.
     pub(super) mcp_sent: Vec<serde_json::Value>,
+    /// What the app tells the agent, after CAF's own instructions, each
+    /// time its session is opened.
+    pub(super) instructions: Option<String>,
     /// Its session as the agent knows it: open, or to be continued.
     pub(super) session: Option<AgentSessionId>,
     /// Where it is with its session.
@@ -413,6 +416,10 @@ pub(super) struct Standing {
     /// that it's the adapter its profile is for: commands of its recipe
     /// that run the adapter may run it.
     pub(super) checked: bool,
+    /// Whether CAF can turn off the own tools of the adapter that last
+    /// answered `initialize` for it in this run, as its profile, checked,
+    /// says: `None` until one has.
+    pub(super) strips: Option<bool>,
 }
 
 /// What a survey found: where installs live, what's there, and what the

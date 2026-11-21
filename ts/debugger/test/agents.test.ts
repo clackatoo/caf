@@ -83,10 +83,10 @@ describe('the Agents panel', () => {
 
   it('installs, stops, signs in and out, each agent by name', async () => {
     const { actions: given } = draw([
-      { name: 'a', install: { type: 'Missing', value: { size: 1e9 } }, sign_in: { type: 'Unknown' }, can_sign_in: false },
-      { name: 'b', install: { type: 'Installing', value: { done: 1, size: 2 } }, sign_in: { type: 'Unknown' }, can_sign_in: false },
-      { name: 'c', install: { type: 'Installed', value: { version: '1' } }, sign_in: { type: 'SignedOut' }, can_sign_in: true },
-      { name: 'd', install: { type: 'Host' }, sign_in: { type: 'SignedIn', value: { type: 'ApiKey' } }, can_sign_in: true },
+      { name: 'a', install: { type: 'Missing', value: { size: 1e9 } }, sign_in: { type: 'Unknown' }, can_sign_in: false, own_tools_off: true },
+      { name: 'b', install: { type: 'Installing', value: { done: 1, size: 2 } }, sign_in: { type: 'Unknown' }, can_sign_in: false, own_tools_off: true },
+      { name: 'c', install: { type: 'Installed', value: { version: '1' } }, sign_in: { type: 'SignedOut' }, can_sign_in: true, own_tools_off: true },
+      { name: 'd', install: { type: 'Host' }, sign_in: { type: 'SignedIn', value: { type: 'ApiKey' } }, can_sign_in: true, own_tools_off: true },
     ])
     // Each named with its agent, for a screen reader.
     await fireEvent.click(screen.getByRole('button', { name: 'Install a' }))
@@ -106,6 +106,7 @@ describe('the Agents panel', () => {
         install: { type: 'Installed', value: { version: '0.98.0' } },
         sign_in: { type: 'SigningIn', value: { url: 'https://claude.com/cai/oauth/authorize', code: 'ABCD-1234', paste: true } },
         can_sign_in: true,
+        own_tools_off: true,
       },
     ])
     const a = screen.getByRole('link') as HTMLAnchorElement
@@ -126,8 +127,8 @@ describe('the Agents panel', () => {
     given.install.mockRejectedValue(new CafError({ type: 'Refused', value: { type: 'NotInstallable' } }))
     draw(
       [
-        { name: 'a', install: { type: 'Missing', value: { size: 1 } }, sign_in: { type: 'Unknown' }, can_sign_in: false },
-        { name: 'b', install: { type: 'Missing', value: { size: 1 } }, sign_in: { type: 'Unknown' }, can_sign_in: false },
+        { name: 'a', install: { type: 'Missing', value: { size: 1 } }, sign_in: { type: 'Unknown' }, can_sign_in: false, own_tools_off: true },
+        { name: 'b', install: { type: 'Missing', value: { size: 1 } }, sign_in: { type: 'Unknown' }, can_sign_in: false, own_tools_off: true },
       ],
       { actions: given },
     )
@@ -147,9 +148,9 @@ describe('the Agents panel', () => {
 
   it("offers Sign in only where CAF can sign in now, as the status says", () => {
     draw([
-      { name: 'no', install: { type: 'Host' }, sign_in: { type: 'Unknown' }, can_sign_in: false },
-      { name: 'out', install: { type: 'Installed', value: { version: '1' } }, sign_in: { type: 'SignedIn', value: { type: 'Account' } }, can_sign_in: false },
-      { name: 'yes', install: { type: 'Host' }, sign_in: { type: 'SignedOut' }, can_sign_in: true },
+      { name: 'no', install: { type: 'Host' }, sign_in: { type: 'Unknown' }, can_sign_in: false, own_tools_off: true },
+      { name: 'out', install: { type: 'Installed', value: { version: '1' } }, sign_in: { type: 'SignedIn', value: { type: 'Account' } }, can_sign_in: false, own_tools_off: true },
+      { name: 'yes', install: { type: 'Host' }, sign_in: { type: 'SignedOut' }, can_sign_in: true, own_tools_off: true },
     ])
     expect(buttons('no')).toEqual([])
     // Signing out is its own command.
@@ -171,6 +172,7 @@ describe('the Agents panel', () => {
       install: { type: 'Host' },
       sign_in: { type: 'SigningIn', value: { url: 'https://caf.example/x', code: null, paste: true } },
       can_sign_in: true,
+      own_tools_off: true,
     })
     draw([signingIn('shown'), signingIn('other')], { inChat: 'shown' })
     expect(text(row('shown'))).toContain('Signing in: see the chat.')

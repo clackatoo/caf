@@ -35,9 +35,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if whole.state == ChatState::Closed {
             return Err(Refused::Closed);
         }
-        // A restored chat whose agent the host no longer offers.
-        if !self.agents.contains_key(&whole.agent) {
-            return Err(Refused::NoSuchAgent);
+        // A restored chat whose agent the host no longer offers, or whose
+        // own tools CAF can't turn off.
+        let spec = self.agents.get(&whole.agent).ok_or(Refused::NoSuchAgent)?;
+        if !spec.profile.strips() {
+            return Err(Refused::OwnTools);
         }
         if message.parts.is_empty() {
             return Err(Refused::Unsupported);

@@ -114,7 +114,8 @@ cargo run -p caf-debugger -- --agents agents.toml
 
 - `claude-agent-acp`, CAF's profile for Claude's adapter;
 - `cautious`, plain ACP with nothing risky switched on, for any other
-  adapter;
+  adapter. CAF can't turn off such an agent's own tools, so it's listed,
+  but a chat with it is refused;
 - `fake`, a profile for CAF's fake agent, for trying installs and
   sign-ins with no real agent. Installed, its install always fails at
   once, as if offline, so nothing is ever installed. Started from

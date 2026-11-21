@@ -56,11 +56,19 @@
 //!   always read as it did; a test fails if a saved type's shape changes
 //!   while [`VERSION`] doesn't.
 //! - A journal's records are in the version of the snapshot before them,
-//!   so a journal never mixes versions: a CAF that loads a save of an
-//!   older version writes a snapshot in its own before it adds anything
-//!   to its journal. That's the core's, on
-//!   [`StorageEvent::Loaded`]; [`FileStore`] refuses an append to a
-//!   snapshot of another version.
+//!   so a journal never mixes versions: [`carry_out`], loading a save of
+//!   an older version, writes it at once as a snapshot and header in its
+//!   own, its journal folded in, before it answers
+//!   [`StorageEvent::Loaded`], so the core never needs to know a save's
+//!   version. A save written again so reads the same as before, but for
+//!   its header, which is the newest the store lists. It isn't written
+//!   again if what was read holds another chat than the one asked for, or
+//!   if that header can't be listed and read, so a stale header never
+//!   goes over a newer one; nor if the write fails. The chat is loaded all
+//!   the same then, its save left in its own version: a store refuses an
+//!   append to a snapshot of another version ([`Store::append`]), so the
+//!   core's first write to it fails, and is tried again whole, as any
+//!   failed write is.
 //!
 //! **App items are kept even when the app can't read them.** One is saved
 //! in an [`Unknown`](caf_core::chat::Unknown) item's shape, its envelope:
@@ -111,8 +119,11 @@ mod format;
 #[path = "../tests/common/mod.rs"]
 mod common;
 
-/// The version of the format this CAF writes.
-pub const VERSION: u32 = 1;
+/// The version of the format this CAF writes. What each added:
+/// 1. the first;
+/// 2. a chat lost because CAF can't turn off its agent's own tools
+///    ([`Incompatible::OwnTools`](caf_core::chat::Incompatible::OwnTools)).
+pub const VERSION: u32 = 2;
 
 /// How hard to compress.
 #[non_exhaustive]
@@ -312,12 +323,21 @@ pub trait Store: Send + 'static {
 
     /// Adds a record to a locked chat's journal, and replaces its header.
     ///
+    /// A store must refuse an append to a chat whose snapshot is of another
+    /// version than this CAF's [`VERSION`] (the snapshot's bytes 3 to 6, a
+    /// little-endian `u32`), as [`FileStore`] does: a record is in the
+    /// version of the snapshot before it, so a journal never mixes
+    /// versions.
+    ///
     /// # Errors
     ///
     /// [`StoreError::NotFound`] if it has no snapshot, [`StoreError::InUse`]
-    /// if it isn't locked and another has it, [`StoreError::Damaged`] or
-    /// [`StoreError::Newer`] if what it keeps can't take the record, or
-    /// [`StoreError::Io`]. A failed append adds nothing.
+    /// if it isn't locked and another has it, [`StoreError::Newer`] if its
+    /// snapshot is of a newer version, [`StoreError::Damaged`] if what it
+    /// keeps can't take the record, or [`StoreError::Io`], which is how
+    /// [`FileStore`] refuses one whose snapshot is of an older version
+    /// (of kind [`InvalidInput`](io::ErrorKind::InvalidInput), saying so).
+    /// A failed append adds nothing.
     fn append(
         &mut self,
         shelf: &Shelf,
@@ -358,13 +378,53 @@ pub trait Store: Send + 'static {
     fn move_shelf(&mut self, from: &Shelf, to: &Shelf) -> Result<(), StoreError>;
 }
 
+/// Writes `saved`, chat `chat` loaded from `stored`, again as a snapshot
+/// and header in this version, if `stored` is of an older one, so nothing
+/// of this version is ever added to a journal of another. Its header is
+/// the newest the store lists, as the snapshot's may be behind its
+/// journal. Nothing is written if what was read holds another chat, or
+/// if that header can't be listed and read: a stale header is never
+/// written over a newer one.
+fn upgrade<A: AppItem, D: AppData>(
+    store: &mut dyn Store,
+    (shelf, chat): (&Shelf, ChatId),
+    stored: &Stored,
+    saved: &mut Saved<A, D>,
+) -> Result<(), String> {
+    match format::version(&stored.snapshot) {
+        Ok(version) if version < VERSION => {}
+        _ => return Ok(()),
+    }
+    if saved.header.chat != chat || saved.chat.id != chat {
+        return Err(format!("it holds chat {} instead", saved.chat.id));
+    }
+    let listed = store.list(shelf).map_err(|error| error.describe())?;
+    let newest = (listed.into_iter())
+        .find(|(each, _)| *each == chat)
+        .and_then(|(_, header)| decode_header(&header).ok())
+        .filter(|header| header.chat == chat)
+        .ok_or("its newest header can't be read")?;
+    // Written with the newest header, and handed on with the snapshot's,
+    // as a load always is.
+    let own = std::mem::replace(&mut saved.header, newest);
+    let written = format::header(&saved.header).and_then(|header| {
+        let snapshot = format::snapshot(Cow::Borrowed(&*saved), Squeeze::Fast)?;
+        (store.snapshot(shelf, chat, &header, &snapshot)).map_err(|error| error.describe())
+    });
+    saved.header = own;
+    written
+}
+
 /// Does one of the core's directives to a store, and says how it went, if
 /// the directive asks for an answer: the storage driver's work, for any
 /// runtime. Encoding, compressing and decoding happen here, on the
 /// caller's thread, never the core's.
 ///
 /// A chat loaded that can't be read is left as it was, and released at
-/// once if loading it took its lock ([`Store::holds`]). A failure to list
+/// once if loading it took its lock ([`Store::holds`]). One saved by an
+/// older version is written again at once in this one, its journal
+/// folded into its snapshot, before it's answered (see
+/// [the policy](crate#the-format)). A failure to list
 /// a shelf is [`StorageEvent::Failed`]. For a write,
 /// [`StorageEvent::Done`] says how big the snapshot or record was: the
 /// header, rewritten each time, isn't counted. A shelf moved onto one
@@ -384,7 +444,12 @@ pub fn carry_out<A: AppItem, D: AppData>(
             let held = store.holds(&shelf, chat);
             let event = match store.load(&shelf, chat) {
                 Ok(stored) => match decode(&stored.snapshot, &stored.journal) {
-                    Ok(saved) => StorageEvent::Loaded(Box::new(saved)),
+                    Ok(mut saved) => {
+                        // If this fails, the chat is loaded all the same:
+                        // its first write fails, and is tried again whole.
+                        let _ = upgrade(store, (&shelf, chat), &stored, &mut saved);
+                        StorageEvent::Loaded(Box::new(saved))
+                    }
                     Err(why) => {
                         if !held {
                             store.release(&shelf, chat);

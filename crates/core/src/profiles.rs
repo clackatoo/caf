@@ -14,6 +14,24 @@
 //! into CAF's own terms, so nothing past this module knows which agent it
 //! is talking to.
 //!
+//! **Every agent runs with none of its own tools.** Its built-in tools,
+//! and the user's MCP servers, skills, plugins, hooks and instruction
+//! files, are all turned off, as its profile says how; it has only the
+//! tools the app gives it. Each will come back, one at a time, once CAF
+//! supports it fully: its typed action, its permissions, and how it shows
+//! in the record. CAF never runs an agent it can't strip, so an agent with
+//! the cautious profile is refused.
+//!
+//! In place of the agent's built-in instructions, which describe tools it
+//! no longer has, CAF gives it short ones of its own, then the app's
+//! ([`OpenChat::instructions`](crate::OpenChat::instructions)). For a
+//! host called `framewright`, CAF's say:
+//!
+//! > You are working inside framewright, the app the user is talking to
+//! > you in. You have no tools of your own: you can't read or change
+//! > files, run commands or browse the web, except through tools
+//! > framewright gives you. Answer in Markdown.
+//!
 //! Profiles are CAF's own. Apps choose one for each agent but never
 //! change one. Users will be able to add profiles as data in CAF's shared
 //! folder (*later*).
@@ -41,6 +59,45 @@
 //! - **no files and no terminals**: CAF serves neither yet, and refuses
 //!   them if asked.
 //!
+//! It **strips Claude Code of its own tools** (see below), through the
+//! options the adapter hands on to Claude Code (`_meta.claudeCode.options`
+//! in `session/new`, `session/load` and `session/resume`):
+//! - `tools: []`: no built-in tools (Bash, Read, Edit, Write, Agent…);
+//! - `settingSources: []`: none of the user's or project's settings files,
+//!   so no CLAUDE.md or AGENTS.md, skills, subagents, plugins, hooks or
+//!   permission rules of theirs;
+//! - `strictMcpConfig: true`, `settings.disableClaudeAiConnectors`: only
+//!   the MCP servers the app gives;
+//! - `settings.disableRemoteControl`: the session can't be connected to
+//!   claude.ai, even if the user sends the adapter's `/remote-control`;
+//! - `systemPrompt`: CAF's own short instructions, saying what the agent
+//!   is in and that it has only the app's tools, then the app's own
+//!   ([`OpenChat::instructions`](crate::OpenChat::instructions)), in place
+//!   of Claude Code's, which describe tools it no longer has;
+//! - `promptSuggestions: false`, `verbatimPrompts: true`,
+//!   `allowDangerouslySkipPermissions: false`, slash commands off
+//!   (`extraArgs: { "disable-slash-commands": null }`), and auto-memory,
+//!   bundled skills, CLAUDE.md files and claude.ai's connectors off
+//!   through their variables (`env`, which the adapter adds to its own).
+//!
+//! Every one of them is part of what the adapter compares to tell whether
+//! a session it has running can be reused, so a session loaded or resumed
+//! with other instructions is started again with them.
+//!
+//! What can't be turned off this way: settings an organisation manages on
+//! the machine, the adapter's own hooks (which only report), the plugins
+//! built into Claude Code, and the adapter's own two commands, `/mcp` and
+//! `/remote-control`, which it offers whatever Claude Code does and runs
+//! itself when the user's message is one of them: they're the user's, not
+//! tools the agent can call, and `/remote-control` fails, as Remote
+//! Control is off. `/mcp` shows the app's MCP servers and reconnects
+//! them. Plugins are off through `settingSources`, which say which are
+//! enabled: Claude Code has no variable for it. Sign-in is untouched (its credentials
+//! live in `~/.claude`), but a sign-in that lives in the user's
+//! `settings.json` (an API key helper, a gateway's variables) isn't seen,
+//! so the chat asks the user to sign in. The user's model choice still
+//! applies.
+//!
 //! It declares **nothing of JetBrains AIR**. Any AIR key switches the
 //! adapter into AIR's shapes for the whole connection: reads and searches
 //! arrive without their text, subagents' words stop, failures move into
@@ -50,11 +107,25 @@
 //! need it.
 //!
 //! A newer adapter keeps the Claude profile with its risky features off;
-//! feature 1 turns on nothing risky, so that changes nothing yet. Any
-//! other adapter, or one that doesn't say what it is, gets the cautious
-//! profile for reading what it sends. What was declared at the start
-//! stays declared: declarations go out before the adapter says who it
-//! is.
+//! feature 1 turns on nothing risky, so that changes nothing yet, and it's
+//! stripped the same way. Any other adapter, or one that doesn't say what
+//! it is, gets the cautious profile for reading what it sends, and as CAF
+//! can't strip it, no session of it is opened: its chats are
+//! [lost](crate::chat::Lost::Incompatible) to
+//! [`Incompatible::OwnTools`](crate::chat::Incompatible::OwnTools). What
+//! was declared at the start stays declared: declarations go out before
+//! the adapter says who it is.
+//!
+//! # The fake and test profiles
+//!
+//! CAF's fake agent (`Builtin::Fake`, with the `fake` feature) and the
+//! made-up agents of CAF's own tests do only what they're told, and have
+//! no tools to turn off: nothing is sent to strip them, and CAF's
+//! instructions aren't sent. The fake's profile is checked at version
+//! 0.0.0, so a fake agent that names itself `caf-fake-agent`, at any
+//! version, keeps it: its scripts may say any version they like. One
+//! that names itself otherwise falls to the cautious profile, and its
+//! chats get no session, as any other adapter's.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -75,7 +146,11 @@ pub enum ProfileChoice {
     /// One CAF knows.
     Builtin(Builtin),
     /// The cautious profile, for agents CAF doesn't know: plain ACP,
-    /// nothing risky switched on.
+    /// nothing risky switched on. CAF can't turn off such an agent's own
+    /// tools, so it doesn't run one: a chat with it is refused
+    /// ([`Refused::OwnTools`](crate::Refused::OwnTools)). It's here for
+    /// user profiles (*later*), which will say an agent behaves like one
+    /// CAF knows, and so how to strip it.
     Cautious,
 }
 
@@ -103,6 +178,12 @@ pub enum Builtin {
     #[cfg(test)]
     #[cfg_attr(feature = "ts", ts(skip))]
     TestDownload,
+    /// A made-up plain ACP adapter, with no tools and no sign-in: for
+    /// tests of what any adapter may do. CAF can't install it. For tests
+    /// only.
+    #[cfg(test)]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    TestPlain,
     /// CAF's fake agent, `caf-fake-agent`, for trying installs and
     /// sign-ins with no real agent: its install always fails at once, as
     /// offline, and it signs in, out and says whether it's signed in
@@ -124,6 +205,8 @@ impl Builtin {
             Self::TestNpm => "test-npm",
             #[cfg(test)]
             Self::TestDownload => "test-download",
+            #[cfg(test)]
+            Self::TestPlain => "test-plain",
             #[cfg(feature = "fake")]
             Self::Fake => "caf-fake-agent",
         }
@@ -137,6 +220,8 @@ impl Builtin {
             Self::TestNpm => "test-npm-acp",
             #[cfg(test)]
             Self::TestDownload => "test-download-acp",
+            #[cfg(test)]
+            Self::TestPlain => "plain-acp",
             #[cfg(feature = "fake")]
             Self::Fake => FAKE_NAME,
         }
@@ -150,6 +235,8 @@ impl Builtin {
             Self::TestNpm => [2, 0, 0],
             #[cfg(test)]
             Self::TestDownload => [1, 4, 0],
+            #[cfg(test)]
+            Self::TestPlain => [1, 0, 0],
             #[cfg(feature = "fake")]
             Self::Fake => [0, 0, 0],
         }
@@ -163,6 +250,8 @@ impl Builtin {
             Self::TestNpm => tests::npm_recipe(),
             #[cfg(test)]
             Self::TestDownload => tests::download_recipe(),
+            #[cfg(test)]
+            Self::TestPlain => tests::plain_recipe(),
             #[cfg(feature = "fake")]
             Self::Fake => fake_recipe(),
         }
@@ -371,7 +460,7 @@ impl ProfileChoice {
                 declared["elicitation"] = json!({ "form": {}, "url": {} });
             }
             #[cfg(test)]
-            Self::Builtin(Builtin::TestNpm | Builtin::TestDownload) => {}
+            Self::Builtin(Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain) => {}
             #[cfg(feature = "fake")]
             Self::Builtin(Builtin::Fake) => {}
             Self::Cautious => {}
@@ -413,6 +502,35 @@ impl ProfileChoice {
         }
     }
 
+    /// Whether CAF can turn off the own tools of an agent with this
+    /// profile: every profile but the cautious one says how, or says its
+    /// agent has none.
+    pub(crate) fn strips(&self) -> bool {
+        match self {
+            Self::Builtin(_) => true,
+            Self::Cautious => false,
+        }
+    }
+
+    /// What to add to `session/new`, `session/load` and `session/resume`,
+    /// as their `_meta`, so the agent has none of its own tools: given
+    /// CAF's own instructions to it, and the app's (`instructions`).
+    /// `None` if nothing is added: the test and fake agents have no tools
+    /// to turn off, and the cautious profile doesn't say how.
+    pub(crate) fn stripped(&self, own: &str, instructions: Option<&str>) -> Option<Value> {
+        match self {
+            Self::Builtin(Builtin::ClaudeAgentAcp) => Some(claude_stripped(own, instructions)),
+            // Made-up agents, with no tools.
+            #[cfg(test)]
+            Self::Builtin(Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain) => None,
+            // CAF's fake agent does only what its script says: it has no
+            // tools.
+            #[cfg(feature = "fake")]
+            Self::Builtin(Builtin::Fake) => None,
+            Self::Cautious => None,
+        }
+    }
+
     /// Whether an adapter with this profile says by itself whether it's
     /// signed in (`_auth/status_update`).
     pub(crate) fn pushes_status(&self) -> bool {
@@ -423,7 +541,7 @@ impl ProfileChoice {
             #[cfg(test)]
             Self::Builtin(Builtin::TestNpm) => true,
             #[cfg(test)]
-            Self::Builtin(Builtin::TestDownload) => false,
+            Self::Builtin(Builtin::TestDownload | Builtin::TestPlain) => false,
             #[cfg(feature = "fake")]
             Self::Builtin(Builtin::Fake) => false,
             Self::Cautious => false,
@@ -470,7 +588,7 @@ impl ProfileChoice {
                 words(error).is_some_and(|words| words.contains("Session not found"))
             }
             #[cfg(test)]
-            Self::Builtin(Builtin::TestNpm | Builtin::TestDownload) => false,
+            Self::Builtin(Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain) => false,
             #[cfg(feature = "fake")]
             Self::Builtin(Builtin::Fake) => false,
             Self::Cautious => false,
@@ -487,12 +605,62 @@ impl ProfileChoice {
                     || line.contains("Not logged in")
             }
             #[cfg(test)]
-            Self::Builtin(Builtin::TestNpm | Builtin::TestDownload) => false,
+            Self::Builtin(Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain) => false,
             #[cfg(feature = "fake")]
             Self::Builtin(Builtin::Fake) => false,
             Self::Cautious => false,
         }
     }
+}
+
+/// CAF's own instructions to every agent, `host` being the app's name:
+/// they take the place of the agent's built-in ones, which describe tools
+/// it no longer has. The app's own come after them.
+pub(crate) fn own_instructions(host: &str) -> String {
+    format!(
+        "You are working inside {host}, the app the user is talking to you in. You have no \
+         tools of your own: you can't read or change files, run commands or browse the web, \
+         except through tools {host} gives you. Answer in Markdown."
+    )
+}
+
+/// The `_meta` that runs Claude Code with none of its own tools, with
+/// CAF's instructions (`own`) and the app's as its whole system prompt.
+/// Checked against claude-agent-acp 0.98.0, which spreads
+/// `_meta.claudeCode.options` into the Claude Agent SDK's options as they
+/// are, merging `env` into its own and `extraArgs` into its own.
+fn claude_stripped(own: &str, instructions: Option<&str>) -> Value {
+    let prompt = match instructions.filter(|text| !text.is_empty()) {
+        Some(text) => format!("{own}\n\n{text}"),
+        None => own.to_owned(),
+    };
+    json!({ "claudeCode": { "options": {
+        // No built-in tools: the SDK passes `--tools ""`.
+        "tools": [],
+        // None of the user's, project's or local settings files: no
+        // CLAUDE.md, skills, subagents, plugins, hooks or permission rules
+        // of theirs.
+        "settingSources": [],
+        // Only the MCP servers the app gives, in `mcpServers`.
+        "strictMcpConfig": true,
+        "systemPrompt": prompt,
+        "promptSuggestions": false,
+        // The user's words as they are: no `@path` expansion or slash
+        // commands, and no CLAUDE.md or rules files sent with them.
+        "verbatimPrompts": true,
+        "allowDangerouslySkipPermissions": false,
+        // No claude.ai connectors, and no Remote Control: the adapter
+        // still offers `/remote-control`, but Claude Code refuses it, so a
+        // session is never reachable from claude.ai.
+        "settings": { "disableClaudeAiConnectors": true, "disableRemoteControl": true },
+        "env": {
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+            "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS": "1",
+            "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
+            "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+        },
+        "extraArgs": { "disable-slash-commands": null },
+    } } })
 }
 
 /// A failure as a profile reads it.
@@ -673,6 +841,24 @@ pub(crate) mod tests {
         }
     }
 
+    /// The plain test agent: a download for no platform, so it can't be
+    /// installed, with no sign-in and no status command.
+    pub(crate) fn plain_recipe() -> Recipe {
+        Recipe {
+            version: "1.0.0".to_owned(),
+            install: Install::Download(Vec::new()),
+            size: 1_000_000,
+            needs: Needs::default(),
+            adapter: bundled(Program::InInstall("bin/plain-acp".into()), &[]),
+            sign_in: None,
+            sign_out: None,
+            status: Status {
+                pushed: false,
+                command: None,
+            },
+        }
+    }
+
     fn claude() -> ProfileChoice {
         ProfileChoice::Builtin(Builtin::ClaudeAgentAcp)
     }
@@ -719,6 +905,7 @@ pub(crate) mod tests {
             Builtin::ClaudeAgentAcp,
             Builtin::TestNpm,
             Builtin::TestDownload,
+            Builtin::TestPlain,
             #[cfg(feature = "fake")]
             Builtin::Fake,
         ] {
@@ -726,6 +913,33 @@ pub(crate) mod tests {
             assert_eq!(profile.pushes_status(), builtin.recipe().status.pushed);
         }
         assert!(!ProfileChoice::Cautious.pushes_status());
+    }
+
+    #[test]
+    fn every_profile_but_the_cautious_one_says_how_to_strip_its_agent() {
+        for builtin in [
+            Builtin::ClaudeAgentAcp,
+            Builtin::TestNpm,
+            Builtin::TestDownload,
+            Builtin::TestPlain,
+            #[cfg(feature = "fake")]
+            Builtin::Fake,
+        ] {
+            let profile = ProfileChoice::Builtin(builtin);
+            assert!(profile.strips(), "{builtin:?}");
+            // Only Claude has tools to turn off.
+            assert_eq!(
+                profile.stripped("Ours.", Some("Theirs.")).is_some(),
+                builtin == Builtin::ClaudeAgentAcp,
+                "{builtin:?}"
+            );
+        }
+        assert!(!ProfileChoice::Cautious.strips());
+        assert_eq!(ProfileChoice::Cautious.stripped("Ours.", None), None);
+        let options = &claude()
+            .stripped("Ours.", Some("Theirs."))
+            .expect("stripped")["claudeCode"]["options"];
+        assert_eq!(options["systemPrompt"], "Ours.\n\nTheirs.");
     }
 
     #[test]

@@ -256,6 +256,9 @@ pub enum Incompatible {
     HttpMcp,
     /// Its answer made no sense, such as a session id CAF can't keep.
     BadAnswer,
+    /// It isn't the adapter its profile says, and CAF can't turn off the
+    /// own tools of one it doesn't know, so it won't run it.
+    OwnTools,
 }
 
 /// One turn: something started it, the agent worked, and it ended.

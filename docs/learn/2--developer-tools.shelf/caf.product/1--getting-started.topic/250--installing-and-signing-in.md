@@ -69,6 +69,10 @@ Its **sign-in state**:
 CAF keeps how an agent is signed in, never who: the account's email never
 reaches its state, its logs or a recording.
 
+It also says whether CAF can turn off the agent's own tools
+(`own_tools_off`), which it must to run it: see
+[Agents and profiles](~caf/concepts/agents-and-profiles#an-agent-has-only-your-tools).
+
 CAF looks as it starts. Call `caf.check_agents()` to look again, such as
 after the user installs Node.
 

@@ -282,6 +282,7 @@ fn changes() -> Vec<Change> {
         Lost::Incompatible(Incompatible::Protocol { version: None }),
         Lost::Incompatible(Incompatible::HttpMcp),
         Lost::Incompatible(Incompatible::BadAnswer),
+        Lost::Incompatible(Incompatible::OwnTools),
         Lost::InUse,
         Lost::ShutDown,
     ];
@@ -464,6 +465,7 @@ fn agents() -> Vec<AgentStatus> {
         name: AgentName(format!("agent-{at}")),
         // Both ways, and always while signing in, as the core says it.
         can_sign_in: matches!(sign_in, SignInState::SigningIn(_)) || at % 2 == 0,
+        own_tools_off: at % 3 != 0,
         install,
         sign_in,
     })
@@ -564,6 +566,7 @@ fn version_1() -> Sample {
         Refused::NotSaved,
         Refused::Loaded,
         Refused::BadShelf,
+        Refused::OwnTools,
     ];
     let outcomes = [
         Outcome::Opened(ChatId::from_number(1)),

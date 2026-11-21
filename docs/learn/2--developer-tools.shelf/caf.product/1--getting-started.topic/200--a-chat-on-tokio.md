@@ -31,6 +31,11 @@ let chat = caf.open_chat(OpenChat::new("claude", "/home/me/project")).await?;
 A chat takes messages at once. Messages sent before its session is open wait
 for it.
 
+The agent has none of its own tools: only those you give it, in
+`OpenChat::mcp_servers`. `OpenChat::instructions` tells it about your
+program and the work, after CAF's own short instructions. See
+[Agents and profiles](~caf/concepts/agents-and-profiles#an-agent-has-only-your-tools).
+
 Here your program says how to start the agent's adapter. CAF can also
 install it, and sign in to it, itself: see
 [Installing and signing in](~caf/getting-started/installing-and-signing-in).

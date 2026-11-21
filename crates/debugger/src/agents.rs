@@ -19,6 +19,9 @@
 //! `fake` is the profile for CAF's fake agent, `caf-fake-agent`, whose
 //! install always fails, as offline, and which signs in through its
 //! `auth` commands: for trying installs and sign-ins with no real agent.
+//! `cautious` is for an agent CAF doesn't know: it's listed, but as CAF
+//! can't turn off its own tools, a chat with it is refused
+//! (`Refused::OwnTools`).
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -126,15 +129,19 @@ fn parse(text: &str, path: Option<&std::ffi::OsStr>) -> Result<Vec<AgentSpec>, S
 }
 
 /// The agents when there's no `agents.toml`: `claude`, installed by CAF
-/// when the user asks, and `fake`, the fake agent following `script`, if
-/// it's there to start.
+/// when the user asks, and `fake`, the fake agent following `script`,
+/// with its profile, if it's there to start.
 #[must_use]
 pub fn found(fake: Option<&Path>, script: &Path) -> Vec<AgentSpec> {
     let mut agents = vec![AgentSpec::installed("claude", Builtin::ClaudeAgentAcp)];
     if let Some(fake) = fake {
         let mut command = SpawnCommand::new(fake);
         command.args = vec![script.as_os_str().to_owned()];
-        agents.push(AgentSpec::command("fake", command, ProfileChoice::Cautious));
+        agents.push(AgentSpec::command(
+            "fake",
+            command,
+            ProfileChoice::Builtin(Builtin::Fake),
+        ));
     }
     agents
 }
@@ -191,6 +198,19 @@ mod tests {
         };
         assert!(command(0).program.is_absolute());
         assert_eq!(agents[0].profile, ProfileChoice::Cautious);
+        // Listed, but CAF can't turn off its own tools: a chat with it is
+        // refused.
+        let now = caf_core::time::Now {
+            wall: caf_core::time::Wall(0),
+            mono: caf_core::time::Mono(0),
+        };
+        let host = caf_core::host::Host::new("test", "1.0.0");
+        let mut core = caf_core::Core::<caf_core::NoAppItems>::new(host, agents.clone());
+        let open = caf_core::OpenChat::new("sh", "/work");
+        assert_eq!(
+            core.open_chat(now, open, &mut Vec::new()),
+            Err(caf_core::Refused::OwnTools)
+        );
         assert_eq!(command(1).args, ["-c", "true"]);
         assert_eq!(
             agents[1].profile,
@@ -245,6 +265,7 @@ mod tests {
             AgentSpec::installed("claude", Builtin::ClaudeAgentAcp)
         );
         assert_eq!(agents[1].name.0, "fake");
+        assert_eq!(agents[1].profile, ProfileChoice::Builtin(Builtin::Fake));
         assert!(
             matches!(&agents[1].launch, Launch::Command(command) if command.args == ["/tmp/script.json"])
         );

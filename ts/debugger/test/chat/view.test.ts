@@ -56,6 +56,7 @@ describe('the chat state', () => {
     [{ type: 'Incompatible', value: { type: 'Protocol', value: { version: null } } }, ["speaks a version of ACP that CAF doesn't"]],
     [{ type: 'Incompatible', value: { type: 'HttpMcp' } }, ["can't reach MCP servers over HTTP"]],
     [{ type: 'Incompatible', value: { type: 'BadAnswer' } }, ['its answer made no sense']],
+    [{ type: 'Incompatible', value: { type: 'OwnTools' } }, ["CAF can't turn off its own tools"]],
     [{ type: 'Incompatible', value: { type: 'Telepathy' } }, ["a reason this viewer doesn't know (Telepathy)"]],
     [{ type: 'InUse' }, ['Another chat already has this session open']],
     [{ type: 'ShutDown' }, ['CAF was shut down.']],

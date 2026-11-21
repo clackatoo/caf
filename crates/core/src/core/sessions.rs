@@ -25,12 +25,16 @@ use crate::chat::{
 use crate::directive::{Directive, Level};
 use crate::host::Grouping;
 use crate::ids::{AgentName, AgentSessionId, ChatId, ConnectionId, QuestionId, Ticket};
-use crate::profiles::AUTH_REQUIRED;
+use crate::profiles::{AUTH_REQUIRED, own_instructions};
 use crate::question::{QuestionKind, SlowChoice, SlowToOpen};
 use crate::time::{Now, Window};
 
 /// The longest session id CAF keeps, in bytes.
 const MOST_SESSION_ID: usize = 256;
+
+/// The longest instructions an app may give an agent, in bytes: 64 KiB,
+/// some 16,000 words, sent with every session opened.
+pub(crate) const MOST_INSTRUCTIONS: usize = 64 << 10;
 
 impl<A: AppItem, D: AppData> Core<A, D> {
     /// Opens chat `chat`.
@@ -41,8 +45,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         open: OpenChat,
         out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
-        if !self.agents.contains_key(&open.agent) {
-            return Err(Refused::NoSuchAgent);
+        let spec = self.agents.get(&open.agent).ok_or(Refused::NoSuchAgent)?;
+        if !spec.profile.strips() {
+            return Err(Refused::OwnTools);
         }
         if !open.cwd.is_absolute() {
             return Err(Refused::RelativeFolder);
@@ -54,6 +59,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
             .ok_or(Refused::Unsendable)?;
+        check_instructions(open.instructions.as_deref())?;
         if let Some(shelf) = &open.shelf {
             super::saving::check_shelf(shelf)?;
         }
@@ -91,6 +97,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 cwd,
                 mcp: open.mcp_servers,
                 mcp_sent,
+                instructions: open.instructions,
                 session: match open.session {
                     SessionChoice::New => None,
                     SessionChoice::Continue(session) => Some(session),
@@ -198,6 +205,18 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 None => {}
             }
         }
+        // An adapter that turned out not to be the one its profile is
+        // for is read cautiously, and CAF can't turn off its tools.
+        let profile = self.profile_of_chat(chat);
+        if !profile.strips() {
+            return self.session_lost(
+                now,
+                chat,
+                Lost::Incompatible(crate::chat::Incompatible::OwnTools),
+                false,
+                out,
+            );
+        }
         let Some(run) = self.runs.get(&chat) else {
             return;
         };
@@ -243,6 +262,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         });
         if let Some(session) = &run.session {
             params["sessionId"] = json!(session.0);
+        }
+        let own = own_instructions(&self.host.name);
+        if let Some(meta) = profile.stripped(&own, run.instructions.as_deref()) {
+            params["_meta"] = meta;
         }
         let purpose = Purpose::Open {
             chat,
@@ -891,6 +914,15 @@ fn failure_for(lost: &Lost) -> Failure {
         reason,
         agent_said,
         remedy: Some(Remedy::SendAgain),
+    }
+}
+
+/// Checks what the app tells the agent ([`OpenChat::instructions`]): at
+/// most [`MOST_INSTRUCTIONS`] bytes, else [`Refused::Unsendable`].
+pub(super) fn check_instructions(instructions: Option<&str>) -> Result<(), Refused> {
+    match instructions {
+        Some(text) if text.len() > MOST_INSTRUCTIONS => Err(Refused::Unsendable),
+        _ => Ok(()),
     }
 }
 

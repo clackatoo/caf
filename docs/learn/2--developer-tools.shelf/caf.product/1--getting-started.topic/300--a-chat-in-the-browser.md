@@ -287,6 +287,12 @@ an agent the host starts itself, or `Unknown` until CAF has looked. The
 `signIn` would be accepted now, so offer Sign in only while it's true. It
 changes as CAF runs: an agent the host starts itself can be signed in to
 only once it has answered as the adapter its profile is for.
+`own_tools_off` says whether CAF can turn off the agent's own tools, as it
+must to run it: while it's false, a chat with the agent is refused, or gets
+no session, so don't offer one. It's false for an agent with the cautious
+profile, turns false once an adapter answers that isn't the one its
+profile is for, and true again once one that is answers. See
+[Agents and profiles](~caf/concepts/agents-and-profiles#an-agent-has-only-your-tools).
 
 ```ts
 await caf.install("claude");
