@@ -182,7 +182,9 @@ or in the folder `--store` names:
 cargo run -p caf-debugger -- --store /tmp/chats
 ```
 
-As it starts, it lists the chats saved there, under **Saved**, below the
+As it starts, it checks it can write there, making the folder, private, if
+it isn't there yet, and stops if it can't, saying why. Then it lists the
+chats saved there, under **Saved**, below the
 list of open chats: each with its title or first message, its agent and
 folder, when it last changed, and how many turns it has. **Restore** brings
 one back, with its record, idle until you send to it; its session then

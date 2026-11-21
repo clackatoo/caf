@@ -71,7 +71,8 @@ CAF writes a chat:
 
 A write that fails, such as on a full disk, is tried again later, whole,
 with a warning in the log each time, waiting longer each time up to a
-minute.
+minute. Shutting down waits until it's written, so check the store can be
+written to as your program starts.
 
 `caf.shutdown()` returns once every saved chat is written whole and let go,
 so the next run, or another program, can have it.
@@ -86,9 +87,9 @@ while let Some(chats) = saved.next().await {
 }
 ```
 
-`watch_saved` follows every shelf you've listed, shelf by shelf, each in the
-order its chats were made: the whole list at once, then again each time it
-changes. Once listed, a shelf is kept up to date as chats on it are saved,
+`watch_saved` follows every shelf you've listed, with their chats in the
+order they were made, whatever shelf each is on: the whole list at once,
+then again each time it changes. Once listed, a shelf is kept up to date as chats on it are saved,
 put away and deleted. List it again to see chats another program saved
 since.
 
@@ -152,8 +153,9 @@ Its session is closed, its adapter stopped if nothing else uses it, and it's
 let go in the store, so another program can have it. A turn running is cut
 off first, and messages waiting are stopped. It stays on its shelf, and
 restoring it carries on. A watch of it gets how it was left, one last time,
-and ends. Until it's written, which is at once, restoring it is refused as
-`Loaded`, though it's listed as saved.
+and ends. Until it's written, which is at once unless a move of its shelf is
+under way, restoring it is refused as `Loaded`, though it's listed as
+saved: try again in a moment.
 
 **Close** a chat when the user is done with it. A saved chat is then put
 away, marked closed, and can still be restored.
@@ -257,7 +259,9 @@ files in it:
 <root>/<shelf>/<chat>.lock      held while a program has it loaded
 ```
 
-Folders and files are readable only by the user. A whole copy replaces the
+The folders and files `FileStore` makes are readable only by the user; a
+folder that's there already, such as the root you give it, keeps its own
+permissions: make a root of your own private yourself. A whole copy replaces the
 old one in one step, and each change is synced before it counts as written,
 so a crash leaves the chat as it was last written, and at worst loses a
 change being written. The locks are the system's, so a program that dies
@@ -306,8 +310,8 @@ A store that can say whether it holds a chat's lock already
 (`Store::holds`) lets CAF let go of a chat it loaded and couldn't read only
 if loading it took the lock. A write that fails is tried again until it's
 written, and shutting down waits for it, so fail only when you must. A
-store that panics fails what it was doing, as if it had said so, and is
-used again. On a runtime other than tokio, `caf_save::carry_out` does one
+store that panics fails what it was doing, as if it had said so, lets go
+of a chat it was loading, and is used again. On a runtime other than tokio, `caf_save::carry_out` does one
 of the core's directives to your store and gives back its answer: the
 storage driver's whole job.
 
