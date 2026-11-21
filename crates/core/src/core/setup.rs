@@ -771,9 +771,10 @@ impl<A: AppItem> Core<A> {
     /// A process of `agent`'s answered `initialize`. One of the host's own
     /// command that said it's its profile's adapter may run its recipe's
     /// commands, so the first to say so has its status command run, if its
-    /// adapter doesn't say by itself whether it's signed in. One of CAF's install at the version its profile was
-    /// checked at, that said it's that version, lets older versions that
-    /// nothing has used for a while be removed.
+    /// adapter doesn't say by itself whether it's signed in. One of CAF's
+    /// install at the version its profile was checked at, that said it's
+    /// that version, lets older versions that nothing has used for a while
+    /// be removed.
     pub(super) fn agent_answered(
         &mut self,
         now: Now,
