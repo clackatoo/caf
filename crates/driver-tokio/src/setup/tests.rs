@@ -1479,6 +1479,36 @@ async fn a_sign_in_that_takes_no_paste_has_no_input() {
 }
 
 #[tokio::test]
+async fn a_sign_in_that_never_reads_whats_pasted_still_stops() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    let mut command = SpawnCommand::new("/bin/sh");
+    command.args = vec!["-c".into(), "exec sleep 30".into()];
+    driver.apply(SetupDirective::SignIn {
+        ticket: Ticket(1000),
+        command,
+        link: LinkFrom::Browser,
+        code_after: None,
+        paste: true,
+    });
+    // More than its input's pipe holds, so writing waits.
+    for _ in 0..40 {
+        driver.apply(SetupDirective::Paste {
+            ticket: Ticket(1000),
+            text: "x".repeat(4000),
+        });
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    driver.apply(SetupDirective::Stop {
+        ticket: Ticket(1000),
+    });
+    let events = tokio::time::timeout(Duration::from_secs(3), done(&mut driver, Ticket(1000)))
+        .await
+        .expect("it stops within a second or so");
+    assert_eq!(events, [SetupEvent::Ended { ok: false }]);
+}
+
+#[tokio::test]
 async fn a_sign_in_that_fails_or_is_stopped_ends_not_ok() {
     let dir = Dir::new();
     let mut driver = driver(&dir);

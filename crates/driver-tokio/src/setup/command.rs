@@ -134,7 +134,19 @@ pub(super) async fn sign_in(sign_in: SignIn, reporter: Reporter, mut stop: onesh
             }
             Some(event) = finds.recv() => report(event),
             text = recv(pasted.as_mut()) => match text {
-                Some(text) => give(&mut stdin, &text).await,
+                // Written while Stop is still heard: a command that doesn't
+                // read its input mustn't hold it up.
+                Some(text) => {
+                    let stopped = tokio::select! {
+                        () = give(&mut stdin, &text) => false,
+                        _ = &mut stop => true,
+                    };
+                    if stopped {
+                        kill_group(&child);
+                        let _ = child.wait().await;
+                        break false;
+                    }
+                }
                 None => pasted = None,
             },
             _ = looks.tick(), if browser.is_some() => {
