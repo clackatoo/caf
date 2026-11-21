@@ -371,7 +371,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             ),
         );
         let (agent, how) = (each.agent.clone(), checked.checked);
+        let strips = checked.profile.strips();
         each.profile = Some(checked);
+        if let Some(standing) = self.setup.agents.get_mut(&agent) {
+            standing.strips = Some(strips);
+        }
         self.agent_answered(now, proc, &agent, how, out);
         if let Some(each) = self.procs.get_mut(&proc) {
             each.init = Init::Ready(caps(&result));

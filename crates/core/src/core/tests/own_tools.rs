@@ -205,3 +205,25 @@ fn instructions_longer_than_64_kib_are_refused() {
         &sent(&out, "session/new")["params"]["_meta"]["claudeCode"]["options"]["systemPrompt"];
     assert!(prompt.as_str().is_some_and(|prompt| prompt.ends_with("éé")));
 }
+
+#[test]
+fn an_agents_status_follows_the_adapter_that_last_answered() {
+    let mut per_chat = host();
+    per_chat.grouping = crate::host::Grouping::PerChat;
+    let mut script = Script::new(per_chat);
+    script
+        .open(OpenChat::new("claude", "/work"))
+        .0
+        .expect("opened");
+    let mut other = claude_init();
+    other["agentInfo"]["name"] = json!("someone-elses-acp");
+    script.answers(PROC, 1000, &other);
+    assert_eq!(script.agent_status("claude")["own_tools_off"], false);
+    // Another chat's adapter is Claude's, as its profile is for.
+    let (_, out) = script.open(OpenChat::new("claude", "/work"));
+    let proc = with(&out, "start")[0]["start"].as_u64().expect("a process");
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let out = script.answers(proc, init, &claude_init());
+    sent(&out, "session/new");
+    assert_eq!(script.agent_status("claude")["own_tools_off"], true);
+}
