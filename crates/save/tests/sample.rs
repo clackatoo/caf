@@ -96,7 +96,7 @@ struct Sample {
 /// A version's sample's values.
 fn sample(version: u32) -> Sample {
     match version {
-        1 | 2 => Sample {
+        1..=3 => Sample {
             header: from(header(9)),
             before: before(),
             records: records(version),
@@ -333,8 +333,10 @@ fn header(turns: u64) -> Value {
 }
 
 /// What the journal adds, a record at a time: one of every kind of
-/// change, and of entry, and, from version 2, a chat lost as CAF can't
-/// turn off its agent's own tools.
+/// change, and of entry; from version 2, a chat lost as CAF can't turn
+/// off its agent's own tools; and from version 3, the agent's settings,
+/// the model a turn was sent on, the notes about settings, and a message
+/// failed as a setting couldn't be applied.
 fn records(version: u32) -> Vec<Vec<Entry<Pin, Notes>>> {
     let change = |change: Value| json!({ "type": "Change", "value": change });
     let own_tools = change(
@@ -348,6 +350,9 @@ fn records(version: u32) -> Vec<Vec<Entry<Pin, Notes>>> {
     ];
     if version >= 2 {
         last.push(own_tools);
+    }
+    if version >= 3 {
+        last.extend(settings().into_iter().map(change));
     }
     last.push(change(
         json!({ "type": "State", "value": { "type": "Idle" } }),
@@ -387,6 +392,62 @@ fn records(version: u32) -> Vec<Vec<Entry<Pin, Notes>>> {
         ],
         last,
     ]))
+}
+
+/// What version 3 added: the chat's settings, the model turn 8 was sent
+/// on, CAF's notes about settings, and the message waiting failed as a
+/// setting couldn't be applied.
+fn settings() -> Vec<Value> {
+    let choice = |id: &str, name: &str, group: Value| {
+        json!({ "id": id, "name": name, "description": null, "group": group })
+    };
+    let offered = json!([
+        {
+            "kind": { "type": "Model" },
+            "name": "Model",
+            "form": { "type": "Choices", "value": [
+                { "id": "default", "name": "Default (recommended)", "description": "Opus 4.7", "group": null },
+                choice("sonnet", "Sonnet", Value::Null),
+                choice("haiku", "Haiku", json!("Older")),
+            ] },
+            "current": { "type": "Choice", "value": "default" },
+        },
+        {
+            "kind": { "type": "Effort" },
+            "name": "Effort",
+            "form": { "type": "Choices", "value": [choice("low", "Low", Value::Null), choice("high", "High", Value::Null)] },
+            "current": null,
+        },
+        {
+            "kind": { "type": "Fast" },
+            "name": "Fast mode",
+            "form": { "type": "Switch" },
+            "current": { "type": "Switch", "value": false },
+        },
+    ]);
+    let note = |id: u64, note: Value| {
+        json!({ "type": "ItemAdded", "value": { "turn": 10, "item": item(id, None, json!({ "type": "Note", "value": note })) } })
+    };
+    vec![
+        json!({ "type": "Settings", "value": {
+            "offered": offered,
+            "chosen": [
+                { "kind": { "type": "Model" }, "value": { "type": "Choice", "value": "sonnet" } },
+                { "kind": { "type": "Effort" }, "value": { "type": "Choice", "value": "high" } },
+                { "kind": { "type": "Fast" }, "value": { "type": "Switch", "value": true } },
+            ],
+        }}),
+        json!({ "type": "TurnModel", "value": { "turn": 8, "model": { "id": "sonnet", "name": "Sonnet 4.6" } } }),
+        note(101, json!({ "type": "AgentChanged", "value": { "kind": { "type": "Model" }, "value": { "type": "Choice", "value": "haiku" } } })),
+        note(102, json!({ "type": "NotOffered", "value": { "kind": { "type": "Fast" }, "value": { "type": "Switch", "value": true } } })),
+        json!({ "type": "TurnLife", "value": {
+            "turn": 9,
+            "life": { "type": "Failed", "value": {
+                "reason": { "type": "SettingNotApplied" }, "agent_said": null, "remedy": { "type": "SendAgain" },
+            } },
+            "end": { "type": "At", "value": wall(1100) },
+        }}),
+    ]
 }
 
 /// The chat as it reads, its journal of `version`'s sample applied.
