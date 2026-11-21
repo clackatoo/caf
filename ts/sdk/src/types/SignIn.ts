@@ -29,7 +29,7 @@ code_after: string | null,
 paste: boolean, 
 /**
  * The sites a link may point to, by host name, such as `claude.ai`.
- * A link to any other is refused, and the sign-in ends, so a tampered
- * package can't send the user to a fake sign-in page.
+ * A link to any other is refused, and the sign-in ends: CAF never
+ * shows the user a link to a site the profile doesn't name.
  */
 sites: Array<string>, };

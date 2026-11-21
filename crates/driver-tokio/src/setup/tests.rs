@@ -846,6 +846,7 @@ async fn an_install_makes_its_agents_private_folder_and_never_removes_it() {
     driver.apply(SetupDirective::Remove {
         ticket: Ticket(1002),
         folder: "fake-private".into(),
+        unused_since: ANY_TIME,
     });
     assert_eq!(
         done(&mut driver, Ticket(1002)).await,
@@ -914,6 +915,7 @@ async fn only_install_folders_can_be_installed_or_removed() {
         driver.apply(SetupDirective::Remove {
             ticket,
             folder: folder.into(),
+            unused_since: ANY_TIME,
         });
         let events = done(&mut driver, ticket).await;
         assert_eq!(events, [SetupEvent::Removed { removed: false }], "{folder}");
@@ -940,6 +942,7 @@ async fn an_install_isnt_removed_while_a_process_runs_from_it() {
     setup.apply(SetupDirective::Remove {
         ticket: Ticket(1001),
         folder: "fake-1.0.0".into(),
+        unused_since: ANY_TIME,
     });
     let events = done(&mut setup, Ticket(1001)).await;
     assert_eq!(events, [SetupEvent::Removed { removed: false }]);
@@ -963,6 +966,7 @@ async fn an_install_isnt_removed_while_a_process_runs_from_it() {
         setup.apply(SetupDirective::Remove {
             ticket: Ticket(ticket),
             folder: "fake-1.0.0".into(),
+            unused_since: ANY_TIME,
         });
         let events = done(&mut setup, Ticket(ticket)).await;
         if events == [SetupEvent::Removed { removed: true }] {
@@ -977,6 +981,7 @@ async fn an_install_isnt_removed_while_a_process_runs_from_it() {
     setup.apply(SetupDirective::Remove {
         ticket: Ticket(2000),
         folder: "fake-1.0.0".into(),
+        unused_since: ANY_TIME,
     });
     let events = done(&mut setup, Ticket(2000)).await;
     assert_eq!(events, [SetupEvent::Removed { removed: true }]);
@@ -1005,6 +1010,38 @@ async fn a_program_still_open_for_writing_is_waited_for_briefly() {
     drop(writing);
     let (_, event) = tokio::time::timeout(PATIENCE, agents.next()).await.unwrap();
     assert!(matches!(event, AgentEvent::Started { .. }), "{event:?}");
+}
+
+/// A time later than any folder in these tests was used, so a removal
+/// isn't held for it.
+const ANY_TIME: caf_core::time::Wall = caf_core::time::Wall(i64::MAX);
+
+#[tokio::test]
+async fn a_removal_keeps_a_folder_used_since_the_core_decided() {
+    let dir = Dir::new();
+    let at = |secs: u64| std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
+    for (folder, used) in [("fake-0.8.0", 1_600_000_000), ("fake-0.9.0", 1_700_000_000)] {
+        let install = dir.root().join(folder);
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::File::create(install.join(".used"))
+            .unwrap()
+            .set_modified(at(used))
+            .unwrap();
+    }
+    let mut driver = driver(&dir);
+    for (n, folder, removed) in [(0, "fake-0.8.0", true), (1, "fake-0.9.0", false)] {
+        driver.apply(SetupDirective::Remove {
+            ticket: Ticket(1000 + n),
+            folder: folder.into(),
+            unused_since: caf_core::time::Wall(1_650_000_000_000),
+        });
+        assert_eq!(
+            done(&mut driver, Ticket(1000 + n)).await,
+            [SetupEvent::Removed { removed }],
+            "{folder}"
+        );
+        assert_eq!(dir.root().join(folder).exists(), !removed, "{folder}");
+    }
 }
 
 #[tokio::test]

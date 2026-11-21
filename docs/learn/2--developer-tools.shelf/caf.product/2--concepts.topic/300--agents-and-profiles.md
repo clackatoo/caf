@@ -141,6 +141,9 @@ starting it would only fail: its status shows the sign-in, with its link.
 A sign-in nobody finishes is stopped after a while (10 minutes, unless the
 program sets otherwise), and the chats waiting on it go ahead.
 
+Agents CAF installs from one profile share one sign-in too, whatever
+the program calls them: signing in to one signs in to all of them.
+
 CAF learns whether an agent is signed in from what the agent says when it
 starts and as it works, from a status command where the recipe has one,
 and from failures. Of what the agent says about its account, CAF reads only

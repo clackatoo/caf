@@ -310,8 +310,9 @@ async fn viewers_hear_every_agents_status_and_act_on_agents_only_if_allowed() {
     let dir = Dir::new();
     let (caf, running) = Caf::start(config(&dir, vec![claude(&dir, &signing_in(&dir))]));
 
-    let (to, mut from) = viewer(&caf, ViewerRules::default()).await;
-    let statuses = next_that(&mut from, |message| match message {
+    let (watcher_to, mut watcher) = viewer(&caf, ViewerRules::default()).await;
+    let (to, from) = (watcher_to.clone(), &mut watcher);
+    let statuses = next_that(from, |message| match message {
         ToViewer::Agents(statuses) => Some(statuses),
         _ => None,
     })
@@ -333,10 +334,7 @@ async fn viewers_hear_every_agents_status_and_act_on_agents_only_if_allowed() {
         })
         .await
         .unwrap();
-        assert_eq!(
-            next_that(&mut from, done(request)).await,
-            Outcome::NotAllowed
-        );
+        assert_eq!(next_that(from, done(request)).await, Outcome::NotAllowed);
     }
 
     let _chat = checked(&caf, &dir, "claude").await;
@@ -360,6 +358,18 @@ async fn viewers_hear_every_agents_status_and_act_on_agents_only_if_allowed() {
     })
     .await;
     assert_eq!(link, LINK, "the link reaches the viewer");
+    // A viewer that may only watch sees the sign-in, but not its link: who
+    // opens it chooses whose account the agent signs in to.
+    let seen = next_that(&mut watcher, |message| match message {
+        ToViewer::Agents(statuses) => match &statuses[0].sign_in {
+            SignInState::SigningIn(link) => Some(link.clone()),
+            _ => None,
+        },
+        _ => None,
+    })
+    .await;
+    assert_eq!((seen.url, seen.code), (None, None));
+    drop(watcher_to);
     to.send(FromViewer::Agent {
         request: RequestNo(2),
         agent: name("claude"),

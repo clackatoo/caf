@@ -92,6 +92,12 @@ pub(crate) fn agents() -> Vec<AgentSpec> {
         // Another name for the npm agent, as another host might call it:
         // it shares its install.
         AgentSpec::installed("npm-twin", Builtin::TestNpm),
+        // The npm agent, started by a host's own command.
+        AgentSpec::command(
+            "npm-host",
+            SpawnCommand::new("/opt/npm-host/test-npm-acp"),
+            ProfileChoice::Builtin(Builtin::TestNpm),
+        ),
         // Claude, run by a host as `npx -y <the adapter>`.
         AgentSpec::command(
             "claude-npx",
@@ -640,8 +646,12 @@ fn render_setup(setup: &SetupDirective) -> Value {
             let how = serde_json::to_value(install).expect("installs serialise");
             json!({ "install": ticket.0, "folder": folder, "how": how["type"], "private": private })
         }
-        SetupDirective::Remove { ticket, folder } => {
-            json!({ "remove": ticket.0, "folder": folder })
+        SetupDirective::Remove {
+            ticket,
+            folder,
+            unused_since,
+        } => {
+            json!({ "remove": ticket.0, "folder": folder, "unused_since": unused_since.0 })
         }
         SetupDirective::SignIn {
             ticket,

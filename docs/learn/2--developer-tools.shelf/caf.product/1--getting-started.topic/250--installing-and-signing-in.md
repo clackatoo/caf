@@ -154,7 +154,10 @@ rules.agents = true;
 ```
 
 With it off, a viewer's `FromViewer::Agent` request is answered
-`NotAllowed`.
+`NotAllowed`, and it sees a sign-in under way without its link or code.
+Whoever opens the link and approves it, or types the code on the
+provider's site, chooses whose account the agent signs in to: a viewer
+that may only watch mustn't be able to sign your agent in to its own.
 
 ## Recordings
 
