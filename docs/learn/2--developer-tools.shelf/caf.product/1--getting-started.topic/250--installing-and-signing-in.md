@@ -94,7 +94,12 @@ What CAF does to install it:
   hash it was checked with, and no install script runs. This needs Node 22
   or later, and npm, on `PATH`. CAF never installs Node itself.
 - **Downloads** come over `https` only, and are checked against their
-  SHA-256 before anything is unpacked.
+  SHA-256 before anything is unpacked. They go through the proxy npm would
+  use: `HTTPS_PROXY` (or `HTTP_PROXY`), unless `NO_PROXY` names the host
+  or a domain it's in.
+- **An agent that keeps its sign-in in a folder CAF gives it** gets one,
+  `<agent>-private`, beside its installs, readable only by the user. It
+  outlives every version, and CAF never removes it.
 - **Each install** is built in a hidden folder and renamed into place whole,
   so one cut off partway leaves nothing that looks installed. Two programs
   installing the same agent at once install it once: a lock in the folder
