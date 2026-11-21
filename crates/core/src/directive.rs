@@ -211,7 +211,14 @@ pub enum ViewerDirective {
 ///   one in one step, with its journal.
 /// - **A save it can't read is never overwritten or removed**, unless the
 ///   core deletes it.
-#[non_exhaustive]
+/// - **Every directive with a ticket is answered**, once. A
+///   [`Release`](StorageDirective::Release) has none: it's done as it's
+///   given, before any work given after it.
+///
+/// And the core's: **while a shelf is being moved, no work for a chat on
+/// it, or on the shelf it goes to, is given**, and a move is given only
+/// once all work for chats on both is answered. So a store needn't order
+/// a move against other work.
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[cfg_attr(

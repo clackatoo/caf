@@ -129,7 +129,8 @@
 //!    an adapter's own sign-in status (`_auth/status_update`), as the rest
 //!    holds the account's email, which CAF never keeps; and what an agent
 //!    replays when a restored chat's session is loaded, as CAF has the
-//!    chat's record already, with a report that it did.
+//!    chat's record already: reported once each time the session is asked
+//!    to load.
 //! 4. **Every event names what it belongs to**: a turn, an item, a session,
 //!    a process. A late update lands on its own row, never on whatever is
 //!    current.

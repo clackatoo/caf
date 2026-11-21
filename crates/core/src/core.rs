@@ -687,6 +687,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// Moves every chat on one shelf to another, loaded or not, such as
     /// when framewright saves a project under a new name.
     ///
+    /// The store is asked once nothing for a chat on either shelf is under
+    /// way, and until it answers, nothing more for them is: a chat on one
+    /// that changes, or is opened on one, is written once the move is
+    /// done, on the shelf it's on then; restores, deletions and lists of
+    /// them wait too. A chat is on its new shelf, as [`Core::summaries`]
+    /// says, once the store says it moved.
+    ///
     /// # Errors
     ///
     /// [`Refused::BadShelf`].
@@ -832,7 +839,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             HostCommand::Restore(restore) => self.start_restore(restore, out),
             HostCommand::PutAway { chat } => self.put_chat_away(now, chat, out),
             HostCommand::Delete { chat, shelf } => self.delete_chat(now, chat, shelf, out),
-            HostCommand::MoveShelf { from, to } => self.move_chats(from, to, out),
+            HostCommand::MoveShelf { from, to } => self.move_chats(from, to),
             HostCommand::SetData { chat, data } => self.set_chat_data(chat, data),
             HostCommand::AddAppItem(_) => {
                 report(

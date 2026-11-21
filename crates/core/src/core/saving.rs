@@ -9,6 +9,11 @@
 //! failed one is never followed by one that counts on it: the next is a
 //! snapshot, tried again later.
 //!
+//! A move of a shelf is a barrier: it's sent once nothing for a chat on
+//! either shelf is under way, and until it's answered, work for them
+//! (writes, loads, deletions, lists, letting chats go) waits, then goes
+//! in order, on the shelf the answer says.
+//!
 //! [`Timers::save`]: crate::host::Timers::save
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -68,6 +73,32 @@ pub(super) struct Saving<A: AppItem, D: AppData> {
     /// the lock it takes, if it comes, goes with them, or is let go if the
     /// deletion fails.
     pub(super) deleted: BTreeMap<Ticket, Deleted>,
+    /// The shelf of each piece of work sent to the store that it hasn't
+    /// answered yet, by ticket: what a move of the shelf waits for.
+    pub(super) flights: BTreeMap<Ticket, Shelf>,
+    /// Moves of shelves, waiting or sent, in the order they were asked
+    /// for. While one is, nothing more is sent for either shelf: it waits
+    /// with it.
+    pub(super) moves: Vec<Moving>,
+    /// Loads, deletions and lists waiting for a move of their shelf, by
+    /// ticket, in order.
+    pub(super) waiting: Vec<Ticket>,
+    /// Chats to let go in the store once no move of their shelf waits.
+    pub(super) releases: Vec<(Shelf, ChatId)>,
+}
+
+/// A move of a shelf, waiting or sent.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "inspect", derive(Clone))]
+pub(super) struct Moving {
+    /// Its ticket.
+    pub(super) ticket: Ticket,
+    /// From.
+    pub(super) from: Shelf,
+    /// To.
+    pub(super) to: Shelf,
+    /// It's been sent: it waits for nothing more, and the store does it.
+    pub(super) sent: bool,
 }
 
 /// A chat deleted while it was being restored.
@@ -93,18 +124,37 @@ impl<A: AppItem, D: AppData> Default for Saving<A, D> {
             jobs: BTreeMap::new(),
             away: BTreeMap::new(),
             deleted: BTreeMap::new(),
+            flights: BTreeMap::new(),
+            moves: Vec::new(),
+            waiting: Vec::new(),
+            releases: Vec::new(),
         }
     }
 }
 
 impl<A: AppItem, D: AppData> Saving<A, D> {
     /// Whether every chat that's to be written whole and let go has been:
-    /// nothing put away, being restored or shutting down waits on the
-    /// store.
+    /// nothing put away, being restored, moved or shutting down waits on
+    /// the store.
     pub(super) fn settled(&self) -> bool {
         self.away.is_empty()
             && self.restoring.is_empty()
+            && self.moves.is_empty()
+            && self.waiting.is_empty()
+            && self.releases.is_empty()
             && self.kept.values().all(|kept| !kept.releasing)
+    }
+
+    /// Whether a move of `shelf` waits or is under way: work for chats on
+    /// it waits until it's answered.
+    pub(super) fn blocked(&self, shelf: &Shelf) -> bool {
+        (self.moves.iter()).any(|each| each.from == *shelf || each.to == *shelf)
+    }
+
+    /// Whether work for chats on `shelf` is under way: a move of it waits
+    /// until it's answered.
+    fn busy(&self, shelf: &Shelf) -> bool {
+        self.flights.values().any(|on| on == shelf)
     }
 }
 
@@ -114,17 +164,16 @@ impl<A: AppItem, D: AppData> Saving<A, D> {
 #[cfg_attr(feature = "inspect", derive(Clone))]
 #[allow(clippy::struct_excessive_bools)] // one plain answer each
 pub(super) struct Kept<A: AppItem, D: AppData> {
-    /// Its shelf, once every move of a shelf under way is done.
+    /// Its shelf.
     pub(super) shelf: Shelf,
-    /// The shelf the store holds it on, as the moves it has answered say.
-    pub(super) stored: Shelf,
     /// What's changed since it was last written, squashed as it's added.
     /// Its own list, not the viewers' bounded one, so nothing is lost
     /// however much changes at once; past the size of its last snapshot,
     /// it's written whole instead.
     pub(super) unsaved: Vec<Entry<A, D>>,
-    /// About how big its last snapshot was, in bytes, as the store said:
-    /// 0 until this run writes one.
+    /// About how many bytes its last snapshot took in the store, as the
+    /// store said: 0 until this run writes one, so a restored chat's
+    /// second write is whole.
     pub(super) snapshot_size: u64,
     /// When to write what's changed, if anything has.
     pub(super) due: Option<Mono>,
@@ -166,7 +215,6 @@ impl<A: AppItem, D: AppData> Kept<A, D> {
     /// now if `stored`.
     fn new(shelf: Shelf, made: Wall, stored: bool) -> Self {
         Self {
-            stored: shelf.clone(),
             shelf,
             unsaved: Vec::new(),
             snapshot_size: 0,
@@ -188,7 +236,8 @@ impl<A: AppItem, D: AppData> Kept<A, D> {
     }
 
     /// Adds `entry` to what's unsaved: words streamed to the item the last
-    /// entry grew are added to that entry.
+    /// entry grew are added to that entry, and a tool call that changed
+    /// again replaces the last entry, if that was its change.
     pub(super) fn add(&mut self, entry: Entry<A, D>) {
         self.add_with(|| entry);
     }
@@ -213,9 +262,19 @@ impl<A: AppItem, D: AppData> Kept<A, D> {
             && item == more
         {
             text.push_str(added);
-        } else {
-            self.unsaved.push(entry);
+            return;
         }
+        if let (
+            Some(Entry::Change(Change::ToolChanged { item, .. })),
+            Entry::Change(Change::ToolChanged { item: again, .. }),
+        ) = (self.unsaved.last(), &entry)
+            && item == again
+            && let Some(last) = self.unsaved.last_mut()
+        {
+            *last = entry;
+            return;
+        }
+        self.unsaved.push(entry);
     }
 }
 
@@ -224,10 +283,8 @@ impl<A: AppItem, D: AppData> Kept<A, D> {
 #[serde(bound = "A: AppItem, D: AppData")]
 #[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) struct Away<A: AppItem, D: AppData> {
-    /// Its shelf, once every move of a shelf under way is done.
+    /// Its shelf.
     pub(super) shelf: Shelf,
-    /// The shelf the store holds it on, as the moves it has answered say.
-    pub(super) stored: Shelf,
     /// It, whole.
     pub(super) saved: Box<Saved<A, D>>,
     /// The write under way.
@@ -246,7 +303,7 @@ pub(super) enum Job {
     /// Listing a shelf.
     List(Shelf),
     /// Adding to a chat's journal.
-    Write(ChatId),
+    Append(ChatId),
     /// Writing a loaded chat whole.
     Snapshot(ChatId),
     /// Writing a chat put away whole, to let it go once it's written.
@@ -260,16 +317,6 @@ pub(super) enum Job {
         /// It was loaded or put away, so its lock was this run's: let go
         /// if it couldn't be deleted.
         held: bool,
-    },
-    /// Moving a shelf.
-    Move {
-        /// From.
-        from: Shelf,
-        /// To.
-        to: Shelf,
-        /// The loads, of restores and of chats deleted while restored,
-        /// that moved with it: moved back if it couldn't be.
-        loads: Vec<Ticket>,
     },
 }
 
@@ -326,6 +373,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         event: StorageEvent<A, D>,
         out: &mut Vec<Directive<A, D>>,
     ) {
+        self.saving.flights.remove(&ticket);
+        if let Some(at) =
+            (self.saving.moves.iter()).position(|each| each.sent && each.ticket == ticket)
+        {
+            let moving = self.saving.moves.remove(at);
+            return self.moved(moving, event, out);
+        }
         if let Some(restore) = self.saving.restoring.remove(&ticket) {
             return match event {
                 StorageEvent::Loaded(saved) => self.restored(restore, *saved, out),
@@ -370,10 +424,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
             // A write of a chat that's gone, or isn't the one under way,
             // changes nothing.
-            (Job::Write(chat) | Job::Snapshot(chat), _)
+            (Job::Append(chat) | Job::Snapshot(chat), _)
                 if (self.saving.kept.get(&chat))
                     .is_none_or(|kept| kept.writing != Some(ticket)) => {}
-            (Job::Write(chat), StorageEvent::Done { written }) => {
+            (Job::Append(chat), StorageEvent::Done { written }) => {
                 if let Some(kept) = self.saving.kept.get_mut(&chat) {
                     kept.writing = None;
                     kept.journal = kept.journal.saturating_add(written);
@@ -390,7 +444,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 }
                 self.release_if_done(now, chat, out);
             }
-            (Job::Write(chat) | Job::Snapshot(chat), StorageEvent::Failed(why)) => {
+            (Job::Append(chat) | Job::Snapshot(chat), StorageEvent::Failed(why)) => {
                 let Some(kept) = self.saving.kept.get_mut(&chat) else {
                     return;
                 };
@@ -419,10 +473,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     // Listed as written, even if it wasn't when the shelf
                     // was read.
                     self.relist(&shelf, chat, Some((saved.header, SavedState::Saved)));
-                    out.push(Directive::Storage(StorageDirective::Release {
-                        shelf,
-                        chat,
-                    }));
+                    self.release(shelf, chat, out);
                 }
             }
             (Job::Away(chat), StorageEvent::Failed(why)) => {
@@ -446,31 +497,19 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 // Gone, with any lock a load took.
                 self.saving.deleted.retain(|_, each| each.chat != chat);
             }
-            (Job::Move { from, to, .. }, StorageEvent::Done { .. }) => {
-                self.moved(now, &from, &to, true);
-                // What each holds now is the store's: read again, if
-                // listed, as a list read before the move may hold what
-                // moved.
-                for shelf in [from, to] {
-                    if self.saving.shelves.contains_key(&shelf) {
-                        self.list_again(shelf, out);
-                    }
-                }
-            }
             (Job::Delete { chat, shelf, held }, StorageEvent::Failed(why)) => {
                 report(
                     out,
                     Level::Warn,
-                    format!("chat {chat} couldn't be deleted: {why}"),
+                    format!(
+                        "chat {chat} couldn't be deleted, and an older copy of it stays on shelf {:?}: what it hadn't written yet is gone: {why}",
+                        shelf.0
+                    ),
                 );
                 // It's still there, held by this run: let go, and listed
                 // again.
                 if held {
-                    let shelf = shelf.clone();
-                    out.push(Directive::Storage(StorageDirective::Release {
-                        shelf,
-                        chat,
-                    }));
+                    self.release(shelf.clone(), chat, out);
                 }
                 if self.saving.shelves.contains_key(&shelf) {
                     self.list_again(shelf, out);
@@ -487,24 +526,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                         ..
                     }) = self.saving.deleted.remove(&load)
                     {
-                        out.push(Directive::Storage(StorageDirective::Release {
-                            shelf,
-                            chat,
-                        }));
-                    }
-                }
-            }
-            (Job::Move { from, to, loads }, StorageEvent::Failed(why)) => {
-                report(
-                    out,
-                    Level::Warn,
-                    format!("shelf {:?} couldn't be moved to {:?}: {why}", from.0, to.0),
-                );
-                self.moved(now, &from, &to, false);
-                self.unmove_loads(&from, &to, &loads);
-                for shelf in [from, to] {
-                    if self.saving.shelves.contains_key(&shelf) {
-                        self.list_again(shelf, out);
+                        self.release(shelf, chat, out);
                     }
                 }
             }
@@ -535,8 +557,145 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// Asks the store for a shelf's chats.
     fn list_again(&mut self, shelf: Shelf, out: &mut Vec<Directive<A, D>>) {
         let ticket = Ticket(self.ids.take());
-        self.saving.jobs.insert(ticket, Job::List(shelf.clone()));
-        out.push(Directive::Storage(StorageDirective::List { ticket, shelf }));
+        self.saving.jobs.insert(ticket, Job::List(shelf));
+        self.dispatch(ticket, out);
+    }
+
+    /// Sends the load, deletion or list of `ticket`, or has it wait for a
+    /// move of its shelf.
+    fn dispatch(&mut self, ticket: Ticket, out: &mut Vec<Directive<A, D>>) {
+        let directive = match (
+            self.saving.restoring.get(&ticket),
+            self.saving.jobs.get(&ticket),
+        ) {
+            (Some(restore), _) => StorageDirective::Load {
+                ticket,
+                shelf: restore.shelf.clone(),
+                chat: restore.chat,
+            },
+            (None, Some(Job::List(shelf))) => StorageDirective::List {
+                ticket,
+                shelf: shelf.clone(),
+            },
+            (None, Some(Job::Delete { chat, shelf, .. })) => StorageDirective::Delete {
+                ticket,
+                shelf: shelf.clone(),
+                chat: *chat,
+            },
+            _ => return,
+        };
+        match shelf_of(&directive) {
+            Some(shelf) if self.saving.blocked(&shelf) => self.saving.waiting.push(ticket),
+            _ => self.hand_over(directive, out),
+        }
+    }
+
+    /// Sends `directive`, noting its shelf until it's answered.
+    fn hand_over(&mut self, directive: StorageDirective<A, D>, out: &mut Vec<Directive<A, D>>) {
+        if let (Some(ticket), Some(shelf)) = (ticket_of(&directive), shelf_of(&directive)) {
+            self.saving.flights.insert(ticket, shelf);
+        }
+        out.push(Directive::Storage(directive));
+    }
+
+    /// Lets `chat` go in the store, on `shelf`: once no move of the shelf
+    /// waits.
+    fn release(&mut self, shelf: Shelf, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
+        if self.saving.blocked(&shelf) {
+            self.saving.releases.push((shelf, chat));
+        } else {
+            out.push(Directive::Storage(StorageDirective::Release {
+                shelf,
+                chat,
+            }));
+        }
+    }
+
+    /// A move was answered: if it was done, every chat on the shelf it
+    /// was from is on the shelf it went to, and work waiting for one there
+    /// goes there. Both are listed again, if listed, as a list read before
+    /// it doesn't hold what moved.
+    fn moved(&mut self, moving: Moving, event: StorageEvent<A, D>, out: &mut Vec<Directive<A, D>>) {
+        let Moving { from, to, .. } = moving;
+        match event {
+            StorageEvent::Done { .. } => {
+                let on = |shelf: &mut Shelf| {
+                    if *shelf == from {
+                        shelf.clone_from(&to);
+                    }
+                };
+                self.saving
+                    .kept
+                    .values_mut()
+                    .for_each(|kept| on(&mut kept.shelf));
+                self.saving
+                    .away
+                    .values_mut()
+                    .for_each(|away| on(&mut away.shelf));
+                (self.saving.releases.iter_mut()).for_each(|(shelf, _)| on(shelf));
+                for ticket in &self.saving.waiting {
+                    if let Some(restore) = self.saving.restoring.get_mut(ticket) {
+                        on(&mut restore.shelf);
+                    }
+                    if let Some(Job::Delete { shelf, .. }) = self.saving.jobs.get_mut(ticket) {
+                        on(shelf);
+                    }
+                }
+            }
+            StorageEvent::Failed(why) => report(
+                out,
+                Level::Warn,
+                format!("shelf {:?} couldn't be moved to {:?}: {why}", from.0, to.0),
+            ),
+            other => report(
+                out,
+                Level::Warn,
+                format!("the store answered a move with {}", kind(&other)),
+            ),
+        }
+        for shelf in [from, to] {
+            if self.saving.shelves.contains_key(&shelf) {
+                self.list_again(shelf, out);
+            }
+        }
+    }
+
+    /// As a call ends, once no move of their shelves waits: chats are let
+    /// go, and work waiting is sent, in order; then each move waiting
+    /// whose shelves have no work under way is sent.
+    fn unblock(&mut self, out: &mut Vec<Directive<A, D>>) {
+        let releases = std::mem::take(&mut self.saving.releases);
+        for (shelf, chat) in releases {
+            self.release(shelf, chat, out);
+        }
+        for ticket in std::mem::take(&mut self.saving.waiting) {
+            self.dispatch(ticket, out);
+        }
+    }
+
+    /// Sends each move waiting whose shelves have no work under way, and
+    /// no earlier move of either waiting.
+    fn send_moves(&mut self, out: &mut Vec<Directive<A, D>>) {
+        for at in 0..self.saving.moves.len() {
+            let moving = &self.saving.moves[at];
+            let shares = |each: &Moving| {
+                [&each.from, &each.to].contains(&&moving.from)
+                    || [&each.from, &each.to].contains(&&moving.to)
+            };
+            let ready = !moving.sent
+                && !self.saving.busy(&moving.from)
+                && !self.saving.busy(&moving.to)
+                && !self.saving.moves[..at].iter().any(shares);
+            if ready {
+                let moving = &mut self.saving.moves[at];
+                moving.sent = true;
+                out.push(Directive::Storage(StorageDirective::MoveShelf {
+                    ticket: moving.ticket,
+                    from: moving.from.clone(),
+                    to: moving.to.clone(),
+                }));
+            }
+        }
     }
 
     /// The store listed `shelf`: its chats, each loaded one as it is now,
@@ -681,13 +840,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return Err(Refused::Loaded);
         }
         let ticket = Ticket(self.ids.take());
-        out.push(Directive::Storage(StorageDirective::Load {
-            ticket,
-            shelf: restore.shelf.clone(),
-            chat: restore.chat,
-        }));
         self.relist_state(&restore.shelf, restore.chat, SavedState::Restoring);
         self.saving.restoring.insert(ticket, restore);
+        self.dispatch(ticket, out);
         Ok(())
     }
 
@@ -848,10 +1003,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         );
         self.relist_state(&shelf, chat, SavedState::Failed(why));
         if locked {
-            out.push(Directive::Storage(StorageDirective::Release {
-                shelf,
-                chat,
-            }));
+            self.release(shelf, chat, out);
         }
     }
 
@@ -892,7 +1044,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(kept) = self.forget(chat) else {
             return;
         };
-        let Kept { shelf, stored, .. } = kept;
+        let Kept { shelf, .. } = kept;
+        let blocked = self.saving.blocked(&shelf);
         self.relist(
             &shelf,
             chat,
@@ -902,16 +1055,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             chat,
             Away {
                 shelf,
-                stored,
                 saved: Box::new(saved),
                 writing: None,
                 retry: None,
                 failures: 0,
             },
         );
-        // At once, unless its shelf is being moved: then once it's said
-        // whether it moved.
-        if !self.moving() {
+        // At once, unless a move of its shelf waits: then once it's
+        // answered.
+        if !blocked {
             self.write_away(chat, out);
         }
     }
@@ -931,7 +1083,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.saving.kept.remove(&chat)
     }
 
-    /// Writes a chat put away again, after a write of it failed.
+    /// Writes a chat put away whole: as it's put away, and again after a
+    /// write of it failed.
     pub(super) fn write_away(&mut self, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
         let ticket = Ticket(self.ids.take());
         let Some(away) = self.saving.away.get_mut(&chat) else {
@@ -939,12 +1092,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         away.retry = None;
         away.writing = Some(ticket);
-        self.saving.jobs.insert(ticket, Job::Away(chat));
-        out.push(Directive::Storage(StorageDirective::Snapshot {
+        let snapshot = StorageDirective::Snapshot {
             ticket,
             shelf: away.shelf.clone(),
             saved: away.saved.clone(),
-        }));
+        };
+        self.saving.jobs.insert(ticket, Job::Away(chat));
+        self.hand_over(snapshot, out);
     }
 
     /// Deletes a chat.
@@ -975,6 +1129,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .collect();
         for load in loads {
             self.saving.restoring.remove(&load);
+            // A load not sent yet just isn't.
+            if let Some(at) = self.saving.waiting.iter().position(|each| *each == load) {
+                self.saving.waiting.remove(at);
+                continue;
+            }
             let deleted = Deleted {
                 chat,
                 shelf: shelf.clone(),
@@ -990,138 +1149,26 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             held,
         };
         self.saving.jobs.insert(ticket, job);
-        out.push(Directive::Storage(StorageDirective::Delete {
-            ticket,
-            shelf,
-            chat,
-        }));
+        self.dispatch(ticket, out);
         Ok(())
     }
 
-    /// Moves a shelf.
-    pub(super) fn move_chats(
-        &mut self,
-        from: Shelf,
-        to: Shelf,
-        out: &mut Vec<Directive<A, D>>,
-    ) -> Result<(), Refused> {
+    /// Moves a shelf: once nothing is under way for a chat on either, and
+    /// meanwhile nothing more is sent for them.
+    pub(super) fn move_chats(&mut self, from: Shelf, to: Shelf) -> Result<(), Refused> {
         check_shelf(&from)?;
         check_shelf(&to)?;
         if from == to {
             return Ok(());
         }
-        let mut loads = Vec::new();
-        for kept in self.saving.kept.values_mut() {
-            if kept.shelf == from {
-                kept.shelf = to.clone();
-            }
-        }
-        for away in self.saving.away.values_mut() {
-            if away.shelf == from {
-                away.shelf = to.clone();
-            }
-        }
-        for (&load, restore) in &mut self.saving.restoring {
-            if restore.shelf == from {
-                restore.shelf = to.clone();
-                loads.push(load);
-            }
-        }
-        for (&load, deleted) in &mut self.saving.deleted {
-            if deleted.shelf == from {
-                deleted.shelf = to.clone();
-                loads.push(load);
-            }
-        }
-        // What's listed of the one goes to the other, if that's listed
-        // too: it's read again once the move is done.
-        if let Some(list) = self.saving.shelves.get_mut(&from) {
-            let moved = std::mem::take(list);
-            if let Some(into) = self.saving.shelves.get_mut(&to) {
-                into.extend(moved.into_iter().map(|each| SavedChat {
-                    shelf: to.clone(),
-                    ..each
-                }));
-                into.sort_by_key(|each| (each.header.made, each.header.chat));
-            }
-        }
-        let loaded: Vec<ChatId> = (self.saving.kept.iter())
-            .filter(|(_, kept)| kept.shelf == to)
-            .map(|(&chat, _)| chat)
-            .collect();
-        for chat in loaded {
-            self.relist_loaded(chat);
-        }
         let ticket = Ticket(self.ids.take());
-        let job = Job::Move {
-            from: from.clone(),
-            to: to.clone(),
-            loads,
-        };
-        self.saving.jobs.insert(ticket, job);
-        out.push(Directive::Storage(StorageDirective::MoveShelf {
+        self.saving.moves.push(Moving {
             ticket,
             from,
             to,
-        }));
+            sent: false,
+        });
         Ok(())
-    }
-
-    /// The store moved `from` to `to`, if `done`, or failed to. Each chat
-    /// loaded or put away is where the store holds it now, with the moves
-    /// still under way done after, in order, as the store does them: a
-    /// chat that ends up elsewhere than was thought is in doubt, and is
-    /// written whole.
-    fn moved(&mut self, now: Now, from: &Shelf, to: &Shelf, done: bool) {
-        let pending: Vec<(Shelf, Shelf)> = (self.saving.jobs.values())
-            .filter_map(|job| match job {
-                Job::Move { from, to, .. } => Some((from.clone(), to.clone())),
-                _ => None,
-            })
-            .collect();
-        let after = |stored: &Shelf| {
-            (pending.iter()).fold(
-                stored.clone(),
-                |at, (from, to)| {
-                    if at == *from { to.clone() } else { at }
-                },
-            )
-        };
-        for kept in self.saving.kept.values_mut() {
-            if done && kept.stored == *from {
-                kept.stored = to.clone();
-            }
-            let shelf = after(&kept.stored);
-            if shelf != kept.shelf {
-                kept.shelf = shelf;
-                kept.whole = true;
-                kept.behind = true;
-                kept.due = Some(now.mono);
-            }
-        }
-        for away in self.saving.away.values_mut() {
-            if done && away.stored == *from {
-                away.stored = to.clone();
-            }
-            away.shelf = after(&away.stored);
-        }
-    }
-
-    /// A move from `from` to `to` failed: the loads that moved with it
-    /// move back.
-    fn unmove_loads(&mut self, from: &Shelf, to: &Shelf, loads: &[Ticket]) {
-        for load in loads {
-            if let Some(restore) =
-                (self.saving.restoring.get_mut(load)).filter(|each| each.shelf == *to)
-            {
-                restore.shelf = from.clone();
-            }
-            if let Some(deleted) =
-                (self.saving.deleted.get_mut(load)).filter(|each| each.shelf == *to)
-            {
-                deleted.shelf = from.clone();
-            }
-        }
     }
 
     /// Sets a chat's data slot.
@@ -1186,6 +1233,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// As a call ends: what changed of each saved chat is noted, and each
     /// due to be written is.
     pub(super) fn save_due(&mut self, now: Now, out: &mut Vec<Directive<A, D>>) {
+        self.unblock(out);
         let chats: Vec<ChatId> = self.saving.kept.keys().copied().collect();
         for chat in chats {
             self.note_session(chat);
@@ -1198,20 +1246,21 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .filter(|(_, away)| {
                 away.writing.is_none()
                     && away.retry.is_none_or(|at| at <= now.mono)
-                    && !self.moving()
+                    && !self.saving.blocked(&away.shelf)
             })
             .map(|(&chat, _)| chat)
             .collect();
         for chat in away {
             self.write_away(chat, out);
         }
+        self.send_moves(out);
     }
 
     /// When `chat` is next written, if it's waiting to be: never while a
     /// write of it is under way.
     pub(super) fn save_at(&self, chat: ChatId) -> Option<Mono> {
         let kept = self.saving.kept.get(&chat)?;
-        if kept.writing.is_some() || self.moving() {
+        if kept.writing.is_some() || self.saving.blocked(&kept.shelf) {
             return None;
         }
         let due = kept.due?;
@@ -1221,14 +1270,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// When a chat put away is next written, after a write of it failed.
     pub(super) fn away_at(&self, chat: ChatId) -> Option<Mono> {
         let away = self.saving.away.get(&chat)?;
-        (away.writing.is_none() && !self.moving()).then_some(away.retry?)
-    }
-
-    /// Whether a shelf is being moved: until the store says whether it
-    /// moved, no saved chat is written, as a write could land on a shelf
-    /// the chat isn't on. Moves are rare, and quick.
-    fn moving(&self) -> bool {
-        (self.saving.jobs.values()).any(|job| matches!(job, Job::Move { .. }))
+        (away.writing.is_none() && !self.saving.blocked(&away.shelf)).then_some(away.retry?)
     }
 
     /// Writes what's changed of `chat`: whole if it must be or its journal
@@ -1280,14 +1322,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     header,
                     entries,
                 };
-                (append, Job::Write(chat))
+                (append, Job::Append(chat))
             }
             (None, None) => return,
         };
         kept.behind = false;
         kept.writing = Some(ticket);
         self.saving.jobs.insert(ticket, job);
-        out.push(Directive::Storage(directive));
+        self.hand_over(directive, out);
         self.relist_loaded(chat);
     }
 
@@ -1306,10 +1348,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         kept.releasing = false;
         kept.whole = true;
-        out.push(Directive::Storage(StorageDirective::Release {
-            shelf: kept.shelf.clone(),
-            chat,
-        }));
+        let shelf = kept.shelf.clone();
+        self.release(shelf, chat, out);
     }
 
     /// `chat`, whole, as it's saved.
@@ -1347,7 +1387,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// Starts keeping new chat `chat`, made at `now`, on `shelf`.
     pub(super) fn keep_new(&mut self, now: Now, chat: ChatId, shelf: Shelf) {
-        (self.saving.kept).insert(chat, Kept::new(shelf, now.wall, false));
+        self.saving
+            .kept
+            .insert(chat, Kept::new(shelf, now.wall, false));
         self.relist_loaded(chat);
     }
 }
@@ -1504,6 +1546,33 @@ fn kind<A: AppItem, D: AppData>(event: &StorageEvent<A, D>) -> &'static str {
         StorageEvent::NotLoaded(_) => "a failed load",
         StorageEvent::Done { .. } => "done",
         StorageEvent::Failed(_) => "a failure",
+    }
+}
+
+/// The ticket a storage directive is answered with, if it's answered.
+fn ticket_of<A: AppItem, D: AppData>(directive: &StorageDirective<A, D>) -> Option<Ticket> {
+    match directive {
+        StorageDirective::List { ticket, .. }
+        | StorageDirective::Load { ticket, .. }
+        | StorageDirective::Snapshot { ticket, .. }
+        | StorageDirective::Append { ticket, .. }
+        | StorageDirective::Delete { ticket, .. }
+        | StorageDirective::MoveShelf { ticket, .. } => Some(*ticket),
+        StorageDirective::Release { .. } => None,
+    }
+}
+
+/// The shelf a storage directive's work is on: none for a move, which
+/// is on two.
+fn shelf_of<A: AppItem, D: AppData>(directive: &StorageDirective<A, D>) -> Option<Shelf> {
+    match directive {
+        StorageDirective::List { shelf, .. }
+        | StorageDirective::Load { shelf, .. }
+        | StorageDirective::Snapshot { shelf, .. }
+        | StorageDirective::Append { shelf, .. }
+        | StorageDirective::Delete { shelf, .. }
+        | StorageDirective::Release { shelf, .. } => Some(shelf.clone()),
+        StorageDirective::MoveShelf { .. } => None,
     }
 }
 

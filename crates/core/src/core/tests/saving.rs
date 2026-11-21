@@ -58,8 +58,8 @@ fn done(written: u64) -> StorageEvent {
 struct Store {
     /// Each chat's snapshot and the journal after it.
     chats: BTreeMap<(Shelf, ChatId), (Saved, Vec<Entry>)>,
-    /// The chats locked.
-    locked: BTreeSet<ChatId>,
+    /// The chats locked, on their shelves.
+    locked: BTreeSet<(Shelf, ChatId)>,
     /// Work given and not done yet, oldest first.
     work: VecDeque<StorageDirective>,
     /// How many snapshots, journal entries, failures, loads and releases
@@ -68,10 +68,37 @@ struct Store {
 }
 
 impl Store {
-    /// Takes on the storage work in `out`.
+    /// Takes on the storage work in `out`, checking the core keeps its
+    /// side of the contract: no work for a shelf being moved, and no move
+    /// while work for either shelf is under way.
     fn take(&mut self, out: &[Value]) {
         for directive in storage(out) {
-            let work = serde_json::from_value(directive).expect("storage work reads back");
+            let work: StorageDirective =
+                serde_json::from_value(directive).expect("storage work reads back");
+            let shelves = |work: &StorageDirective| match work {
+                StorageDirective::List { shelf, .. }
+                | StorageDirective::Load { shelf, .. }
+                | StorageDirective::Snapshot { shelf, .. }
+                | StorageDirective::Append { shelf, .. }
+                | StorageDirective::Delete { shelf, .. }
+                | StorageDirective::Release { shelf, .. } => vec![shelf.clone()],
+                StorageDirective::MoveShelf { from, to, .. } => vec![from.clone(), to.clone()],
+            };
+            let moving =
+                |work: &StorageDirective| matches!(work, StorageDirective::MoveShelf { .. });
+            let mine = shelves(&work);
+            let meets =
+                |other: &StorageDirective| shelves(other).iter().any(|shelf| mine.contains(shelf));
+            for other in self.work.iter().filter(|other| meets(other)) {
+                // A move goes once all else for its shelves is answered;
+                // a chat let go before it is let go as it's given.
+                let ok = if moving(&work) {
+                    matches!(other, StorageDirective::Release { .. })
+                } else {
+                    !moving(other)
+                };
+                assert!(ok, "{work:?} given while {other:?} is under way");
+            }
             self.work.push_back(work);
         }
     }
@@ -108,7 +135,7 @@ impl Store {
                         "chat {id} written to {shelf:?} is on another shelf"
                     );
                     let written = serde_json::to_vec(&saved).expect("JSON").len();
-                    self.locked.insert(saved.chat.id);
+                    self.locked.insert((shelf.clone(), saved.chat.id));
                     self.chats
                         .insert((shelf, saved.chat.id), (*saved, Vec::new()));
                     (ticket, done(written as u64))
@@ -121,16 +148,22 @@ impl Store {
                 } => {
                     self.counts[1] += entries.len();
                     let written = serde_json::to_vec(&entries).expect("JSON").len();
+                    assert!(
+                        self.locked.contains(&(shelf.clone(), header.chat)),
+                        "added to while locked, on its shelf"
+                    );
                     let (saved, journal) = (self.chats.get_mut(&(shelf, header.chat)))
                         .expect("a journal is added to after its snapshot");
-                    assert!(self.locked.contains(&header.chat), "written while locked");
                     saved.header = header;
                     journal.extend(entries);
                     (ticket, done(written as u64))
                 }
-                StorageDirective::Release { chat, .. } => {
+                StorageDirective::Release { shelf, chat } => {
                     self.counts[4] += 1;
-                    assert!(self.locked.remove(&chat), "released only if locked");
+                    assert!(
+                        self.locked.remove(&(shelf.clone(), chat)),
+                        "chat {chat} let go only if locked on {shelf:?}"
+                    );
                     continue;
                 }
                 StorageDirective::Load {
@@ -139,9 +172,10 @@ impl Store {
                     chat,
                 } => {
                     self.counts[3] += 1;
+                    let locked = self.locked.iter().any(|(_, each)| *each == chat);
                     let event = match self.read(&shelf, chat) {
-                        Some(saved) if !self.locked.contains(&chat) => {
-                            self.locked.insert(chat);
+                        Some(saved) if !locked => {
+                            self.locked.insert((shelf, chat));
                             StorageEvent::Loaded(Box::new(saved))
                         }
                         Some(_) => StorageEvent::NotLoaded(crate::save::CannotRestore::InUse),
@@ -162,8 +196,12 @@ impl Store {
                     shelf,
                     chat,
                 } => {
+                    assert!(
+                        (self.locked.iter()).all(|(on, each)| *each != chat || *on == shelf),
+                        "chat {chat} deleted from {shelf:?}, where it isn't"
+                    );
+                    self.locked.remove(&(shelf.clone(), chat));
                     self.chats.remove(&(shelf, chat));
-                    self.locked.remove(&chat);
                     (ticket, done(0))
                 }
                 StorageDirective::MoveShelf { ticket, from, to } => {
@@ -173,6 +211,9 @@ impl Store {
                         .collect();
                     for key in moving {
                         let stored = self.chats.remove(&key).expect("there");
+                        if self.locked.remove(&key) {
+                            self.locked.insert((to.clone(), key.1));
+                        }
                         self.chats.insert((to.clone(), key.1), stored);
                     }
                     (ticket, done(0))
@@ -1041,16 +1082,12 @@ fn moving_a_shelf_moves_its_loaded_chats_and_its_list() {
         &one_storage(&out),
         &json!({ "type": "MoveShelf", "value": { "from": SHELF, "to": "renamed" } }),
     );
+    // Until the store says it moved, it's where it was.
     let renamed = Shelf("renamed".to_owned());
     assert_eq!(
-        script.core.saved(&Shelf(SHELF.to_owned())),
-        Some(Vec::new())
+        script.core.summaries()[0].shelf.as_ref(),
+        Some(&Shelf(SHELF.to_owned()))
     );
-    assert_has(
-        &serde_json::to_value(script.core.saved(&renamed)).expect("JSON"),
-        &json!([{ "shelf": "renamed", "header": { "chat": CHAT }, "state": { "type": "Loaded" } }]),
-    );
-    assert_eq!(script.core.summaries()[0].shelf.as_ref(), Some(&renamed));
     store.take(&out);
     // Once moved, both shelves are read again.
     let out = script.serve(&mut store, false);
@@ -1060,6 +1097,15 @@ fn moving_a_shelf_moves_its_loaded_chats_and_its_list() {
             { "type": "List", "value": { "shelf": SHELF } },
             { "type": "List", "value": { "shelf": "renamed" } }
         ]),
+    );
+    assert_eq!(script.core.summaries()[0].shelf.as_ref(), Some(&renamed));
+    assert_eq!(
+        script.core.saved(&Shelf(SHELF.to_owned())),
+        Some(Vec::new())
+    );
+    assert_has(
+        &serde_json::to_value(script.core.saved(&renamed)).expect("JSON"),
+        &json!([{ "shelf": "renamed", "header": { "chat": CHAT }, "state": { "type": "Loaded" } }]),
     );
     // Its next write goes to its new shelf.
     script.at(2000);
@@ -1116,14 +1162,14 @@ fn a_listed_shelf_is_kept_up_to_date() {
         &list(&script),
         &json!([{ "state": { "type": "Restoring" } }, {}]),
     );
-    store.locked.insert(other);
+    store.locked.insert((Shelf(SHELF.to_owned()), other));
     store.take(&out);
     script.serve(&mut store, false);
     assert_has(
         &list(&script),
         &json!([{ "state": { "type": "Failed", "value": { "type": "InUse" } } }, {}]),
     );
-    store.locked.remove(&other);
+    store.locked.remove(&(Shelf(SHELF.to_owned()), other));
     store.take(
         &script
             .restore(RestoreChat::new(other, Shelf(SHELF.to_owned())))
@@ -1397,6 +1443,15 @@ fn random_script(seed: u64) -> [usize; 5] {
                 &mut proc,
                 &mut prompt,
             );
+            // Moved, deleted or listed while its write is under way.
+            let out = meddle(&mut script, &mut dice, other);
+            follow(
+                &mut script,
+                &mut store,
+                (out, false),
+                &mut proc,
+                &mut prompt,
+            );
             end_process(&mut script, proc);
             settle(
                 &mut script,
@@ -1406,10 +1461,19 @@ fn random_script(seed: u64) -> [usize; 5] {
                 &mut proc,
                 &mut prompt,
             );
-            // Restored, though the store may fail to load it.
+            // Restored, though the store may fail to load it, and moved,
+            // deleted or listed while it loads.
             while script.core.chat(CHAT).is_none() {
                 let shelf = store.shelf_of(CHAT).expect("it's stored");
                 let out = script.restore(RestoreChat::new(CHAT, shelf)).1;
+                follow(
+                    &mut script,
+                    &mut store,
+                    (out, false),
+                    &mut proc,
+                    &mut prompt,
+                );
+                let out = meddle(&mut script, &mut dice, other);
                 follow(
                     &mut script,
                     &mut store,
@@ -1622,6 +1686,20 @@ fn random_script(seed: u64) -> [usize; 5] {
         script.answers(proc, id, &json!({ "stopReason": "end_turn" }));
     }
     store.counts
+}
+
+/// Moves one of the fuzz's shelves to the other, deletes `other` from
+/// one, or lists one, or nothing, as the dice say.
+fn meddle(script: &mut Script, dice: &mut Dice, other: ChatId) -> Vec<Value> {
+    let shelves = [SHELF, "else"];
+    let shelf = shelves[usize::try_from(dice.roll(2)).unwrap_or(0)];
+    let elsewhere = if shelf == SHELF { "else" } else { SHELF };
+    match dice.roll(4) {
+        0 => script.move_shelf(shelf, elsewhere).1,
+        1 => script.delete(other, shelf).1,
+        2 => script.list_saved(shelf).1,
+        _ => Vec::new(),
+    }
 }
 
 /// The shelf the core keeps [`CHAT`] on, loaded or put away.
@@ -2107,7 +2185,7 @@ fn a_restore_in_flight_as_caf_shuts_down_is_written_whole_and_let_go() {
 }
 
 #[test]
-fn a_shelf_that_couldnt_be_moved_takes_its_chats_back_written_whole() {
+fn a_move_waits_for_work_on_its_shelves_and_a_failed_one_leaves_its_chats_where_they_were() {
     let mut script = Script::new(host());
     // A chat written, and another put away whose write is under way.
     script.open_saved("claude");
@@ -2117,28 +2195,28 @@ fn a_shelf_that_couldnt_be_moved_takes_its_chats_back_written_whole() {
     let (other, _) = script.open(saved_open("claude"));
     let other = other.expect("opened");
     let away = ticket(&one_storage(&script.put_away(other).1));
-    let out = script.move_shelf(SHELF, "renamed").1;
-    let moving = ticket(&one_storage(&out));
-    let shelves = |script: &Script| {
-        let state = script.state();
-        (
-            state["saving"]["kept"][CHAT.to_string()]["shelf"].clone(),
-            state["saving"]["away"][other.to_string()]["shelf"].clone(),
-        )
-    };
-    assert_eq!(shelves(&script), (json!("renamed"), json!("renamed")));
-    let out = script.storage(moving, StorageEvent::Failed("in use".to_owned()));
-    assert_eq!(shelves(&script), (json!(SHELF), json!(SHELF)));
-    // What the store holds of it is in doubt: it's written whole, where
-    // it was.
+    // The move waits for the write.
+    assert!(storage(&script.move_shelf(SHELF, "renamed").1).is_empty());
+    // Written, the move goes, and letting the chat go waits for it.
+    let out = script.storage(away, done(10_000));
+    let moving = one_storage(&out);
+    assert_eq!(moving["type"], "MoveShelf");
+    // Meanwhile, nothing is written for the chat on it.
+    script.at(2000);
+    script.send(CHAT, "Run the tests").0.expect("sent");
+    script.at(3000);
+    assert!(storage(&script.woken()).is_empty());
+    let out = script.storage(ticket(&moving), StorageEvent::Failed("in use".to_owned()));
     assert_has(
         &json!(storage(&out)),
-        &json!([{ "type": "Snapshot", "value": { "shelf": SHELF, "saved": { "header": { "chat": CHAT } } } }]),
+        &json!([
+            { "type": "Release", "value": { "shelf": SHELF, "chat": other } },
+            { "type": "Append", "value": { "shelf": SHELF, "header": { "chat": CHAT } } }
+        ]),
     );
-    let out = script.storage(away, done(10_000));
     assert_eq!(
-        storage(&out),
-        [json!({ "type": "Release", "value": { "shelf": SHELF, "chat": other } })]
+        script.core.summaries()[0].shelf,
+        Some(Shelf(SHELF.to_owned()))
     );
 }
 
@@ -2181,20 +2259,22 @@ fn a_list_read_before_a_deletion_or_move_doesnt_bring_back_what_it_moved() {
     let header = saved(&mid_turn("claude"), Some("old"), 0).header;
     // Listed, then deleted before the list is answered.
     let list = ticket(&one_storage(&script.list_saved(SHELF).1));
-    script.delete(CHAT, SHELF).0.expect("deleting");
+    let delete = ticket(&one_storage(&script.delete(CHAT, SHELF).1));
     let (chats, unreadable) = (vec![header.clone()], Vec::new());
     script.storage(list, StorageEvent::Listed { chats, unreadable });
     assert_eq!(
         script.core.saved(&Shelf(SHELF.to_owned())),
         Some(Vec::new())
     );
+    script.storage(delete, done(0));
 
-    // Listed, then moved before the list is answered: once moved, both
-    // are read again.
+    // Listed, then moved before the list is answered: the move waits
+    // for the list, and once moved, both are read again.
     let list = ticket(&one_storage(&script.list_saved("other").1));
-    let moving = ticket(&one_storage(&script.move_shelf("other", SHELF).1));
+    assert!(storage(&script.move_shelf("other", SHELF).1).is_empty());
     let (chats, unreadable) = (vec![header], Vec::new());
-    script.storage(list, StorageEvent::Listed { chats, unreadable });
+    let out = script.storage(list, StorageEvent::Listed { chats, unreadable });
+    let moving = ticket(&one_storage(&out));
     let out = script.storage(moving, done(0));
     assert_has(
         &json!(storage(&out)),
@@ -2251,7 +2331,7 @@ fn a_chat_isnt_written_while_its_shelf_is_being_moved() {
 }
 
 #[test]
-fn moves_answered_in_turn_leave_a_chat_where_the_store_has_it() {
+fn moves_of_one_shelf_go_one_at_a_time_and_leave_a_chat_where_the_store_has_it() {
     // Each pair: whether the first move, then the second back, is done.
     for (first, second, ends) in [
         (false, false, SHELF),
@@ -2265,7 +2345,7 @@ fn moves_answered_in_turn_leave_a_chat_where_the_store_has_it() {
         let snapshot = ticket(&one_storage(&script.woken()));
         script.storage(snapshot, done(10_000));
         let there = ticket(&one_storage(&script.move_shelf(SHELF, "renamed").1));
-        let back = ticket(&one_storage(&script.move_shelf("renamed", SHELF).1));
+        assert!(storage(&script.move_shelf("renamed", SHELF).1).is_empty());
         let answer = |done_: bool| {
             if done_ {
                 done(0)
@@ -2273,18 +2353,10 @@ fn moves_answered_in_turn_leave_a_chat_where_the_store_has_it() {
                 StorageEvent::Failed("in use".to_owned())
             }
         };
-        script.storage(there, answer(first));
-        let out = script.storage(back, answer(second));
+        let back = ticket(&one_storage(&script.storage(there, answer(first))));
+        script.storage(back, answer(second));
         let kept = &script.state()["saving"]["kept"][CHAT.to_string()];
         assert_eq!(kept["shelf"], ends, "{first} {second}");
-        assert_eq!(kept["stored"], ends, "{first} {second}");
-        // Where it was thought to be at first, it's not written again.
-        let moved = ends != SHELF;
-        assert_eq!(
-            storage(&out).iter().any(|each| each["type"] == "Snapshot"),
-            moved,
-            "{first} {second}"
-        );
     }
 }
 
@@ -2305,4 +2377,77 @@ fn a_chat_made_after_the_clock_went_back_still_sorts_after() {
     let third = open(2000);
     assert!(first < second && second < third);
     assert_eq!(second.0.get_version_num(), 7);
+}
+
+#[test]
+fn loads_deletions_and_lists_wait_for_a_move_of_their_shelf_and_go_where_it_says() {
+    for moved in [true, false] {
+        let mut script = Script::new(host());
+        let moving = ticket(&one_storage(&script.move_shelf(SHELF, "renamed").1));
+        // A restore, a deletion and a list of the shelf being moved wait,
+        // as does a list of the one it goes to; another shelf's don't.
+        let restore = RestoreChat::new(CHAT, Shelf(SHELF.to_owned()));
+        assert!(storage(&script.restore(restore).1).is_empty());
+        let gone = ChatId::from_number(9000);
+        assert!(storage(&script.delete(gone, SHELF).1).is_empty());
+        assert!(storage(&script.list_saved("renamed").1).is_empty());
+        assert_eq!(
+            one_storage(&script.list_saved("elsewhere").1)["type"],
+            "List"
+        );
+        assert!(!script.core.is_idle());
+        let answer = if moved {
+            done(0)
+        } else {
+            StorageEvent::Failed("in use".to_owned())
+        };
+        let out = script.storage(moving, answer);
+        let went = if moved { "renamed" } else { SHELF };
+        assert_has(
+            &json!(storage(&out)),
+            &json!([
+                { "type": "Load", "value": { "shelf": went, "chat": CHAT } },
+                { "type": "Delete", "value": { "shelf": went, "chat": gone } },
+                { "type": "List", "value": { "shelf": "renamed" } }
+            ]),
+        );
+    }
+}
+
+#[test]
+fn a_chat_opened_on_a_shelf_being_moved_is_first_written_once_its_moved() {
+    let mut script = Script::new(host());
+    let moving = ticket(&one_storage(&script.move_shelf(SHELF, "renamed").1));
+    script.open(saved_open("claude")).0.expect("opened");
+    script.at(1000);
+    assert!(storage(&script.woken()).is_empty(), "it waits for the move");
+    let out = script.storage(moving, done(0));
+    assert_has(
+        &one_storage(&out),
+        &json!({ "type": "Snapshot", "value": { "shelf": "renamed" } }),
+    );
+}
+
+#[test]
+fn a_tool_call_that_changes_again_is_one_entry() {
+    let mut script = Script::new(host());
+    script.open_saved("claude");
+    script.at(1000);
+    let snapshot = ticket(&one_storage(&script.woken()));
+    script.storage(snapshot, done(10_000));
+    script.send(CHAT, "Run them").0.expect("sent");
+    let call = json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Run", "kind": "execute", "status": "pending" });
+    script.update(PROC, SESSION, &call);
+    for output in ["one", "two", "three"] {
+        let update = json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "in_progress", "rawOutput": output });
+        script.update(PROC, SESSION, &update);
+    }
+    script.at(2000);
+    let append = one_storage(&script.woken());
+    let changed: Vec<&Value> = (append["value"]["entries"].as_array().into_iter())
+        .flatten()
+        .filter(|entry| entry["value"]["type"] == "ToolChanged")
+        .collect();
+    assert_eq!(changed.len(), 1, "{append:#}");
+    assert_eq!(changed[0]["value"]["value"]["tool"]["output"], "three");
 }
