@@ -925,61 +925,6 @@ fn an_agent_that_offers_nothing_fails_a_message_waiting_on_a_choice() {
 }
 
 #[test]
-fn a_setting_the_agent_doesnt_answer_in_time_isnt_applied_and_a_late_answer_is_still_read() {
-    let mut script = Script::new(host());
-    script.open_offering(
-        OpenChat::new("claude", "/work"),
-        &claude_options("default", "default", false),
-    );
-    let (done, out) = script.set_setting(CHAT, SettingChoice::model("sonnet"));
-    done.expect("taken");
-    let (id, _) = set(&out);
-    let (turn, _) = script.send(CHAT, "Hello");
-    let turn = turn.expect("sent");
-    script.at(60_000);
-    let out = script.woken();
-    assert!(prompts(&out).is_empty());
-    let whole = script.chat(CHAT);
-    assert_has(
-        &turn_of(&whole, turn.0),
-        &json!({ "life": { "type": "Failed", "value": { "reason": { "type": "SettingNotApplied" } } } }),
-    );
-    assert_eq!(
-        whole["settings"]["chosen"],
-        json!([chosen(&SettingChoice::model("default"))])
-    );
-    assert_eq!(
-        notes(&whole),
-        [(
-            "Caf".to_owned(),
-            note("NotApplied", &SettingChoice::model("sonnet"))
-        )]
-    );
-    // Its answer, late, says it was applied after all: the chat's own
-    // choice again, with nothing more to say.
-    let out = script.answers(
-        PROC,
-        id,
-        &json!({ "configOptions": claude_options("sonnet", "default", false) }),
-    );
-    assert!(writes(&out).is_empty());
-    let whole = script.chat(CHAT);
-    assert_eq!(
-        whole["settings"],
-        json!({
-            "offered": claude_offered("sonnet", "default", false),
-            "chosen": [chosen(&SettingChoice::model("sonnet"))],
-            "own": [{ "type": "Model" }]
-        })
-    );
-    assert_eq!(notes(&whole).len(), 1);
-    // Given up on twice, it ends.
-    script.at(130_000);
-    script.woken();
-    assert_eq!(script.state()["pending"], json!([]));
-}
-
-#[test]
 fn a_change_lost_with_its_adapter_is_sent_again_as_the_session_reopens() {
     let mut script = Script::new(host());
     script.open_offering(
@@ -1722,73 +1667,6 @@ fn learning_again_shows_what_was_learned_until_it_knows_better() {
 }
 
 #[test]
-fn a_late_answer_to_something_else_is_followed_and_one_for_a_session_gone_is_dropped() {
-    let mut script = Script::new(host());
-    script.open_offering(
-        OpenChat::new("claude", "/work"),
-        &claude_options("default", "default", false),
-    );
-    let (_, out) = script.set_setting(CHAT, SettingChoice::model("sonnet"));
-    let (first, _) = set(&out);
-    script.at(60_000);
-    script.woken();
-    // Set late, but to something else: followed, as the agent's own.
-    script.answers(
-        PROC,
-        first,
-        &json!({ "configOptions": claude_options("haiku", "", false) }),
-    );
-    let whole = script.chat(CHAT);
-    assert_eq!(
-        whole["settings"]["chosen"],
-        json!([chosen(&SettingChoice::model("haiku"))])
-    );
-    assert_eq!(whole["settings"]["own"], json!([]));
-    assert_eq!(
-        notes(&whole).last(),
-        Some(&(
-            "Caf".to_owned(),
-            note("AgentChanged", &SettingChoice::model("haiku"))
-        ))
-    );
-
-    // Given up on, then the session is gone and a new one opens: what the
-    // old one's late answer says isn't about it.
-    let (_, out) = script.set_setting(CHAT, SettingChoice::model("sonnet"));
-    let (second, _) = set(&out);
-    script.at(120_000);
-    script.woken();
-    let (_, out) = script.send(CHAT, "Hello");
-    let gone = json!({ "code": -32603, "message": "Session not found" });
-    let out = script.fails(PROC, id_of(&prompts(&out)[0]), &gone);
-    let out = script.fails(PROC, id_of(&sent(&out, "session/resume")), &gone);
-    let new = sent(&out, "session/new");
-    let out = script.answers(
-        PROC,
-        id_of(&new),
-        &json!({ "sessionId": "sess-2", "configOptions": claude_options("default", "default", false) }),
-    );
-    // What it fell back to, the agent's Haiku, goes first.
-    let (id, params) = set(&out);
-    assert_eq!(params["sessionId"], "sess-2");
-    assert_eq!(params["value"], "haiku");
-    let out = script.answers(
-        PROC,
-        id,
-        &json!({ "configOptions": claude_options("haiku", "", false) }),
-    );
-    assert_eq!(prompts(&out).len(), 1, "sent again on the new session");
-    let before = script.chat(CHAT);
-    let out = script.answers(
-        PROC,
-        second,
-        &json!({ "configOptions": claude_options("sonnet", "default", false) }),
-    );
-    assert!(writes(&out).is_empty());
-    assert_eq!(script.chat(CHAT), before, "about a session gone");
-}
-
-#[test]
 fn an_own_choice_that_cant_be_applied_falls_back_to_the_hosts_default_if_offered() {
     let mut script = Script::offering(host(), offering(vec![SettingChoice::model("haiku")]));
     let out = script.open_offering(
@@ -1897,104 +1775,7 @@ fn failed(chat: &Value) -> usize {
 }
 
 #[test]
-fn a_late_success_with_nothing_listed_is_taken_as_asked_on_the_older_models_path() {
-    let mut script = Script::offering(host(), offering(Vec::new()));
-    let mut open = OpenChat::new("models", "/work");
-    open.settings = vec![SettingChoice::model("flash")];
-    let (chat, out) = script.open(open);
-    chat.expect("opened");
-    let init = json!({ "protocolVersion": 1, "agentCapabilities": {}, "agentInfo": { "name": "models-acp", "version": "1.0.0" } });
-    let out = script.answers(PROC, id_of(&sent(&out, "initialize")), &init);
-    let out = script.answers(
-        PROC,
-        id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": SESSION, "models": {
-            "availableModels": [{ "modelId": "pro", "name": "Pro" }, { "modelId": "flash", "name": "Flash" }],
-            "currentModelId": "pro"
-        } }),
-    );
-    let set_model = id_of(&sent(&out, "session/set_model"));
-    script.at(60_000);
-    script.woken();
-    assert_eq!(
-        script.chat(CHAT)["settings"]["chosen"],
-        json!([chosen(&SettingChoice::model("pro"))])
-    );
-    // Late, with nothing listed: as asked, the chat's own again.
-    script.answers(PROC, set_model, &json!({}));
-    let whole = script.chat(CHAT);
-    assert_eq!(
-        whole["settings"]["offered"][0]["current"],
-        json!({ "type": "Choice", "value": "flash" })
-    );
-    assert_eq!(
-        whole["settings"]["chosen"],
-        json!([chosen(&SettingChoice::model("flash"))])
-    );
-    assert_eq!(whole["settings"]["own"], json!([{ "type": "Model" }]));
-    assert_eq!(
-        notes(&whole).len(),
-        1,
-        "only that it wasn't applied in time"
-    );
-}
-
-#[test]
-fn an_own_choice_confirmed_late_goes_again_after_the_hosts_default_sent_meanwhile() {
-    let mut script = Script::offering(host(), offering(vec![SettingChoice::model("haiku")]));
-    let out = script.open_offering(
-        choosing(vec![SettingChoice::model("sonnet")]),
-        &claude_options("default", "default", false),
-    );
-    let (own, _) = set(&out);
-    script.at(60_000);
-    // Not answered: the host's default goes in its place.
-    let out = script.woken();
-    let (default, params) = set(&out);
-    assert_eq!(params["value"], "haiku");
-    let (turn, out) = script.send(CHAT, "Hello");
-    let turn = turn.expect("sent");
-    assert!(prompts(&out).is_empty(), "waiting for the default");
-    // The chat's own, applied after all.
-    let out = script.answers(
-        PROC,
-        own,
-        &json!({ "configOptions": claude_options("sonnet", "default", false) }),
-    );
-    assert!(writes(&out).is_empty(), "the default is still on its way");
-    // The default's answer: its choice no longer counts, and nothing is
-    // said of it.
-    let out = script.answers(
-        PROC,
-        default,
-        &json!({ "configOptions": claude_options("haiku", "", false) }),
-    );
-    let (again, params) = set(&out);
-    assert_eq!(params["value"], "sonnet", "the chat's own, again");
-    let out = script.answers(
-        PROC,
-        again,
-        &json!({ "configOptions": claude_options("sonnet", "default", false) }),
-    );
-    assert_eq!(prompts(&out).len(), 1, "the message goes");
-    let whole = script.chat(CHAT);
-    assert_eq!(
-        whole["settings"]["chosen"],
-        json!([chosen(&SettingChoice::model("sonnet"))])
-    );
-    assert_eq!(whole["settings"]["own"], json!([{ "type": "Model" }]));
-    assert_eq!(
-        notes(&whole),
-        [(
-            "Caf".to_owned(),
-            note("NotApplied", &SettingChoice::model("sonnet"))
-        )]
-    );
-    assert_eq!(turn_of(&whole, turn.0)["life"]["type"], "Running");
-}
-
-#[test]
-fn the_hosts_default_fallen_back_to_fails_quietly_when_refused_unanswered_or_unsendable() {
+fn the_hosts_default_fallen_back_to_fails_quietly_when_refused_or_unsendable() {
     // Refused: dropped quietly, nothing more sent, the message failed once.
     let mut script = Script::offering(host(), offering(vec![SettingChoice::model("haiku")]));
     let mut open = choosing(vec![SettingChoice::model("opus[1m]")]);
@@ -2038,30 +1819,6 @@ fn the_hosts_default_fallen_back_to_fails_quietly_when_refused_unanswered_or_uns
         )]
     );
 
-    // Unanswered: the same.
-    let mut script = Script::offering(host(), offering(vec![SettingChoice::model("haiku")]));
-    let (chat, out) = script.open(choosing(vec![SettingChoice::model("opus[1m]")]));
-    chat.expect("opened");
-    script.send(CHAT, "Hello").0.expect("sent");
-    let out = script.answers(PROC, id_of(&sent(&out, "initialize")), &claude_init());
-    let out = script.answers(
-        PROC,
-        id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
-    );
-    set(&out);
-    script.at(60_000);
-    let out = script.woken();
-    assert!(writes(&out).is_empty(), "{out:#?}");
-    let whole = script.chat(CHAT);
-    assert_eq!(failed(&whole), 1);
-    assert_eq!(whole["settings"]["chosen"], json!([]));
-    assert_eq!(
-        notes(&whole).len(),
-        1,
-        "only that the chat's own wasn't offered"
-    );
-
     // One CAF can't send exactly is never fallen back to.
     let mut script = Script::offering(host(), offering(vec![SettingChoice::model("hai\u{7}ku")]));
     let (chat, out) = script.open(choosing(vec![SettingChoice::model("opus[1m]")]));
@@ -2080,67 +1837,7 @@ fn the_hosts_default_fallen_back_to_fails_quietly_when_refused_unanswered_or_uns
 }
 
 #[test]
-fn a_late_answer_makes_a_choice_the_chats_own_only_if_it_was_and_still_is_its_latest() {
-    // The host's default, given up on, then confirmed: chosen, not own.
-    let mut script = Script::offering(host(), offering(vec![SettingChoice::model("haiku")]));
-    let out = script.open_offering(
-        OpenChat::new("claude", "/work"),
-        &claude_options("default", "default", false),
-    );
-    let (default, _) = set(&out);
-    script.at(60_000);
-    script.woken();
-    assert_eq!(script.chat(CHAT)["settings"]["chosen"], json!([]));
-    script.answers(
-        PROC,
-        default,
-        &json!({ "configOptions": claude_options("haiku", "", false) }),
-    );
-    let whole = script.chat(CHAT);
-    assert_eq!(
-        whole["settings"]["chosen"],
-        json!([chosen(&SettingChoice::model("haiku"))])
-    );
-    assert_eq!(whole["settings"]["own"], json!([]));
-    assert_eq!(notes(&whole), [], "the host's, said of nothing");
-
-    // The chat's own, given up on; another of its own chosen and refused
-    // since; then the first confirmed: chosen as the agent's, not own.
-    let mut script = Script::new(host());
-    script.open_offering(
-        OpenChat::new("claude", "/work"),
-        &claude_options("default", "default", false),
-    );
-    let (_, out) = script.set_setting(CHAT, SettingChoice::model("sonnet"));
-    let (first, _) = set(&out);
-    script.at(60_000);
-    script.woken();
-    let (_, out) = script.set_setting(CHAT, SettingChoice::model("haiku"));
-    let (second, _) = set(&out);
-    script.fails(
-        PROC,
-        second,
-        &json!({ "code": -32602, "message": "Invalid params" }),
-    );
-    script.answers(
-        PROC,
-        first,
-        &json!({ "configOptions": claude_options("sonnet", "default", false) }),
-    );
-    let whole = script.chat(CHAT);
-    assert_eq!(
-        whole["settings"]["chosen"],
-        json!([chosen(&SettingChoice::model("sonnet"))])
-    );
-    assert_eq!(
-        whole["settings"]["own"],
-        json!([]),
-        "a later choice was the chat's"
-    );
-}
-
-#[test]
-fn a_setting_given_up_on_and_never_answered_ends_at_its_second_watchdog() {
+fn a_change_the_agent_never_answers_restarts_its_adapter_and_goes_again() {
     let mut script = Script::new(host());
     script.open_offering(
         OpenChat::new("claude", "/work"),
@@ -2148,14 +1845,189 @@ fn a_setting_given_up_on_and_never_answered_ends_at_its_second_watchdog() {
     );
     let (_, out) = script.set_setting(CHAT, SettingChoice::model("sonnet"));
     set(&out);
+    let (turn, _) = script.send(CHAT, "Hello");
+    let turn = turn.expect("sent");
+    // Stuck, as any request so long unanswered: restarted.
     script.at(60_000);
     let out = script.woken();
-    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 120_000 })]);
-    assert_eq!(script.state()["pending"].as_array().map(Vec::len), Some(1));
-    let before = script.chat(CHAT);
-    script.at(120_000);
+    assert_eq!(
+        with(&out, "signal"),
+        [json!({ "signal": PROC, "is": "Term" })]
+    );
+    script.agent(PROC, AgentEvent::OutputClosed);
+    let out = script.agent(PROC, AgentEvent::Group { empty: true });
+    let proc = started(&out);
+    let out = script.answers(proc, id_of(&sent(&out, "initialize")), &claude_init());
+    let out = script.answers(
+        proc,
+        id_of(&sent(&out, "session/resume")),
+        &json!({ "configOptions": claude_options("default", "default", false) }),
+    );
+    // The change goes again, before the message waiting.
+    assert!(prompts(&out).is_empty());
+    let (id, params) = set(&out);
+    assert_eq!(params["value"], "sonnet");
+    let out = script.answers(
+        proc,
+        id,
+        &json!({ "configOptions": claude_options("sonnet", "default", false) }),
+    );
+    assert_eq!(
+        prompts(&out).len(),
+        1,
+        "the message goes on the new session"
+    );
+    let whole = script.chat(CHAT);
+    assert_eq!(failed(&whole), 0, "nothing failed");
+    assert_eq!(notes(&whole), []);
+    assert_eq!(
+        turn_of(&whole, turn.0)["model"],
+        json!({ "id": "sonnet", "name": "Sonnet" })
+    );
+}
+
+#[test]
+fn a_change_unanswered_on_an_adapter_busy_with_another_chat_restarts_only_its_session() {
+    let mut script = Script::new(host());
+    script.open_offering(
+        OpenChat::new("claude", "/elsewhere"),
+        &claude_options("default", "default", false),
+    );
+    // A second chat, on the same adapter.
+    let (other, out) = script.open(OpenChat::new("claude", "/work"));
+    let other = other.expect("opened");
+    let out = script.answers(
+        PROC,
+        id_of(&sent(&out, "session/new")),
+        &json!({ "sessionId": "sess-2", "configOptions": claude_options("default", "default", false) }),
+    );
+    assert!(writes(&out).is_empty());
+    // The first chat is mid-turn.
+    let (_, out) = script.send(CHAT, "Busy");
+    prompts(&out);
+    let (_, out) = script.set_setting(other, SettingChoice::model("sonnet"));
+    set(&out);
+    script.send(other, "Hello").0.expect("sent");
+    script.at(60_000);
     let out = script.woken();
-    assert_eq!(script.state()["pending"], json!([]));
+    assert!(
+        with(&out, "signal").is_empty(),
+        "the other chat's turn runs on"
+    );
+    assert_eq!(
+        sent(&out, "session/close")["params"],
+        json!({ "sessionId": "sess-2" })
+    );
+    assert_eq!(failed(&script.chat(other)), 0);
+}
+
+#[test]
+fn putting_a_chat_away_with_a_change_being_sent_leaves_nothing_behind() {
+    let mut script = Script::new(host());
+    let mut open = OpenChat::new("claude", "/work");
+    open.shelf = Some(Shelf("work".to_owned()));
+    script.open_offering(open, &claude_options("default", "default", false));
+    let (_, out) = script.set_setting(CHAT, SettingChoice::model("sonnet"));
+    let (id, _) = set(&out);
+    let out = script.put_away(CHAT).1;
+    assert_eq!(with(&out, "close_input"), [json!({ "close_input": PROC })]);
+    let saved = with(&out, "storage")
+        .into_iter()
+        .find(|each| each["storage"]["type"] == "Snapshot")
+        .expect("written whole")["storage"]["value"]["saved"]["chat"]
+        .clone();
+    assert_eq!(
+        saved["settings"]["chosen"],
+        json!([chosen(&SettingChoice::model("sonnet"))])
+    );
+    // Its answer, as the adapter goes, changes nothing.
+    let out = script.answers(
+        PROC,
+        id,
+        &json!({ "configOptions": claude_options("sonnet", "default", false) }),
+    );
+    assert!(writes(&out).is_empty());
+    script.agent(PROC, AgentEvent::OutputClosed);
+    script.agent(PROC, AgentEvent::Group { empty: true });
+    assert_eq!(script.state()["pending"], json!([]), "no request left");
+    assert_eq!(script.state()["runs"], json!({}), "no chat left");
+
+    // Restored, it sends its choice as its session opens.
+    let mut script = restored(Vec::new(), &saved);
+    let (_, out) = script.send(CHAT, "Go on");
+    let proc = started(&out);
+    let out = script.answers(proc, id_of(&sent(&out, "initialize")), &claude_init());
+    let out = script.answers(
+        proc,
+        id_of(&sent(&out, "session/resume")),
+        &json!({ "configOptions": claude_options("default", "default", false) }),
+    );
+    let (_, params) = set(&out);
+    assert_eq!(params["value"], "sonnet");
+}
+
+#[test]
+fn choosing_the_value_being_set_makes_it_the_chats_own_without_sending_it_twice() {
+    let mut script = Script::offering(host(), offering(vec![SettingChoice::model("haiku")]));
+    let out = script.open_offering(
+        OpenChat::new("claude", "/work"),
+        &claude_options("default", "default", false),
+    );
+    let (id, params) = set(&out);
+    assert_eq!(params["value"], "haiku", "the host's default");
+    let (done, out) = script.set_setting(CHAT, SettingChoice::model("haiku"));
+    done.expect("taken");
+    assert!(writes(&out).is_empty(), "not sent twice");
+    assert_eq!(
+        script.chat(CHAT)["settings"]["own"],
+        json!([{ "type": "Model" }])
+    );
+    script.answers(
+        PROC,
+        id,
+        &json!({ "configOptions": claude_options("haiku", "", false) }),
+    );
+    assert_eq!(
+        script.chat(CHAT)["settings"],
+        json!({
+            "offered": claude_offered("haiku", "", false),
+            "chosen": [chosen(&SettingChoice::model("haiku"))],
+            "own": [{ "type": "Model" }]
+        })
+    );
+
+    // Refused, it's the chat's own that failed: said, and the refused
+    // default isn't sent again in its place.
+    let mut script = Script::offering(host(), offering(vec![SettingChoice::model("haiku")]));
+    let out = script.open_offering(
+        OpenChat::new("claude", "/work"),
+        &claude_options("default", "default", false),
+    );
+    let (id, _) = set(&out);
+    script
+        .set_setting(CHAT, SettingChoice::model("haiku"))
+        .0
+        .expect("taken");
+    let (turn, _) = script.send(CHAT, "Hello");
+    let turn = turn.expect("sent");
+    let out = script.fails(
+        PROC,
+        id,
+        &json!({ "code": -32602, "message": "Invalid params" }),
+    );
+    assert_eq!(prompts(&out).len(), 0);
     assert!(writes(&out).is_empty(), "{out:#?}");
-    assert_eq!(script.chat(CHAT), before, "nothing more happens");
+    let whole = script.chat(CHAT);
+    assert_eq!(turn_of(&whole, turn.0)["life"]["type"], "Failed");
+    assert_eq!(
+        notes(&whole),
+        [(
+            "Caf".to_owned(),
+            note("NotApplied", &SettingChoice::model("haiku"))
+        )]
+    );
+    assert_eq!(
+        whole["settings"]["chosen"],
+        json!([chosen(&SettingChoice::model("default"))])
+    );
 }

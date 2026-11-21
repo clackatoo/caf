@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use super::clean::Tail;
-use super::settings::{Choosing, Sent};
+use super::settings::Choosing;
 use crate::acp::RequestId;
 use crate::agent::{InstallState, McpServer, SignInState};
 use crate::chat::{AppItem, Note, Turn};
@@ -18,7 +18,7 @@ use crate::ids::{
 use crate::install::Platform;
 use crate::profiles::ProfileReport;
 use crate::question::PermissionOption;
-use crate::settings::KnownSettings;
+use crate::settings::{KnownSettings, SettingChoice};
 use crate::time::{Mono, Wall};
 
 /// Gives out ids, in order, from one counter, so no two things of any
@@ -273,13 +273,8 @@ pub(super) enum Purpose {
     Set {
         /// The chat.
         chat: ChatId,
-        /// What was asked, of which session, and whether it was the
-        /// chat's own.
-        sent: Sent,
-        /// It wasn't answered in time, and wasn't applied: a late answer
-        /// is read as the agent's word on what it uses, for the session it
-        /// was asked of only.
-        given_up: bool,
+        /// What was asked for.
+        choice: SettingChoice,
     },
     /// Opening a session only to learn what settings a connection's agent
     /// offers.

@@ -600,13 +600,16 @@ pub enum Note {
     /// The agent changed a setting by itself, such as falling back to
     /// another model; the choice follows it.
     AgentChanged(SettingChoice),
-    /// A setting chosen isn't offered by the agent any more, such as a
-    /// model it no longer has, so the choice was dropped, and the agent's
-    /// own applies.
+    /// A setting chosen for the chat isn't offered by the agent, or no
+    /// longer is, such as a model it no longer has. The setting falls back
+    /// to the host's default for the agent, if the agent offers it, and
+    /// otherwise to what the agent uses; a message waiting for it failed.
     NotOffered(SettingChoice),
-    /// A setting chosen for the chat couldn't be applied: the agent
-    /// refused it, or never answered. The setting falls back, and any
-    /// message waiting failed.
+    /// A setting chosen for the chat was refused by the agent. It falls
+    /// back as for [`Note::NotOffered`], and a message waiting for it
+    /// failed. A change the agent never answers isn't refused: its program
+    /// is restarted, as for any request it leaves unanswered, and the
+    /// change is sent again.
     NotApplied(SettingChoice),
 }
 

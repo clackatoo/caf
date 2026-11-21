@@ -222,21 +222,20 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     self.lose_process(now, proc, Cause::Restarted, out);
                 }
             }
-            // Given up on once already: it just ends.
-            Purpose::Set { given_up: true, .. } => {
+            // Stuck, as any request unanswered so long: restarted. The
+            // choice is sent again as the session opens again, and messages
+            // waiting go after it.
+            Purpose::Set { chat, .. } => {
                 self.pending.remove(&(proc, id));
-            }
-            // Kept, given up on, so a late answer is still read, until a
-            // watchdog of its own ends it.
-            Purpose::Set {
-                chat,
-                ref sent,
-                ref mut given_up,
-            } => {
-                *given_up = true;
-                pending.deadline = Some(now.mono.after(self.host.timers.request));
-                let choice = sent.choice.clone();
-                self.set_overdue(now, (proc, id), chat, &choice, out);
+                report(
+                    out,
+                    Level::Warn,
+                    format!(
+                        "process {} didn't answer changing a setting of chat {}: restarting it",
+                        proc.0, chat.0
+                    ),
+                );
+                self.restart_stuck(now, chat, proc, out);
             }
             // As an abandoned open: a session it opens even so is closed.
             Purpose::Learn { conn } => {

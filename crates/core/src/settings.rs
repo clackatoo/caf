@@ -20,18 +20,20 @@
 //!   turn running, it's sent at once;
 //! - only the latest change of a setting counts;
 //! - while a change is asked for, the agent's reports about that setting
-//!   don't move the choice: its answer decides. One never answered isn't
-//!   applied; if its answer comes late, for the same session, what it
-//!   says is followed, and it's applied after all if it says so;
+//!   don't move the choice: its answer decides. A change the agent leaves
+//!   unanswered for [`Timers::request`](crate::host::Timers::request)
+//!   means its program is stuck: it's restarted, as for any request so
+//!   left, and the session opened again, with every choice sent to it
+//!   before the messages waiting go;
 //! - when a session opens or reopens, the choices are sent first, and the
 //!   messages waiting go once they're answered;
-//! - a choice made for the chat itself that can't be applied (a model
-//!   gone, a change refused, one never answered) fails every message
-//!   waiting, saying why, with
-//!   [`Remedy::SendAgain`](crate::chat::Remedy::SendAgain), and the chat
+//! - only a choice made for the chat itself that the agent doesn't offer,
+//!   or refuses, fails every message waiting, saying why, with
+//!   [`Remedy::SendAgain`](crate::chat::Remedy::SendAgain); and the chat
 //!   says so whether or not any waits
 //!   ([`Note::NotOffered`](crate::chat::Note::NotOffered),
-//!   [`Note::NotApplied`](crate::chat::Note::NotApplied));
+//!   [`Note::NotApplied`](crate::chat::Note::NotApplied)). The host's
+//!   default is dropped quietly;
 //! - a choice made for the chat itself that can't be applied, or that the
 //!   agent stops offering, falls back as a restore would have it: to the
 //!   host's default, if the agent offers that, and otherwise to what the

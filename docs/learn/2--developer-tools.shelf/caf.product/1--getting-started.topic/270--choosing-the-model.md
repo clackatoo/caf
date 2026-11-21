@@ -57,17 +57,21 @@ level only a new model has can be chosen once the model change is
 answered, not with it.
 
 A message never goes with a choice silently replaced: either it fails, or
-the chat says what changed. If a choice can't be applied, because the
-agent doesn't offer it, refuses it, or never answers, every message
+the chat says what changed. If a choice made for the chat itself can't be
+applied, because the agent doesn't offer it or refuses it, every message
 waiting fails (`FailureReason::SettingNotApplied`), with Send again, and
 the chat says so whether or not any waits (`Note::NotOffered`, or
-`Note::NotApplied` for one refused or never answered). The setting falls
-back to your program's default, if the agent offers it,
-and otherwise to what the agent uses. If the agent's answer comes late,
-for the same session, what it says is followed, and the choice counts as
-applied after all if it says so: the chat's own again, unless the chat
-chose that setting again since. If the agent had lost the session, it's
-opened again and the choice sent to it, as a message would be.
+`Note::NotApplied` for one refused). The setting falls back to your
+program's default, if the agent offers it, and otherwise to what the
+agent uses. Your program's own default that can't be applied is dropped
+quietly.
+
+A change the agent never answers doesn't fail anything: as with any
+request it leaves unanswered for `Timers::request` (60 s), its program is
+taken to be stuck and restarted, its session opened again, and every
+choice sent again before the messages waiting go. If the agent had lost
+the session, it's opened again and the choice sent to it, as a message
+would be.
 
 A choice already applied that the agent stops offering, such as fast mode
 when the model changes to one without it, falls back the same way, and

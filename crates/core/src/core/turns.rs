@@ -15,11 +15,11 @@ use crate::acp::RpcError;
 use crate::change::Change;
 use crate::chat::AppData;
 use crate::chat::{
-    AppItem, ChatState, Failure, FailureReason, ItemKind, Part, Remedy, Starter, ToolStatus, Turn,
-    TurnLife, UserMessage,
+    AppItem, ChatState, Failure, FailureReason, ItemKind, Lost, Note, Part, Remedy, Starter,
+    ToolStatus, Turn, TurnLife, UserMessage,
 };
 use crate::directive::{Directive, Level};
-use crate::ids::{ChatId, TurnId};
+use crate::ids::{ChatId, Ticket, TurnId};
 use crate::time::{End, Now, Window};
 
 impl<A: AppItem, D: AppData> Core<A, D> {
@@ -488,9 +488,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// The agent didn't stop `chat`'s turn in time: the turn fails, and
-    /// the session is restarted. The adapter is restarted if no other chat
-    /// is mid-turn on it; otherwise only this chat's session is closed,
-    /// where the agent can, and opened again with its next message.
+    /// the session is restarted ([`Core::restart_stuck`]).
     pub(super) fn stop_overdue(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
         let Some(running) = self.give_up_prompt(now, chat) else {
             return;
@@ -502,13 +500,27 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         );
         let failed = failure(FailureReason::DidNotStop, Some(Remedy::SendAgain));
         self.end_turn(now, chat, running.turn, TurnLife::Failed(failed));
-        if !self.busy_besides(running.proc, chat) {
-            return self.lose_process(now, running.proc, Cause::Restarted, out);
+        self.restart_stuck(now, chat, running.proc, out);
+    }
+
+    /// `chat`'s session on `proc` is stuck: the adapter is restarted if no
+    /// other chat is mid-turn on it; otherwise only this chat's session is
+    /// closed, where the agent can, and opened again with its next
+    /// message, or at once if one waits.
+    pub(super) fn restart_stuck(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        proc: Ticket,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
+        if !self.busy_besides(proc, chat) {
+            return self.lose_process(now, proc, Cause::Restarted, out);
         }
         let session = self.runs.get(&chat).and_then(|run| run.session.clone());
         let closes = self
             .procs
-            .get(&running.proc)
+            .get(&proc)
             .and_then(|each| each.caps())
             .is_some_and(|caps| caps.close);
         match (session, closes) {
@@ -517,7 +529,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 let params = json!({ "sessionId": session.0 });
                 self.request(
                     now,
-                    running.proc,
+                    proc,
                     ("session/close", params),
                     Purpose::Close { session },
                     Some(wait),
@@ -529,11 +541,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             _ => {
                 if let Some(run) = self.runs.get_mut(&chat) {
                     run.session = None;
-                    run.note = Some(crate::chat::Note::SessionStuck);
+                    run.note = Some(Note::SessionStuck);
                 }
             }
         }
-        self.session_lost(now, chat, crate::chat::Lost::Restarted, true, out);
+        self.session_lost(now, chat, Lost::Restarted, true, out);
     }
 }
 
