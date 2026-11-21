@@ -454,6 +454,8 @@ pub fn carry_out<A: AppItem, D: AppData>(
             };
             (ticket, event)
         }
+        // None the core gives yet.
+        _ => return None,
     })
 }
 
