@@ -123,9 +123,10 @@ Connect, and the SDK says hello and agrees a version of the wire with CAF:
 import { Connection, webSocket } from "@clackatoo/caf";
 
 const caf = await Connection.open(await webSocket("ws://127.0.0.1:7320/viewer"));
-caf.agents; // the agents a chat may be opened with
+caf.agents; // every agent on offer: its name, whether it's installed and signed in
 caf.chats; // the open chats: id, agent and folder
 caf.onChats((chats) => drawList(chats));
+caf.onAgents((agents) => drawAgents(agents));
 ```
 
 `Connection.open` takes any `Transport`, an object that sends and hears one
@@ -134,6 +135,10 @@ no version of the wire the SDK does, `open` rejects with a `CafError` whose
 `why` is `NoCommonVersion`. It waits as long as CAF takes to say hello
 back: to give up sooner, pass a signal, as in
 `Connection.open(transport, { signal: AbortSignal.timeout(5000) })`.
+
+CAF says where its agents stand right after its hello, and `open` resolves
+once it has, so `agents` is right from the start. `onChats` and `onAgents`
+each return a function that stops them.
 
 ### Watch a chat
 
@@ -203,6 +208,42 @@ function refusal(reason: Refused): string {
   }
 }
 ```
+
+### Install and sign in
+
+Each of `caf.agents` is an `AgentStatus`: its `name`, its `install` state
+and its `sign_in` state. These are the agent's, shared by every chat with
+it. The `install` state is `Missing` with its size, `Installing` with how
+far it has got, `Installed` with its version, `Cannot` with why, `Host` for
+an agent the host starts itself, or `Unknown` until CAF has looked. The
+`sign_in` state is `SignedOut`, `SigningIn` with what the user must do,
+`SignedIn` with how (never who), or `Unknown`.
+
+```ts
+await caf.install("claude");
+await caf.stopInstall("claude");
+await caf.signIn("claude");
+await caf.paste("claude", code); // the code a sign-in page gave the user
+await caf.stopSignIn("claude");
+await caf.signOut("claude");
+```
+
+Each resolves once CAF has started it: how it goes shows in `agents`.
+While signing in, the status's `SigningIn` value holds the `url` to open
+(null until the agent's sign-in command gives it), a `code` to type there,
+if any, and whether the user may `paste` a code back. Open the link in a
+new tab with `rel="noopener noreferrer"`, and only if it starts with
+`https://`. CAF has checked its site against the agent's profile, but a
+page should check for itself too.
+
+The host decides whether viewers may do any of this, as it does for opening
+chats. When it doesn't let them, each rejects with `NotAllowed`. The core
+may refuse too, with `NotInstallable`, `AlreadyInstalled`, `CannotSignIn`
+or `NotSigningIn`.
+
+A chat with an agent that isn't installed yet is `WaitingForAgent`, and its
+messages wait. They're sent once the agent is installed. Stopping the chat
+stops them, and a note in the chat says so.
 
 ### When the link drops
 
@@ -276,15 +317,31 @@ care where the chat came from:
 ```svelte
 <ChatView
   {chat}
+  agent={caf.agents.find((agent) => agent.name === chat.agent)}
   actions={{
     send: (message) => caf.send(chat.id, message),
     stop: () => caf.stop(chat.id),
     answer: (question, answer) => caf.answer(question, answer),
     sendAgain: (message) => caf.send(chat.id, structuredClone(message)),
     close: () => caf.close(chat.id),
+    install: () => caf.install(chat.agent),
+    stopInstall: () => caf.stopInstall(chat.agent),
+    signIn: () => caf.signIn(chat.agent),
+    paste: (text) => caf.paste(chat.agent, text),
+    stopSignIn: () => caf.stopSignIn(chat.agent),
   }}
 />
 ```
+
+Given its agent's status, the view also shows what the agent needs before
+the chat can go on. While the chat waits for an agent that isn't
+installed, it offers Install, naming the size, and Not now, which stops the
+waiting message. It shows progress while the agent installs, and says why
+when it can't be. While the agent is being signed in to, it shows the link,
+the code, a box to paste a code into if the agent takes one, and Stop. A
+turn that failed for want of signing in offers Sign in, and still offers
+Send again: once signed in, the user sends it again, since CAF never does
+by itself.
 
 It imports only the caf-sdk, Svelte and markdown-it, which a check in CI
 holds it to, so the folder can be lifted out whole. Copy it, or read it for
@@ -294,5 +351,6 @@ The agent's words are untrusted: an agent may repeat a web page or a file,
 and HTML in it could script the page. So the view renders Markdown with
 HTML off, links only `http` and `https` addresses, opening each in a new tab
 with `rel="noopener noreferrer"`, and links to images rather than loading
-them. Whatever a page built on CAF draws the agent's words with, it should
+them. A sign-in link isn't the agent's words, but it opens one the same way,
+and only if it's `https`. Whatever a page built on CAF draws the agent's words with, it should
 do the same.
