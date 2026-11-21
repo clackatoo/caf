@@ -7,6 +7,7 @@
 //! forms are declared even to a host that can't show them, so Claude
 //! keeps its question tool, and CAF answers any form itself.
 
+use std::hash::BuildHasher;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,17 @@ pub struct Host {
     pub limits: Limits,
     /// How long to wait for things.
     pub timers: Timers,
+    /// Where the random part of each new chat's id comes from: the core
+    /// makes no randomness of its own, so replaying a run gives out the
+    /// same ids. [`Host::new`] draws a fresh one, different in every run;
+    /// set it only in tests. Two runs given the same seed may give two
+    /// chats the same id, which a restore then refuses
+    /// ([`Refused::Loaded`](crate::Refused::Loaded)).
+    ///
+    /// Recordings made before it was added don't have it: they read as 0,
+    /// and never made a chat id from it.
+    #[serde(default)]
+    pub seed: u64,
 }
 
 /// What the host can show the user. A `false` here never stops CAF
@@ -150,6 +162,14 @@ pub struct Timers {
     #[serde(default = "sign_in_default")]
     #[cfg_attr(feature = "ts", ts(as = "Option<crate::ts::Duration>", optional))]
     pub sign_in: Duration,
+    /// How long after a chat changes it's saved, so a burst of changes,
+    /// such as the agent streaming its words, is saved as one. A crash
+    /// loses at most this much. A turn ending, a chat being put away and
+    /// shutting down save at once. 1 s.
+    /// Recordings made before it was added read as the default.
+    #[serde(default = "save_default")]
+    #[cfg_attr(feature = "ts", ts(as = "Option<crate::ts::Duration>", optional))]
+    pub save: Duration,
 }
 
 /// [`Timers::sign_in`]'s default, for hosts written before it.
@@ -157,9 +177,16 @@ fn sign_in_default() -> Duration {
     Duration::from_mins(10)
 }
 
+/// [`Timers::save`]'s default, for hosts written before it.
+fn save_default() -> Duration {
+    Duration::from_secs(1)
+}
+
 impl Host {
-    /// A host of this name and version, with the defaults for the rest.
-    /// Change any other field by setting it.
+    /// A host of this name and version, with the defaults for the rest,
+    /// and a fresh [`seed`](Host::seed), drawn from the randomness the
+    /// standard library seeds its hash maps with. Change any other field
+    /// by setting it.
     #[must_use]
     pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
         Self {
@@ -169,6 +196,7 @@ impl Host {
             grouping: Grouping::PerAgent,
             limits: Limits::default(),
             timers: Timers::default(),
+            seed: std::hash::RandomState::new().hash_one(0_u8),
         }
     }
 }
@@ -209,6 +237,7 @@ impl Default for Timers {
             kill_after: Duration::from_secs(2),
             group_poll: Duration::from_millis(50),
             sign_in: sign_in_default(),
+            save: save_default(),
         }
     }
 }

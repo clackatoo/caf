@@ -24,9 +24,10 @@ use std::task::Poll;
 
 use caf_core::OpenChat;
 use caf_core::agent::{AgentStatus, SignInState};
-use caf_core::chat::AppItem;
+use caf_core::chat::{AppData, AppItem};
 use caf_core::ids::AgentName;
-use caf_core::ids::{ChangeNo, ChatId};
+use caf_core::ids::{ChangeNo, ChatId, Shelf};
+use caf_core::save::RestoreChat;
 use caf_core::viewer::{AgentAction, FromViewer, OpenRequest, Outcome, Rights, ToViewer, VERSIONS};
 use tokio::sync::mpsc;
 
@@ -35,6 +36,9 @@ use crate::caf::{AgentsWatch, Caf, ChatsWatch, Error, Update, Watch, WeakCaf};
 /// Turns a viewer's request to open a chat into one, or refuses it: see
 /// [`ViewerRules::open`].
 pub type Opener = dyn Fn(&OpenRequest) -> Option<OpenChat> + Send + Sync;
+
+/// [`ViewerRules::restore`].
+pub type Restorer = dyn Fn(ChatId, &Shelf) -> Option<RestoreChat> + Send + Sync;
 
 /// What viewers may do. One Caf is one circle of trust: a viewer may
 /// watch any chat in it. A host whose users mustn't see each other's
@@ -53,6 +57,13 @@ pub struct ViewerRules {
     ///
     /// [`Outcome::NotAllowed`]: caf_core::viewer::Outcome::NotAllowed
     pub open: Box<Opener>,
+    /// Turns a viewer's request to restore a saved chat into one, giving
+    /// its tools, or `None` to refuse it with [`Outcome::NotAllowed`], as
+    /// [`ViewerRules::open`] does for opening. The default refuses every
+    /// request.
+    ///
+    /// [`Outcome::NotAllowed`]: caf_core::viewer::Outcome::NotAllowed
+    pub restore: Box<Restorer>,
     /// Whether viewers may send, stop, answer and close. `true` by
     /// default; `false` makes them watch only.
     pub act: bool,
@@ -74,6 +85,7 @@ impl Default for ViewerRules {
     fn default() -> Self {
         Self {
             open: Box::new(|_| None),
+            restore: Box::new(|_, _| None),
             act: true,
             max_watches: 256,
             agents: false,
@@ -111,6 +123,11 @@ impl Default for ViewerRules {
 /// way without its link or code: whoever opens the link, or types the
 /// code, chooses whose account the agent signs in to.
 ///
+/// After that comes [`ToViewer::Saved`], if the host has listed any
+/// shelf ([`Caf::list_saved`]), and again each time it changes: only the
+/// latest, as for agents. A request to restore one
+/// ([`FromViewer::Restore`]) goes to [`ViewerRules::restore`].
+///
 /// Every request gets exactly one [`ToViewer::Done`], unless the link
 /// ends first: one made while CAF shuts down is answered
 /// [`Outcome::Gone`].
@@ -118,8 +135,8 @@ impl Default for ViewerRules {
 /// `serve` takes messages already decoded, so it can't limit their size:
 /// the host's transport should refuse a message bigger than it means to
 /// take, before decoding it.
-pub async fn serve<A: AppItem>(
-    caf: Caf<A>,
+pub async fn serve<A: AppItem, D: AppData>(
+    caf: Caf<A, D>,
     rules: Arc<ViewerRules>,
     mut from: mpsc::Receiver<FromViewer>,
     to: mpsc::Sender<ToViewer<A>>,
@@ -164,8 +181,8 @@ pub async fn serve<A: AppItem>(
 }
 
 /// The handshake: the version both speak, or `None` if the link ends.
-async fn hello<A: AppItem>(
-    caf: &WeakCaf<A>,
+async fn hello<A: AppItem, D: AppData>(
+    caf: &WeakCaf<A, D>,
     from: &mut mpsc::Receiver<FromViewer>,
     to: &mpsc::Sender<ToViewer<A>>,
 ) -> Option<u32> {
@@ -191,8 +208,8 @@ async fn hello<A: AppItem>(
 }
 
 /// One viewer's link, after the handshake.
-struct Link<A: AppItem> {
-    caf: WeakCaf<A>,
+struct Link<A: AppItem, D: AppData> {
+    caf: WeakCaf<A, D>,
     rules: Arc<ViewerRules>,
     chats: ChatsWatch,
     agents: AgentsWatch,
@@ -201,7 +218,7 @@ struct Link<A: AppItem> {
     watches: Watches<A>,
 }
 
-impl<A: AppItem> Link<A> {
+impl<A: AppItem, D: AppData> Link<A, D> {
     async fn run(mut self, mut from: mpsc::Receiver<FromViewer>, to: &mpsc::Sender<ToViewer<A>>) {
         // A message from the viewer taken while there was no room for its
         // answer.
@@ -315,6 +332,7 @@ impl<A: AppItem> Link<A> {
                 agent,
                 action,
             } => (request, about(caf, rules, &agent, action).await),
+            FromViewer::Restore { .. } => todo!(),
             // A second Hello, or a message of a later version: there's
             // nothing to do.
             _ => return,
@@ -324,8 +342,8 @@ impl<A: AppItem> Link<A> {
 }
 
 /// Asks the host whether to open the chat, and opens it if so.
-async fn opened<A: AppItem>(
-    caf: &WeakCaf<A>,
+async fn opened<A: AppItem, D: AppData>(
+    caf: &WeakCaf<A, D>,
     rules: &ViewerRules,
     request: &OpenRequest,
 ) -> Outcome {
@@ -349,10 +367,10 @@ async fn opened<A: AppItem>(
 }
 
 /// Sends, stops, answers or closes, if viewers may.
-async fn act<A: AppItem, F: Future<Output = Result<Outcome, Error>>>(
-    caf: &WeakCaf<A>,
+async fn act<A: AppItem, D: AppData, F: Future<Output = Result<Outcome, Error>>>(
+    caf: &WeakCaf<A, D>,
     rules: &ViewerRules,
-    act: impl FnOnce(Caf<A>) -> F,
+    act: impl FnOnce(Caf<A, D>) -> F,
 ) -> Outcome {
     if !rules.act {
         return Outcome::NotAllowed;
@@ -364,8 +382,8 @@ async fn act<A: AppItem, F: Future<Output = Result<Outcome, Error>>>(
 }
 
 /// Installs an agent, or signs in or out of it, if viewers may.
-async fn about<A: AppItem>(
-    caf: &WeakCaf<A>,
+async fn about<A: AppItem, D: AppData>(
+    caf: &WeakCaf<A, D>,
     rules: &ViewerRules,
     agent: &AgentName,
     action: AgentAction,
@@ -428,7 +446,7 @@ struct Watched<A: AppItem> {
 }
 
 impl<A: AppItem> Watched<A> {
-    fn new(caf: &WeakCaf<A>, chat: ChatId, since: Option<ChangeNo>) -> Self {
+    fn new<D: AppData>(caf: &WeakCaf<A, D>, chat: ChatId, since: Option<ChangeNo>) -> Self {
         Self {
             chat,
             next: next_of(caf.watch(chat, since)),
@@ -467,7 +485,7 @@ impl<A: AppItem> Watches<A> {
     /// viewer asking again and again costs no more than asking once. One
     /// from somewhere else is started over; CAF doesn't answer a read the
     /// old watch was waiting for.
-    fn watch(&mut self, caf: &WeakCaf<A>, chat: ChatId, since: Option<ChangeNo>) {
+    fn watch<D: AppData>(&mut self, caf: &WeakCaf<A, D>, chat: ChatId, since: Option<ChangeNo>) {
         match self.each.iter_mut().find(|each| each.chat == chat) {
             Some(each) if !each.sent && each.since == since => {}
             Some(each) => *each = Watched::new(caf, chat, since),

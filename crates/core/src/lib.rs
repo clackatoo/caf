@@ -32,10 +32,13 @@
 //! - stop a turn;
 //! - survive the adapter dying or hanging.
 //!
-//! Feature 2 added the [`viewer`] wire. Feature 3 adds installing the
+//! Feature 2 added the [`viewer`] wire. Feature 3 added installing the
 //! agents CAF has profiles for, and signing in to them, each from its
 //! profile's recipe ([`install`]): [`Core::install`], [`Core::sign_in`]
 //! and the rest, with where each agent stands in [`Core::agents`].
+//! Feature 4 adds saving chats and restoring them ([`save`]):
+//! [`Core::restore`], [`Core::put_away`] and the rest, with the app's own
+//! data on each chat ([`AppData`]).
 //!
 //! The types already hold everything the architecture fixed, so later
 //! features add behaviour without reshaping them. Items and variants
@@ -65,7 +68,8 @@
 //!   is always written first.
 //! - **Names are as in Rust**: fields in snake_case, variants in
 //!   PascalCase, so these docs describe the wire exactly.
-//! - **Ids are plain numbers or strings**, such as a [`ChatId`] as `1000`.
+//! - **Ids are plain numbers or strings**, such as a [`TurnId`] as `1000`,
+//!   or a [`ChatId`] as its UUID's text.
 //! - **What isn't CAF's keeps its own shape:** what an agent sent, such as
 //!   a message's params or an [`Unknown`](chat::Unknown) item's data, stays
 //!   exactly as it came; Rust's own types keep serde's shapes, such as
@@ -82,7 +86,7 @@
 //!
 //! Every number CAF itself writes in a chat or on the viewer wire
 //! ([`viewer`]) is below 2^53, so JavaScript reads it exactly: CAF's ids
-//! count up from 1, times are milliseconds ([`Wall`](time::Wall)), and a
+//! count up from 1 (a chat's is a UUID, as text), times are milliseconds ([`Wall`](time::Wall)), and a
 //! number the agent gives that CAF keeps, such as how full its memory is,
 //! is read only if it's below 2^53. An update with a bigger one is
 //! unreadable, and kept as an [`Unknown`](chat::Unknown) item. A viewer's
@@ -155,6 +159,7 @@ pub mod install;
 mod kinds;
 pub mod profiles;
 pub mod question;
+pub mod save;
 #[cfg(test)]
 mod shape;
 pub mod time;
@@ -164,9 +169,10 @@ pub mod viewer;
 
 pub use crate::core::{Core, OpenChat, Refused, SessionChoice};
 pub use change::{Change, Mismatch, Numbered, Read};
-pub use chat::{AppItem, Chat, Item, ItemKind, NoAppItems, Turn};
+pub use chat::{AppData, AppItem, Chat, Item, ItemKind, NoAppData, NoAppItems, Turn};
 pub use directive::{Directive, Report};
 pub use event::{Event, HostCommand};
 pub use host::Host;
-pub use ids::{ChatId, ItemId, QuestionId, Ticket, TurnId};
+pub use ids::{ChatId, ItemId, QuestionId, Shelf, Ticket, TurnId};
+pub use save::{RestoreChat, SavedChat};
 pub use time::{Now, Window};

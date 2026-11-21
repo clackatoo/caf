@@ -29,28 +29,28 @@
 //! [`Event::Host`]: caf_core::Event::Host
 
 use caf_core::chat::AppItem;
-use caf_core::{Directive, Event, Now};
+use caf_core::{AppData, Directive, Event, NoAppData, Now};
 
 /// Sees every step CAF takes. Give one to [`Caf::start_watching`].
 ///
 /// [`Caf::start_watching`]: crate::Caf::start_watching
-pub trait Steps<A: AppItem>: Send + 'static {
+pub trait Steps<A: AppItem, D: AppData = NoAppData>: Send + 'static {
     /// Called after each step, on CAF's task, in order. Be quick: copy or
     /// encode what you need and return, since every chat waits meanwhile.
     /// A panic here is CAF's panic.
-    fn step(&mut self, step: Step<'_, A>);
+    fn step(&mut self, step: Step<'_, A, D>);
 }
 
 /// One step: an event the core was given, and what it gave out.
 #[non_exhaustive]
 #[derive(Debug)]
-pub struct Step<'a, A: AppItem> {
+pub struct Step<'a, A: AppItem, D: AppData = NoAppData> {
     /// When, as the core was told.
     pub now: Now,
     /// The event.
-    pub event: &'a Event<A>,
+    pub event: &'a Event<A, D>,
     /// The directives it gave out, in order.
-    pub directives: &'a [Directive],
+    pub directives: &'a [Directive<A, D>],
     /// The step's line for the recording ([`Config::record`]), if CAF is
     /// recording and the line was handed to the recording:
     /// `{"now": …, "event": …}`, exactly as it's written, with no

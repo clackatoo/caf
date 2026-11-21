@@ -300,7 +300,7 @@ fn a_chat_not_yet_open_isnt_in_the_list() {
     assert!(copies.open.is_empty(), "nothing open before the first step");
     player.go(1);
     copies.take(player.past());
-    assert_eq!(copies.open, [ChatId(1)]);
+    assert_eq!(copies.open, [ChatId::from_number(1)]);
 }
 
 #[test]

@@ -181,7 +181,10 @@ async fn a_watcher_without_a_recording_sees_the_host_calls_the_core_took() {
     assert!(matches!(refused, Some(Error::Refused(_))), "{refused:?}");
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
-    let refused = caf.chat(ChatId(999_999)).send(UserMessage::text("?")).await;
+    let refused = caf
+        .chat(ChatId::from_number(999_999))
+        .send(UserMessage::text("?"))
+        .await;
     assert!(matches!(refused, Err(Error::Refused(_))), "{refused:?}");
     chat.send(UserMessage::text("Hello")).await.unwrap();
     until(&chat, &mut watch, "the turn", finished).await;

@@ -18,18 +18,19 @@ use crate::agent::{
 use crate::change::{Change, Mismatch, Numbered};
 use crate::chat::{
     Chat, ChatState, Compacted, Cost, Failure, FailureReason, Incompatible, Item, ItemKind, Lost,
-    Note, Part, Remedy, Starter, ToolCall, ToolKind, ToolStatus, Turn, TurnLife, Unknown, Usage,
-    UserMessage,
+    NoAppData, NoAppItems, Note, Part, Remedy, Starter, ToolCall, ToolKind, ToolStatus, Turn,
+    TurnLife, Unknown, Usage, UserMessage,
 };
 use crate::core::{ConnectionInfo, OpenChat, Refused, SessionChoice};
 use crate::directive::{
     AgentDirective, Directive, Level, PermissionRequest, PolicyDirective, Report, SetupDirective,
-    Signal, TimerDirective, ViewerDirective,
+    Signal, StorageDirective, TimerDirective, ViewerDirective,
 };
-use crate::event::{AgentEvent, Event, Exit, HostCommand, PolicyAnswer, SetupEvent};
+use crate::event::{AgentEvent, Event, Exit, HostCommand, PolicyAnswer, SetupEvent, StorageEvent};
 use crate::host::{Grouping, Host, Limits, Shows, Timers};
 use crate::ids::{
-    AgentName, AgentSessionId, ChangeNo, ChatId, ConnectionId, ItemId, QuestionId, Ticket, TurnId,
+    AgentName, AgentSessionId, ChangeNo, ChatId, ConnectionId, ItemId, QuestionId, Shelf, Ticket,
+    TurnId,
 };
 use crate::install::{
     Artifact, Bundled, EnvValue, Install, LinkFrom, Needs, NpmPackage, Platform, Program, Recipe,
@@ -40,6 +41,7 @@ use crate::question::{
     Answer, OptionId, OptionKind, Permission, PermissionOption, Question, QuestionKind, SlowChoice,
     SlowToOpen,
 };
+use crate::save::{CannotRestore, Entry, Header, RestoreChat, Saved, SavedChat, SavedState};
 use crate::time::{End, Mono, Now, Wall, Window};
 use crate::viewer::{
     AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
@@ -236,7 +238,7 @@ pub(crate) fn usage() -> Usage {
 
 pub(crate) fn chat() -> Chat {
     Chat {
-        id: ChatId(1),
+        id: ChatId::from_number(1),
         agent: AgentName("claude".into()),
         cwd: "/work".into(),
         state: ChatState::Open {
@@ -350,8 +352,35 @@ fn answered() -> Message {
     }
 }
 
+/// A saved chat's header.
+fn header() -> Header {
+    Header {
+        chat: ChatId::from_number(1),
+        shelf: Shelf("work".into()),
+        agent: AgentName("claude".into()),
+        profile: Some("claude-agent-acp".into()),
+        cwd: "/work".into(),
+        made: Wall(1),
+        changed: Wall(2),
+        label: Some("Fix the tests".into()),
+        first: Some("Fix the tests".into()),
+        turns: 1,
+        closed: false,
+    }
+}
+
+/// A saved chat, whole.
+fn saved() -> Saved {
+    Saved {
+        header: header(),
+        chat: chat(),
+        session: Some(AgentSessionId("s1".into())),
+        data: NoAppData,
+    }
+}
+
 /// Adds one of every type CAF writes to `s`, but for those that have no
-/// values (`NoAppItems`, `StorageEvent`, `StorageDirective`).
+/// values (`NoAppItems`).
 pub(crate) fn every_type(s: &mut Samples) {
     // time
     s.both(&now());
@@ -360,7 +389,7 @@ pub(crate) fn every_type(s: &mut Samples) {
     s.both(&Window::unknown());
     s.both(&End::At(Wall(1)));
     // ids
-    s.both(&ChatId(1));
+    s.both(&ChatId::from_number(1));
     s.both(&TurnId(1));
     s.both(&ItemId(1));
     s.both(&QuestionId(1));
@@ -385,7 +414,7 @@ pub(crate) fn every_type(s: &mut Samples) {
     s.both(&Incompatible::HttpMcp);
     s.both(&turn());
     s.both(&Starter::OtherChat {
-        from: ChatId(9),
+        from: ChatId::from_number(9),
         message: message(),
     });
     s.both(&message());
@@ -409,6 +438,7 @@ pub(crate) fn every_type(s: &mut Samples) {
     s.both(&Unknown {
         what: "hologram".into(),
         raw: json!({ "sessionUpdate": "hologram" }),
+        summary: None,
     });
     // change
     let change: Change = Change::TurnLife {
@@ -550,9 +580,40 @@ pub(crate) fn every_type(s: &mut Samples) {
         id: ConnectionId(2),
         agent: AgentName("claude".into()),
         profile: Some(profile()),
-        chats: vec![ChatId(1)],
+        chats: vec![ChatId::from_number(1)],
         stderr: vec!["warming up".into()],
     });
+    // save
+    s.both(&Shelf("work".into()));
+    s.both(&NoAppData);
+    s.both(&header());
+    s.both(&saved());
+    s.both(&Entry::<NoAppItems, NoAppData>::Session(Some(
+        AgentSessionId("s2".into()),
+    )));
+    s.both(&RestoreChat::new(
+        ChatId::from_number(1),
+        Shelf("work".into()),
+    ));
+    s.both(&SavedChat {
+        header: header(),
+        state: SavedState::Failed(CannotRestore::Newer { version: 2 }),
+    });
+    s.both(&SavedState::Loaded);
+    s.both(&CannotRestore::Damaged("a checksum doesn't match".into()));
+    s.written(
+        &StorageDirective::<NoAppItems, NoAppData>::Append {
+            ticket: Ticket(1),
+            shelf: Shelf("work".into()),
+            header: header(),
+            entries: vec![Entry::Data(NoAppData)],
+        },
+        true,
+    );
+    s.written(
+        &StorageEvent::<NoAppItems, NoAppData>::Loaded(Box::new(saved())),
+        true,
+    );
     // viewer
     s.both(&FromViewer::Answer {
         request: RequestNo(1),
@@ -564,7 +625,7 @@ pub(crate) fn every_type(s: &mut Samples) {
         latest: ChangeNo(5),
     });
     s.both(&ToViewer::Changes {
-        chat: ChatId(1),
+        chat: ChatId::from_number(1),
         changes: vec![Numbered {
             no: ChangeNo(6),
             change: Change::ItemAdded {
@@ -574,9 +635,11 @@ pub(crate) fn every_type(s: &mut Samples) {
         }],
     });
     s.both(&ChatSummary {
-        id: ChatId(1),
+        id: ChatId::from_number(1),
         agent: AgentName("claude".into()),
         cwd: "/work".into(),
+        label: Some("Fix the tests".into()),
+        shelf: Some(Shelf("work".into())),
     });
     s.both(&RequestNo(1));
     s.both(&Rights::new(true, false));
@@ -597,7 +660,7 @@ pub(crate) fn every_type(s: &mut Samples) {
     ]));
     // directive
     s.written(
-        &Directive::Agent(AgentDirective::Start {
+        &Directive::<crate::chat::NoAppItems>::Agent(AgentDirective::Start {
             process: Ticket(3),
             command: command(),
             hold: Some("/home/me/.local/share/caf/agents/claude-agent-acp-0.98.0".into()),
@@ -616,7 +679,7 @@ pub(crate) fn every_type(s: &mut Samples) {
     s.written(
         &PolicyDirective::Decide {
             ticket: Ticket(5),
-            chat: ChatId(1),
+            chat: ChatId::from_number(1),
             request: PermissionRequest {
                 title: "Run ls".into(),
                 input: Some("ls".into()),
@@ -630,7 +693,7 @@ pub(crate) fn every_type(s: &mut Samples) {
     });
     s.written(
         &ViewerDirective::Changed {
-            chat: ChatId(1),
+            chat: ChatId::from_number(1),
             latest: ChangeNo(5),
         },
         true,
@@ -682,19 +745,22 @@ pub(crate) fn every_type(s: &mut Samples) {
     ];
     for directive in setup {
         s.written(&directive, true);
-        s.written(&Directive::Setup(directive), true);
+        s.written(
+            &Directive::<crate::chat::NoAppItems>::Setup(directive),
+            true,
+        );
     }
     // event
     s.written(
         &Event::<crate::chat::NoAppItems>::Host(HostCommand::OpenChat {
-            chat: ChatId(1),
+            chat: ChatId::from_number(1),
             open,
         }),
         true,
     );
     s.written(
         &HostCommand::<crate::chat::NoAppItems>::Send {
-            chat: ChatId(1),
+            chat: ChatId::from_number(1),
             turn: TurnId(2),
             message: message(),
         },
@@ -808,7 +874,7 @@ fn enums_are_type_then_value() {
     );
     // Ids are plain numbers and strings, and std's Duration and Option
     // keep their shapes.
-    assert_eq!(both(&ChatId(5)), json!(5));
+    assert_eq!(both(&ChatId::from_number(5)), json!(5));
     assert_eq!(both(&AgentName("claude".into())), json!("claude"));
     assert_eq!(
         both(&Timers::default())["group_poll"],

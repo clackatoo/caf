@@ -563,7 +563,8 @@ pub(crate) fn check_fixtures(core: &Core) {
     let chats = core.applied.iter().map(|(chat, applied)| {
         let steps = (applied.steps.iter()).map(|(change, chat)| (change, After::Chat(chat)));
         (
-            chat.0,
+            // Tests' chats are numbered ([`ChatId::from_number`]).
+            u64::try_from(chat.0.as_u128()).expect("a test's chat id"),
             fixtures::text(&applied.picture, applied.latest, steps),
         )
     });
@@ -639,15 +640,15 @@ pub(crate) fn render(directive: &Directive) -> Value {
             chat,
             request,
         }) => {
-            json!({ "decide": ticket.0, "chat": chat.0, "title": request.title, "input": request.input })
+            json!({ "decide": ticket.0, "chat": chat, "title": request.title, "input": request.input })
         }
         Directive::Policy(PolicyDirective::Withdrawn { ticket }) => {
             json!({ "withdrawn": ticket.0 })
         }
         Directive::Viewer(ViewerDirective::Changed { chat, latest }) => {
-            json!({ "changed": chat.0, "latest": latest.0 })
+            json!({ "changed": chat, "latest": latest.0 })
         }
-        Directive::Storage(storage) => match *storage {},
+        Directive::Storage(storage) => json!({ "storage": storage }),
         Directive::Setup(setup) => render_setup(setup),
         Directive::Report(report) => {
             json!({ "report": format!("{:?}", report.level), "message": report.message })

@@ -28,7 +28,7 @@ use crate::ids::ChatId;
 const PROC: u64 = 1002;
 
 /// The first chat.
-const CHAT: ChatId = ChatId(1000);
+const CHAT: ChatId = ChatId::from_number(1000);
 
 /// The session the agent opens for the first chat.
 const SESSION: &str = "sess-1";

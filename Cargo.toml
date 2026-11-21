@@ -12,6 +12,7 @@ repository = "https://github.com/clackatoo/caf"
 
 [workspace.dependencies]
 caf-core = { path = "crates/core" }
+caf-save = { path = "crates/save" }
 # ACP's types only: CAF frames and routes the messages itself. The same
 # pin as clackatoo, with the session notices clackatoo already declares.
 agent-client-protocol-schema = { version = "1.10", default-features = false, features = ["unstable_session_notices"] }
@@ -50,4 +51,14 @@ tar = { version = "0.4", default-features = false }
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 # Unpacking a downloaded zip: deflate only, through flate2.
 zip = { version = "9.1", default-features = false, features = ["deflate-flate2"] }
+# Chat ids: UUIDs, version 7, built by the core from its seed and the
+# time it's given. No `v7` or `rng`: the core makes no randomness of its
+# own, so `Uuid::now_v7` doesn't even compile in it.
+uuid = { version = "1.29", default-features = false, features = ["std"] }
+# Saved chats are compressed with zstd: its format is frozen (RFC 8878),
+# so a chat saved today reads forever. The C library, not pure Rust as
+# elsewhere here: ruzstd, the pure-Rust one, compresses only at its
+# fastest levels, and old chats are squeezed at the strongest, with a long
+# window.
+zstd = { version = "0.14", default-features = false }
 tokio = { version = "1.54", features = ["rt", "macros", "io-util", "process", "sync", "time"] }

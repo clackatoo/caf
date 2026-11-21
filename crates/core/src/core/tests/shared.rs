@@ -12,7 +12,7 @@ use crate::ids::{ChatId, QuestionId};
 use crate::question::{Answer, SlowChoice};
 
 /// The second chat, opened after the first's session.
-const OTHER: ChatId = ChatId(1003);
+const OTHER: ChatId = ChatId::from_number(1003);
 
 #[test]
 fn per_agent_grouping_shares_one_adapter_and_per_chat_grouping_doesnt() {

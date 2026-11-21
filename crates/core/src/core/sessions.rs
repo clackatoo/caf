@@ -17,6 +17,7 @@ use super::record::Log;
 use super::state::{Conn, How, Open, Purpose, Run};
 use super::{Core, OpenChat, Refused, SessionChoice, report};
 use crate::agent::{EnvChange, McpServer};
+use crate::chat::AppData;
 use crate::chat::{
     AppItem, Chat, ChatState, Failure, FailureReason, ItemKind, Lost, Note, Remedy, Starter, Turn,
     TurnLife,
@@ -31,14 +32,14 @@ use crate::time::{Now, Window};
 /// The longest session id CAF keeps, in bytes.
 const MOST_SESSION_ID: usize = 256;
 
-impl<A: AppItem> Core<A> {
+impl<A: AppItem, D: AppData> Core<A, D> {
     /// Opens chat `chat`.
     pub(super) fn open_chat_as(
         &mut self,
         now: Now,
         chat: ChatId,
         open: OpenChat,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         if !self.agents.contains_key(&open.agent) {
             return Err(Refused::NoSuchAgent);
@@ -57,7 +58,8 @@ impl<A: AppItem> Core<A> {
             report(out, Level::Warn, format!("chat {} is already open", chat.0));
             return Ok(());
         }
-        self.ids.seen(chat.0);
+        self.saving.made += 1;
+        self.data.insert(chat, D::default());
         self.shutting_down = false;
         let conn = self.conn_for(chat, &open);
         self.chats.insert(
@@ -140,7 +142,7 @@ impl<A: AppItem> Core<A> {
     }
 
     /// The chat wants its session open again.
-    pub(super) fn want_open(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) {
+    pub(super) fn want_open(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
         let Some(run) = self.runs.get_mut(&chat) else {
             return;
         };
@@ -157,7 +159,7 @@ impl<A: AppItem> Core<A> {
         now: Now,
         chat: ChatId,
         proc: Ticket,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let Some(caps) = self.procs.get(&proc).and_then(|each| each.caps().cloned()) else {
             return;
@@ -296,7 +298,7 @@ impl<A: AppItem> Core<A> {
         chat: ChatId,
         (how, asked, abandoned): (How, Option<AgentSessionId>, bool),
         reply: Reply,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let waiting = !abandoned
             && self
@@ -374,7 +376,7 @@ impl<A: AppItem> Core<A> {
         chat: ChatId,
         proc: Ticket,
         session: AgentSessionId,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let Some(run) = self.runs.get_mut(&chat) else {
             return;
@@ -403,7 +405,7 @@ impl<A: AppItem> Core<A> {
         now: Now,
         proc: Ticket,
         session: AgentSessionId,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         if let Some(each) = self.procs.get_mut(&proc) {
             each.sessions.insert(session.0.clone());
@@ -464,7 +466,7 @@ impl<A: AppItem> Core<A> {
         chat: ChatId,
         lost: Lost,
         reopen: bool,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let Some(run) = self.runs.get_mut(&chat) else {
             return;
@@ -562,7 +564,7 @@ impl<A: AppItem> Core<A> {
         chat: ChatId,
         question: QuestionId,
         choice: SlowChoice,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         self.unask_slow(chat, question);
         let Some(run) = self.runs.get(&chat) else {
@@ -656,7 +658,7 @@ impl<A: AppItem> Core<A> {
 
     /// Stops waiting for `chat`'s session: its waiting messages end as
     /// stopped.
-    pub(super) fn stop_opening(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) {
+    pub(super) fn stop_opening(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
         self.abandon_open(now, chat);
         for turn in self.waiting_turns(chat) {
             self.set_life(now, chat, turn, TurnLife::Stopped);
@@ -706,7 +708,7 @@ impl<A: AppItem> Core<A> {
         &mut self,
         now: Now,
         chat: ChatId,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         let whole = self.chats.get(&chat).ok_or(Refused::NoSuchChat)?;
         if whole.state == ChatState::Closed {
@@ -758,7 +760,13 @@ impl<A: AppItem> Core<A> {
     /// Ends what `chat` has going: its questions, its running turn (as
     /// `life`, telling the agent to stop), its waiting turns (as stopped)
     /// and any session it's opening.
-    fn wind_down(&mut self, now: Now, chat: ChatId, life: TurnLife, out: &mut Vec<Directive>) {
+    fn wind_down(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        life: TurnLife,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
         self.withdraw_asks(chat, out);
         if let Some(running) = self.give_up_prompt(now, chat) {
             if let Some(session) = self.runs.get(&chat).and_then(|run| run.session.clone()) {
@@ -779,7 +787,7 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Stops everything.
-    pub(super) fn shut_down(&mut self, now: Now, out: &mut Vec<Directive>) {
+    pub(super) fn shut_down(&mut self, now: Now, out: &mut Vec<Directive<A, D>>) {
         self.shutting_down = true;
         self.stop_setup(out);
         let chats: Vec<ChatId> = (self.chats.iter())

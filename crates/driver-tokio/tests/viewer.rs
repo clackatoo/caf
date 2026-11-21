@@ -583,7 +583,7 @@ async fn opening_is_refused_unless_the_host_allows_it() {
     buggy
         .send(FromViewer::Stop {
             request: RequestNo(6),
-            chat: ChatId(999_999),
+            chat: ChatId::from_number(999_999),
         })
         .await;
     assert_eq!(buggy.done(6).await, Outcome::Refused(Refused::NoSuchChat));
@@ -727,7 +727,7 @@ async fn a_watched_chat_ends_when_it_closes() {
     }
     assert_eq!(viewer.next().await, Some(ToViewer::Ended { chat: chat.id }));
     // So does a chat that was never there.
-    let never = ChatId(999_999);
+    let never = ChatId::from_number(999_999);
     viewer
         .send(FromViewer::Watch {
             chat: never,
@@ -944,7 +944,7 @@ async fn a_viewer_answers_a_question_and_hears_refusals() {
     viewer
         .send(FromViewer::Send {
             request: RequestNo(1),
-            chat: ChatId(999_999),
+            chat: ChatId::from_number(999_999),
             message: UserMessage::text("Anyone?"),
         })
         .await;
@@ -1117,7 +1117,7 @@ async fn viewers_that_stop_reading_dont_hold_caf_up() {
         tokio::spawn(async move {
             for id in 5000..8000 {
                 let watch = FromViewer::Watch {
-                    chat: ChatId(id),
+                    chat: ChatId::from_number(id),
                     since: None,
                 };
                 if to.send(watch).await.is_err() {
@@ -1177,7 +1177,7 @@ async fn nothing_more_comes_for_an_unwatched_chat() {
     viewer
         .send(FromViewer::Stop {
             request: RequestNo(1),
-            chat: ChatId(999_999),
+            chat: ChatId::from_number(999_999),
         })
         .await;
     viewer.done(1).await;
@@ -1187,7 +1187,7 @@ async fn nothing_more_comes_for_an_unwatched_chat() {
     viewer
         .send(FromViewer::Stop {
             request: RequestNo(2),
-            chat: ChatId(999_999),
+            chat: ChatId::from_number(999_999),
         })
         .await;
     viewer.done(2).await;
@@ -1292,7 +1292,7 @@ async fn watching_a_chat_again_before_anything_comes_starts_it_once() {
     viewer
         .send(FromViewer::Stop {
             request: RequestNo(1),
-            chat: ChatId(999_999),
+            chat: ChatId::from_number(999_999),
         })
         .await;
     viewer.done(1).await;
@@ -1329,7 +1329,7 @@ async fn serve_ends_though_its_viewer_has_stopped_reading() {
         viewer
             .send(FromViewer::Stop {
                 request: RequestNo(1),
-                chat: ChatId(999_999),
+                chat: ChatId::from_number(999_999),
             })
             .await;
         viewer

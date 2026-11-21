@@ -2,5 +2,11 @@
 
 /**
  * A chat: the user's conversation, over one or more agent sessions.
+ *
+ * Written as a UUID's text in every format, such as
+ * `"0192f0c4-5b8e-7c3a-9d41-6e2f8a1b3c5d"`, MessagePack included, so it
+ * has one shape everywhere. A number is read too, as the UUID whose last
+ * bits it is: what recordings and samples made before chats had UUIDs
+ * hold.
  */
-export type ChatId = number;
+export type ChatId = string;

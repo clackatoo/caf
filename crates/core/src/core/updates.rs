@@ -16,6 +16,7 @@ use serde_json::Value;
 use super::clean::{agent_text, unhidden};
 use super::state::Open;
 use super::{Core, report};
+use crate::chat::AppData;
 use crate::chat::{
     AppItem, Cost, Item, ItemKind, Part, Starter, ToolCall, ToolKind, ToolStatus, Turn, TurnLife,
     Unknown, Usage, UserMessage,
@@ -58,14 +59,14 @@ struct ToolChange {
     output: Option<String>,
 }
 
-impl<A: AppItem> Core<A> {
+impl<A: AppItem, D: AppData> Core<A, D> {
     /// Takes in a `session/update` from `proc`.
     pub(super) fn update(
         &mut self,
         now: Now,
         proc: Ticket,
         params: &Value,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let session = params.get("sessionId").and_then(Value::as_str);
         let Some(chat) = session.and_then(|session| self.chat_with_session(proc, session)) else {
@@ -157,12 +158,16 @@ impl<A: AppItem> Core<A> {
             } else {
                 agent_text(&tag, 64)
             };
-            Said::Unknown(Unknown { what, raw: update })
+            Said::Unknown(Unknown {
+                what,
+                raw: update,
+                summary: None,
+            })
         })
     }
 
     /// Takes in what the agent says live.
-    fn live(&mut self, now: Now, chat: ChatId, said: Said, out: &mut Vec<Directive>) {
+    fn live(&mut self, now: Now, chat: ChatId, said: Said, out: &mut Vec<Directive<A, D>>) {
         // Anything the agent says keeps a turn it started going.
         let quiet = self.host.timers.quiet;
         if let Some(run) = self.runs.get_mut(&chat)
@@ -246,7 +251,7 @@ impl<A: AppItem> Core<A> {
         now: Now,
         chat: ChatId,
         call: &Value,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) -> Option<ItemId> {
         let id = call.get("toolCallId").and_then(Value::as_str)?;
         if let Some(item) = self.runs.get(&chat).and_then(|run| run.tools.get(id)) {
@@ -292,7 +297,7 @@ impl<A: AppItem> Core<A> {
         chat: ChatId,
         id: String,
         change: ToolChange,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let known = self
             .runs
@@ -350,7 +355,7 @@ impl<A: AppItem> Core<A> {
     /// Takes in what the agent replays of a session's history: turns are
     /// built and added once each is whole. Nothing in them acts, and their
     /// times aren't known.
-    fn replayed(&mut self, now: Now, chat: ChatId, said: Said, out: &mut Vec<Directive>) {
+    fn replayed(&mut self, now: Now, chat: ChatId, said: Said, out: &mut Vec<Directive<A, D>>) {
         // Each update replayed shows the agent is still at it.
         if let Some(super::state::Open::Asked { proc, id }) =
             self.runs.get(&chat).map(|run| &run.open)

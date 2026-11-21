@@ -19,6 +19,7 @@
 //! | `Policy(Withdrawn)` | Stops that decision's task. An answer it gave already is still handed in, and the core ignores it |
 //! | `Viewer(Changed)` | Wakes the chat's watches, which read with [`Core::read`] |
 //! | `Setup` | [`SetupDriver::apply`]; its reports come back as [`Event::Setup`] |
+//! | `Storage` | [`caf_save::carry_out`] with [`Config::store`], on a thread of its own, in order; its reports come back as [`Event::Storage`] |
 //! | `Report` | The [`log`] facade, target `caf` |
 //!
 //! A [`Steps`] given to [`Caf::start_watching`] sees each event once the
@@ -47,6 +48,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use caf_core::Shelf;
 use caf_core::acp::{Frame, Message};
 use caf_core::agent::AgentStatus;
 use caf_core::agent::{AgentSpec, EnvChange, Launch, McpServer};
@@ -55,11 +57,13 @@ use caf_core::directive::{Level, PolicyDirective, TimerDirective, ViewerDirectiv
 use caf_core::event::{AgentEvent, HostCommand, PolicyAnswer};
 use caf_core::ids::{AgentName, ChangeNo};
 use caf_core::question::Answer;
+use caf_core::save::{CannotRestore, RestoreChat, SavedChat};
 use caf_core::viewer::ChatSummary;
 use caf_core::{
-    AppItem, Chat, ChatId, Core, Directive, Event, Host, NoAppItems, Now, Numbered, OpenChat,
-    QuestionId, Read, Refused, Report, Ticket, TurnId,
+    AppData, AppItem, Chat, ChatId, Core, Directive, Event, Host, NoAppData, NoAppItems, Now,
+    Numbered, OpenChat, QuestionId, Read, Refused, Report, Ticket, TurnId,
 };
+use caf_save::Store;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -137,6 +141,16 @@ pub struct Config {
     /// on the machine. `None` (the default) means
     /// [`SetupDriver::default_root`](crate::SetupDriver::default_root).
     pub installs: Option<PathBuf>,
+    /// Where chats are kept, such as a
+    /// [`FileStore`](caf_save::FileStore) in
+    /// [`FileStore::default_root`](caf_save::FileStore::default_root), or
+    /// the app's own. `None` (the default) keeps none: a chat opened with
+    /// a shelf is refused ([`Refused::NotSaved`]), and so is restoring.
+    ///
+    /// It runs on a thread of its own, so the disk never holds CAF up.
+    /// Once [`Caf::shutdown`] returns, every saved chat has been written
+    /// whole and released.
+    pub store: Option<Box<dyn Store>>,
 }
 
 impl Config {
@@ -151,6 +165,7 @@ impl Config {
             agent_limits: AgentLimits::default(),
             record: None,
             installs: None,
+            store: None,
         }
     }
 }
@@ -161,15 +176,15 @@ impl Config {
 /// Once every clone and every [`ChatHandle`] is dropped, CAF shuts down by
 /// itself, as if [`Caf::shutdown`] had been called. A [`Watch`] doesn't
 /// keep it running.
-pub struct Caf<A: AppItem = NoAppItems> {
-    commands: mpsc::Sender<Command>,
+pub struct Caf<A: AppItem = NoAppItems, D: AppData = NoAppData> {
+    commands: mpsc::Sender<Command<D>>,
     /// Watches' reads, apart from the commands, so a watch never waits
     /// for room among them: see [`Reading`].
     reads: mpsc::UnboundedSender<Reading<A>>,
     shared: Common<A>,
 }
 
-impl<A: AppItem> Clone for Caf<A> {
+impl<A: AppItem, D: AppData> Clone for Caf<A, D> {
     fn clone(&self) -> Self {
         Self {
             commands: self.commands.clone(),
@@ -190,6 +205,8 @@ struct Common<A: AppItem> {
     chats: watch::Receiver<Vec<ChatSummary>>,
     /// Where every agent stands, in the order they were offered.
     statuses: watch::Receiver<Vec<AgentStatus>>,
+    /// The saved chats on every shelf listed.
+    saved: watch::Receiver<Vec<SavedChat>>,
     /// See [`Caf::run`].
     run: Arc<str>,
 }
@@ -202,22 +219,23 @@ impl<A: AppItem> Clone for Common<A> {
             agents: Arc::clone(&self.agents),
             chats: self.chats.clone(),
             statuses: self.statuses.clone(),
+            saved: self.saved.clone(),
             run: Arc::clone(&self.run),
         }
     }
 }
 
 /// A handle on CAF that doesn't keep it running, as a [`Watch`] holds.
-pub(crate) struct WeakCaf<A: AppItem> {
-    commands: mpsc::WeakSender<Command>,
+pub(crate) struct WeakCaf<A: AppItem, D: AppData> {
+    commands: mpsc::WeakSender<Command<D>>,
     reads: mpsc::WeakUnboundedSender<Reading<A>>,
     shared: Common<A>,
 }
 
-impl<A: AppItem> WeakCaf<A> {
+impl<A: AppItem, D: AppData> WeakCaf<A, D> {
     /// A handle that keeps CAF running while it's held, unless CAF has
     /// shut down.
-    pub(crate) fn upgrade(&self) -> Option<Caf<A>> {
+    pub(crate) fn upgrade(&self) -> Option<Caf<A, D>> {
         Some(Caf {
             commands: self.commands.upgrade()?,
             reads: self.reads.upgrade()?,
@@ -322,6 +340,8 @@ pub enum Error {
     /// CAF has shut down, or is shutting down, so nothing can be asked of
     /// it.
     Gone,
+    /// A saved chat couldn't be restored. Its save is left as it was.
+    CannotRestore(CannotRestore),
 }
 
 impl From<Refused> for Error {
@@ -335,6 +355,7 @@ impl std::fmt::Display for Error {
         match self {
             Self::Refused(refused) => write!(f, "CAF refused: {refused:?}"),
             Self::Gone => f.write_str("CAF has shut down"),
+            Self::CannotRestore(why) => write!(f, "CAF couldn't restore the chat: {why:?}"),
         }
     }
 }
@@ -345,7 +366,7 @@ impl std::error::Error for Error {}
 /// send one.
 const COMMANDS: usize = 64;
 
-impl<A: AppItem> Caf<A> {
+impl<A: AppItem, D: AppData> Caf<A, D> {
     /// Starts CAF in a task of its own, on the current tokio runtime.
     ///
     /// Reports go to the [`log`] facade, with target `caf`, at the level
@@ -374,12 +395,12 @@ impl<A: AppItem> Caf<A> {
     ///
     /// As [`Caf::start`].
     #[must_use]
-    pub fn start_watching(config: Config, steps: impl Steps<A>) -> (Self, Running) {
+    pub fn start_watching(config: Config, steps: impl Steps<A, D>) -> (Self, Running) {
         Self::start_with(config, Some(Box::new(steps)))
     }
 
     /// Starts CAF, with `steps` seeing every step if there are any.
-    fn start_with(config: Config, steps: Option<Box<dyn Steps<A>>>) -> (Self, Running) {
+    fn start_with(config: Config, steps: Option<Box<dyn Steps<A, D>>>) -> (Self, Running) {
         assert_eq!(
             config.agent_limits.biggest_line, config.host.limits.biggest_message,
             "the agent driver's biggest line must be the host's biggest message"
@@ -408,6 +429,7 @@ impl<A: AppItem> Caf<A> {
             });
         let core = Core::new(config.host, config.agents);
         let (told, statuses) = watch::channel(core.agents());
+        let (_listed, saved) = watch::channel(Vec::new());
         let mut task = Task {
             core,
             agents: AgentDriver::new(config.agent_limits),
@@ -443,6 +465,7 @@ impl<A: AppItem> Caf<A> {
                 agents,
                 chats,
                 statuses,
+                saved,
                 run: new_run().into(),
             },
         };
@@ -575,7 +598,7 @@ impl<A: AppItem> Caf<A> {
     }
 
     /// A handle that doesn't keep CAF running.
-    pub(crate) fn downgrade(&self) -> WeakCaf<A> {
+    pub(crate) fn downgrade(&self) -> WeakCaf<A, D> {
         WeakCaf {
             commands: self.commands.downgrade(),
             reads: self.reads.downgrade(),
@@ -589,18 +612,77 @@ impl<A: AppItem> Caf<A> {
     /// # Errors
     ///
     /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
-    pub async fn open_chat(&self, open: OpenChat) -> Result<ChatHandle<A>, Error> {
+    pub async fn open_chat(&self, open: OpenChat) -> Result<ChatHandle<A, D>, Error> {
         let chat = self.ask(|reply| Command::Open { open, reply }).await?;
         Ok(self.chat(chat))
     }
 
     /// A handle on a chat that's already open.
     #[must_use]
-    pub fn chat(&self, chat: ChatId) -> ChatHandle<A> {
+    pub fn chat(&self, chat: ChatId) -> ChatHandle<A, D> {
         ChatHandle {
             id: chat,
             caf: self.clone(),
         }
+    }
+
+    /// Lists a shelf's saved chats. They come in [`Caf::watch_saved`]. See
+    /// [`Core::list_saved`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::list_saved`]: caf_core::Core::list_saved
+    pub async fn list_saved(&self, shelf: Shelf) -> Result<(), Error> {
+        self.ask(|reply| Command::ListSaved { shelf, reply }).await
+    }
+
+    /// Follows the saved chats on every shelf listed, loaded or not: the
+    /// whole list at once, then again each time it changes.
+    #[must_use]
+    pub fn watch_saved(&self) -> SavedWatch {
+        todo!()
+    }
+
+    /// Restores a saved chat, and returns its handle once it's loaded.
+    /// See [`Core::restore`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::CannotRestore`] saying why, [`Error::Refused`] with the
+    /// core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::restore`]: caf_core::Core::restore
+    pub async fn restore(&self, restore: RestoreChat) -> Result<ChatHandle<A, D>, Error> {
+        let chat = self
+            .ask(|reply| Command::Restore { restore, reply })
+            .await?;
+        Ok(self.chat(chat.map_err(Error::CannotRestore)?))
+    }
+
+    /// Deletes a chat for good, loaded or not. See [`Core::delete`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::delete`]: caf_core::Core::delete
+    pub async fn delete(&self, chat: ChatId, shelf: Shelf) -> Result<(), Error> {
+        self.ask(|reply| Command::Delete { chat, shelf, reply })
+            .await
+    }
+
+    /// Moves every chat on a shelf to another. See [`Core::move_shelf`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    ///
+    /// [`Core::move_shelf`]: caf_core::Core::move_shelf
+    pub async fn move_shelf(&self, from: Shelf, to: Shelf) -> Result<(), Error> {
+        self.ask(|reply| Command::MoveShelf { from, to, reply })
+            .await
     }
 
     /// Stops everything: every session closed, every adapter stopped.
@@ -624,7 +706,7 @@ impl<A: AppItem> Caf<A> {
     /// Sends the task a command that takes a reply, and waits for it.
     async fn ask<T>(
         &self,
-        command: impl FnOnce(oneshot::Sender<Result<T, Refused>>) -> Command,
+        command: impl FnOnce(oneshot::Sender<Result<T, Refused>>) -> Command<D>,
     ) -> Result<T, Error> {
         let (reply, answer) = oneshot::channel();
         (self.commands.send(command(reply)).await).map_err(|_| Error::Gone)?;
@@ -634,13 +716,13 @@ impl<A: AppItem> Caf<A> {
 }
 
 /// A handle on one chat.
-pub struct ChatHandle<A: AppItem = NoAppItems> {
+pub struct ChatHandle<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     /// The chat's id.
     pub id: ChatId,
-    caf: Caf<A>,
+    caf: Caf<A, D>,
 }
 
-impl<A: AppItem> ChatHandle<A> {
+impl<A: AppItem, D: AppData> ChatHandle<A, D> {
     /// Sends a message. See [`caf_core::Core::send`].
     ///
     /// # Errors
@@ -676,7 +758,8 @@ impl<A: AppItem> ChatHandle<A> {
         self.caf.answer(question, answer).await
     }
 
-    /// Closes the chat for good.
+    /// Closes the chat: the user is done with it. See
+    /// [`caf_core::Core::close_chat`].
     ///
     /// # Errors
     ///
@@ -684,6 +767,40 @@ impl<A: AppItem> ChatHandle<A> {
     pub async fn close(self) -> Result<(), Error> {
         let chat = self.id;
         self.caf.ask(|reply| Command::Close { chat, reply }).await
+    }
+
+    /// Saves the chat whole and lets it go from memory, to be restored
+    /// later. See [`caf_core::Core::put_away`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    pub async fn put_away(self) -> Result<(), Error> {
+        let chat = self.id;
+        self.caf.ask(|reply| Command::PutAway { chat, reply }).await
+    }
+
+    /// Sets the chat's data slot, whole. See
+    /// [`caf_core::Core::set_data`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    pub async fn set_data(&self, data: D) -> Result<(), Error> {
+        let chat = self.id;
+        (self.caf)
+            .ask(|reply| Command::SetData { chat, data, reply })
+            .await
+    }
+
+    /// The chat's data slot. See [`caf_core::Core::data`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with [`Refused::NoSuchChat`], or [`Error::Gone`].
+    pub async fn data(&self) -> Result<D, Error> {
+        let chat = self.id;
+        self.caf.ask(|reply| Command::Data { chat, reply }).await
     }
 
     /// Watches the chat: first the whole chat, then its changes as they
@@ -767,6 +884,27 @@ impl AgentsWatch {
             self.list.changed().await.ok()?;
         }
         Some(self.list.borrow_and_update().clone())
+    }
+}
+
+/// Follows the saved chats on every shelf listed. Like [`Watch`], it
+/// doesn't keep CAF running.
+#[allow(dead_code)] // A draft: the build reads them.
+pub struct SavedWatch {
+    list: watch::Receiver<Vec<SavedChat>>,
+    /// It hasn't given the list yet.
+    first: bool,
+}
+
+impl SavedWatch {
+    /// The saved chats on every shelf listed, shelf by shelf, each in the
+    /// order they were made: at once the first time, then each time it
+    /// changes. If it changes more than once between calls, only the
+    /// latest is given. `None` once CAF has shut down.
+    ///
+    /// Cancel-safe: dropped before it resolves, it loses nothing.
+    pub async fn next(&mut self) -> Option<Vec<SavedChat>> {
+        todo!()
     }
 }
 
@@ -914,7 +1052,8 @@ impl<A: AppItem> Watch<A> {
 }
 
 /// What a handle asks of the task.
-enum Command {
+#[allow(dead_code)] // A draft: the build reads the new ones.
+enum Command<D: AppData> {
     Open {
         open: OpenChat,
         reply: oneshot::Sender<Result<ChatId, Refused>>,
@@ -947,6 +1086,38 @@ enum Command {
         agent: AgentName,
         call: AgentCall,
         reply: oneshot::Sender<Result<(), Refused>>,
+    },
+    ListSaved {
+        shelf: Shelf,
+        reply: oneshot::Sender<Result<(), Refused>>,
+    },
+    /// Answered once the chat is loaded or has failed to be.
+    Restore {
+        restore: RestoreChat,
+        reply: oneshot::Sender<Result<Result<ChatId, CannotRestore>, Refused>>,
+    },
+    PutAway {
+        chat: ChatId,
+        reply: oneshot::Sender<Result<(), Refused>>,
+    },
+    Delete {
+        chat: ChatId,
+        shelf: Shelf,
+        reply: oneshot::Sender<Result<(), Refused>>,
+    },
+    MoveShelf {
+        from: Shelf,
+        to: Shelf,
+        reply: oneshot::Sender<Result<(), Refused>>,
+    },
+    SetData {
+        chat: ChatId,
+        data: D,
+        reply: oneshot::Sender<Result<(), Refused>>,
+    },
+    Data {
+        chat: ChatId,
+        reply: oneshot::Sender<Result<D, Refused>>,
     },
 }
 
@@ -1022,8 +1193,8 @@ impl<A: AppItem> Default for Last<A> {
 }
 
 /// The task: the core and its drivers.
-struct Task<A: AppItem> {
-    core: Core<A>,
+struct Task<A: AppItem, D: AppData> {
+    core: Core<A, D>,
     agents: AgentDriver,
     timers: TimerDriver,
     setup: SetupDriver,
@@ -1041,13 +1212,13 @@ struct Task<A: AppItem> {
     ending: Option<watch::Sender<()>>,
     recorder: Option<Recorder>,
     /// Who sees every step, if anyone.
-    steps: Option<Box<dyn Steps<A>>>,
+    steps: Option<Box<dyn Steps<A, D>>>,
     /// The open chats, for [`ChatsWatch`]es. Dropped as the task ends.
     open: watch::Sender<Vec<ChatSummary>>,
     /// Every agent's status, for [`AgentsWatch`]es. Dropped as the task
     /// ends.
     statuses: watch::Sender<Vec<AgentStatus>>,
-    inbox: mpsc::Receiver<Command>,
+    inbox: mpsc::Receiver<Command<D>>,
     /// Whether any handle is left to send commands.
     listening: bool,
     reads: mpsc::UnboundedReceiver<Reading<A>>,
@@ -1057,10 +1228,10 @@ struct Task<A: AppItem> {
     /// Those waiting for shutting down to be done.
     waiting: Vec<oneshot::Sender<()>>,
     /// The core's directives, kept to save allocating.
-    out: Vec<Directive>,
+    out: Vec<Directive<A, D>>,
 }
 
-impl<A: AppItem> Task<A> {
+impl<A: AppItem, D: AppData> Task<A, D> {
     async fn run(mut self) {
         while !(self.shutting_down && self.core.is_idle()) {
             tokio::select! {
@@ -1121,7 +1292,7 @@ impl<A: AppItem> Task<A> {
     }
 
     /// Carries out a handle's command.
-    fn command(&mut self, command: Command) {
+    fn command(&mut self, command: Command<D>) {
         // Once shutting down, none is carried out: dropping the reply tells
         // the handle CAF is gone. Reads are still answered.
         match command {
@@ -1198,6 +1369,13 @@ impl<A: AppItem> Task<A> {
                 let result = self.agent(&agent, call);
                 let _ = reply.send(result);
             }
+            Command::ListSaved { .. }
+            | Command::Restore { .. }
+            | Command::PutAway { .. }
+            | Command::Delete { .. }
+            | Command::MoveShelf { .. }
+            | Command::SetData { .. }
+            | Command::Data { .. } => todo!(),
         }
     }
 
@@ -1256,8 +1434,8 @@ impl<A: AppItem> Task<A> {
     /// says if the core took it.
     fn host<T>(
         &mut self,
-        call: impl FnOnce(&mut Core<A>, Now, &mut Vec<Directive>) -> Result<T, Refused>,
-        recorded: impl FnOnce(&T) -> Option<HostCommand<A>>,
+        call: impl FnOnce(&mut Core<A, D>, Now, &mut Vec<Directive<A, D>>) -> Result<T, Refused>,
+        recorded: impl FnOnce(&T) -> Option<HostCommand<A, D>>,
     ) -> Result<T, Refused> {
         let now = self.timers.now();
         let result = call(&mut self.core, now, &mut self.out);
@@ -1286,14 +1464,14 @@ impl<A: AppItem> Task<A> {
         }
         self.shutting_down = true;
         let now = self.timers.now();
-        let step = self.keep(now, &Event::Host(HostCommand::<A>::Shutdown));
+        let step = self.keep(now, &Event::Host(HostCommand::<A, D>::Shutdown));
         self.core.shutdown(now, &mut self.out);
         self.kept(step);
         self.route();
     }
 
     /// Gives the core what a driver reported.
-    fn give(&mut self, event: Event<A>) {
+    fn give(&mut self, event: Event<A, D>) {
         let now = self.timers.now();
         let step = self.keep(now, &event);
         self.core.handle(now, event, &mut self.out);
@@ -1315,7 +1493,7 @@ impl<A: AppItem> Task<A> {
     /// core panics on is in the recording. A host's call is written after,
     /// since the core gives it its id, such as a new chat's, and isn't
     /// written if the core panics on it.
-    fn keep(&mut self, now: Now, event: &Event<A>) -> Option<Kept<A>> {
+    fn keep(&mut self, now: Now, event: &Event<A, D>) -> Option<Kept<A, D>> {
         let watching = self.steps.is_some();
         let mut written = None;
         if let Some(recorder) = (self.recorder.as_mut()).filter(|recorder| !recorder.stopped) {
@@ -1353,7 +1531,7 @@ impl<A: AppItem> Task<A> {
     /// Shows the watcher the step [`Task::keep`] read back, once the core
     /// has been given its event and before its directives are carried
     /// out.
-    fn kept(&mut self, kept: Option<Kept<A>>) {
+    fn kept(&mut self, kept: Option<Kept<A, D>>) {
         if let (Some(steps), Some(Kept { recorded, line })) = (&mut self.steps, kept) {
             steps.step(Step {
                 now: recorded.now,
@@ -1643,15 +1821,15 @@ struct Header<'a> {
 /// One of a recording's events.
 #[derive(Serialize)]
 #[serde(bound = "A: AppItem")]
-struct Line<'a, A: AppItem> {
+struct Line<'a, A: AppItem, D: AppData> {
     now: Now,
-    event: &'a Event<A>,
+    event: &'a Event<A, D>,
 }
 
 /// A step kept for the watcher: its event read back, and its line of the
 /// recording, if it went into one.
-struct Kept<A: AppItem> {
-    recorded: Recorded<A>,
+struct Kept<A: AppItem, D: AppData> {
+    recorded: Recorded<A, D>,
     line: Option<String>,
 }
 
@@ -1659,9 +1837,9 @@ struct Kept<A: AppItem> {
 /// recording's line, or a watched step's event.
 #[derive(Deserialize)]
 #[serde(bound = "A: AppItem")]
-struct Recorded<A: AppItem> {
+struct Recorded<A: AppItem, D: AppData> {
     now: Now,
-    event: Event<A>,
+    event: Event<A, D>,
 }
 
 impl Recorder {
@@ -1778,7 +1956,7 @@ impl Recorder {
 /// `event` at `now`, as a recording's line: with MCP servers' secrets,
 /// pasted codes and all of Claude's sign-in status but its kind hidden,
 /// and error output as text where it's UTF-8.
-fn line<A: AppItem>(now: Now, event: &Event<A>) -> serde_json::Result<String> {
+fn line<A: AppItem, D: AppData>(now: Now, event: &Event<A, D>) -> serde_json::Result<String> {
     let (process, agent) = match event {
         Event::Agent { process, event } => (process, event),
         Event::Host(HostCommand::OpenChat { chat, open }) => {
@@ -2097,7 +2275,7 @@ mod tests {
         let (caf, running) =
             Caf::<NoAppItems>::start(Config::new(Host::new("test", "1.0.0"), vec![]));
         for chat in 1000..1100 {
-            let mut watch = caf.chat(ChatId(chat)).watch();
+            let mut watch = caf.chat(ChatId::from_number(chat)).watch();
             assert!(watch.next().await.is_none());
         }
         let watched = caf.shared.last.lock().unwrap().watched.len();
@@ -2112,7 +2290,7 @@ mod tests {
             Caf::<NoAppItems>::start(Config::new(Host::new("test", "1.0.0"), vec![]));
         caf.shutdown().await;
         running.await;
-        let mut watch = caf.chat(ChatId(1000)).watch();
+        let mut watch = caf.chat(ChatId::from_number(1000)).watch();
         assert!(watch.next().await.is_none());
         let watched = caf.shared.last.lock().unwrap().watched.len();
         assert_eq!(watched, 0, "nothing is kept for a watch once CAF has ended");
@@ -2128,7 +2306,7 @@ mod tests {
             reads: reads.downgrade(),
             last: LastWords::default(),
             caf_ended: ended,
-            chat: ChatId(1),
+            chat: ChatId::from_number(1),
             since: None,
             wake: None,
             ended: false,
@@ -2145,7 +2323,7 @@ mod tests {
         let (caf, running) =
             Caf::<NoAppItems>::start(Config::new(Host::new("test", "1.0.0"), vec![]));
         for chat in 1000..2000 {
-            drop(caf.chat(ChatId(chat)).watch());
+            drop(caf.chat(ChatId::from_number(chat)).watch());
         }
         let kept = caf.shared.last.lock().unwrap().watched.len();
         assert_eq!(kept, 0, "nothing is kept for a watch once it's dropped");

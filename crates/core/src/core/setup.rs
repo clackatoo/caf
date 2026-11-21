@@ -28,6 +28,7 @@ use crate::agent::{
     CannotInstall, EnvChange, InstallFailure, InstallState, Launch, SignInLink, SignInState,
     SpawnCommand,
 };
+use crate::chat::AppData;
 use crate::chat::{AppItem, ChatState, Failure, FailureReason, Note, Remedy, Starter, TurnLife};
 use crate::directive::{Directive, Level, SetupDirective};
 use crate::event::SetupEvent;
@@ -53,10 +54,10 @@ const MOST_REASON: usize = 300;
 /// another CAF program may pin it, and use it now and then.
 const KEEP_UNUSED: Duration = Duration::from_hours(14 * 24);
 
-impl<A: AppItem> Core<A> {
+impl<A: AppItem, D: AppData> Core<A, D> {
     /// Asks the setup driver what's installed and what the machine has.
     /// Only the answer to the latest survey counts.
-    pub(super) fn survey(&mut self, out: &mut Vec<Directive>) {
+    pub(super) fn survey(&mut self, out: &mut Vec<Directive<A, D>>) {
         let ticket = Ticket(self.ids.take());
         self.setup.survey = Some(ticket);
         out.push(Directive::Setup(SetupDirective::Survey { ticket }));
@@ -66,7 +67,7 @@ impl<A: AppItem> Core<A> {
     pub(super) fn install_agent(
         &mut self,
         agent: &AgentName,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         let spec = self.agents.get(agent).ok_or(Refused::NoSuchAgent)?;
         let recipe = match (&spec.launch, self.recipes.get(agent)) {
@@ -123,7 +124,7 @@ impl<A: AppItem> Core<A> {
         &mut self,
         now: Now,
         agent: &AgentName,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         if !self.agents.contains_key(agent) {
             return Err(Refused::NoSuchAgent);
@@ -144,7 +145,7 @@ impl<A: AppItem> Core<A> {
         &mut self,
         now: Now,
         agent: &AgentName,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         if !self.agents.contains_key(agent) {
             return Err(Refused::NoSuchAgent);
@@ -194,7 +195,7 @@ impl<A: AppItem> Core<A> {
         &mut self,
         agent: &AgentName,
         text: &str,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         if !self.agents.contains_key(agent) {
             return Err(Refused::NoSuchAgent);
@@ -221,7 +222,7 @@ impl<A: AppItem> Core<A> {
     pub(super) fn stop_signing_in(
         &mut self,
         agent: &AgentName,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         if !self.agents.contains_key(agent) {
             return Err(Refused::NoSuchAgent);
@@ -235,7 +236,7 @@ impl<A: AppItem> Core<A> {
     pub(super) fn start_sign_out(
         &mut self,
         agent: &AgentName,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         if !self.agents.contains_key(agent) {
             return Err(Refused::NoSuchAgent);
@@ -273,7 +274,7 @@ impl<A: AppItem> Core<A> {
         now: Now,
         ticket: Ticket,
         event: SetupEvent,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         if self.setup.survey == Some(ticket) || matches!(event, SetupEvent::Surveyed { .. }) {
             return self.survey_said(ticket, event, out);
@@ -423,7 +424,7 @@ impl<A: AppItem> Core<A> {
 
     /// A survey's report: what it found, if it's the one waited for, or
     /// that it couldn't look.
-    fn survey_said(&mut self, ticket: Ticket, event: SetupEvent, out: &mut Vec<Directive>) {
+    fn survey_said(&mut self, ticket: Ticket, event: SetupEvent, out: &mut Vec<Directive<A, D>>) {
         if self.setup.survey != Some(ticket) {
             return report(
                 out,
@@ -470,7 +471,7 @@ impl<A: AppItem> Core<A> {
 
     /// A survey answered: each agent CAF installs is installed, can be, or
     /// can't be, and those that have a status command are asked.
-    fn surveyed(&mut self, mut machine: Machine, out: &mut Vec<Directive>) {
+    fn surveyed(&mut self, mut machine: Machine, out: &mut Vec<Directive<A, D>>) {
         machine.installed.append(&mut self.setup.fresh);
         self.setup.machine = Some(machine);
         self.setup.survey = None;
@@ -536,7 +537,7 @@ impl<A: AppItem> Core<A> {
     /// `folder` is installed: every agent of its profile is, any other
     /// install of it under way is stopped, chats waiting start, and status
     /// commands can run.
-    fn installed(&mut self, folder: &str, out: &mut Vec<Directive>) {
+    fn installed(&mut self, folder: &str, out: &mut Vec<Directive<A, D>>) {
         if self.setup.survey.is_some() {
             self.setup.fresh.insert(folder.to_owned());
         }
@@ -566,7 +567,7 @@ impl<A: AppItem> Core<A> {
         now: Now,
         folder: &str,
         why: InstallFailure,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let why = match why {
             InstallFailure::Other(text) => InstallFailure::Other(agent_text(&text, MOST_REASON)),
@@ -588,7 +589,13 @@ impl<A: AppItem> Core<A> {
 
     /// The sign-in command gave its link: kept if it's to one of the
     /// recipe's sites, and otherwise the sign-in is stopped.
-    fn link(&mut self, ticket: Ticket, agent: &AgentName, url: &str, out: &mut Vec<Directive>) {
+    fn link(
+        &mut self,
+        ticket: Ticket,
+        agent: &AgentName,
+        url: &str,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
         let sites = (self.recipes.get(agent))
             .and_then(|recipe| recipe.sign_in.as_ref())
             .map(|sign_in| sign_in.sites.clone())
@@ -620,7 +627,7 @@ impl<A: AppItem> Core<A> {
 
     /// The sign-in command gave a code to type on the site: kept only as
     /// it came, as one changed would be the wrong code.
-    fn code(&mut self, agent: &AgentName, code: &str, out: &mut Vec<Directive>) {
+    fn code(&mut self, agent: &AgentName, code: &str, out: &mut Vec<Directive<A, D>>) {
         let code = code.trim();
         if code.is_empty() {
             return;
@@ -652,7 +659,7 @@ impl<A: AppItem> Core<A> {
 
     /// The user signed in to `agent`: each chat whose last turn failed for
     /// want of it says so, and its status command, if any, says how.
-    fn signed_in(&mut self, now: Now, agent: &AgentName, out: &mut Vec<Directive>) {
+    fn signed_in(&mut self, now: Now, agent: &AgentName, out: &mut Vec<Directive<A, D>>) {
         self.set_sign_in(agent, SignInState::SignedIn(SignedInAs::Unknown));
         let group = self.sign_in_group(agent);
         let chats: Vec<ChatId> = (self.chats.values())
@@ -680,7 +687,7 @@ impl<A: AppItem> Core<A> {
     }
 
     /// A sign-in nobody finished in time is stopped.
-    pub(super) fn sign_in_overdue(&mut self, ticket: Ticket, out: &mut Vec<Directive>) {
+    pub(super) fn sign_in_overdue(&mut self, ticket: Ticket, out: &mut Vec<Directive<A, D>>) {
         let Some(job) = self.setup.jobs.get_mut(&ticket) else {
             return;
         };
@@ -714,7 +721,7 @@ impl<A: AppItem> Core<A> {
 
     /// Runs `agent`'s status command, if it has one that can run now and
     /// isn't running already.
-    fn check_status(&mut self, agent: &AgentName, out: &mut Vec<Directive>) {
+    fn check_status(&mut self, agent: &AgentName, out: &mut Vec<Directive<A, D>>) {
         let group = self.sign_in_group(agent);
         if (group.iter()).any(|each| {
             self.job_for(each, |work| matches!(work, Work::Status))
@@ -742,7 +749,12 @@ impl<A: AppItem> Core<A> {
     /// The adapter of process `proc` said whether it's signed in, in
     /// `_auth/status_update`. Only `kind` is read, and only from an
     /// adapter whose profile says it reports so.
-    pub(super) fn status_pushed(&mut self, proc: Ticket, params: &Value, out: &mut Vec<Directive>) {
+    pub(super) fn status_pushed(
+        &mut self,
+        proc: Ticket,
+        params: &Value,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
         let Some(conn) = (self.procs.get(&proc)).and_then(|each| self.conns.get(&each.conn)) else {
             return;
         };
@@ -782,7 +794,7 @@ impl<A: AppItem> Core<A> {
         proc: Ticket,
         agent: &AgentName,
         checked: Checked,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let confirmed = matches!(checked, Checked::Yes | Checked::Newer);
         let first = (self.setup.agents.get_mut(agent)).is_some_and(|standing| {
@@ -1031,7 +1043,7 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Stops every install and sign-in under way, as CAF shuts down.
-    pub(super) fn stop_setup(&mut self, out: &mut Vec<Directive>) {
+    pub(super) fn stop_setup(&mut self, out: &mut Vec<Directive<A, D>>) {
         let running: Vec<(Ticket, AgentName, Option<String>)> = (self.setup.jobs.iter())
             .filter(|(_, job)| !job.stopped)
             .filter_map(|(&ticket, job)| match &job.work {
@@ -1146,7 +1158,7 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Stops work under way. A sign-in's state goes back to what it was.
-    fn stop_job(&mut self, ticket: Ticket, out: &mut Vec<Directive>) {
+    fn stop_job(&mut self, ticket: Ticket, out: &mut Vec<Directive<A, D>>) {
         let Some(job) = self.setup.jobs.get_mut(&ticket) else {
             return;
         };

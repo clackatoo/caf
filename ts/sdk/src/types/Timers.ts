@@ -60,4 +60,12 @@ group_poll: Duration,
  * Recordings made before it was added don't have it: they read as
  * the default.
  */
-sign_in?: Duration, };
+sign_in?: Duration, 
+/**
+ * How long after a chat changes it's saved, so a burst of changes,
+ * such as the agent streaming its words, is saved as one. A crash
+ * loses at most this much. A turn ending, a chat being put away and
+ * shutting down save at once. 1 s.
+ * Recordings made before it was added read as the default.
+ */
+save?: Duration, };

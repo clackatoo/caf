@@ -111,8 +111,8 @@ fn replay_recording(text: &str) -> (Core, Vec<Vec<serde_json::Value>>) {
 #[test]
 fn a_live_claude_run_replays_to_its_end() {
     let (core, outs) = replay_recording(CLAUDE_LIVE);
-    let chat =
-        serde_json::to_value(core.chat(ChatId(1)).expect("the chat")).expect("chats serialise");
+    let chat = serde_json::to_value(core.chat(ChatId::from_number(1)).expect("the chat"))
+        .expect("chats serialise");
     assert_has(
         &chat,
         &json!({

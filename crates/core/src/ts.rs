@@ -64,8 +64,8 @@ mod tests {
     use crate::change::{Change, Mismatch, Numbered};
     use crate::chat::{
         Chat, ChatState, Compacted, Cost, Failure, FailureReason, Incompatible, Item, ItemKind,
-        Lost, NoAppItems, Note, Part, Remedy, Starter, ToolCall, ToolKind, ToolStatus, Turn,
-        TurnLife, Unknown, Usage, UserMessage,
+        Lost, NoAppData, NoAppItems, Note, Part, Remedy, Starter, ToolCall, ToolKind, ToolStatus,
+        Turn, TurnLife, Unknown, Usage, UserMessage,
     };
     use crate::core::{ConnectionInfo, OpenChat, Refused, SessionChoice};
     use crate::directive::{
@@ -77,8 +77,8 @@ mod tests {
     };
     use crate::host::{Grouping, Host, Limits, Shows, Timers};
     use crate::ids::{
-        AgentName, AgentSessionId, ChangeNo, ChatId, ConnectionId, ItemId, QuestionId, Ticket,
-        TurnId,
+        AgentName, AgentSessionId, ChangeNo, ChatId, ConnectionId, ItemId, QuestionId, Shelf,
+        Ticket, TurnId,
     };
     use crate::install::{
         Artifact, Bundled, EnvValue, Install, LinkFrom, Needs, NpmPackage, Platform, Program,
@@ -89,6 +89,7 @@ mod tests {
         Answer, OptionId, OptionKind, Permission, PermissionOption, Question, QuestionKind,
         SlowChoice, SlowToOpen,
     };
+    use crate::save::{CannotRestore, Entry, Header, RestoreChat, Saved, SavedChat, SavedState};
     use crate::shape::{Samples, every_type, traces};
     use crate::time::{End, Mono, Now, Wall, Window};
     use crate::viewer::{
@@ -101,7 +102,7 @@ mod tests {
     }
 
     /// The types that have no values, so have no samples.
-    const UNINHABITED: [&str; 3] = ["NoAppItems", "StorageDirective", "StorageEvent"];
+    const UNINHABITED: [&str; 1] = ["NoAppItems"];
 
     /// Writes every type, each with what it uses, to `dir`, and an
     /// `index.ts` exporting them all. Returns their Rust names.
@@ -152,6 +153,7 @@ mod tests {
             Item,
             ItemKind,
             Lost,
+            NoAppData,
             NoAppItems,
             Note,
             Part,
@@ -165,6 +167,14 @@ mod tests {
             Unknown,
             Usage,
             UserMessage,
+            // save
+            CannotRestore,
+            Entry,
+            Header,
+            RestoreChat,
+            Saved,
+            SavedChat,
+            SavedState,
             // core
             ConnectionInfo,
             OpenChat,
@@ -220,6 +230,7 @@ mod tests {
             ConnectionId,
             ItemId,
             QuestionId,
+            Shelf,
             Ticket,
             TurnId,
             // profiles
@@ -457,14 +468,22 @@ mod tests {
                 if !line.contains("derive(ts_rs::TS)") {
                     continue;
                 }
+                // The item: past its attributes, which may span lines.
                 let item = (lines[at + 1..].iter())
-                    .find(|line| !line.trim_start().starts_with(['#', '/']))
+                    .find(|line| {
+                        (line.split_whitespace()).any(|word| ["struct", "enum"].contains(&word))
+                    })
                     .expect("an item");
                 let words: Vec<&str> = item.split_whitespace().collect();
                 let name = words
                     .windows(2)
                     .find(|pair| ["struct", "enum"].contains(&pair[0]))
-                    .map(|pair| pair[1].split(['<', '(', '{']).next().unwrap_or(pair[1]))
+                    .map(|pair| {
+                        pair[1]
+                            .split(['<', '(', '{', ';'])
+                            .next()
+                            .unwrap_or(pair[1])
+                    })
                     .expect("a struct or enum");
                 if name == "$name" {
                     // The ids, each made by `id!`: its name is the line

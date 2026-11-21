@@ -7,7 +7,8 @@ import type { StorageEvent } from "./StorageEvent.ts";
 import type { Ticket } from "./Ticket.ts";
 
 /**
- * Something that happened.
+ * Something that happened. `A` and `D` are the app's item and data
+ * types.
  */
 export type Event = { "type": "Host", "value": HostCommand } | { "type": "Agent", "value": { 
 /**
@@ -25,7 +26,15 @@ ticket: Ticket,
 /**
  * The answer.
  */
-answer: PolicyAnswer, } } | { "type": "Storage", "value": StorageEvent } | { "type": "Setup", "value": { 
+answer: PolicyAnswer, } } | { "type": "Storage", "value": { 
+/**
+ * The directive's ticket.
+ */
+ticket: Ticket, 
+/**
+ * What happened.
+ */
+event: StorageEvent, } } | { "type": "Setup", "value": { 
 /**
  * The directive's ticket.
  */

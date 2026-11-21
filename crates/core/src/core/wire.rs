@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use super::Core;
 use super::state::{Pending, Purpose};
 use crate::acp::RequestId;
+use crate::chat::AppData;
 use crate::chat::AppItem;
 use crate::directive::{AgentDirective, Directive};
 use crate::ids::Ticket;
@@ -25,7 +26,7 @@ pub(super) const INVALID_REQUEST: i64 = -32600;
 /// ACP's error for a request the asker withdrew.
 pub(super) const CANCELLED: i64 = -32800;
 
-impl<A: AppItem> Core<A> {
+impl<A: AppItem, D: AppData> Core<A, D> {
     /// Sends a request to `proc` and remembers it as `purpose`, overdue
     /// after `watchdog` if given. Returns its id, or `None` if `proc` may
     /// not be asked anything.
@@ -36,7 +37,7 @@ impl<A: AppItem> Core<A> {
         (method, params): (&str, Value),
         purpose: Purpose,
         watchdog: Option<Duration>,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) -> Option<i64> {
         let each = self.procs.get_mut(&proc).filter(|each| each.askable())?;
         let id = each.next_id;
@@ -64,7 +65,7 @@ impl<A: AppItem> Core<A> {
         proc: Ticket,
         method: &str,
         params: Value,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         if self.procs.get(&proc).is_some_and(|each| each.askable()) {
             write(
@@ -82,7 +83,7 @@ impl<A: AppItem> Core<A> {
         proc: Ticket,
         id: &RequestId,
         result: Result<Value, (i64, String)>,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) -> bool {
         if !self.procs.get(&proc).is_some_and(|each| each.writable()) {
             return false;
@@ -100,7 +101,7 @@ impl<A: AppItem> Core<A> {
 }
 
 /// Adds a directive writing `message` as one line to `proc`.
-fn write(out: &mut Vec<Directive>, proc: Ticket, message: &Value) {
+fn write<A: AppItem, D: AppData>(out: &mut Vec<Directive<A, D>>, proc: Ticket, message: &Value) {
     let mut bytes = serde_json::to_vec(message).unwrap_or_default();
     bytes.push(b'\n');
     out.push(Directive::Agent(AgentDirective::Write {

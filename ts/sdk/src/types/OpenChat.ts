@@ -2,6 +2,7 @@
 import type { AgentName } from "./AgentName.ts";
 import type { McpServer } from "./McpServer.ts";
 import type { SessionChoice } from "./SessionChoice.ts";
+import type { Shelf } from "./Shelf.ts";
 
 /**
  * What to open a chat with.
@@ -22,4 +23,9 @@ session: SessionChoice,
 /**
  * Tools to give it, as MCP servers.
  */
-mcp_servers: Array<McpServer>, };
+mcp_servers: Array<McpServer>, 
+/**
+ * Where to keep it, if it's to be saved. `None` (the default) keeps
+ * it in memory only, gone when CAF stops.
+ */
+shelf: Shelf | null, };

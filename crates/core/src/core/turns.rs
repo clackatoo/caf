@@ -12,6 +12,7 @@ use super::procs::Cause;
 use super::state::{Open, Purpose, Running};
 use super::{Core, Refused, report};
 use crate::acp::RpcError;
+use crate::chat::AppData;
 use crate::chat::{
     AppItem, ChatState, Failure, FailureReason, ItemKind, Part, Remedy, Starter, ToolStatus, Turn,
     TurnLife, UserMessage,
@@ -20,7 +21,7 @@ use crate::directive::{Directive, Level};
 use crate::ids::{ChatId, TurnId};
 use crate::time::{End, Now, Window};
 
-impl<A: AppItem> Core<A> {
+impl<A: AppItem, D: AppData> Core<A, D> {
     /// Sends `message` in `chat` as turn `turn`.
     pub(super) fn send_as(
         &mut self,
@@ -28,7 +29,7 @@ impl<A: AppItem> Core<A> {
         chat: ChatId,
         turn: TurnId,
         message: UserMessage,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         let whole = self.chats.get(&chat).ok_or(Refused::NoSuchChat)?;
         if whole.state == ChatState::Closed {
@@ -83,7 +84,7 @@ impl<A: AppItem> Core<A> {
 
     /// Sends `chat`'s next waiting turn, if its session is open and no
     /// turn is running.
-    pub(super) fn pump(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) {
+    pub(super) fn pump(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
         let Some(run) = self.runs.get(&chat) else {
             return;
         };
@@ -133,7 +134,7 @@ impl<A: AppItem> Core<A> {
         chat: ChatId,
         turn: TurnId,
         reply: Reply,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let Some(run) = self.runs.get_mut(&chat) else {
             return;
@@ -186,7 +187,7 @@ impl<A: AppItem> Core<A> {
         chat: ChatId,
         turn: TurnId,
         stopping: bool,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         self.withdraw_asks(chat, out);
         let heard = self
@@ -293,7 +294,7 @@ impl<A: AppItem> Core<A> {
         &mut self,
         now: Now,
         chat: ChatId,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) -> Option<TurnId> {
         if let Some(turn) = self.open_turn(chat) {
             return Some(turn);
@@ -361,7 +362,7 @@ impl<A: AppItem> Core<A> {
         &mut self,
         now: Now,
         chat: ChatId,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         let whole = self.chats.get(&chat).ok_or(Refused::NoSuchChat)?;
         let run = self.runs.get(&chat).ok_or(Refused::NoSuchChat)?;
@@ -426,7 +427,13 @@ impl<A: AppItem> Core<A> {
     /// Stops a turn the agent started by itself. ACP doesn't say when such a
     /// turn ends, so it ends now, and what the agent had in flight opens
     /// no new turn for a moment.
-    fn stop_agent_turn(&mut self, now: Now, chat: ChatId, turn: TurnId, out: &mut Vec<Directive>) {
+    fn stop_agent_turn(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        turn: TurnId,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
         let Some(run) = self.runs.get_mut(&chat) else {
             return;
         };
@@ -461,7 +468,7 @@ impl<A: AppItem> Core<A> {
     /// the session is restarted. The adapter is restarted if no other chat
     /// is mid-turn on it; otherwise only this chat's session is closed,
     /// where the agent can, and opened again with its next message.
-    pub(super) fn stop_overdue(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive>) {
+    pub(super) fn stop_overdue(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
         let Some(running) = self.give_up_prompt(now, chat) else {
             return;
         };

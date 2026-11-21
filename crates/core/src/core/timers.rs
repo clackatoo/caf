@@ -7,6 +7,7 @@
 use super::procs::Cause;
 use super::state::{Group, Init, Open, Purpose};
 use super::{Core, report};
+use crate::chat::AppData;
 use crate::chat::AppItem;
 use crate::directive::{Directive, Level};
 use crate::ids::{ChatId, Ticket};
@@ -41,7 +42,7 @@ enum Due {
     SignIn(Ticket),
 }
 
-impl<A: AppItem> Core<A> {
+impl<A: AppItem, D: AppData> Core<A, D> {
     /// The earliest deadline the core has, if any.
     pub(super) fn next_deadline(&self) -> Option<Mono> {
         self.deadlines().map(|(at, _)| at).min()
@@ -91,7 +92,7 @@ impl<A: AppItem> Core<A> {
     }
 
     /// The timer driver woke the core: whatever is due is done.
-    pub(super) fn woken(&mut self, now: Now, out: &mut Vec<Directive>) {
+    pub(super) fn woken(&mut self, now: Now, out: &mut Vec<Directive<A, D>>) {
         if self.wake.is_some_and(|wake| wake <= now.mono) {
             self.wake = None;
         }
@@ -111,7 +112,7 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Does what's due.
-    fn fire(&mut self, now: Now, due: Due, out: &mut Vec<Directive>) {
+    fn fire(&mut self, now: Now, due: Due, out: &mut Vec<Directive<A, D>>) {
         match due {
             Due::Init(proc) => self.init_slow(now, proc),
             Due::Gone(proc) => self.finalize(now, proc, out),
@@ -149,7 +150,7 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Request `id` of `proc` is overdue.
-    fn overdue(&mut self, now: Now, proc: Ticket, id: i64, out: &mut Vec<Directive>) {
+    fn overdue(&mut self, now: Now, proc: Ticket, id: i64, out: &mut Vec<Directive<A, D>>) {
         let Some(pending) = self.pending.get_mut(&(proc, id)) else {
             return;
         };

@@ -199,7 +199,10 @@ fn the_host_is_refused_what_cant_be_done() {
         script.open(OpenChat::new("claude", "work")).0,
         Err(Refused::RelativeFolder)
     );
-    assert_eq!(script.send(ChatId(4242), "hi").0, Err(Refused::NoSuchChat));
+    assert_eq!(
+        script.send(ChatId::from_number(4242), "hi").0,
+        Err(Refused::NoSuchChat)
+    );
     assert_eq!(
         script.send_message(CHAT, UserMessage { parts: vec![] }).0,
         Err(Refused::Unsupported)
@@ -282,7 +285,7 @@ fn viewers_read_changes_or_the_whole_chat() {
     let out = script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
     assert_eq!(
         with(&out, "changed"),
-        [json!({ "changed": CHAT.0, "latest": 1000 })]
+        [json!({ "changed": CHAT, "latest": 1000 })]
     );
     let Some(Read::Changes(changes)) = script.core.read(CHAT, Some(ChangeNo(999))) else {
         panic!("changes")
@@ -311,7 +314,7 @@ fn viewers_read_changes_or_the_whole_chat() {
         script.core.read(CHAT, Some(ChangeNo(latest.0 + 1))),
         Some(Read::Picture { .. })
     ));
-    assert!(script.core.read(ChatId(1), None).is_none());
+    assert!(script.core.read(ChatId::from_number(1), None).is_none());
 }
 
 /// A change that doesn't fit its chat's record is a bug in the core, so

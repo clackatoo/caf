@@ -12,6 +12,7 @@ use serde_json::value::RawValue;
 use super::wire::{INVALID_REQUEST, METHOD_NOT_FOUND};
 use super::{Core, report};
 use crate::acp::{Frame, Message, RequestId, RpcError, Shape};
+use crate::chat::AppData;
 use crate::chat::AppItem;
 use crate::directive::{Directive, Level};
 use crate::ids::Ticket;
@@ -31,9 +32,15 @@ pub(super) enum Reply {
     Unreadable,
 }
 
-impl<A: AppItem> Core<A> {
+impl<A: AppItem, D: AppData> Core<A, D> {
     /// Takes in one line from an adapter.
-    pub(super) fn frame(&mut self, now: Now, proc: Ticket, frame: Frame, out: &mut Vec<Directive>) {
+    pub(super) fn frame(
+        &mut self,
+        now: Now,
+        proc: Ticket,
+        frame: Frame,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
         if self.procs.get(&proc).is_some_and(|each| each.finalized) {
             report(
                 out,
@@ -131,7 +138,7 @@ impl<A: AppItem> Core<A> {
         id: &RequestId,
         method: &str,
         params: Option<Box<RawValue>>,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         if !self.procs.get(&proc).is_some_and(|each| each.writable()) {
             report(
@@ -175,7 +182,7 @@ impl<A: AppItem> Core<A> {
         proc: Ticket,
         method: &str,
         params: Option<Box<RawValue>>,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         match method {
             "session/update" => self.update(now, proc, &parse(params.as_deref()), out),
@@ -199,7 +206,7 @@ impl<A: AppItem> Core<A> {
         proc: Ticket,
         id: RequestId,
         reply: Reply,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let retired = self.procs.get(&proc).is_some_and(|each| each.retired);
         let level = if retired { Level::Debug } else { Level::Warn };

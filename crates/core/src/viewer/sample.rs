@@ -24,13 +24,14 @@ use crate::chat::{
     UserMessage,
 };
 use crate::core::{Refused, SessionChoice};
-use crate::ids::{AgentName, AgentSessionId, ChangeNo, ChatId, ItemId, QuestionId, TurnId};
+use crate::ids::{AgentName, AgentSessionId, ChangeNo, ChatId, ItemId, QuestionId, Shelf, TurnId};
 use crate::install::SignedInAs;
 use crate::kinds::Seen;
 use crate::question::{
     Answer, OptionId, OptionKind, Permission, PermissionOption, Question, QuestionKind, SlowChoice,
     SlowToOpen,
 };
+use crate::save::{CannotRestore, Header, SavedChat, SavedState};
 use crate::time::{End, Wall, Window};
 use crate::viewer::{
     AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
@@ -150,6 +151,7 @@ fn chat() -> Chat {
         ItemKind::Unknown(Unknown {
             what: "an update of a kind CAF doesn't know".into(),
             raw: json!({ "sessionUpdate": "plan", "entries": [] }),
+            summary: None,
         }),
     ));
     let notes = [
@@ -177,7 +179,7 @@ fn chat() -> Chat {
     );
     imported.imported = true;
     Chat {
-        id: ChatId(1),
+        id: ChatId::from_number(1),
         agent: AgentName("claude".into()),
         cwd: "/work".into(),
         state: ChatState::Open {
@@ -203,7 +205,7 @@ fn chat() -> Chat {
             turn(
                 24,
                 Starter::OtherChat {
-                    from: ChatId(9),
+                    from: ChatId::from_number(9),
                     message: UserMessage::text("Review this"),
                 },
                 TurnLife::Waiting,
@@ -292,6 +294,7 @@ fn changes() -> Vec<Change> {
     states.extend(lost.into_iter().map(|reason| ChatState::Lost { reason }));
     states.push(ChatState::Closed);
     states.push(ChatState::WaitingForAgent);
+    states.push(ChatState::Idle);
     let reasons = [
         FailureReason::TooLong,
         FailureReason::TooManySteps,
@@ -470,9 +473,11 @@ fn agents() -> Vec<AgentStatus> {
 /// Version 1: one of every message each way, and of everything in them.
 fn version_1() -> Sample {
     let summary = ChatSummary {
-        id: ChatId(1),
+        id: ChatId::from_number(1),
         agent: AgentName("claude".into()),
         cwd: "/work".into(),
+        label: Some("Fix the tests".into()),
+        shelf: Some(Shelf("work".into())),
     };
     let open = |request, session| FromViewer::Open {
         request: RequestNo(request),
@@ -490,24 +495,26 @@ fn version_1() -> Sample {
     let mut from_viewer = vec![
         FromViewer::Hello { min: 1, max: 1 },
         FromViewer::Watch {
-            chat: ChatId(1),
+            chat: ChatId::from_number(1),
             since: None,
         },
         FromViewer::Watch {
-            chat: ChatId(1),
+            chat: ChatId::from_number(1),
             since: Some(ChangeNo(5)),
         },
-        FromViewer::Unwatch { chat: ChatId(1) },
+        FromViewer::Unwatch {
+            chat: ChatId::from_number(1),
+        },
         open(1, SessionChoice::New),
         open(2, SessionChoice::Continue(AgentSessionId("s1".into()))),
         FromViewer::Send {
             request: RequestNo(3),
-            chat: ChatId(1),
+            chat: ChatId::from_number(1),
             message: UserMessage::text("hi"),
         },
         FromViewer::Stop {
             request: RequestNo(4),
-            chat: ChatId(1),
+            chat: ChatId::from_number(1),
         },
         answer(5, 26, Answer::Permission(OptionId("allow".into()))),
         answer(6, 27, Answer::SlowToOpen(SlowChoice::KeepWaiting)),
@@ -515,7 +522,7 @@ fn version_1() -> Sample {
         answer(8, 27, Answer::SlowToOpen(SlowChoice::Stop)),
         FromViewer::Close {
             request: RequestNo(9),
-            chat: ChatId(1),
+            chat: ChatId::from_number(1),
         },
     ];
     let actions = [
@@ -533,6 +540,11 @@ fn version_1() -> Sample {
             action,
         }
     }));
+    from_viewer.push(FromViewer::Restore {
+        request: RequestNo(20),
+        chat: ChatId::from_number(2),
+        shelf: Shelf("work".into()),
+    });
     let refused = [
         Refused::NoSuchChat,
         Refused::Closed,
@@ -549,13 +561,17 @@ fn version_1() -> Sample {
         Refused::AlreadyInstalled,
         Refused::CannotSignIn,
         Refused::NotSigningIn,
+        Refused::NotSaved,
+        Refused::Loaded,
+        Refused::BadShelf,
     ];
     let outcomes = [
-        Outcome::Opened(ChatId(1)),
+        Outcome::Opened(ChatId::from_number(1)),
         Outcome::Sent(TurnId(30)),
         Outcome::Done,
         Outcome::NotAllowed,
         Outcome::Gone,
+        Outcome::CannotRestore(CannotRestore::InUse),
     ]
     .into_iter()
     .chain(refused.into_iter().map(Outcome::Refused));
@@ -574,7 +590,7 @@ fn version_1() -> Sample {
             latest: ChangeNo(5),
         },
         ToViewer::Changes {
-            chat: ChatId(1),
+            chat: ChatId::from_number(1),
             changes: (changes().into_iter().zip(6..))
                 .map(|(change, no)| Numbered {
                     no: ChangeNo(no),
@@ -582,8 +598,11 @@ fn version_1() -> Sample {
                 })
                 .collect(),
         },
-        ToViewer::Ended { chat: ChatId(1) },
+        ToViewer::Ended {
+            chat: ChatId::from_number(1),
+        },
         ToViewer::Agents(agents()),
+        ToViewer::Saved(saved()),
     ];
     to_viewer.extend(
         (outcomes.zip(1..)).map(|(outcome, request)| ToViewer::Done {
@@ -596,6 +615,40 @@ fn version_1() -> Sample {
         from_viewer,
         to_viewer,
     }
+}
+
+/// Saved chats, one in each state, failed for every reason.
+fn saved() -> Vec<SavedChat> {
+    let header = |no| Header {
+        chat: ChatId::from_number(no),
+        shelf: Shelf("work".into()),
+        agent: AgentName("claude".into()),
+        profile: Some("claude-agent-acp".into()),
+        cwd: "/work".into(),
+        made: Wall(1_700_000_000_000),
+        changed: Wall(1_700_000_060_000),
+        label: Some("Fix the tests".into()),
+        first: Some("Fix the tests".into()),
+        turns: 3,
+        closed: no == 2,
+    };
+    let failures = [
+        CannotRestore::NotFound,
+        CannotRestore::InUse,
+        CannotRestore::Newer { version: 2 },
+        CannotRestore::Damaged("a checksum doesn't match".into()),
+        CannotRestore::AppData("missing field `title`".into()),
+        CannotRestore::Store("No space left on device".into()),
+    ];
+    [SavedState::Saved, SavedState::Restoring, SavedState::Loaded]
+        .into_iter()
+        .chain(failures.into_iter().map(SavedState::Failed))
+        .zip(1..)
+        .map(|(state, no)| SavedChat {
+            header: header(no),
+            state,
+        })
+        .collect()
 }
 
 /// What to say when the sample no longer matches.

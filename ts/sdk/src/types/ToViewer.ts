@@ -9,6 +9,7 @@ import type { Numbered } from "./Numbered.ts";
 import type { Outcome } from "./Outcome.ts";
 import type { RequestNo } from "./RequestNo.ts";
 import type { Rights } from "./Rights.ts";
+import type { SavedChat } from "./SavedChat.ts";
 
 /**
  * A message from CAF to a viewer.
@@ -63,7 +64,7 @@ changes: Array<Numbered>, } } | { "type": "Ended", "value": {
 /**
  * The chat.
  */
-chat: ChatId, } } | { "type": "Agents", "value": Array<AgentStatus> } | { "type": "Done", "value": { 
+chat: ChatId, } } | { "type": "Agents", "value": Array<AgentStatus> } | { "type": "Saved", "value": Array<SavedChat> } | { "type": "Done", "value": { 
 /**
  * The viewer's number for it.
  */

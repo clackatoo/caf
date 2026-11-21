@@ -3,6 +3,7 @@ import type {
   AgentName,
   AgentStatus,
   Answer,
+  CannotRestore,
   Chat,
   ChangeNo,
   ChatId,
@@ -14,6 +15,8 @@ import type {
   QuestionId,
   Refused,
   Rights,
+  SavedChat,
+  Shelf,
   TurnId,
   UserMessage,
 } from "./types.ts";
@@ -25,6 +28,7 @@ import {
   isNumber,
   isRecord,
   isRights,
+  isSaved,
   isStatus,
   isString,
   isSummary,
@@ -105,6 +109,8 @@ export class CafError extends Error {
       | { type: "NotAllowed" }
       /** CAF has shut down, or is shutting down: nothing was done. */
       | { type: "Gone" }
+      /** The saved chat couldn't be restored, and its save is as it was. */
+      | { type: "CannotRestore"; value: CannotRestore }
       /** It went in a way this SDK doesn't know, from a later version of CAF: `outcome` is its name. */
       | { type: "Unknown"; value: { outcome: string } }
       /** The link ended before the answer came. */
@@ -121,6 +127,8 @@ function describe(why: CafError["why"]): string {
   switch (why.type) {
     case "Refused":
       return `Refused: ${why.value.type}`;
+    case "CannotRestore":
+      return `CannotRestore: ${why.value.type}`;
     case "Unknown":
       return `Unknown: ${why.value.outcome}`;
     case "NoCommonVersion":
@@ -184,6 +192,8 @@ export class Connection {
   readonly #run: string;
   readonly #may: Readonly<Rights>;
   #chats: readonly Readonly<ChatSummary>[];
+  #saved: readonly DeepReadonly<SavedChat>[] = [];
+  readonly #savedListeners = new Set<(saved: readonly DeepReadonly<SavedChat>[]) => void>();
   readonly #chatListeners = new Set<(chats: readonly Readonly<ChatSummary>[]) => void>();
   readonly #agentListeners = new Set<(agents: readonly DeepReadonly<AgentStatus>[]) => void>();
   readonly #closeListeners = new Set<() => void>();
@@ -331,9 +341,19 @@ export class Connection {
   }
 
   /**
-   * This run of CAF: different every time CAF starts. A restarted CAF
-   * numbers its chats and their changes from the start again, so a copy
-   * is only resumed from on a connection to the run it came from.
+   * The saved chats on the shelves the host has listed, loaded or not, in
+   * the order they were made: empty until CAF says, which it does right
+   * after the agents if the host has listed any. Read-only.
+   */
+  get saved(): readonly DeepReadonly<SavedChat>[] {
+    return this.#saved;
+  }
+
+  /**
+   * This run of CAF: different every time CAF starts. A chat keeps its id
+   * when it's saved and restored, but a restarted CAF numbers its changes
+   * from the start again, so a copy is only resumed from on a connection
+   * to the run it came from.
    */
   get run(): string {
     return this.#run;
@@ -366,6 +386,16 @@ export class Connection {
     const each = (agents: readonly DeepReadonly<AgentStatus>[]) => listener(agents);
     this.#agentListeners.add(each);
     return () => void this.#agentListeners.delete(each);
+  }
+
+  /**
+   * Calls `listener` with the saved chats each time the list changes.
+   * Returns a function that stops it.
+   */
+  onSaved(listener: (saved: readonly DeepReadonly<SavedChat>[]) => void): () => void {
+    const each = (saved: readonly DeepReadonly<SavedChat>[]) => listener(saved);
+    this.#savedListeners.add(each);
+    return () => void this.#savedListeners.delete(each);
   }
 
   /**
@@ -428,6 +458,16 @@ export class Connection {
   /** Asks to open a chat. The host decides: it may reject with `NotAllowed`. */
   open(request: OpenRequest): Promise<ChatId> {
     return this.#request("Opened", (no) => ({ type: "Open", value: { request: no, open: request } }));
+  }
+
+  /**
+   * Asks to restore a saved chat, as `saved` lists them, resolving with its
+   * id once it's loaded. The host decides: it may reject with
+   * `NotAllowed`. It rejects with `CannotRestore` saying why if the chat
+   * can't be, and its save is left as it was.
+   */
+  restore(chat: ChatId, shelf: Shelf): Promise<ChatId> {
+    return this.#request("Opened", (no) => ({ type: "Restore", value: { request: no, chat, shelf } }));
   }
 
   /** Sends a message, resolving with its turn once the core has taken it. */
@@ -539,6 +579,12 @@ export class Connection {
         for (const listener of [...this.#agentListeners]) call(listener, value);
         return;
       }
+      case "Saved": {
+        if (!isArrayOf(value, isSaved)) return this.#end();
+        this.#saved = value;
+        for (const listener of [...this.#savedListeners]) call(listener, value);
+        return;
+      }
       case "Picture": {
         if (!isRecord(value) || !isChat(value.chat) || !isNumber(value.latest)) return this.#end();
         const { chat, latest } = value;
@@ -547,13 +593,13 @@ export class Connection {
         return;
       }
       case "Changes": {
-        if (!isRecord(value) || !isNumber(value.chat) || !Array.isArray(value.changes)) return this.#end();
+        if (!isRecord(value) || !isString(value.chat) || !Array.isArray(value.changes)) return this.#end();
         const changes = value.changes as Numbered[];
         for (const watch of this.#watchesOf(value.chat)) watch.changes(changes);
         return;
       }
       case "Ended": {
-        if (!isRecord(value) || !isNumber(value.chat)) return this.#end();
+        if (!isRecord(value) || !isString(value.chat)) return this.#end();
         const watches = this.#watchesOf(value.chat);
         this.#watches.delete(value.chat);
         this.#asked.delete(value.chat);
@@ -601,9 +647,13 @@ export class Connection {
         return pending.reject(new CafError({ type: "NotAllowed" }));
       case "Gone":
         return pending.reject(new CafError({ type: "Gone" }));
+      case "CannotRestore":
+        if (!isTagged(value)) return broken();
+        return pending.reject(new CafError({ type: "CannotRestore", value: value as CannotRestore }));
       case pending.expect:
         if (pending.expect === "Done") return pending.resolve(undefined);
-        if (!isNumber(value)) return broken();
+        // A chat's id is a UUID's text; a turn's is a number.
+        if (pending.expect === "Opened" ? !isString(value) : !isNumber(value)) return broken();
         return pending.resolve(value);
       default:
         if (OUTCOMES.has(type)) return broken();
@@ -737,10 +787,10 @@ class Watch implements Watching {
 }
 
 /** The outcomes this SDK knows. */
-const OUTCOMES = new Set(["Opened", "Sent", "Done", "Refused", "NotAllowed", "Gone"]);
+const OUTCOMES = new Set(["Opened", "Sent", "Done", "Refused", "NotAllowed", "Gone", "CannotRestore"]);
 
 /** The message types of version 1 of the wire, from CAF. */
-const KNOWN = new Set(["Welcome", "NoCommonVersion", "Chats", "Picture", "Changes", "Ended", "Agents", "Done"]);
+const KNOWN = new Set(["Welcome", "NoCommonVersion", "Chats", "Picture", "Changes", "Ended", "Agents", "Saved", "Done"]);
 
 /** A message from CAF as far as `{ type, value }`, or null if it isn't one. */
 function parse(text: unknown): { type: string; value: unknown } | null {

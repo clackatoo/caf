@@ -14,6 +14,7 @@ use super::state::Ask;
 use super::wire::CANCELLED;
 use super::{Core, Refused, report};
 use crate::acp::RequestId;
+use crate::chat::AppData;
 use crate::chat::{AppItem, ItemKind};
 use crate::directive::{Directive, Level, PermissionRequest, PolicyDirective};
 use crate::event::PolicyAnswer;
@@ -31,7 +32,7 @@ const MOST_LABEL: usize = 1024;
 /// The longest tool input passed to the policy, in bytes.
 const MOST_INPUT: usize = 64 << 10;
 
-impl<A: AppItem> Core<A> {
+impl<A: AppItem, D: AppData> Core<A, D> {
     /// The agent asks permission, as request `id` of `proc`.
     pub(super) fn permission_asked(
         &mut self,
@@ -39,7 +40,7 @@ impl<A: AppItem> Core<A> {
         proc: Ticket,
         id: &RequestId,
         params: &Value,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let session = params.get("sessionId").and_then(Value::as_str);
         let chat = session.and_then(|session| self.chat_with_session(proc, session));
@@ -100,7 +101,7 @@ impl<A: AppItem> Core<A> {
         now: Now,
         ticket: Ticket,
         answer: PolicyAnswer,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let Some(ask) = self.asks.get(&ticket) else {
             report(
@@ -132,7 +133,7 @@ impl<A: AppItem> Core<A> {
 
     /// Asks the user, if the host can show permission questions, and
     /// refuses safely otherwise.
-    fn ask_user(&mut self, now: Now, ticket: Ticket, out: &mut Vec<Directive>) {
+    fn ask_user(&mut self, now: Now, ticket: Ticket, out: &mut Vec<Directive<A, D>>) {
         if !self.host.shows.permission_questions {
             return self.refuse(ticket, out);
         }
@@ -153,7 +154,7 @@ impl<A: AppItem> Core<A> {
 
     /// Refuses safely: once if the agent offers that, else always, else
     /// "cancelled".
-    fn refuse(&mut self, ticket: Ticket, out: &mut Vec<Directive>) {
+    fn refuse(&mut self, ticket: Ticket, out: &mut Vec<Directive<A, D>>) {
         let Some(ask) = self.asks.get(&ticket) else {
             return;
         };
@@ -164,7 +165,7 @@ impl<A: AppItem> Core<A> {
 
     /// Answers the request kept under `ticket` with `option`, or
     /// "cancelled", and forgets it.
-    fn settle(&mut self, ticket: Ticket, option: Option<OptionId>, out: &mut Vec<Directive>) {
+    fn settle(&mut self, ticket: Ticket, option: Option<OptionId>, out: &mut Vec<Directive<A, D>>) {
         let Some(ask) = self.asks.remove(&ticket) else {
             return;
         };
@@ -185,7 +186,7 @@ impl<A: AppItem> Core<A> {
         proc: Ticket,
         id: &RequestId,
         result: Result<Value, (i64, String)>,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         if !self.reply(proc, id, result, out) {
             report(
@@ -202,7 +203,7 @@ impl<A: AppItem> Core<A> {
         now: Now,
         question: QuestionId,
         answer: Answer,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         if let Some((&ticket, ask)) = self
             .asks
@@ -235,7 +236,7 @@ impl<A: AppItem> Core<A> {
         &mut self,
         proc: Ticket,
         params: &Value,
-        out: &mut Vec<Directive>,
+        out: &mut Vec<Directive<A, D>>,
     ) {
         let id = match params.get("requestId") {
             Some(Value::Number(number)) => number.as_i64().map(RequestId::Number),
@@ -259,7 +260,7 @@ impl<A: AppItem> Core<A> {
     }
 
     /// Answers every request `chat`'s agent is waiting on "cancelled".
-    pub(super) fn withdraw_asks(&mut self, chat: ChatId, out: &mut Vec<Directive>) {
+    pub(super) fn withdraw_asks(&mut self, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
         let tickets: Vec<Ticket> = (self.asks.iter())
             .filter(|(_, ask)| ask.chat == chat)
             .map(|(&ticket, _)| ticket)
@@ -273,7 +274,11 @@ impl<A: AppItem> Core<A> {
 
     /// Forgets the requests `which` picks, without answering them: their
     /// process has gone, so they can't be.
-    pub(super) fn drop_asks(&mut self, which: impl Fn(&Ask) -> bool, out: &mut Vec<Directive>) {
+    pub(super) fn drop_asks(
+        &mut self,
+        which: impl Fn(&Ask) -> bool,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
         let tickets: Vec<Ticket> = (self.asks.iter())
             .filter(|(_, ask)| which(ask))
             .map(|(&ticket, _)| ticket)
@@ -285,7 +290,7 @@ impl<A: AppItem> Core<A> {
 
     /// Forgets the request kept under `ticket`: its question goes, and the
     /// policy is told if it was still deciding.
-    fn forget_ask(&mut self, ticket: Ticket, out: &mut Vec<Directive>) -> Option<Ask> {
+    fn forget_ask(&mut self, ticket: Ticket, out: &mut Vec<Directive<A, D>>) -> Option<Ask> {
         let ask = self.asks.remove(&ticket)?;
         match ask.question {
             Some(question) => self.unask(ask.chat, question),

@@ -57,6 +57,7 @@ kinds!(FromViewer {
     "Stop" => FromViewer::Stop { .. },
     "Answer" => FromViewer::Answer { .. },
     "Close" => FromViewer::Close { .. },
+    "Restore" => FromViewer::Restore { .. },
     "Agent" => FromViewer::Agent { .. },
 });
 
@@ -77,6 +78,7 @@ kinds!(ToViewer {
     "Changes" => ToViewer::Changes { .. },
     "Ended" => ToViewer::Ended { .. },
     "Agents" => ToViewer::Agents(_),
+    "Saved" => ToViewer::Saved(_),
     "Done" => ToViewer::Done { .. },
 });
 
@@ -126,6 +128,7 @@ kinds!(Outcome {
     "Refused" => Outcome::Refused(_),
     "NotAllowed" => Outcome::NotAllowed,
     "Gone" => Outcome::Gone,
+    "CannotRestore" => Outcome::CannotRestore(_),
 });
 
 kinds!(Refused {
@@ -144,6 +147,9 @@ kinds!(Refused {
     "AlreadyInstalled" => Refused::AlreadyInstalled,
     "CannotSignIn" => Refused::CannotSignIn,
     "NotSigningIn" => Refused::NotSigningIn,
+    "NotSaved" => Refused::NotSaved,
+    "Loaded" => Refused::Loaded,
+    "BadShelf" => Refused::BadShelf,
 });
 
 kinds!(SessionChoice {
@@ -194,6 +200,7 @@ kinds!(ChatState {
     "Lost" => ChatState::Lost { .. },
     "Closed" => ChatState::Closed,
     "WaitingForAgent" => ChatState::WaitingForAgent,
+    "Idle" => ChatState::Idle,
 });
 
 kinds!(Lost {
