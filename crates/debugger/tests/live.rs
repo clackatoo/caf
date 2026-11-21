@@ -307,15 +307,18 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
         file.as_deref(),
         Some(recording.display().to_string().as_str())
     );
-    // CAF looks at its agents as it starts: that's its first step, and the
-    // survey's answer may already have followed.
+    // Following live, at the end, having been sent every step up to it.
+    // How many that is depends on how far CAF had got: its first steps,
+    // looking at its agents, may come before or after.
     assert!(
         matches!(
             seen.others.last(),
-            Some(ToInspector::Position { live: true, at, end }) if at == end && *end >= 1
+            Some(ToInspector::Position { live: true, at, end })
+                if at == end && *end == seen.steps.len() as u64
         ),
-        "{:?}",
-        seen.others.last()
+        "{:?} after {} steps",
+        seen.others.last(),
+        seen.steps.len()
     );
 
     // A chat, through the viewer wire.
@@ -347,6 +350,11 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
     let end = running.book.end();
     seen.steps_to(&mut inspector, end).await;
     assert!(end > 10, "{end} steps");
+    assert_eq!(
+        seen.steps[0]["event"],
+        json!({"type": "Host", "value": {"type": "CheckAgents"}}),
+        "CAF looks at its agents first"
+    );
     assert!(running.book.diverged().is_empty());
     assert!(!seen.diverged());
     let writes = (seen.steps.iter())
@@ -442,7 +450,16 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
     live.running.await;
     live.book.all_in().await;
     let running = &live.book;
-    assert_eq!(next(&mut viewer).await, Err(Some(1000)), "closed, normally");
+    // The list of open chats, or the agents' statuses, may still be on
+    // their way: each comes on its own, so either can trail the chat's
+    // end.
+    let closed = loop {
+        match next(&mut viewer).await {
+            Ok(message) if message["type"] == "Chats" || message["type"] == "Agents" => {}
+            other => break other,
+        }
+    };
+    assert_eq!(closed, Err(Some(1000)), "closed, normally");
     // The recording check checked every step.
     assert_eq!(running.recording_checked(), running.end());
 
