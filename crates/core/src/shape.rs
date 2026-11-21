@@ -1122,3 +1122,20 @@ fn what_the_traces_hold_reads_back() {
     assert_eq!(chats, 2);
     assert!(changes > 10, "{changes} changes");
 }
+
+/// What recordings made before chats had UUIDs hold still reads: a chat id
+/// as a number, an `OpenChat` with no shelf, and a host with no seed.
+#[test]
+fn recordings_from_before_saving_still_read() {
+    let line = r#"{"type":"Host","value":{"type":"OpenChat","value":{"chat":1,"open":{"agent":"claude","cwd":"/work","session":{"type":"New"},"mcp_servers":[]}}}}"#;
+    let event: Event = serde_json::from_str(line).expect("an old recording's event reads");
+    let Event::Host(HostCommand::OpenChat { chat, open }) = event else {
+        panic!("an OpenChat: {event:?}");
+    };
+    assert_eq!(chat, ChatId::from_number(1));
+    assert_eq!(open.shelf, None);
+    let mut host = serde_json::to_value(Host::new("caf", "0.0.0")).expect("a host");
+    host.as_object_mut().expect("an object").remove("seed");
+    let host: Host = serde_json::from_value(host).expect("a host with no seed reads");
+    assert_eq!(host.seed, 0);
+}
