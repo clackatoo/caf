@@ -12,7 +12,7 @@ import {
   type WatchEvent,
 } from "../src/index.ts";
 import { busy, chat, numbered, turn, words } from "./chats.ts";
-import { connected, FakeTransport, welcome } from "./transport.ts";
+import { agents, connected, FakeTransport, welcome } from "./transport.ts";
 
 /** Waits for promises and microtasks to settle. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -73,11 +73,28 @@ describe("the handshake", () => {
     const opening = Connection.open(link);
     expect(link.take()).toStrictEqual([{ type: "Hello", value: { min: 1, max: 1 } }]);
     link.deliver(welcome);
+    // Not yet: CAF says where its agents stand next.
+    expect(await outcome(opening)).toBe("pending");
+    link.deliver(agents);
     const caf = await opening;
-    expect(caf.agents).toStrictEqual(["claude", "fake"]);
+    expect(caf.agents).toStrictEqual(agents.value);
     expect(caf.chats).toStrictEqual([{ id: 1000, agent: "claude", cwd: "/home/me/project" }]);
     expect(caf.run).toBe("run-1");
+    expect(caf.may).toStrictEqual({ act: true, agents: true });
     expect(link.closed).toBe(false);
+  });
+
+  test.each([
+    [{ act: false, agents: false }],
+    [{ act: true, agents: false }],
+    [{ act: false, agents: true }],
+  ])("says what the host lets this viewer do: %j", async (may) => {
+    const link = new FakeTransport();
+    const opening = Connection.open(link);
+    link.deliver({ ...welcome, value: { ...welcome.value, may } });
+    link.deliver(agents);
+    const caf = await opening;
+    expect(caf.may).toStrictEqual(may);
   });
 
   test("no common version rejects, and ends the link", async () => {
@@ -107,7 +124,17 @@ describe("the handshake", () => {
     const opening = Connection.open(link);
     link.deliver({ type: "Motd", value: "hi" });
     link.deliver(welcome);
+    link.deliver({ type: "Motd", value: "hi" });
+    link.deliver(agents);
     await expect(opening).resolves.toBeInstanceOf(Connection);
+  });
+
+  test("the link ending between the Welcome and the agents rejects with Disconnected", async () => {
+    const link = new FakeTransport();
+    const opening = Connection.open(link);
+    link.deliver(welcome);
+    link.drop();
+    expect(await rejection(opening)).toStrictEqual({ type: "Disconnected" });
   });
 
   test.each([
@@ -120,12 +147,22 @@ describe("the handshake", () => {
       "a Welcome of a version it doesn't speak",
       JSON.stringify({ ...welcome, value: { ...welcome.value, version: 2 } }),
     ],
+    ["a Welcome without what the viewer may do", JSON.stringify({ ...welcome, value: { ...welcome.value, may: undefined } })],
+    [
+      "a Welcome whose act isn't a boolean",
+      JSON.stringify({ ...welcome, value: { ...welcome.value, may: { act: "yes", agents: true } } }),
+    ],
+    [
+      "a Welcome whose agents isn't a boolean",
+      JSON.stringify({ ...welcome, value: { ...welcome.value, may: { act: true, agents: "yes" } } }),
+    ],
     [
       "a Welcome with a broken chat",
       JSON.stringify({ type: "Welcome", value: { version: 1, agents: [], chats: [{}] } }),
     ],
     ["a NoCommonVersion without its range", JSON.stringify({ type: "NoCommonVersion", value: {} })],
     ["another message of version 1", JSON.stringify({ type: "Chats", value: [] })],
+    ["the agents before the Welcome", JSON.stringify(agents)],
   ])("%s first ends the link", async (_, text) => {
     const link = new FakeTransport();
     const opening = Connection.open(link);
@@ -134,6 +171,115 @@ describe("the handshake", () => {
     expect(link.closed).toBe(true);
     // And nothing after it changes that.
     link.deliver(welcome);
+    link.deliver(agents);
+  });
+
+  test.each([
+    ["text that isn't JSON", "{nope"],
+    ["agents that aren't a list", JSON.stringify({ type: "Agents", value: {} })],
+    ["an agent without its name", JSON.stringify({ type: "Agents", value: [{ ...agents.value[0], name: 1 }] })],
+    [
+      "an agent whose install state has no type",
+      JSON.stringify({ type: "Agents", value: [{ ...agents.value[0], install: "Missing" }] }),
+    ],
+    [
+      "an agent without its sign-in state",
+      JSON.stringify({ type: "Agents", value: [{ name: "claude", install: { type: "Host" } }] }),
+    ],
+    [
+      "an agent without whether it can be signed in to",
+      JSON.stringify({ type: "Agents", value: [{ ...agents.value[0], can_sign_in: undefined }] }),
+    ],
+    [
+      "an agent whose can_sign_in isn't a boolean",
+      JSON.stringify({ type: "Agents", value: [{ ...agents.value[0], can_sign_in: "true" }] }),
+    ],
+    ["another message of version 1", JSON.stringify({ type: "Chats", value: [] })],
+    ["a second Welcome", JSON.stringify(welcome)],
+  ])("%s after the Welcome, in place of the agents, ends the link", async (_, text) => {
+    const link = new FakeTransport();
+    const opening = Connection.open(link);
+    link.deliver(welcome);
+    link.raw(text);
+    expect(await rejection(opening)).toStrictEqual({ type: "Disconnected" });
+    expect(link.closed).toBe(true);
+    link.deliver(agents);
+  });
+});
+
+describe("the agents", () => {
+  test("follow Agents, until a listener stops", async () => {
+    const { caf, link } = await connected();
+    const lists: unknown[] = [];
+    const stop = caf.onAgents((agents) => lists.push(agents));
+    const next = [
+      {
+        name: "claude",
+        install: { type: "Installing", value: { done: 1_000_000, size: 626_797_331 } },
+        sign_in: { type: "SignedOut" },
+        can_sign_in: false,
+      },
+    ];
+    link.deliver({ type: "Agents", value: next });
+    expect(caf.agents).toStrictEqual(next);
+    expect(lists).toStrictEqual([next]);
+    stop();
+    link.deliver({ type: "Agents", value: [] });
+    expect(caf.agents).toStrictEqual([]);
+    expect(lists).toHaveLength(1);
+  });
+
+  test("the same listener twice is two subscriptions", async () => {
+    const { caf, link } = await connected();
+    let calls = 0;
+    const listener = () => void calls++;
+    const first = caf.onAgents(listener);
+    caf.onAgents(listener);
+    first();
+    link.deliver(agents);
+    expect(calls).toBe(1);
+  });
+
+  test("states of a later version come through as they are", async () => {
+    const { caf, link } = await connected();
+    const later = [
+      {
+        name: "claude",
+        install: { type: "Updating", value: { from: "0.98.0" } },
+        sign_in: { type: "Expired" },
+        can_sign_in: true,
+        extra: true,
+      },
+    ];
+    link.deliver({ type: "Agents", value: later });
+    expect(link.closed).toBe(false);
+    expect(caf.agents).toStrictEqual(later);
+  });
+
+  test("a listener that throws is reported, and the others still hear", async () => {
+    const reported: unknown[] = [];
+    vi.stubGlobal("reportError", (error: unknown) => reported.push(error));
+    const { caf, link } = await connected();
+    const boom = new Error("boom");
+    let heard = 0;
+    caf.onAgents(() => {
+      throw boom;
+    });
+    caf.onAgents(() => void heard++);
+    link.deliver(agents);
+    expect(reported).toStrictEqual([boom]);
+    expect(heard).toBe(1);
+    expect(link.closed).toBe(false);
+  });
+
+  test("the link ending stops every listener", async () => {
+    const { caf, link } = await connected();
+    let heard = 0;
+    caf.onAgents(() => void heard++);
+    caf.disconnect();
+    link.closed = false;
+    link.deliver(agents);
+    expect(heard).toBe(0);
   });
 });
 
@@ -575,6 +721,62 @@ describe("requests", () => {
     await expect(Promise.all([stopping, answering, closing])).resolves.toStrictEqual([undefined, undefined, undefined]);
   });
 
+  test("each agent action asks about its agent, and resolves when done", async () => {
+    const { caf, link } = await connected();
+    const acting = [
+      caf.install("claude"),
+      caf.stopInstall("claude"),
+      caf.signIn("claude"),
+      caf.paste("claude", "code#123"),
+      caf.stopSignIn("fake"),
+      caf.signOut("claude"),
+    ];
+    expect(link.take()).toStrictEqual([
+      { type: "Agent", value: { request: 1, agent: "claude", action: { type: "Install" } } },
+      { type: "Agent", value: { request: 2, agent: "claude", action: { type: "StopInstall" } } },
+      { type: "Agent", value: { request: 3, agent: "claude", action: { type: "SignIn" } } },
+      { type: "Agent", value: { request: 4, agent: "claude", action: { type: "Paste", value: "code#123" } } },
+      { type: "Agent", value: { request: 5, agent: "fake", action: { type: "StopSignIn" } } },
+      { type: "Agent", value: { request: 6, agent: "claude", action: { type: "SignOut" } } },
+    ]);
+    for (const request of [6, 5, 4, 3, 2, 1]) {
+      link.deliver({ type: "Done", value: { request, outcome: { type: "Done" } } });
+    }
+    await expect(Promise.all(acting)).resolves.toStrictEqual(acting.map(() => undefined));
+  });
+
+  test("an agent action may be refused, not allowed, or gone", async () => {
+    const { caf, link } = await connected();
+    const installing = held(caf.install("claude"));
+    const signing = held(caf.signIn("claude"));
+    const pasting = held(caf.paste("claude", "x"));
+    const signingOut = held(caf.signOut("claude"));
+    link.deliver({ type: "Done", value: { request: 1, outcome: { type: "Refused", value: { type: "AlreadyInstalled" } } } });
+    link.deliver({ type: "Done", value: { request: 2, outcome: { type: "NotAllowed" } } });
+    link.deliver({ type: "Done", value: { request: 3, outcome: { type: "Gone" } } });
+    link.deliver({ type: "Done", value: { request: 4, outcome: { type: "Retry" } } });
+    expect(await rejection(installing)).toStrictEqual({ type: "Refused", value: { type: "AlreadyInstalled" } });
+    expect(await rejection(signing)).toStrictEqual({ type: "NotAllowed" });
+    expect(await rejection(pasting)).toStrictEqual({ type: "Gone" });
+    expect(await rejection(signingOut)).toStrictEqual({ type: "Unknown", value: { outcome: "Retry" } });
+    expect(link.closed).toBe(false);
+  });
+
+  test("an agent action answered with an outcome that doesn't fit ends the link", async () => {
+    const { caf, link } = await connected();
+    const installing = held(caf.install("claude"));
+    link.deliver({ type: "Done", value: { request: 1, outcome: { type: "Opened", value: 1100 } } });
+    expect(await rejection(installing)).toStrictEqual({ type: "Disconnected" });
+    expect(link.closed).toBe(true);
+  });
+
+  test("an agent action after the link has ended rejects with Disconnected", async () => {
+    const { caf, link } = await connected();
+    caf.disconnect();
+    expect(await rejection(caf.install("claude"))).toStrictEqual({ type: "Disconnected" });
+    expect(link.take()).toStrictEqual([]);
+  });
+
   test("Refused, NotAllowed and Gone reject with CafError", async () => {
     const { caf, link } = await connected();
     const refused = held(caf.send(1000, message));
@@ -645,6 +847,8 @@ describe("the link ending", () => {
       held(caf.send(1000, { parts: [] })),
       held(caf.stop(1000)),
       held(caf.close(1000)),
+      held(caf.install("claude")),
+      held(caf.paste("claude", "code")),
     ];
     link.drop();
     for (const each of pending) expect(await rejection(each)).toStrictEqual({ type: "Disconnected" });
@@ -761,6 +965,8 @@ describe("what CAF sends", () => {
     ["Ended without its chat", JSON.stringify({ type: "Ended", value: {} })],
     ["a Done without its request", JSON.stringify({ type: "Done", value: { outcome: { type: "Done" } } })],
     ["a second Welcome", JSON.stringify(welcome)],
+    ["Agents that aren't a list", JSON.stringify({ type: "Agents", value: null })],
+    ["an agent without its states", JSON.stringify({ type: "Agents", value: [{ name: "claude" }] })],
     ["NoCommonVersion after the Welcome", JSON.stringify({ type: "NoCommonVersion", value: { min: 1, max: 1 } })],
   ])("%s ends the link, and never throws", async (_, text) => {
     const { caf, link } = await connected();
@@ -802,10 +1008,14 @@ describe("CafError", () => {
 });
 
 describe("opening with a signal", () => {
-  test("aborting before the Welcome rejects with the signal's reason, and closes the transport", async () => {
+  test.each([
+    ["before the Welcome", []],
+    ["between the Welcome and the agents", [welcome]],
+  ])("aborting %s rejects with the signal's reason, and closes the transport", async (_, before) => {
     const link = new FakeTransport();
     const abort = new AbortController();
     const opening = held(Connection.open(link, { signal: abort.signal }));
+    for (const message of before) link.deliver(message);
     abort.abort(new Error("gave up"));
     const result = await outcome(opening);
     expect(result !== "pending" && "error" in result && (result.error as Error).message).toBe("gave up");
@@ -821,9 +1031,9 @@ describe("opening with a signal", () => {
   });
 
   test.each([
-    ["welcomed", welcome],
-    ["refused", { type: "NoCommonVersion", value: { min: 2, max: 2 } }],
-  ])("stops listening to the signal once %s", async (_, answer) => {
+    ["welcomed", [welcome, agents]],
+    ["refused", [{ type: "NoCommonVersion", value: { min: 2, max: 2 } }]],
+  ])("stops listening to the signal once %s", async (_, answers) => {
     const added: unknown[] = [];
     const removed: unknown[] = [];
     const signal = {
@@ -834,17 +1044,18 @@ describe("opening with a signal", () => {
     } as unknown as AbortSignal;
     const link = new FakeTransport();
     const opening = held(Connection.open(link, { signal }));
-    link.deliver(answer as typeof welcome);
+    for (const answer of answers) link.deliver(answer);
     await outcome(opening);
     expect(added).toHaveLength(1);
     expect(removed).toStrictEqual(added);
   });
 
-  test("aborting after the Welcome does nothing", async () => {
+  test("aborting after the agents does nothing", async () => {
     const link = new FakeTransport();
     const abort = new AbortController();
     const opening = Connection.open(link, { signal: abort.signal });
     link.deliver(welcome);
+    link.deliver(agents);
     const caf = await opening;
     abort.abort();
     expect(link.closed).toBe(false);

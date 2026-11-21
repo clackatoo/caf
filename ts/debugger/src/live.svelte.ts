@@ -4,11 +4,12 @@
 import {
   CafError,
   Connection,
-  type AgentName,
+  type AgentStatus,
   type Chat,
   type ChatId,
   type ChatSummary,
   type DeepReadonly,
+  type Rights,
   type Transport,
   type Watching,
 } from '@clackatoo/caf'
@@ -16,7 +17,10 @@ import type { LinkState } from './link.ts'
 
 export class Live {
   link = $state<LinkState>('connecting')
-  agents = $state.raw<readonly AgentName[]>([])
+  /** Every agent on offer, with whether it's installed and signed in. */
+  agents = $state.raw<readonly DeepReadonly<AgentStatus>[]>([])
+  /** What the host lets this page do, once connected. */
+  may = $state.raw<Readonly<Rights>>({ act: false, agents: false })
   chats = $state.raw<readonly Readonly<ChatSummary>[]>([])
   /** The chat being watched, once it has come. */
   chat = $state.raw<DeepReadonly<Chat> | null>(null)
@@ -39,8 +43,10 @@ export class Live {
       const caf = await Connection.open(await open(), { signal: AbortSignal.timeout(10_000) })
       this.#caf = caf
       this.agents = caf.agents
+      this.may = caf.may
       this.chats = caf.chats
       caf.onChats((chats) => (this.chats = chats))
+      caf.onAgents((agents) => (this.agents = agents))
       caf.onClose(() => {
         if (this.#caf !== caf) return
         // The chat shown stays as it was, read-only (see `canAct`) until

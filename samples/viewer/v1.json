@@ -211,7 +211,11 @@
             "cwd": "/work"
           }
         ],
-        "run": "7f3a9c2e"
+        "run": "7f3a9c2e",
+        "may": {
+          "act": true,
+          "agents": false
+        }
       }
     },
     {
@@ -1766,7 +1770,8 @@
           },
           "sign_in": {
             "type": "Unknown"
-          }
+          },
+          "can_sign_in": true
         },
         {
           "name": "agent-1",
@@ -1775,7 +1780,8 @@
           },
           "sign_in": {
             "type": "SignedOut"
-          }
+          },
+          "can_sign_in": false
         },
         {
           "name": "agent-2",
@@ -1792,7 +1798,8 @@
               "code": null,
               "paste": false
             }
-          }
+          },
+          "can_sign_in": true
         },
         {
           "name": "agent-3",
@@ -1810,7 +1817,8 @@
               "code": "ABCD-1234",
               "paste": true
             }
-          }
+          },
+          "can_sign_in": true
         },
         {
           "name": "agent-4",
@@ -1825,7 +1833,8 @@
             "value": {
               "type": "Account"
             }
-          }
+          },
+          "can_sign_in": true
         },
         {
           "name": "agent-5",
@@ -1844,7 +1853,8 @@
             "value": {
               "type": "ApiKey"
             }
-          }
+          },
+          "can_sign_in": false
         },
         {
           "name": "agent-6",
@@ -1863,7 +1873,8 @@
             "value": {
               "type": "Gateway"
             }
-          }
+          },
+          "can_sign_in": true
         },
         {
           "name": "agent-7",
@@ -1878,7 +1889,8 @@
             "value": {
               "type": "Unknown"
             }
-          }
+          },
+          "can_sign_in": false
         },
         {
           "name": "agent-8",
@@ -1890,7 +1902,8 @@
           },
           "sign_in": {
             "type": "Unknown"
-          }
+          },
+          "can_sign_in": true
         },
         {
           "name": "agent-9",
@@ -1902,7 +1915,8 @@
           },
           "sign_in": {
             "type": "SignedOut"
-          }
+          },
+          "can_sign_in": false
         },
         {
           "name": "agent-10",
@@ -1922,7 +1936,8 @@
               "code": null,
               "paste": false
             }
-          }
+          },
+          "can_sign_in": true
         },
         {
           "name": "agent-11",
@@ -1942,7 +1957,8 @@
               "code": "ABCD-1234",
               "paste": true
             }
-          }
+          },
+          "can_sign_in": true
         },
         {
           "name": "agent-12",
@@ -1960,7 +1976,8 @@
             "value": {
               "type": "Account"
             }
-          }
+          },
+          "can_sign_in": true
         },
         {
           "name": "agent-13",
@@ -1978,7 +1995,8 @@
             "value": {
               "type": "ApiKey"
             }
-          }
+          },
+          "can_sign_in": false
         },
         {
           "name": "agent-14",
@@ -1997,7 +2015,8 @@
             "value": {
               "type": "Gateway"
             }
-          }
+          },
+          "can_sign_in": true
         }
       ]
     },

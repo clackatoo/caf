@@ -87,14 +87,14 @@ fn every_agent_stands_somewhere_in_the_order_offered_and_a_survey_says_where() {
     assert_eq!(
         script.agents(),
         json!([
-            { "name": "claude", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" } },
-            { "name": "plain", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" } },
-            { "name": "npm-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" } },
-            { "name": "dl-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" } },
-            { "name": "npm-twin", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" } },
-            { "name": "npm-host", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" } },
-            { "name": "dl-host", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" } },
-            { "name": "claude-npx", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" } },
+            { "name": "claude", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
+            { "name": "plain", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
+            { "name": "npm-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
+            { "name": "dl-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
+            { "name": "npm-twin", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
+            { "name": "npm-host", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
+            { "name": "dl-host", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
+            { "name": "claude-npx", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
         ])
     );
     let out = script.surveyed(&["test-download-1.4.0", "someone-else-1.0.0"]);
@@ -1101,6 +1101,136 @@ fn shutting_down_stops_installs_and_sign_ins() {
         script.agent_status("dl-agent")["sign_in"],
         json!({ "type": "Unknown" })
     );
+}
+
+impl Script {
+    /// Checks each agent's `can_sign_in` says what [`Core::sign_in`]
+    /// would answer now, asking a copy of the core, so nothing here
+    /// changes. Returns the agents it's true for, in order.
+    ///
+    /// [`Core::sign_in`]: crate::Core::sign_in
+    #[track_caller]
+    fn can_sign_in(&self) -> Vec<String> {
+        let statuses = self.core.agents();
+        for status in &statuses {
+            let mut copy = self.copy();
+            let accepted = copy.sign_in(self.now(), &status.name, &mut Vec::new());
+            assert_eq!(
+                status.can_sign_in,
+                accepted.is_ok(),
+                "{}: can_sign_in says {}, and sign_in answers {accepted:?}",
+                status.name.0,
+                status.can_sign_in
+            );
+        }
+        (statuses.into_iter())
+            .filter(|status| status.can_sign_in)
+            .map(|status| status.name.0)
+            .collect()
+    }
+}
+
+#[test]
+fn can_sign_in_is_what_sign_in_would_answer_at_every_step() {
+    // claude and claude-npx (the host's commands), plain (no recipe),
+    // npm-agent and npm-twin (one install), npm-host (the host's command,
+    // whose recipe's sign-out needs a private folder) and dl-agent.
+    let mut script = Script::new(host());
+    // Nothing known: Claude's adapter hasn't said it's Claude's, and
+    // nothing installed is there.
+    assert!(script.can_sign_in().is_empty());
+    // Claude, once its adapter has answered as Claude's: that process's
+    // agent only.
+    script.open_claude();
+    assert_eq!(script.can_sign_in(), ["claude"]);
+    // The survey runs the status commands it can.
+    let out = script.surveyed(&["test-download-1.4.0"]);
+    assert_eq!(script.can_sign_in(), ["claude", "dl-agent"]);
+    for status in with(&out, "status") {
+        let ticket = status["status"].as_u64().expect("a ticket");
+        script.setup(ticket, SetupEvent::Status(None));
+    }
+    assert_eq!(script.can_sign_in(), ["claude", "dl-agent"]);
+
+    // Installing: only once it's there, for both names of the profile.
+    let install = ticket_of(&script.install("npm-agent").1, "install");
+    script.setup(install, SetupEvent::Progress { done: 1000 });
+    assert_eq!(script.can_sign_in(), ["claude", "dl-agent"]);
+    let out = script.setup(install, SetupEvent::Installed);
+    for status in with(&out, "status") {
+        let ticket = status["status"].as_u64().expect("a ticket");
+        script.setup(ticket, SetupEvent::Status(None));
+    }
+    let all = ["claude", "npm-agent", "dl-agent", "npm-twin"];
+    assert_eq!(script.can_sign_in(), all);
+
+    // The npm agent run by the host's own command, once it has answered
+    // as the npm agent's adapter. Its sign-in needs no private folder, so
+    // it can, though its sign-out, which does, can't: the flag is about
+    // signing in alone.
+    let (chat, out) = script.open(OpenChat::new("npm-host", "/work"));
+    chat.expect("opened");
+    let proc = one(&out, "start")["start"].as_u64().expect("a process");
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    script.answers(proc, init, &npm_init());
+    let all = ["claude", "npm-agent", "dl-agent", "npm-twin", "npm-host"];
+    assert_eq!(script.can_sign_in(), all);
+    assert_eq!(script.sign_out("npm-host").0, Err(Refused::CannotSignIn));
+
+    // A sign-in under way: sign_in accepts it as it stands.
+    let ticket = ticket_of(&script.sign_in("dl-agent").1, "sign_in");
+    assert_eq!(script.can_sign_in(), all);
+    script.setup(
+        ticket,
+        SetupEvent::Link("https://accounts.download.example/device".into()),
+    );
+    assert_eq!(script.can_sign_in(), all);
+    script.stop_sign_in("dl-agent").0.expect("stopped");
+    assert_eq!(script.can_sign_in(), all);
+
+    // Signing in by one name is signing in to the profile's agent, by
+    // either name. And while that's under way, a survey that finds its
+    // install gone leaves the sign-in standing: sign_in still accepts it,
+    // by either name, though its command couldn't start now.
+    script.sign_in("npm-agent").0.expect("signing in");
+    assert_eq!(script.can_sign_in(), all);
+    let out = script.check_agents();
+    let survey = ticket_of(&out, "survey");
+    script.setup(survey, found(&["test-download-1.4.0"]));
+    assert_has(
+        &script.agent_status("npm-twin"),
+        &json!({ "install": { "type": "Missing" }, "sign_in": { "type": "SigningIn" } }),
+    );
+    assert_eq!(script.can_sign_in(), all);
+    // Stopped, neither can now.
+    script.stop_sign_in("npm-twin").0.expect("stopped");
+    assert_eq!(script.can_sign_in(), ["claude", "dl-agent", "npm-host"]);
+
+    // Shutting down.
+    script.shutdown();
+    script.can_sign_in();
+}
+
+#[test]
+fn can_sign_in_stays_false_for_a_host_command_that_isnt_its_profiles_adapter() {
+    let mut script = Script::new(host());
+    let (_, out) = script.open(OpenChat::new("claude", "/work"));
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let mut other = claude_init();
+    other["agentInfo"]["name"] = json!("someone-elses-acp");
+    script.answers(PROC, init, &other);
+    assert!(script.can_sign_in().is_empty());
+}
+
+#[test]
+fn can_sign_in_is_false_where_the_machine_cant_install() {
+    let mut script = Script::new(host());
+    let out = script.check_agents();
+    script.setup(
+        ticket_of(&out, "survey"),
+        found_on(&[], None, false, "riscv64"),
+    );
+    assert!(script.can_sign_in().is_empty());
 }
 
 #[test]

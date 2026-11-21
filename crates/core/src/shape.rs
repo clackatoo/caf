@@ -42,7 +42,7 @@ use crate::question::{
 };
 use crate::time::{End, Mono, Now, Wall, Window};
 use crate::viewer::{
-    AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, ToViewer,
+    AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
 };
 
 /// Values as CAF writes them, each with its TypeScript type: one of
@@ -320,6 +320,7 @@ fn agent_status() -> AgentStatus {
             code: None,
             paste: true,
         }),
+        can_sign_in: true,
     }
 }
 
@@ -578,6 +579,7 @@ pub(crate) fn every_type(s: &mut Samples) {
         cwd: "/work".into(),
     });
     s.both(&RequestNo(1));
+    s.both(&Rights::new(true, false));
     s.both(&OpenRequest {
         agent: AgentName("claude".into()),
         cwd: "/work".into(),

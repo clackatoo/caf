@@ -7,9 +7,11 @@
   // so the same view draws a live chat or one played back from a
   // recording. With `readOnly` (such as while looking back in time), it
   // draws the chat as it was, and nothing can be done in it.
-  import type { Chat, DeepReadonly } from '@clackatoo/caf'
+  import type { AgentStatus, Chat, DeepReadonly, Rights } from '@clackatoo/caf'
   import { untrack } from 'svelte'
   import { attempt, type ChatActions } from './actions.ts'
+  import AgentBanner from './AgentBanner.svelte'
+  import { showsAgent } from './shows.ts'
   import Composer from './Composer.svelte'
   import Questions from './Questions.svelte'
   import StateBanner from './StateBanner.svelte'
@@ -20,12 +22,26 @@
 
   let {
     chat,
+    agent,
+    may = { act: true, agents: true },
     actions,
     readOnly = false,
     readOnlyWhy = 'As it was then: nothing can be done here.',
     appSummary = () => "An item of the app's own",
   }: {
     chat: DeepReadonly<Chat>
+    /**
+     * The status of the chat's agent, from `Connection.agents`: whether
+     * it's installed and signed in. Without it, a chat waiting for its
+     * agent says only that it waits.
+     */
+    agent?: DeepReadonly<AgentStatus> | undefined
+    /**
+     * What the host lets this viewer do, from `Connection.may`: without
+     * `act`, the chat can be watched, not acted in; without `agents`, it
+     * offers no Install or sign-in. Everything, if not given.
+     */
+    may?: Readonly<Rights> | undefined
     actions: ChatActions
     readOnly?: boolean
     /** Why nothing can be done, said while `readOnly`. */
@@ -34,8 +50,12 @@
     appSummary?: (app: unknown) => string
   } = $props()
 
+  /** The status of the chat's agent, if the host gave it, and it's this chat's agent's. */
+  const status = $derived(agent?.name === chat.agent ? agent : undefined)
   const running = $derived(chat.turns.find((turn) => turn.life.type === 'Running' || turn.life.type === 'Stopping'))
   const closed = $derived(chat.state.type === 'Closed')
+  /** Whether anything can be done in the chat: it isn't read-only, and the host lets this viewer act. */
+  const acting = $derived(!readOnly && may.act)
   let problem = $state<string | null>(null)
   // Follow the end of the chat as it grows, unless the user has scrolled up.
   let scroller = $state<HTMLElement>()
@@ -61,7 +81,7 @@
   })
 
   async function close() {
-    if (readOnly) return
+    if (!acting) return
     problem = null
     const error = await attempt(actions.close)
     if (error !== null) problem = errorText(error)
@@ -80,27 +100,54 @@
     </div>
     {#if chat.usage !== null}<Usage usage={chat.usage} />{/if}
     <span class="state" data-state={chat.state.type}>{stateLabel(chat.state)}</span>
-    {#if !closed}
+    {#if !closed && may.act}
       <button type="button" class="close" disabled={readOnly} onclick={close}>Close</button>
     {/if}
   </header>
   {#if problem !== null}<div class="problem" role="alert">{problem}</div>{/if}
-  {#if readOnly}<div class="looking-back" role="status">{readOnlyWhy}</div>{/if}
+  {#if readOnly}
+    <div class="looking-back" role="status">{readOnlyWhy}</div>
+  {:else if !may.act}
+    <div class="looking-back" role="status">The app lets this viewer watch this chat, not act in it.</div>
+  {/if}
   <StateBanner state={chat.state} />
+  {#if showsAgent(chat)}
+    <AgentBanner
+      name={chat.agent}
+      agent={status}
+      waiting={chat.state.type === 'WaitingForAgent'}
+      {readOnly}
+      act={may.act}
+      agents={may.agents}
+      install={actions.install}
+      stopInstall={actions.stopInstall}
+      notNow={actions.stop}
+      paste={actions.paste}
+      stopSignIn={actions.stopSignIn}
+    />
+  {/if}
 
   <div class="turns" bind:this={scroller} {onscroll}>
     {#each chat.turns as turn (turn.id)}
-      <Turn {turn} {readOnly} sendAgain={actions.sendAgain} {appSummary} />
+      <Turn
+        {turn}
+        {readOnly}
+        act={may.act}
+        sendAgain={actions.sendAgain}
+        signIn={actions.signIn}
+        canSignIn={may.agents && (status?.can_sign_in ?? false)}
+        {appSummary}
+      />
     {:else}
       <p class="empty">Nothing said yet.</p>
     {/each}
   </div>
 
-  <Questions questions={chat.questions} {readOnly} answer={actions.answer} />
+  <Questions questions={chat.questions} readOnly={!acting} answer={actions.answer} />
   <Composer
     running={running !== undefined}
     stopping={running?.life.type === 'Stopping'}
-    disabled={readOnly || closed}
+    disabled={!acting || closed}
     send={(text) => actions.send({ parts: [{ type: 'Text', value: text }] })}
     stop={actions.stop}
   />

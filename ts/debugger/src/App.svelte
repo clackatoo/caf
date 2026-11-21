@@ -5,8 +5,9 @@
   // Live and following, the chat view shows `/viewer`'s chats, as any
   // host's does. Looking back, or replaying, it shows the chats as they
   // were, from the inspector channel's `Past` messages, read-only.
-  import type { AgentName, Answer, ChatId, DeepReadonly, QuestionId, UserMessage } from '@clackatoo/caf'
-  import { ChatList, ChatView, type ChatActions, type ListActions } from './chat/index.ts'
+  import type { AgentName, Answer, Chat, ChatId, DeepReadonly, QuestionId, UserMessage } from '@clackatoo/caf'
+  import AgentsPanel, { type AgentActions } from './AgentsPanel.svelte'
+  import { ChatList, ChatView, showsAgent, type ChatActions, type ListActions } from './chat/index.ts'
   import { PROTOCOL } from './inspector/channel.ts'
   import { Inspector } from './inspector/client.svelte.ts'
   import InspectorView from './inspector/Inspector.svelte'
@@ -82,7 +83,26 @@
     answer: (question: QuestionId, answer: Answer) => live?.caf.answer(question, answer),
     sendAgain: (message: DeepReadonly<UserMessage>) => live?.caf.send(need(selected), structuredClone(message) as UserMessage),
     close: () => live?.caf.close(need(selected)),
+    install: () => live?.caf.install(agentOf(chat)),
+    stopInstall: () => live?.caf.stopInstall(agentOf(chat)),
+    signIn: () => live?.caf.signIn(agentOf(chat)),
+    paste: (text: string) => live?.caf.paste(agentOf(chat), text),
+    stopSignIn: () => live?.caf.stopSignIn(agentOf(chat)),
   }
+
+  const agentActions: AgentActions = {
+    install: (agent: AgentName) => live?.caf.install(agent),
+    stopInstall: (agent: AgentName) => live?.caf.stopInstall(agent),
+    signIn: (agent: AgentName) => live?.caf.signIn(agent),
+    paste: (agent: AgentName, text: string) => live?.caf.paste(agent, text),
+    stopSignIn: (agent: AgentName) => live?.caf.stopSignIn(agent),
+    signOut: (agent: AgentName) => live?.caf.signOut(agent),
+  }
+
+  /** The agents on offer, live. Looking back, or replaying, there are none to show: a recording holds no statuses. */
+  const agents = $derived(lookingBack ? [] : (live?.agents ?? []))
+  /** The status of the chat's agent, live. */
+  const agentStatus = $derived(chat === null ? undefined : agents.find((agent) => agent.name === chat.agent))
 
   const listActions: ListActions = {
     select: (chat: ChatId) => (selected = chat),
@@ -90,6 +110,11 @@
       if (live === null) throw new Error('Not live.')
       selected = await live.caf.open({ agent, cwd, session: { type: 'New' } })
     },
+  }
+
+  function agentOf(chat: DeepReadonly<Chat> | null): AgentName {
+    if (chat === null) throw new Error('No chat is chosen.')
+    return chat.agent
   }
 
   function need(chat: ChatId | null): ChatId {
@@ -181,11 +206,29 @@
   <main bind:this={main} style:grid-template-columns={showInspector ? `${split}fr 6px ${1 - split}fr` : '1fr'}>
     <div class="left">
       <div class="list">
-        <ChatList chats={summaries} agents={live?.agents ?? []} {selected} actions={listActions} readOnly={!actable} />
+        <div class="chats">
+          <ChatList chats={summaries} agents={agents.map((agent) => agent.name)} {selected} actions={listActions} readOnly={!actable} />
+        </div>
+        {#if mode === 'Live' && !lookingBack}
+          <AgentsPanel
+            {agents}
+            actions={agentActions}
+            readOnly={!actable}
+            may={live?.may.agents ?? false}
+            inChat={chat !== null && showsAgent(chat) ? chat.agent : null}
+          />
+        {/if}
       </div>
       <div class="chat">
         {#if chat !== null}
-          <ChatView {chat} actions={chatActions} readOnly={!actable} {readOnlyWhy} />
+          <ChatView
+            {chat}
+            agent={agentStatus}
+            may={lookingBack ? undefined : live?.may}
+            actions={chatActions}
+            readOnly={!actable}
+            {readOnlyWhy}
+          />
         {:else}
           <p class="empty">
             {#if selected === null}
@@ -335,6 +378,13 @@
   .list {
     border-right: 1px solid var(--caf-border);
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .chats {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
   }
   .chat {
     min-width: 0;

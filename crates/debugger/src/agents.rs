@@ -3,13 +3,22 @@
 //! ```toml
 //! [[agent]]
 //! name = "claude"
+//! installed = true               # CAF installs it, and starts it from there
+//! profile = "claude-agent-acp"
+//!
+//! [[agent]]
+//! name = "my-claude"
 //! program = "/home/me/.local/bin/claude-agent-acp"
 //! args = []
-//! profile = "claude-agent-acp"   # or "cautious"
+//! profile = "claude-agent-acp"   # or "cautious", or "fake"
 //! ```
 //!
-//! `program` is an absolute path, or a bare name looked up on `PATH` as
-//! the debugger starts. `args` may be left out.
+//! An agent is either `installed`, which only one of CAF's own profiles
+//! can be, or started by its `program`: an absolute path, or a bare name
+//! looked up on `PATH` as the debugger starts. `args` may be left out.
+//! `fake` is the profile for CAF's fake agent, `caf-fake-agent`, whose
+//! install always fails, as offline, and which signs in through its
+//! `auth` commands: for trying installs and sign-ins with no real agent.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -18,9 +27,6 @@ use std::path::{Path, PathBuf};
 use caf_core::agent::{AgentSpec, SpawnCommand};
 use caf_core::profiles::{Builtin, ProfileChoice};
 use serde::Deserialize;
-
-/// The adapter Claude's agent is reached through.
-const CLAUDE_ADAPTER: &str = "claude-agent-acp";
 
 /// `agents.toml`.
 #[derive(Deserialize)]
@@ -34,9 +40,10 @@ struct File {
 #[serde(deny_unknown_fields)]
 struct Agent {
     name: String,
-    program: PathBuf,
     #[serde(default)]
-    args: Vec<String>,
+    installed: bool,
+    program: Option<PathBuf>,
+    args: Option<Vec<String>>,
     profile: Profile,
 }
 
@@ -47,14 +54,18 @@ enum Profile {
     ClaudeAgentAcp,
     #[serde(rename = "cautious")]
     Cautious,
+    #[serde(rename = "fake")]
+    Fake,
 }
 
 /// Reads `agents.toml`.
 ///
 /// # Errors
 ///
-/// If it can't be read, isn't a list of agents, has two of one name, or
-/// names a program that isn't there.
+/// If it can't be read, isn't a list of agents, or has two of one name;
+/// if an agent is installed but has a program, or a profile CAF has no
+/// recipe for; or if an agent that isn't installed has no program, or
+/// names one that isn't there.
 pub fn load(path: &Path) -> Result<Vec<AgentSpec>, String> {
     let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     parse(&text, std::env::var_os("PATH").as_deref())
@@ -73,14 +84,39 @@ fn parse(text: &str, path: Option<&std::ffi::OsStr>) -> Result<Vec<AgentSpec>, S
         if !names.insert(agent.name.clone()) {
             return Err(format!("two agents are called {:?}", agent.name));
         }
-        let program = locate(&agent.program, path)
-            .ok_or_else(|| format!("{}: no program {}", agent.name, agent.program.display()))?;
-        let mut command = SpawnCommand::new(program);
-        command.args = agent.args.into_iter().map(OsString::from).collect();
         let profile = match agent.profile {
             Profile::ClaudeAgentAcp => ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
             Profile::Cautious => ProfileChoice::Cautious,
+            Profile::Fake => ProfileChoice::Builtin(Builtin::Fake),
         };
+        if agent.installed {
+            if agent.program.is_some() || agent.args.is_some() {
+                return Err(format!(
+                    "{}: an installed agent is started from its install, so has no program or args",
+                    agent.name
+                ));
+            }
+            let ProfileChoice::Builtin(builtin) = profile else {
+                return Err(format!(
+                    "{}: only one of CAF's own profiles says how to install it",
+                    agent.name
+                ));
+            };
+            agents.push(AgentSpec::installed(agent.name, builtin));
+            continue;
+        }
+        let Some(program) = agent.program else {
+            return Err(format!(
+                "{}: no program, and not installed = true",
+                agent.name
+            ));
+        };
+        let found = locate(&program, path)
+            .ok_or_else(|| format!("{}: no program {}", agent.name, program.display()))?;
+        let mut command = SpawnCommand::new(found);
+        command.args = (agent.args.unwrap_or_default().into_iter())
+            .map(OsString::from)
+            .collect();
         agents.push(AgentSpec::command(agent.name, command, profile));
     }
     if agents.is_empty() {
@@ -89,20 +125,12 @@ fn parse(text: &str, path: Option<&std::ffi::OsStr>) -> Result<Vec<AgentSpec>, S
     Ok(agents)
 }
 
-/// The agents when there's no `agents.toml`: `claude`, if Claude's
-/// adapter is on `PATH`, and `fake`, the fake agent following `script`,
-/// if it's there to start.
+/// The agents when there's no `agents.toml`: `claude`, installed by CAF
+/// when the user asks, and `fake`, the fake agent following `script`, if
+/// it's there to start.
 #[must_use]
 pub fn found(fake: Option<&Path>, script: &Path) -> Vec<AgentSpec> {
-    let mut agents = Vec::new();
-    let path = std::env::var_os("PATH");
-    if let Some(claude) = locate(Path::new(CLAUDE_ADAPTER), path.as_deref()) {
-        agents.push(AgentSpec::command(
-            "claude",
-            SpawnCommand::new(claude),
-            ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
-        ));
-    }
+    let mut agents = vec![AgentSpec::installed("claude", Builtin::ClaudeAgentAcp)];
     if let Some(fake) = fake {
         let mut command = SpawnCommand::new(fake);
         command.args = vec![script.as_os_str().to_owned()];
@@ -129,10 +157,12 @@ fn locate(program: &Path, path: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use caf_core::agent::Launch;
+    use std::path::Path;
+
+    use caf_core::agent::{AgentSpec, Launch};
     use caf_core::profiles::{Builtin, ProfileChoice};
 
-    use super::parse;
+    use super::{found, parse};
 
     #[test]
     fn agents_toml_lists_agents_by_path_or_name() {
@@ -169,6 +199,59 @@ mod tests {
     }
 
     #[test]
+    fn agents_toml_may_say_an_agent_is_installed() {
+        let agents = parse(
+            r#"
+            [[agent]]
+            name = "claude"
+            installed = true
+            profile = "claude-agent-acp"
+            "#,
+            None,
+        )
+        .expect("it reads");
+        assert_eq!(
+            agents,
+            [AgentSpec::installed("claude", Builtin::ClaudeAgentAcp)]
+        );
+    }
+
+    #[test]
+    fn agents_toml_may_name_the_fake_profile_installed_or_not() {
+        let agents = parse(
+            r#"
+            [[agent]]
+            name = "offline"
+            installed = true
+            profile = "fake"
+
+            [[agent]]
+            name = "signs-in"
+            program = "/bin/sh"
+            profile = "fake"
+            "#,
+            None,
+        )
+        .expect("it reads");
+        assert_eq!(agents[0], AgentSpec::installed("offline", Builtin::Fake));
+        assert_eq!(agents[1].profile, ProfileChoice::Builtin(Builtin::Fake));
+    }
+
+    #[test]
+    fn with_no_agents_toml_claude_is_installed_and_the_fake_agent_started() {
+        let agents = found(Some(Path::new("/bin/fake")), Path::new("/tmp/script.json"));
+        assert_eq!(
+            agents[0],
+            AgentSpec::installed("claude", Builtin::ClaudeAgentAcp)
+        );
+        assert_eq!(agents[1].name.0, "fake");
+        assert!(
+            matches!(&agents[1].launch, Launch::Command(command) if command.args == ["/tmp/script.json"])
+        );
+        assert_eq!(found(None, Path::new("/tmp/script.json")).len(), 1);
+    }
+
+    #[test]
     fn agents_toml_must_be_right() {
         let path = std::env::var_os("PATH");
         let bad = |text: &str| parse(text, path.as_deref()).expect_err(text);
@@ -198,5 +281,28 @@ mod tests {
             program = "/bin/sh"
             profile = "cautious"
             colour = "red""#);
+        // Installed, but with a program, or a profile with no recipe.
+        bad(r#"[[agent]]
+            name = "a"
+            installed = true
+            program = "/bin/sh"
+            profile = "claude-agent-acp""#);
+        bad(r#"[[agent]]
+            name = "a"
+            installed = true
+            args = []
+            profile = "claude-agent-acp""#);
+        bad(r#"[[agent]]
+            name = "a"
+            installed = true
+            profile = "cautious""#);
+        // Neither installed nor with a program.
+        bad(r#"[[agent]]
+            name = "a"
+            profile = "cautious""#);
+        bad(r#"[[agent]]
+            name = "a"
+            installed = false
+            profile = "claude-agent-acp""#);
     }
 }

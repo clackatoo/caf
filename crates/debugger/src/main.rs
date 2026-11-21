@@ -148,15 +148,19 @@ async fn run(args: Args) -> Result<(), String> {
             app.dist.display()
         );
     }
+    // Listened for before it says it's serving, so a signal that comes
+    // the moment it does is heard, never fatal.
+    let mut stops =
+        Stops::new().map_err(|error| format!("it can't listen for signals: {error}"))?;
     say!("Open {}", server::url(port, &token));
     let serving = axum::serve(listener, server::router(Arc::new(app)));
     tokio::select! {
         served = serving => served.map_err(|error| error.to_string())?,
-        signal = stop() => say!("{signal}: shutting down. Again to stop at once."),
+        signal = stops.next() => say!("{signal}: shutting down. Again to stop at once."),
     }
     // A second signal doesn't wait for CAF.
-    tokio::spawn(async {
-        let signal = stop().await;
+    tokio::spawn(async move {
+        let signal = stops.next().await;
         tell!("caf-debugger: {signal} again: stopping at once");
         std::process::exit(1);
     });
@@ -170,21 +174,32 @@ async fn run(args: Args) -> Result<(), String> {
     Ok(())
 }
 
-/// The next signal to stop: Ctrl-C, `SIGTERM`, or `SIGHUP` as the
-/// terminal closes. Named for saying so.
-async fn stop() -> &'static str {
-    use tokio::signal::unix::{SignalKind, signal};
-    let (Ok(mut term), Ok(mut hup)) = (
-        signal(SignalKind::terminate()),
-        signal(SignalKind::hangup()),
-    ) else {
-        let _ = tokio::signal::ctrl_c().await;
-        return "Ctrl-C";
-    };
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => "Ctrl-C",
-        _ = term.recv() => "SIGTERM",
-        _ = hup.recv() => "SIGHUP",
+/// The signals to stop on: Ctrl-C, `SIGTERM`, and `SIGHUP` as the
+/// terminal closes. Each is caught from when these are made, so one that
+/// comes before anything waits for it is kept, not fatal.
+struct Stops {
+    int: tokio::signal::unix::Signal,
+    term: tokio::signal::unix::Signal,
+    hup: tokio::signal::unix::Signal,
+}
+
+impl Stops {
+    fn new() -> std::io::Result<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
+        Ok(Self {
+            int: signal(SignalKind::interrupt())?,
+            term: signal(SignalKind::terminate())?,
+            hup: signal(SignalKind::hangup())?,
+        })
+    }
+
+    /// The next signal to stop, named for saying so.
+    async fn next(&mut self) -> &'static str {
+        tokio::select! {
+            _ = self.int.recv() => "Ctrl-C",
+            _ = self.term.recv() => "SIGTERM",
+            _ = self.hup.recv() => "SIGHUP",
+        }
     }
 }
 

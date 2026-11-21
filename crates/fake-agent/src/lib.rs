@@ -253,14 +253,16 @@
 //! # Signing in
 //!
 //! ```text
-//! caf-fake-agent [--cli] auth login|status|logout
+//! caf-fake-agent [SCRIPT] [--cli] auth login|status|logout
 //! ```
 //!
 //! The fake also has the sign-in commands an agent's own command line
 //! has, as `claude-agent-acp --cli auth login` does, for testing CAF's
 //! setup driver and the views of a sign-in. These come before the
 //! script: an adapter's sign-in is run with its environment, which may
-//! name one. What they do is set by a JSON file, [`Auth`], that
+//! name one. A script given as the first argument is passed over, as a
+//! host that starts the fake with one keeps it when CAF runs its sign-in,
+//! adding the recipe's arguments after it. What they do is set by a JSON file, [`Auth`], that
 //! [`AUTH_VAR`] (`CAF_FAKE_AGENT_AUTH`) names:
 //!
 //! ```text

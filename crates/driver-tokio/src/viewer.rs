@@ -27,7 +27,7 @@ use caf_core::agent::{AgentStatus, SignInState};
 use caf_core::chat::AppItem;
 use caf_core::ids::AgentName;
 use caf_core::ids::{ChangeNo, ChatId};
-use caf_core::viewer::{AgentAction, FromViewer, OpenRequest, Outcome, ToViewer, VERSIONS};
+use caf_core::viewer::{AgentAction, FromViewer, OpenRequest, Outcome, Rights, ToViewer, VERSIONS};
 use tokio::sync::mpsc;
 
 use crate::caf::{AgentsWatch, Caf, ChatsWatch, Error, Update, Watch, WeakCaf};
@@ -146,6 +146,7 @@ pub async fn serve<A: AppItem>(
         agents: caf.agents().to_vec(),
         chats: open,
         run: caf.run().to_owned(),
+        may: Rights::new(rules.act, rules.agents),
     };
     let statuses = ToViewer::Agents(for_viewer(statuses, &rules));
     if to.send(welcome).await.is_err() || to.send(statuses).await.is_err() {

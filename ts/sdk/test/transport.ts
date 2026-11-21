@@ -63,7 +63,22 @@ export const welcome = {
     agents: ["claude", "fake"],
     chats: [{ id: 1000, agent: "claude", cwd: "/home/me/project" }],
     run: "run-1",
+    may: { act: true, agents: true },
   },
+} satisfies ToViewer;
+
+/** Where the Welcome's agents stand: CAF says so right after it. */
+export const agents = {
+  type: "Agents",
+  value: [
+    {
+      name: "claude",
+      install: { type: "Missing", value: { size: 626_797_331 } },
+      sign_in: { type: "Unknown" },
+      can_sign_in: false,
+    },
+    { name: "fake", install: { type: "Host" }, sign_in: { type: "Unknown" }, can_sign_in: true },
+  ],
 } satisfies ToViewer;
 
 /** A Welcome from a run of CAF. */
@@ -71,13 +86,14 @@ export function welcomeFrom(run: string): ToViewer {
   return { type: "Welcome", value: { ...welcome.value, run } };
 }
 
-/** A connection that has been welcomed, with the Hello already taken. */
+/** A connection that has been welcomed and told its agents, with the Hello already taken. */
 export async function connected(
   run = "run-1",
   link = new FakeTransport(),
 ): Promise<{ caf: Connection; link: FakeTransport }> {
   const opening = Connection.open(link);
   link.deliver(welcomeFrom(run));
+  link.deliver(agents);
   const caf = await opening;
   link.take();
   return { caf, link };

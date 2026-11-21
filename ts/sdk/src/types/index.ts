@@ -84,6 +84,7 @@ export type * from "./Remedy.ts";
 export type * from "./Report.ts";
 export type * from "./RequestId.ts";
 export type * from "./RequestNo.ts";
+export type * from "./Rights.ts";
 export type * from "./RpcError.ts";
 export type * from "./SessionChoice.ts";
 export type * from "./SetupDirective.ts";

@@ -261,6 +261,7 @@ impl<A: AppItem> Core<A> {
                     name: name.clone(),
                     install: standing.install.clone(),
                     sign_in: standing.sign_in.clone(),
+                    can_sign_in: self.signing_in(name).is_some() || self.can_sign_in(name),
                 })
             })
             .collect()

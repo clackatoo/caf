@@ -21,6 +21,10 @@ rmp-serde.workspace = true
 [features]
 # Core::inspect: the core's whole state as JSON, for debugging tools only.
 inspect = []
+# Builtin::Fake: a profile for caf-fake-agent, whose install always fails,
+# offline, and whose sign-in is its `auth` commands. For tools that try
+# installs and sign-ins with no real agent, and their tests.
+fake = []
 # TypeScript types for every type CAF serialises, through ts-rs: what the
 # TypeScript caf-sdk's are generated from (`ts/sdk/src/types/`).
 ts = ["dep:ts-rs"]

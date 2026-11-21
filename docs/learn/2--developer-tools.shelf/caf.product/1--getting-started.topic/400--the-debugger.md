@@ -1,9 +1,10 @@
 ---
 title: The Debugger
 type: how
-description: Run caf-debugger to chat with an agent beside an inspector of every step CAF takes, record each run, replay a recording, and move back and forth through it, with what its token is for, what a recording holds, and what "replay diverged" means.
+description: Run caf-debugger to chat with an agent beside an inspector of every step CAF takes, install agents and sign in to them, record each run, replay a recording, and move back and forth through it, with what its token is for, what a recording holds, and what "replay diverged" means.
 related:
   - caf/getting-started/a-chat-in-the-browser
+  - caf/getting-started/installing-and-signing-in
   - caf/concepts/the-core
   - caf/concepts/viewers
 ---
@@ -64,14 +65,16 @@ another version of the server says so, rather than half working.
 
 With no `--agents`, the debugger offers:
 
-- **`claude`**, if Claude's adapter, `claude-agent-acp`, is on your `PATH`;
+- **`claude`**, Claude's adapter, installed by CAF when you ask (see
+  [Installing and signing in](#installing-and-signing-in));
 - **`fake`**, if it can be found (below): CAF's fake agent, which has no
   model behind it, so the debugger is useful with no real agent and no
   cost. It answers any message
   at once with a few words. Send it exactly `ask`, and it asks permission
   to run a command: answer it, or try Stop while it waits. Send it exactly
   `fail`, and the turn fails, the first time in each chat, so sending it
-  again shows Send again working.
+  again shows Send again working. Send it exactly `sign in`, and the turn
+  fails for want of signing in, the first time in each chat.
 
 The fake agent is built by Cargo as the debugger starts, so start the
 debugger with `cargo run`. Started any other way, it offers the fake agent
@@ -85,6 +88,11 @@ them.
 ```toml
 [[agent]]
 name = "claude"
+installed = true
+profile = "claude-agent-acp"
+
+[[agent]]
+name = "my-claude"
 program = "/home/me/.local/bin/claude-agent-acp"
 args = []
 profile = "claude-agent-acp"
@@ -99,15 +107,67 @@ profile = "cautious"
 cargo run -p caf-debugger -- --agents agents.toml
 ```
 
-`program` is an absolute path, or a bare name looked up on `PATH` as the
-debugger starts. `profile` is `claude-agent-acp`, CAF's profile for Claude's
-adapter, or `cautious`, plain ACP with nothing risky switched on, for any
-other adapter.
+`profile` is one of:
+
+- `claude-agent-acp`, CAF's profile for Claude's adapter;
+- `cautious`, plain ACP with nothing risky switched on, for any other
+  adapter;
+- `fake`, a profile for CAF's fake agent, for trying installs and
+  sign-ins with no real agent. Installed, its install always fails at
+  once, as if offline, so nothing is ever installed. Started from
+  `caf-fake-agent` (with its script as its argument), it signs in, out and
+  says whether it's signed in with `caf-fake-agent auth`, which does what
+  the file `CAF_FAKE_AGENT_AUTH` names says. Its sign-in link must be to
+  `caf.example`.
+
+Each agent is either:
+
+- **`installed = true`**: CAF installs it, and starts it from its install.
+  Only an agent with one of CAF's own profiles can be, since the profile
+  says how, so not `cautious`. It has no `program` or `args`.
+- **started by its `program`**: an absolute path, or a bare name looked up
+  on `PATH` as the debugger starts, with any `args`. CAF signs in to one
+  only once it has answered as the adapter its profile is for, so open a
+  chat with it first.
 
 In the chat view, "New chat" opens a chat with any of these agents in any
 folder, given as an absolute path. The debugger gives chats no MCP servers,
 asks you about every permission request, and starts an adapter of its own for
 each chat.
+
+## Installing and signing in
+
+The **Agents** panel, under the list of chats, shows each agent the
+debugger offers: whether it's installed, and whether it's signed in.
+
+- **Install** installs an agent CAF installs itself, showing its size
+  first and its progress as it goes; **Stop** stops it. If it can't be
+  installed, the panel says why, such as a missing Node or npm.
+- **Sign in** runs the agent's own sign-in, from CAF's profile for it. It
+  shows only where CAF can sign in now: for an agent the debugger starts
+  itself, once it has answered in a chat as the adapter its profile is
+  for. It shows while signed in too, to switch accounts.
+  The sign-in then shows a link to open in a new tab, a code to type there
+  if the agent shows one, and a box to paste a code into, for when the
+  sign-in page gives you one instead. **Stop signing in** stops it. It
+  shows in the chat beside the panel, if that chat is with the agent and
+  isn't closed, and the panel says "Signing in: see the chat."; otherwise
+  in the panel.
+- **Sign out** signs out of it.
+
+The debugger lets its page do all of this. Installs go where every CAF
+program keeps them, `~/.local/share/caf/agents/` (under `$XDG_DATA_HOME`
+if that's set), so an agent installed here is installed for them all.
+Claude's adapter is about 627 MB. Claude keeps its sign-in in its own
+folder, `~/.claude`, so signing in here signs in Claude Code too.
+
+A chat opened with an agent that isn't installed waits for it, and says so:
+Install starts it, and Not now stops the message that waited. A chat whose
+turn failed for want of signing in offers Sign in, and once you're signed
+in, says so; send the message again then.
+
+Nothing is shown in the panel while looking back or replaying: a recording
+holds what CAF was told, not each agent's status.
 
 ## The token
 
@@ -169,10 +229,16 @@ before sharing it.
 
 A few things are left out, and replaying doesn't need them:
 
-- the account's email, which Claude's adapter reports in its sign-in status;
+- the account's email, which Claude's adapter reports in its sign-in status,
+  and all of that status but how you're signed in;
+- a code you pasted into a sign-in;
 - each agent's arguments, and the values of its environment variables;
 - the values of each MCP server's environment variables and HTTP headers;
 - what you paste into a sign-in, such as a code from the sign-in page.
+
+A sign-in's link, and any code it showed you to type, are kept: each works
+once, so it's no use by the time anyone reads the recording, and a replay
+needs it.
 
 The inspector itself shows everything, those too: it shows exactly what the
 core was given. Only your browser can see it, but take care with
@@ -231,7 +297,8 @@ same directives. Live, the debugger checks this at every step, twice:
   it, with its secrets hidden, as a replay of a bug report would be. It
   must give out what CAF's core did, but for the hidden secrets
   themselves: the values of MCP servers' variables and headers, which
-  reach the agent in the message that opens its session.
+  reach the agent in the message that opens its session, and a code
+  pasted into a sign-in, which a replay passes on as empty.
 
 If either ever differs, the inspector shows **"replay diverged at step
 N"**, saying which check, with both lists of directives. That's a bug in

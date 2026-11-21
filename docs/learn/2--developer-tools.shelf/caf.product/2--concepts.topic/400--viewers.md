@@ -22,12 +22,17 @@ MessagePack with field names; TypeScript sends them as JSON.
 1. The viewer says **Hello**, with the oldest and newest versions of the
    wire it speaks. Anything else first ends the link.
 2. CAF answers **Welcome**, with the version both will speak, the agents a
-   viewer may open chats with, the open chats, and which run of CAF this
-   is. If there's no version in common, it says so and ends the link.
+   viewer may open chats with, the open chats, which run of CAF this is,
+   and what the host lets this viewer do: act on chats, and on agents. If
+   there's no version in common, it says so and ends the link.
+   Right after the welcome, CAF says where every agent stands (**Agents**):
+   installed or not, signed in or not. It says so again, the whole list,
+   each time any of it changes.
 3. The viewer **watches** chats. For each, it gets the chat whole, then its
    changes as they happen.
 4. It may act on them: send a message, stop a turn, answer a question, close
-   a chat, or ask to open one. Each request carries a number the viewer
+   a chat, or ask to open one. It may ask to install an agent, or sign in
+   to or out of one, if the host lets viewers. Each request carries a number the viewer
    chose, and CAF quotes it back with how it went: done, refused with the
    core's reason, not allowed by the host, or not done because CAF has
    shut down.

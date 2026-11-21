@@ -9,6 +9,10 @@
 //!   the first time in a chat: CAF fails the turn, offering Send again.
 //!   Sent again, it's answered as any message is, so Send again can be
 //!   seen to work.
+//! - **The message `sign in`**, exactly, is answered at once as wanting a
+//!   sign-in (ACP's -32000), the first time in a chat: CAF fails the turn,
+//!   offering Sign in where it can sign in to the agent, as it can with
+//!   the `fake` profile.
 //! - **The message `ask`**, exactly, is waited for by the script itself,
 //!   round after round: a few words, then it asks permission to run a
 //!   command, and once that's answered, the turn ends. While the question
@@ -36,6 +40,9 @@ pub const ASK: &str = "ask";
 /// The message that makes the fake fail the turn, the first time.
 pub const FAIL: &str = "fail";
 
+/// The message that makes the fake want a sign-in, the first time.
+pub const SIGN_IN: &str = "sign in";
+
 /// How many times `ask` can be sent to one fake: more are answered as
 /// any message is.
 const ROUNDS: u32 = 200;
@@ -46,7 +53,8 @@ const SESSION: &str = "fake-1";
 /// The words the fake says to any message.
 const REPLY: &str = "This is CAF's fake agent, with no model behind it, so it says this to \
                      every message. Send exactly \"ask\" to see it ask permission to run a \
-                     command, or \"fail\" to see a turn fail.";
+                     command, \"fail\" to see a turn fail, or \"sign in\" to see one fail for \
+                     want of signing in.";
 
 /// The words before it asks.
 const ASKING: &str = "I'd like to run a command. Allow it, refuse it, or stop me.";
@@ -65,6 +73,11 @@ pub fn script() -> String {
         line(
             &json!({"on": {"method": "session/prompt", "match": prompt(FAIL), "once": true, "do": [
                 {"respond": {"error": {"code": -32603, "message": "The fake agent failed, as it was asked to. Send the message again, and it won't."}}},
+            ]}}),
+        ),
+        line(
+            &json!({"on": {"method": "session/prompt", "match": prompt(SIGN_IN), "once": true, "do": [
+                {"respond": {"error": {"code": -32000, "message": "Authentication required: the fake agent wants a sign-in, as it was asked to."}}},
             ]}}),
         ),
         line(&json!({"on": {"method": "session/prompt", "fallback": true, "do": reply()}})),

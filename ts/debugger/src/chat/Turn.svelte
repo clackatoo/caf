@@ -9,12 +9,21 @@
   let {
     turn,
     readOnly,
+    act: acts,
     sendAgain,
+    signIn,
+    canSignIn,
     appSummary,
   }: {
     turn: DeepReadonly<Turn>
     readOnly: boolean
+    /** Whether the host lets this viewer act: Send again sends. */
+    act: boolean
     sendAgain: (message: DeepReadonly<UserMessage>) => Promise<unknown> | void
+    /** The Sign in remedy: start signing in to the chat's agent. */
+    signIn: () => Promise<unknown> | void
+    /** Whether CAF can sign in to the chat's agent now, as its status says. */
+    canSignIn: boolean
     appSummary: (app: unknown) => string
   } = $props()
 
@@ -34,11 +43,11 @@
   let sending = $state(false)
   let problem = $state<string | null>(null)
 
-  async function again(message: DeepReadonly<UserMessage>) {
+  async function act(action: () => Promise<unknown> | void) {
     if (readOnly || sending) return
     sending = true
     problem = null
-    const error = await attempt(() => sendAgain(message))
+    const error = await attempt(action)
     sending = false
     if (error !== null) problem = errorText(error)
   }
@@ -103,8 +112,23 @@
       {#if failure.remedy !== null}
         {#if failure.remedy.type === 'SendAgain'}
           {#if message !== null}
-            <button type="button" disabled={readOnly || sending} onclick={() => again(message)}>Send again</button>
+            {#if acts}
+              <button type="button" disabled={readOnly || sending} onclick={() => act(() => sendAgain(message))}>Send again</button>
+            {/if}
           {/if}
+        {:else if failure.remedy.type === 'SignIn'}
+          <!-- Signing in doesn't send it again: once signed in, the user does. -->
+          {#if !canSignIn}<div class="remedy">{remedyText(failure.remedy)}</div>{/if}
+          <div class="remedies">
+            {#if canSignIn}
+              <button type="button" disabled={readOnly || sending} onclick={() => act(signIn)}>Sign in</button>
+            {/if}
+            {#if message !== null && acts}
+              <button type="button" class="quiet" disabled={readOnly || sending} onclick={() => act(() => sendAgain(message))}>
+                Send again
+              </button>
+            {/if}
+          </div>
         {:else}
           <div class="remedy">{remedyText(failure.remedy)}</div>
         {/if}
@@ -255,6 +279,15 @@
     background: var(--caf-accent);
     color: var(--caf-accent-text);
     cursor: pointer;
+  }
+  .remedies {
+    display: flex;
+    gap: 0.5em;
+  }
+  button.quiet {
+    background: var(--caf-bg);
+    color: var(--caf-text);
+    border-color: var(--caf-border);
   }
   button:disabled {
     opacity: 0.5;

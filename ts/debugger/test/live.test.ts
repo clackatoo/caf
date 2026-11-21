@@ -7,7 +7,7 @@ import { Live } from '../src/live.svelte.ts'
 import { canAct } from '../src/view.ts'
 
 /** A transport CAF welcomes at once, and whose link the test can drop. */
-function transport(): Transport & { drop(): void; sent: { type: string }[] } {
+function transport(): Transport & { drop(): void; deliver(message: unknown): void; sent: { type: string }[] } {
   const messages: ((text: string) => void)[] = []
   const closes: (() => void)[] = []
   const sent: { type: string }[] = []
@@ -17,8 +17,11 @@ function transport(): Transport & { drop(): void; sent: { type: string }[] } {
       const message = JSON.parse(text) as { type: string }
       sent.push(message)
       if (message.type === 'Hello') {
-        const welcome = { type: 'Welcome', value: { version: 1, agents: ['fake'], chats: [{ id: 1, agent: 'fake', cwd: '/a' }], run: 'r' } }
-        queueMicrotask(() => messages.forEach((listener) => listener(JSON.stringify(welcome))))
+        const welcome = { type: 'Welcome', value: { version: 1, agents: ['fake'], chats: [{ id: 1, agent: 'fake', cwd: '/a' }], run: 'r', may: { act: true, agents: false } } }
+        const agents = { type: 'Agents', value: [{ name: 'fake', install: { type: 'Host' }, sign_in: { type: 'Unknown' }, can_sign_in: false }] }
+        queueMicrotask(() => {
+          for (const message of [welcome, agents]) messages.forEach((listener) => listener(JSON.stringify(message)))
+        })
       }
     },
     onMessage: (listener) => void messages.push(listener),
@@ -27,6 +30,7 @@ function transport(): Transport & { drop(): void; sent: { type: string }[] } {
       this.drop()
     },
     drop: () => closes.splice(0).forEach((listener) => listener()),
+    deliver: (message) => messages.forEach((listener) => listener(JSON.stringify(message))),
   }
 }
 
@@ -49,6 +53,19 @@ describe('live', () => {
     const link = transport()
     await live.connect(async () => link)
     expect(link.sent.map((message) => message.type)).toEqual(['Hello', 'Watch'])
+  })
+})
+
+describe('the agents', () => {
+  it('follows their statuses', async () => {
+    const link = transport()
+    const live = new Live()
+    await live.connect(async () => link)
+    expect(live.agents.map((agent) => agent.install.type)).toEqual(['Host'])
+    expect(live.may).toEqual({ act: true, agents: false })
+    const signedIn = [{ name: 'fake', install: { type: 'Host' }, sign_in: { type: 'SignedIn', value: { type: 'Account' } }, can_sign_in: true }]
+    link.deliver({ type: 'Agents', value: signedIn })
+    expect(live.agents).toEqual(signedIn)
   })
 })
 

@@ -8,6 +8,7 @@ import type { ChatSummary } from "./ChatSummary.ts";
 import type { Numbered } from "./Numbered.ts";
 import type { Outcome } from "./Outcome.ts";
 import type { RequestNo } from "./RequestNo.ts";
+import type { Rights } from "./Rights.ts";
 
 /**
  * A message from CAF to a viewer.
@@ -30,7 +31,11 @@ chats: Array<ChatSummary>,
  * restarted CAF from the one it was watching. A `since` holds
  * only within one run.
  */
-run: string, } } | { "type": "NoCommonVersion", "value": { 
+run: string, 
+/**
+ * What the host lets this viewer do, so it offers only that.
+ */
+may: Rights, } } | { "type": "NoCommonVersion", "value": { 
 /**
  * The oldest CAF speaks.
  */

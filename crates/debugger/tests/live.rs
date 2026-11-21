@@ -541,6 +541,22 @@ async fn the_fake_fails_a_turn_once_and_answers_it_sent_again() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_fake_wants_a_sign_in_once_and_answers_it_sent_again() {
+    let debugger = Debugger::start("sign-in").await;
+    let mut viewer = debugger.chat().await;
+    viewer.say(fake::SIGN_IN).await;
+    viewer.until(|chat| lives(chat) == ["Failed"]).await;
+    let life = serde_json::to_value(&viewer.copy.chat().turns[0].life).unwrap();
+    assert_eq!(life["value"]["reason"]["type"], "SignInNeeded", "{life:#}");
+    viewer.say(fake::SIGN_IN).await;
+    viewer
+        .until(|chat| lives(chat) == ["Failed", "Finished"])
+        .await;
+    assert!(debugger.live.book.diverged().is_empty());
+    debugger.live.caf.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stopping_the_fake_while_it_asks_always_ends_the_turn_stopped() {
     // CAF answers the question `cancelled` before it sends the cancel, so
     // a fake that went on once its question was answered would race its

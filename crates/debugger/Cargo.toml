@@ -17,7 +17,7 @@ doc = false
 [dependencies]
 # The HTTP server and its WebSockets, on 127.0.0.1 only.
 axum = { version = "0.8.9", default-features = false, features = ["http1", "query", "tokio", "ws"] }
-caf-core = { workspace = true, features = ["inspect"] }
+caf-core = { workspace = true, features = ["inspect", "fake"] }
 caf-driver-tokio = { path = "../driver-tokio" }
 # The fake agent, offered as `fake` so the debugger works with no real
 # agent.
@@ -46,6 +46,8 @@ ts-rs = { workspace = true, optional = true }
 [dev-dependencies]
 # A real WebSocket client, for the HTTP-level tests.
 tokio-tungstenite = "0.29"
+# Signals sent the moment the debugger says it's serving.
+libc.workspace = true
 
 [features]
 # TypeScript types for the inspector channel, written to

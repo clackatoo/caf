@@ -33,7 +33,7 @@ use crate::question::{
 };
 use crate::time::{End, Wall, Window};
 use crate::viewer::{
-    AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, ToViewer,
+    AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
 };
 
 /// What the sample holds.
@@ -459,6 +459,8 @@ fn agents() -> Vec<AgentStatus> {
         .enumerate())
     .map(|(at, (install, sign_in))| AgentStatus {
         name: AgentName(format!("agent-{at}")),
+        // Both ways, and always while signing in, as the core says it.
+        can_sign_in: matches!(sign_in, SignInState::SigningIn(_)) || at % 2 == 0,
         install,
         sign_in,
     })
@@ -563,6 +565,7 @@ fn version_1() -> Sample {
             agents: vec![AgentName("claude".into())],
             chats: vec![summary.clone()],
             run: "7f3a9c2e".into(),
+            may: Rights::new(true, false),
         },
         ToViewer::NoCommonVersion { min: 1, max: 1 },
         ToViewer::Chats(vec![summary]),

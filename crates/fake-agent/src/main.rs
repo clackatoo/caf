@@ -1,6 +1,6 @@
 //! `caf-fake-agent SCRIPT [--record RECORD]`, or
-//! `caf-fake-agent [--cli] auth login|status|logout`: see the library's
-//! docs.
+//! `caf-fake-agent [SCRIPT] [--cli] auth login|status|logout`: see the
+//! library's docs.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -22,6 +22,10 @@ fn main() {
         // environment, which names one.
         [cli, word, rest @ ..] if cli == "--cli" && word == "auth" => auth(rest),
         [word, rest @ ..] if word == "auth" => auth(rest),
+        // The same, after the script a host started it with: CAF keeps a
+        // host's own arguments, and adds the recipe's after them.
+        [_script, cli, word, rest @ ..] if cli == "--cli" && word == "auth" => auth(rest),
+        [_script, word, rest @ ..] if word == "auth" => auth(rest),
         // Started by a driver, which may add arguments of its own.
         _ if std::env::var_os(SCRIPT_VAR).is_some() => {
             let script = std::env::var_os(SCRIPT_VAR).map(PathBuf::from);
