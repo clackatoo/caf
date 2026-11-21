@@ -1,5 +1,5 @@
-//! The kit against the real Claude adapter: opt-in. The chat test needs
-//! a signed-in Claude and spends usage; the install test downloads
+//! The kit against the real Claude adapter: opt-in. The chat tests need
+//! a signed-in Claude and spend usage; the install test downloads
 //! Claude's adapter from npm, and spends none.
 //!
 //! ```text
@@ -165,6 +165,96 @@ async fn claude_answers_and_stops() {
     if std::env::var_os("CAF_LIVE_RECORD").is_none() {
         let _ = std::fs::remove_dir_all(&folder);
     }
+}
+
+/// Claude, as the kit offers it in these tests: on Haiku.
+fn claude() -> AgentSpec {
+    let mut command = SpawnCommand::new(adapter());
+    command.env = vec![EnvChange::Set("ANTHROPIC_MODEL".into(), "haiku".into())];
+    AgentSpec::command(
+        "claude",
+        command,
+        ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
+    )
+}
+
+/// Sends `text` to `chat` and waits for its turn to end: the turn.
+async fn ask(chat: &ChatHandle, text: &str) -> Turn {
+    let mut watch = chat.watch();
+    let turns = picture(chat).await.turns.len();
+    chat.send(UserMessage::text(text)).await.unwrap();
+    let mut streamed = 0;
+    let done = until(chat, &mut watch, &mut streamed, text, |chat| {
+        chat.turns
+            .get(turns)
+            .is_some_and(|turn| turn.life != TurnLife::Waiting && turn.life != TurnLife::Running)
+    })
+    .await;
+    done.turns[turns].clone()
+}
+
+/// A chat with Claude saved in one run, and restored in the next, carries
+/// on Claude's own session: it remembers what it was told before.
+///
+/// ```text
+/// cargo test -p caf-driver-tokio --test live restored -- --ignored
+/// ```
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a signed-in Claude, and spends usage"]
+async fn a_restored_claude_chat_carries_on_its_session() {
+    use caf_core::ids::Shelf;
+    use caf_core::save::RestoreChat;
+    use caf_save::FileStore;
+
+    let folder = std::env::temp_dir().join(format!("caf-live-saved-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let shelf = Shelf("live".into());
+    let start = || {
+        let mut config = Config::new(Host::new("caf-live-test", "0.0.0"), vec![claude()]);
+        config.store = Some(Box::new(FileStore::new(folder.join("chats"))));
+        Caf::start(config)
+    };
+    let stop = |caf: Caf, running| async move {
+        tokio::time::timeout(PATIENCE, async {
+            caf.shutdown().await;
+            running.await;
+        })
+        .await
+        .expect("shutting down");
+    };
+
+    let (caf, running) = start();
+    let mut open = OpenChat::new("claude", &folder);
+    open.shelf = Some(shelf.clone());
+    let chat = caf.open_chat(open).await.unwrap();
+    let id = chat.id;
+    let told = ask(
+        &chat,
+        "Remember the word heliotrope. Reply with exactly the word ok.",
+    )
+    .await;
+    assert_eq!(told.life, TurnLife::Finished, "{told:#?}");
+    drop(chat);
+    stop(caf, running).await;
+
+    let (caf, running) = start();
+    let chat = caf.restore(RestoreChat::new(id, shelf)).await.unwrap();
+    assert_eq!(picture(&chat).await.turns.len(), 1, "its record");
+    let recalled = ask(
+        &chat,
+        "Which word did I ask you to remember? Reply with that word alone.",
+    )
+    .await;
+    assert_eq!(recalled.life, TurnLife::Finished, "{recalled:#?}");
+    assert!(
+        words(&recalled).to_lowercase().contains("heliotrope"),
+        "{recalled:#?}"
+    );
+    let restored = picture(&chat).await;
+    assert_eq!(restored.turns.len(), 2, "nothing replayed into it");
+    drop(chat);
+    stop(caf, running).await;
+    let _ = std::fs::remove_dir_all(&folder);
 }
 
 /// Installs Claude's adapter for real, as its profile's recipe says, into
