@@ -219,6 +219,7 @@ pub enum ViewerDirective {
 /// it, or on the shelf it goes to, is given**, and a move is given only
 /// once all work for chats on both is answered. So a store needn't order
 /// a move against other work.
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[cfg_attr(
