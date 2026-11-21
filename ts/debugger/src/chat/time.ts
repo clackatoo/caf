@@ -26,6 +26,11 @@ export function clock(wall: Wall): string {
   return new Date(wall).toLocaleTimeString()
 }
 
+/** A day and time, short: when a saved chat last changed. */
+export function dayAndTime(wall: Wall): string {
+  return new Date(wall).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
 /** A calendar time in full, for a tooltip. */
 export function fullTime(wall: Wall): string {
   return new Date(wall).toLocaleString()

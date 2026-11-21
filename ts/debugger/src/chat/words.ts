@@ -6,6 +6,8 @@
 
 import type {
   CannotInstall,
+  CannotRestore,
+  ChatId,
   ChatState,
   DeepReadonly,
   FailureReason,
@@ -17,6 +19,7 @@ import type {
   OptionKind,
   Refused,
   Remedy,
+  SavedState,
   SignedInAs,
   SignInState,
   ToolKind,
@@ -45,6 +48,8 @@ export function stateLabel(state: DeepReadonly<ChatState>): string {
       return 'Lost'
     case 'Closed':
       return 'Closed'
+    case 'Idle':
+      return 'Not running'
     case 'WaitingForAgent':
       return 'Waiting for its agent'
     default:
@@ -322,6 +327,12 @@ export function refusedText(reason: DeepReadonly<Refused>): string {
       return "CAF can't sign in to or out of this agent now."
     case 'NotSigningIn':
       return "The agent isn't being signed in to."
+    case 'NotSaved':
+      return "The chat isn't saved."
+    case 'Loaded':
+      return 'That chat is open already, or being restored.'
+    case 'BadShelf':
+      return "That shelf's name can't be used."
     default:
       return `Refused, for a reason this viewer doesn't know (${tagOf(reason)}).`
   }
@@ -334,6 +345,8 @@ export function errorText(error: unknown): string {
     switch (why.type) {
       case 'Refused':
         return refusedText(why.value)
+      case 'CannotRestore':
+        return `It can't be restored: ${cannotRestoreText(why.value)}`
       case 'NotAllowed':
         return "The host doesn't let this viewer do that."
       case 'Gone':
@@ -349,6 +362,61 @@ export function errorText(error: unknown): string {
     }
   }
   return error instanceof Error ? error.message : String(error)
+}
+
+/** Why a saved chat can't be restored, finishing "It can't be restored: ". */
+export function cannotRestoreText(why: DeepReadonly<CannotRestore>): string {
+  switch (why.type) {
+    case 'NotFound':
+      return "it isn't on its shelf any more."
+    case 'InUse':
+      return 'another program has it open.'
+    case 'Newer':
+      return `a newer CAF saved it (in version ${why.value.version} of the format), and this one can't read it. It's kept for one that can.`
+    case 'Damaged':
+      return `its save is damaged: ${why.value}`
+    case 'AppData':
+      return `the app can't read what it saved with it: ${why.value}`
+    case 'Store':
+      return `it couldn't be read: ${why.value}`
+    default:
+      return `a reason this viewer doesn't know (${tagOf(why)}).`
+  }
+}
+
+/** Whether a saved chat is loaded, in a word or two. Why one failed is drawn apart. */
+export function savedStateLabel(state: DeepReadonly<SavedState>): string {
+  switch (state.type) {
+    case 'Saved':
+      return 'Saved'
+    case 'Restoring':
+      return 'Restoring…'
+    case 'Loaded':
+      return 'Open'
+    case 'Failed':
+      return "Can't be restored"
+    default:
+      return `Unknown (${tagOf(state)})`
+  }
+}
+
+/**
+ * A chat's id, short enough to tell chats apart in a list: the end of
+ * its UUID, which is the random part of one CAF makes.
+ */
+export function shortId(chat: ChatId): string {
+  return `#${chat.replaceAll('-', '').slice(-6)}`
+}
+
+/** The last part of a path: the folder's own name. */
+export function folderName(path: string): string {
+  const parts = path.split(/[\\/]/).filter((part) => part !== '')
+  return parts.at(-1) ?? path
+}
+
+/** A number of turns: `1 turn`, `3 turns`. */
+export function turnCount(turns: number): string {
+  return turns === 1 ? '1 turn' : `${turns} turns`
 }
 
 /** A number of bytes, roughly, in MB or GB (powers of 1000, as downloads are sized). */

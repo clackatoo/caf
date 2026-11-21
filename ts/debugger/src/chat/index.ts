@@ -6,5 +6,6 @@
 
 export { default as ChatView } from './ChatView.svelte'
 export { default as ChatList } from './ChatList.svelte'
-export type { ChatActions, ListActions } from './actions.ts'
+export { default as SavedList } from './SavedList.svelte'
+export type { ChatActions, ListActions, SavedActions } from './actions.ts'
 export { showsAgent } from './shows.ts'

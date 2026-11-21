@@ -4,7 +4,7 @@
   import { attempt } from './actions.ts'
   import Item from './Item.svelte'
   import { clock, fullTime, took } from './time.ts'
-  import { errorText, failureText, lifeHint, lifeLabel, remedyText, tagOf } from './words.ts'
+  import { errorText, failureText, lifeHint, lifeLabel, remedyText, shortId, tagOf } from './words.ts'
 
   let {
     turn,
@@ -66,7 +66,7 @@
     {:else if turn.starter.type === 'Agent'}
       <span class="starter agent">The agent, by itself</span>
     {:else if turn.starter.type === 'OtherChat'}
-      <span class="starter other">From chat {turn.starter.value.from}</span>
+      <span class="starter other" title={turn.starter.value.from}>From chat {shortId(turn.starter.value.from)}</span>
     {:else if turn.starter.type === 'Notice'}
       <span class="starter notice">A notice from the app</span>
     {:else if turn.starter.type === 'Caf'}

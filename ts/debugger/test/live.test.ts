@@ -6,8 +6,20 @@ import type { Transport } from '@clackatoo/caf'
 import { Live } from '../src/live.svelte.ts'
 import { canAct } from '../src/view.ts'
 
-/** A transport CAF welcomes at once, and whose link the test can drop. */
-function transport(): Transport & { drop(): void; deliver(message: unknown): void; sent: { type: string }[] } {
+const one = '00000000-0000-0000-0000-000000000001'
+const two = '00000000-0000-0000-0000-000000000002'
+
+/** A saved chat, as `Saved` lists it. */
+function saved(chat: string, state: { type: string } = { type: 'Saved' }) {
+  const header = { chat, agent: 'fake', profile: null, cwd: '/a', made: 1, changed: 2, label: null, first: 'hi', turns: 1, closed: false }
+  return { shelf: 'work', header, state }
+}
+
+/**
+ * A transport CAF welcomes at once, and whose link the test can drop.
+ * Given `first`, CAF says those right after the agents.
+ */
+function transport(first: unknown[] = []): Transport & { drop(): void; deliver(message: unknown): void; sent: { type: string }[] } {
   const messages: ((text: string) => void)[] = []
   const closes: (() => void)[] = []
   const sent: { type: string }[] = []
@@ -17,10 +29,10 @@ function transport(): Transport & { drop(): void; deliver(message: unknown): voi
       const message = JSON.parse(text) as { type: string }
       sent.push(message)
       if (message.type === 'Hello') {
-        const welcome = { type: 'Welcome', value: { version: 1, agents: ['fake'], chats: [{ id: 1, agent: 'fake', cwd: '/a' }], run: 'r', may: { act: true, agents: false } } }
+        const welcome = { type: 'Welcome', value: { version: 1, agents: ['fake'], chats: [{ id: one, agent: 'fake', cwd: '/a', label: null, shelf: null }], run: 'r', may: { act: true, agents: false } } }
         const agents = { type: 'Agents', value: [{ name: 'fake', install: { type: 'Host' }, sign_in: { type: 'Unknown' }, can_sign_in: false }] }
         queueMicrotask(() => {
-          for (const message of [welcome, agents]) messages.forEach((listener) => listener(JSON.stringify(message)))
+          for (const message of [welcome, agents, ...first]) messages.forEach((listener) => listener(JSON.stringify(message)))
         })
       }
     },
@@ -40,16 +52,16 @@ describe('live', () => {
     const live = new Live()
     await live.connect(async () => link)
     expect(live.link).toBe('open')
-    live.watch(1)
+    live.watch(one)
     link.drop()
     expect(live.link).toBe('closed')
-    live.watch(2)
+    live.watch(two)
     expect(live.chat).toBeNull()
   })
 
   it('watches the chat chosen again once connected again', async () => {
     const live = new Live()
-    live.watch(1)
+    live.watch(one)
     const link = transport()
     await live.connect(async () => link)
     expect(link.sent.map((message) => message.type)).toEqual(['Hello', 'Watch'])
@@ -66,6 +78,19 @@ describe('the agents', () => {
     const signedIn = [{ name: 'fake', install: { type: 'Host' }, sign_in: { type: 'SignedIn', value: { type: 'Account' } }, can_sign_in: true }]
     link.deliver({ type: 'Agents', value: signedIn })
     expect(live.agents).toEqual(signedIn)
+  })
+})
+
+describe('the saved chats', () => {
+  it('follows them, whether CAF says them before the connection is made or after', async () => {
+    const before = [saved(one)]
+    const link = transport([{ type: 'Saved', value: before }])
+    const live = new Live()
+    await live.connect(async () => link)
+    expect(live.saved).toEqual(before)
+    const after = [saved(one, { type: 'Loaded' }), saved(two)]
+    link.deliver({ type: 'Saved', value: after })
+    expect(live.saved).toEqual(after)
   })
 })
 

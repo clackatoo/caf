@@ -5,7 +5,7 @@
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CafError } from '@clackatoo/caf'
-import { actions, chat, draw, item, life, lost, question, turn, words } from './build.ts'
+import { actions, chat, chatId, draw, item, life, lost, question, turn, words } from './build.ts'
 
 afterEach(cleanup)
 
@@ -27,6 +27,16 @@ describe('the chat state', () => {
   it('says nothing more while open', () => {
     const { container } = draw(chat())
     expect(container.querySelector('[role=status]')).toBeNull()
+  })
+
+  it('says calmly that a chat with no session is continued by sending to it', () => {
+    const { container } = draw(chat({ state: { type: 'Idle' } }))
+    const banner = container.querySelector('[role=status]')!
+    expect(banner.textContent).toBe('Not running: sending a message continues it.')
+    expect(banner.classList.contains('lost')).toBe(false)
+    expect(container.querySelector('header .state')?.textContent).toBe('Not running')
+    expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).disabled).toBe(false)
+    expect(button('Close').disabled).toBe(false)
   })
 
   it('says the chat is closed, and offers no Close', () => {
@@ -73,7 +83,7 @@ describe('turns', () => {
           turn({ starter: { type: 'Agent' } }),
           turn({ starter: { type: 'Caf' } }),
           turn({ starter: { type: 'Notice', value: 'The build finished' } }),
-          turn({ starter: { type: 'OtherChat', value: { from: 3, message: { parts: [{ type: 'Text', value: 'From afar' }] } } } }),
+          turn({ starter: { type: 'OtherChat', value: { from: chatId(3), message: { parts: [{ type: 'Text', value: 'From afar' }] } } } }),
           turn({ starter: { type: 'Ghost' } as never }),
         ],
       }),
@@ -85,7 +95,7 @@ describe('turns', () => {
     expect(all).toContain('The agent, by itself')
     expect(all).toContain('A notice from the app')
     expect(all).toContain('The build finished')
-    expect(all).toContain('From chat 3')
+    expect(all).toContain('From chat #000003')
     expect(all).toContain('From afar')
     expect(all).toContain("something this viewer doesn't know (Ghost)")
   })
@@ -259,7 +269,7 @@ describe('items', () => {
   }
 
   it('folds an unknown item, with what it was and its raw data', () => {
-    const unknown = item({ type: 'Unknown', value: { what: 'plan_v2', raw: { steps: ['a'] } } })
+    const unknown = item({ type: 'Unknown', value: { what: 'plan_v2', raw: { steps: ['a'] }, summary: null } })
     const { container } = draw(chat({ turns: [turn({ items: [unknown] })] }))
     const details = container.querySelector('details.unknown') as HTMLDetailsElement
     expect(details.open).toBe(false)
@@ -270,6 +280,22 @@ describe('items', () => {
   it("names an item kind it doesn't know", () => {
     const { container } = draw(chat({ turns: [turn({ items: [item({ type: 'Hologram', value: 1 } as never)] })] }))
     expect(text(container)).toContain("An item of a kind this viewer doesn't know: Hologram")
+  })
+
+  it("draws an app item this version of the app can't read by the summary it had, and keeps its data", () => {
+    const unreadable = item({ type: 'Unknown', value: { what: 'App', raw: { route: ['Kyiv'] }, summary: 'Planned a route' } })
+    const { container } = draw(chat({ turns: [turn({ items: [unreadable] })] }))
+    const details = container.querySelector('details.unreadable') as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    expect(text(details.querySelector('summary') as HTMLElement)).toBe("Planned a route (an item of the app's this version can't read)")
+    expect(JSON.parse(details.querySelector('pre')!.textContent!)).toEqual({ route: ['Kyiv'] })
+    expect(container.querySelector('details.unknown')).toBeNull()
+  })
+
+  it("draws an app item with no summary as something CAF couldn't read", () => {
+    const unreadable = item({ type: 'Unknown', value: { what: 'App', raw: {}, summary: null } })
+    const { container } = draw(chat({ turns: [turn({ items: [unreadable] })] }))
+    expect(container.querySelector('details.unknown summary')?.textContent).toContain('App')
   })
 
   it("draws an app item by the app's summary", () => {
@@ -540,16 +566,31 @@ describe('read-only', () => {
   })
 })
 
+describe("the app's line for a chat", () => {
+  it('heads the chat, and names it', () => {
+    const { container } = draw(chat(), { label: 'Fix the tests' })
+    expect(container.querySelector('header .label')?.textContent).toBe('Fix the tests')
+    expect(container.querySelector('header .agent')?.textContent).toBe('claude')
+    expect(screen.getByRole('region', { name: 'Fix the tests' })).toBeTruthy()
+  })
+
+  it("isn't there for a chat without one", () => {
+    const { container } = draw(chat())
+    expect(container.querySelector('header .label')).toBeNull()
+    expect(screen.getByRole('region', { name: 'Chat #000007' })).toBeTruthy()
+  })
+})
+
 describe('a different chat in the same view', () => {
   it("doesn't carry a draft, or why something failed, from one chat to the next", async () => {
     const given = actions()
     given.send.mockRejectedValue(new CafError({ type: 'Disconnected' }))
-    const view = draw(chat({ id: 1 }), { actions: given })
+    const view = draw(chat({ id: chatId(1) }), { actions: given })
     const box = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement
     await fireEvent.input(box, { target: { value: 'meant for chat 1' } })
     await fireEvent.click(button('Send'))
     await waitFor(() => expect(text(view.container)).toContain('The link to CAF dropped'))
-    await view.rerender({ chat: chat({ id: 2 }) })
+    await view.rerender({ chat: chat({ id: chatId(2) }) })
     const now = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement
     expect(now.value).toBe('')
     expect(text(view.container)).not.toContain('The link to CAF dropped')
@@ -560,10 +601,10 @@ describe('a different chat in the same view, again', () => {
   it("doesn't carry why closing failed from one chat to the next", async () => {
     const given = actions()
     given.close.mockRejectedValue(new CafError({ type: 'Disconnected' }))
-    const view = draw(chat({ id: 1 }), { actions: given })
+    const view = draw(chat({ id: chatId(1) }), { actions: given })
     await fireEvent.click(button('Close'))
     await waitFor(() => expect(text(view.container)).toContain('The link to CAF dropped'))
-    await view.rerender({ chat: chat({ id: 2 }) })
+    await view.rerender({ chat: chat({ id: chatId(2) }) })
     expect(text(view.container)).not.toContain('The link to CAF dropped')
   })
 })
@@ -571,8 +612,8 @@ describe('a different chat in the same view, again', () => {
 describe('two chat views on one page', () => {
   it('Escape in one keeps only its own question waiting', async () => {
     const slow = () => question({ type: 'SlowToOpen', value: { adapter_answered: true } })
-    const one = draw(chat({ id: 1, questions: [slow()] }))
-    const two = draw(chat({ id: 2, questions: [slow()] }))
+    const one = draw(chat({ id: chatId(1), questions: [slow()] }))
+    const two = draw(chat({ id: chatId(2), questions: [slow()] }))
     const box = two.container.querySelector('textarea')!
     box.focus()
     await fireEvent.keyDown(box, { key: 'Escape' })
@@ -615,7 +656,7 @@ describe("text that hides or reorders itself", () => {
       type: 'Tool',
       value: { title: 't', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'echo \u202Egnp.exe\u200B' }, output: 'out\u2066put', app: null },
     })
-    const unknown = item({ type: 'Unknown', value: { what: 'x\u202E', raw: { a: '\u202Eb' } } })
+    const unknown = item({ type: 'Unknown', value: { what: 'x\u202E', raw: { a: '\u202Eb' }, summary: null } })
     const { container } = draw(chat({ turns: [turn({ items: [tool, unknown] })] }))
     const all = container.textContent ?? ''
     expect(all).not.toMatch(/[\u202A-\u202E\u2066-\u2069\u200B]/)

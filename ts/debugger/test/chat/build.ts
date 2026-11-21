@@ -14,6 +14,11 @@ export const NOON = Date.UTC(2026, 10, 20, 12)
 
 let next = 1000
 
+/** Chat `number`'s id, as caf-core's tests number chats: the UUID whose value is the number. */
+export function chatId(number: number): string {
+  return `00000000-0000-0000-0000-${number.toString(16).padStart(12, '0')}`
+}
+
 export function words(text: string): Item {
   return item({ type: 'Words', value: text })
 }
@@ -36,7 +41,7 @@ export function turn(fields: Partial<Turn> = {}): Turn {
 
 export function chat(fields: Partial<Chat> = {}): Chat {
   return {
-    id: 7,
+    id: chatId(7),
     agent: 'claude',
     cwd: '/home/me/project',
     state: { type: 'Open', value: { session: 'abc' } },
@@ -78,11 +83,12 @@ export function actions(): { [K in keyof ChatActions]: ReturnType<typeof vi.fn> 
 /** The chat view, drawing `chat`, and its agent's status if given. */
 export function draw(
   drawn: Chat,
-  options: { readOnly?: boolean; actions?: ChatActions; agent?: AgentStatus; may?: Rights } = {},
+  options: { readOnly?: boolean; actions?: ChatActions; agent?: AgentStatus; may?: Rights; label?: string | null } = {},
 ) {
   const given = options.actions ?? actions()
   const view = render(ChatView, {
     chat: drawn,
+    label: options.label ?? null,
     agent: options.agent,
     may: options.may,
     actions: given,

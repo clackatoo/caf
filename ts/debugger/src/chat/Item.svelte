@@ -33,6 +33,13 @@
   <div class="note" role="note"><span class="who">CAF</span>The agent compacted its memory here.</div>
 {:else if kind.type === 'App'}
   <div class="app">{appSummary(kind.value)}</div>
+{:else if kind.type === 'Unknown' && kind.value.what === 'App' && kind.value.summary !== null}
+  <!-- One of the app's own items, saved by a version of the app that this
+       one can't read: kept as it was, and shown by the summary it had. -->
+  <details class="app unreadable">
+    <summary>{kind.value.summary} <span class="why">(an item of the app's this version can't read)</span></summary>
+    <pre>{rawJson(kind.value.raw)}</pre>
+  </details>
 {:else if kind.type === 'Unknown'}
   <details class="unknown">
     <summary>Something the agent sent that CAF couldn't read: <code>{unhidden(kind.value.what)}</code></summary>
@@ -83,7 +90,14 @@
     border-radius: 6px;
     padding: 0.35em 0.6em;
   }
-  .unknown pre {
+  .unreadable > summary {
+    color: inherit;
+  }
+  .why {
+    color: var(--caf-faint);
+  }
+  .unknown pre,
+  .unreadable pre {
     margin: 0.3em 0 0;
     max-height: 20em;
     overflow: auto;
