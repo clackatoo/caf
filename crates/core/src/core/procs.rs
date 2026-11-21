@@ -16,7 +16,7 @@ use super::clean::agent_text;
 use super::frames::Reply;
 use super::state::{Caps, Conn, Ending, Gone, Group, Init, Learn, Open, Proc, Purpose, Step};
 use super::{Core, report};
-use crate::agent::Launch;
+use crate::agent::{InstallState, Launch};
 use crate::chat::AppData;
 use crate::chat::{AppItem, ChatState, Incompatible, Lost};
 use crate::directive::{AgentDirective, Directive, Level, Signal};
@@ -159,6 +159,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     // Unlike a chat, learning doesn't wait for it.
                     let why = if self.signing_in(&agent).is_some() {
                         "the agent is being signed in to"
+                    } else if matches!(self.install_state(&agent), Some(InstallState::Unknown)) {
+                        "CAF hasn't looked whether the agent is installed yet"
                     } else {
                         "the agent isn't installed"
                     };

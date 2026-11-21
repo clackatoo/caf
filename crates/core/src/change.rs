@@ -72,7 +72,7 @@ pub enum Change<A: AppItem = NoAppItems> {
     TurnModel {
         /// The turn.
         turn: TurnId,
-        /// The model.
+        /// The model that answers it.
         model: ModelUsed,
     },
     /// An item was added to a turn.

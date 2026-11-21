@@ -42,7 +42,7 @@ end: End, } } | { "type": "TurnModel", "value": {
  */
 turn: TurnId, 
 /**
- * The model.
+ * The model that answers it.
  */
 model: ModelUsed, } } | { "type": "ItemAdded", "value": { 
 /**

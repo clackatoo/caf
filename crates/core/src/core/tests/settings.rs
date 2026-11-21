@@ -1135,13 +1135,13 @@ fn learning_fails_saying_why_or_is_refused() {
     let mut script = Script::offering(host(), offering(Vec::new()));
     assert_eq!(script.learn_settings("nobody").0, Err(Refused::NoSuchAgent));
     assert_eq!(script.learn_settings("unknown").0, Err(Refused::OwnTools));
-    // Not installed: it doesn't wait for it, as a chat does.
+    // Not known to be installed: it doesn't wait for it, as a chat does.
     let (done, out) = script.learn_settings("npm-agent");
     done.expect("taken");
     assert!(with(&out, "start").is_empty());
     assert_eq!(
         script.agent_status("npm-agent")["settings"],
-        json!({ "type": "Failed", "value": "the agent isn't installed" })
+        json!({ "type": "Failed", "value": "CAF hasn't looked whether the agent is installed yet" })
     );
     assert_eq!(script.state()["conns"], json!({}), "nothing is left");
 

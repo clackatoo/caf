@@ -1177,7 +1177,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// `agent`'s install state.
-    fn install_state(&self, agent: &AgentName) -> Option<InstallState> {
+    pub(super) fn install_state(&self, agent: &AgentName) -> Option<InstallState> {
         (self.setup.agents.get(agent)).map(|standing| standing.install.clone())
     }
 
