@@ -427,7 +427,11 @@ async fn npm(
     reporter: &Reporter,
     stop: &mut oneshot::Receiver<()>,
 ) -> Result<(), InstallFailure> {
-    let Some(npm) = on_path("npm") else {
+    #[cfg(test)]
+    let npm_given = options.npm.clone();
+    #[cfg(not(test))]
+    let npm_given = None;
+    let Some(npm) = npm_given.or_else(|| on_path("npm")) else {
         return Err(other("npm isn't on PATH".into()));
     };
     {

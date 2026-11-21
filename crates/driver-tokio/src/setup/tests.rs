@@ -70,6 +70,7 @@ fn driver(dir: &Dir) -> SetupDriver {
             temp: Some(dir.path("temp")),
             env: Some(std::collections::HashMap::new()),
             idle: None,
+            npm: None,
         },
     )
 }
@@ -311,6 +312,68 @@ async fn npm_installs_from_the_lockfile_into_place() {
         !dir.root().join("fake-1.0.0/installed-by-script").exists(),
         "no install script runs"
     );
+}
+
+#[tokio::test]
+async fn stopping_an_npm_install_stops_all_it_started() {
+    let dir = Dir::new();
+    // An npm that starts something and waits on it, as npm does.
+    let pid_file = dir.path("started.pid");
+    let npm = dir.path("npm");
+    std::fs::write(
+        &npm,
+        format!(
+            "#!/bin/sh\nsleep 300 &\necho $! > {}.new && mv {0}.new {0}\nwait\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&npm, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut driver = SetupDriver::with_options(
+        dir.root(),
+        Options {
+            npm: Some(npm),
+            env: Some(std::collections::HashMap::new()),
+            ..Options::default()
+        },
+    );
+    driver.apply(SetupDirective::Install {
+        ticket: Ticket(1000),
+        folder: "fake-1.0.0".into(),
+        install: Install::Npm(NpmPackage::new("{}", "{}")),
+        private: None,
+        size: 1 << 30,
+    });
+    let started = tokio::time::timeout(PATIENCE, async {
+        loop {
+            if let Ok(pid) = std::fs::read_to_string(&pid_file) {
+                return pid.trim().parse::<i32>().unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("npm started");
+    driver.apply(SetupDirective::Stop {
+        ticket: Ticket(1000),
+    });
+    let events = tokio::time::timeout(Duration::from_secs(3), done(&mut driver, Ticket(1000)))
+        .await
+        .expect("stopped within a second or so");
+    assert_eq!(
+        events.last().expect("a last report"),
+        &SetupEvent::InstallFailed(InstallFailure::Stopped)
+    );
+    assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
+    let gone = tokio::time::timeout(Duration::from_secs(5), async {
+        // SAFETY: signal 0 sends nothing.
+        #[allow(unsafe_code)]
+        while unsafe { libc::kill(started, 0) } == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(gone.is_ok(), "what npm started was stopped with it");
 }
 
 #[tokio::test]
@@ -1611,7 +1674,9 @@ async fn a_sign_in_that_fails_or_is_stopped_ends_not_ok() {
     driver.apply(SetupDirective::Stop {
         ticket: Ticket(1001),
     });
-    let events = done(&mut driver, Ticket(1001)).await;
+    let events = tokio::time::timeout(Duration::from_secs(3), done(&mut driver, Ticket(1001)))
+        .await
+        .expect("stopped within a second or so, not when it gives up waiting");
     assert_eq!(events, [SetupEvent::Ended { ok: false }]);
     // A paste or stop for a sign-in that has ended does nothing.
     driver.apply(SetupDirective::Paste {

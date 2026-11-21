@@ -211,6 +211,9 @@ pub(crate) struct Options {
     /// up, instead of a minute.
     #[cfg(test)]
     pub(crate) idle: Option<std::time::Duration>,
+    /// The npm to run, instead of the one on `PATH`.
+    #[cfg(test)]
+    pub(crate) npm: Option<PathBuf>,
 }
 
 impl Options {
