@@ -33,7 +33,9 @@ function withFiles(added: Record<string, string>): string {
   return root
 }
 
-describe('the import check', () => {
+// Each case runs the whole check, a Vite build of the chat view: on a busy
+// machine that takes far longer than vitest's default 5 s.
+describe('the import check', { timeout: 60_000 }, () => {
   it('passes the chat view as it is', () => {
     const result = check(app)
     expect(result.out).toContain('stands alone')
