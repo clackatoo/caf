@@ -69,3 +69,17 @@ The second, *the reference app and inspector*, puts chats in other places:
 - **[The debugger](~caf/getting-started/the-debugger)**, `caf-debugger`: a
   chat view to copy, beside an inspector of every step CAF takes. It records
   every run, replays recordings, and moves back and forth through them.
+
+The third, *installing and signing in to agents*, means a program no longer
+has to find an agent itself:
+
+- **[Installing](~caf/getting-started/installing-and-signing-in)**: CAF
+  installs each agent at the version it has checked, in one folder every
+  CAF program shares, asking the user first. Old versions go once nothing
+  has used them for two weeks.
+- **Signing in**: CAF runs each agent's own sign-in and shows its link, so a
+  web page can sign the user in without a terminal. It knows whether each
+  agent is signed in, and how, but never who.
+- **Built for any agent**: everything about one agent is data in its
+  [profile](~caf/concepts/agents-and-profiles), so adding an agent is
+  adding a profile.
