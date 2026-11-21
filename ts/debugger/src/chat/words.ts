@@ -384,6 +384,23 @@ export function cannotRestoreText(why: DeepReadonly<CannotRestore>): string {
   }
 }
 
+/**
+ * Whether trying to restore a chat again may help: only once another
+ * program has let it go, or the store has recovered, or for a reason this
+ * viewer doesn't know. Its save is as it was, whatever the reason.
+ */
+export function mayRestoreAgain(why: DeepReadonly<CannotRestore>): boolean {
+  switch (why.type) {
+    case 'NotFound':
+    case 'Newer':
+    case 'Damaged':
+    case 'AppData':
+      return false
+    default:
+      return true
+  }
+}
+
 /** Whether a saved chat is loaded, in a word or two. Why one failed is drawn apart. */
 export function savedStateLabel(state: DeepReadonly<SavedState>): string {
   switch (state.type) {
@@ -392,7 +409,7 @@ export function savedStateLabel(state: DeepReadonly<SavedState>): string {
     case 'Restoring':
       return 'Restoring…'
     case 'Loaded':
-      return 'Open'
+      return 'Loaded'
     case 'Failed':
       return "Can't be restored"
     default:

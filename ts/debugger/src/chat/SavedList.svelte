@@ -1,43 +1,83 @@
 <script lang="ts">
   // The saved chats on the shelves the host lists, from
-  // `Connection.saved`: open or not, each with Restore while it isn't,
-  // where the viewer may act.
-  import type { DeepReadonly, SavedChat } from '@clackatoo/caf'
+  // `Connection.saved`: open or not, each with Restore while it isn't.
+  // The host decides each restore, as it does each open, so it's offered
+  // whatever `Connection.may` says, and a refusal is shown under the chat.
+  import { CafError, type CannotRestore, type DeepReadonly, type SavedChat } from '@clackatoo/caf'
   import { attempt, type SavedActions } from './actions.ts'
   import { dayAndTime, fullTime } from './time.ts'
-  import { cannotRestoreText, errorText, folderName, savedStateLabel, turnCount } from './words.ts'
+  import { cannotRestoreText, errorText, folderName, mayRestoreAgain, savedStateLabel, turnCount } from './words.ts'
   import './theme.css'
 
   let {
     saved,
     actions,
-    act = true,
     readOnly = false,
   }: {
     saved: DeepReadonly<SavedChat[]>
     actions: SavedActions
-    /** The host lets this viewer act, from `Connection.may`: without it, nothing is offered. */
-    act?: boolean
-    /** Nothing can be restored now: the link is down. */
+    /** Nothing can be restored now: the link is down, or this is the past. */
     readOnly?: boolean
   } = $props()
 
   /** A saved chat's key: its id is only its own on its shelf. */
   const keyOf = (chat: DeepReadonly<SavedChat>) => `${chat.shelf}\u0000${chat.header.chat}`
 
-  /** The chat being restored from here, while CAF answers. */
-  let restoring = $state<string | null>(null)
-  /** Why restoring a chat from here failed, by its key: shown under it until it's tried again. */
-  let problems = $state<Record<string, string>>({})
+  /** What a saved chat is called: the app's line for it, or else its first message. */
+  const nameOf = (chat: DeepReadonly<SavedChat>) => chat.header.label ?? chat.header.first ?? 'Untitled'
+
+  /**
+   * The chat being restored from here. Once CAF has said it's open, it
+   * stays so until the list says it's loaded, or says anything new of it,
+   * so Restore doesn't come back for a moment between the two.
+   */
+  let restoring = $state.raw<{ key: string; answered: DeepReadonly<SavedChat[]> | null } | null>(null)
+
+  /** Why restoring a chat from here failed, while its state is still what it was then. */
+  interface Problem {
+    text: string
+    /** Why it couldn't be restored, if CAF said. */
+    why: DeepReadonly<CannotRestore> | null
+    /** The chat's state when it failed. */
+    state: string
+  }
+  let problems = $state<Record<string, Problem>>({})
+
+  $effect(() => {
+    const rows = new Map(saved.map((chat) => [keyOf(chat), chat]))
+    // A problem goes once the chat's state moves on: someone else may have
+    // restored it, or CAF says why it failed itself.
+    for (const [key, problem] of Object.entries(problems)) {
+      if (rows.get(key)?.state.type !== problem.state) delete problems[key]
+    }
+    if (restoring === null) return
+    const row = rows.get(restoring.key)
+    if (readOnly || row === undefined || row.state.type === 'Loaded') restoring = null
+    else if (restoring.answered !== null && saved !== restoring.answered) restoring = null
+  })
 
   async function restore(chat: DeepReadonly<SavedChat>) {
     const key = keyOf(chat)
-    if (readOnly || !act || restoring !== null) return
-    restoring = key
+    if (readOnly || restoring !== null) return
+    restoring = { key, answered: null }
     delete problems[key]
     const error = await attempt(() => actions.restore(chat.header.chat, chat.shelf))
+    if (restoring?.key !== key) return
+    if (error === null) {
+      restoring = { key, answered: saved }
+      return
+    }
     restoring = null
-    if (error !== null) problems[key] = errorText(error)
+    const why = error instanceof CafError && error.why.type === 'CannotRestore' ? error.why.value : null
+    const now = saved.find((each) => keyOf(each) === key) ?? chat
+    problems[key] = { text: errorText(error), why, state: now.state.type }
+  }
+
+  /** Whether to offer Restore: not after a failure that trying again can't help. */
+  function offered(chat: DeepReadonly<SavedChat>, problem: Problem | undefined): boolean {
+    if (chat.state.type === 'Failed') return mayRestoreAgain(chat.state.value)
+    if (chat.state.type !== 'Saved') return false
+    return problem?.why == null || mayRestoreAgain(problem.why)
   }
 </script>
 
@@ -47,11 +87,11 @@
     {#each saved as chat (keyOf(chat))}
       {@const { header, state } = chat}
       {@const key = keyOf(chat)}
+      {@const name = nameOf(chat)}
+      {@const problem = problems[key]}
+      {@const again = state.type === 'Failed' || problem !== undefined}
       <li data-state={state.type}>
-        <!-- The app's line for it if it has one, or else its first message. -->
-        <span class="name" title={header.label ?? header.first ?? undefined}>
-          {header.label ?? header.first ?? 'Nothing said yet'}
-        </span>
+        <span class="name" title={name}>{name}</span>
         <span class="meta" title={header.cwd}>{header.agent} · {folderName(header.cwd)}</span>
         <span class="meta">
           <time datetime={new Date(header.changed).toISOString()} title="Last changed {fullTime(header.changed)}">
@@ -62,20 +102,25 @@
         <div class="state">
           {#if state.type === 'Loaded'}
             <span class="loaded">{savedStateLabel(state)}</span>
-            <button type="button" onclick={() => actions.select(header.chat)}>Show</button>
-          {:else if state.type === 'Restoring' || restoring === key}
+            <button type="button" aria-label="Show {name}" onclick={() => actions.select(header.chat)}>Show</button>
+          {:else if state.type === 'Restoring' || restoring?.key === key}
             <span class="restoring" role="status">{savedStateLabel({ type: 'Restoring' })}</span>
           {:else}
             {#if state.type !== 'Saved' && state.type !== 'Failed'}<span>{savedStateLabel(state)}</span>{/if}
-            {#if act && (state.type === 'Saved' || state.type === 'Failed')}
-              <button type="button" disabled={readOnly || restoring !== null} onclick={() => restore(chat)}>
-                {state.type === 'Failed' ? 'Try again' : 'Restore'}
+            {#if offered(chat, problem)}
+              <button
+                type="button"
+                aria-label={again ? `Try again to restore ${name}` : `Restore ${name}`}
+                disabled={readOnly || restoring !== null}
+                onclick={() => restore(chat)}
+              >
+                {again ? 'Try again' : 'Restore'}
               </button>
             {/if}
           {/if}
         </div>
-        {#if problems[key] !== undefined}
-          <div class="problem" role="alert">{problems[key]}</div>
+        {#if problem !== undefined}
+          <div class="problem" role="alert">{problem.text}</div>
         {:else if state.type === 'Failed'}
           <div class="problem">It can't be restored: {cannotRestoreText(state.value)}</div>
         {/if}

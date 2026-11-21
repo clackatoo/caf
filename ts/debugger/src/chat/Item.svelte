@@ -16,6 +16,8 @@
   } = $props()
 
   const kind = $derived(item.kind)
+  /** What an app item this version can't read is, said the same with a summary or without. */
+  const UNREADABLE = "An item of the app's that this version can't read"
 </script>
 
 {#if kind.type === 'Words'}
@@ -38,11 +40,7 @@
        one can't read: kept as it was, and shown by the summary it had. -->
   <details class="app unreadable">
     <summary>
-      {#if kind.value.summary !== null}
-        {kind.value.summary} <span class="why">(an item of the app's this version can't read)</span>
-      {:else}
-        An item of the app's that this version can't read
-      {/if}
+      {#if kind.value.summary != null}{kind.value.summary} <span class="why">· {UNREADABLE}</span>{:else}{UNREADABLE}{/if}
     </summary>
     <pre>{rawJson(kind.value.raw)}</pre>
   </details>

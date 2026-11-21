@@ -231,7 +231,7 @@
         </div>
         {#if saved.length > 0}
           <div class="saved">
-            <SavedList {saved} actions={savedActions} act={live?.may.act ?? false} readOnly={!actable} />
+            <SavedList {saved} actions={savedActions} readOnly={!actable} />
           </div>
         {/if}
         {#if mode === 'Live' && !lookingBack}
