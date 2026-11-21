@@ -7,7 +7,7 @@
   // were, from the inspector channel's `Past` messages, read-only.
   import type { AgentName, Answer, Chat, ChatId, DeepReadonly, QuestionId, UserMessage } from '@clackatoo/caf'
   import AgentsPanel, { type AgentActions } from './AgentsPanel.svelte'
-  import { ChatList, ChatView, type ChatActions, type ListActions } from './chat/index.ts'
+  import { ChatList, ChatView, showsAgent, type ChatActions, type ListActions } from './chat/index.ts'
   import { PROTOCOL } from './inspector/channel.ts'
   import { Inspector } from './inspector/client.svelte.ts'
   import InspectorView from './inspector/Inspector.svelte'
@@ -215,7 +215,7 @@
             actions={agentActions}
             readOnly={!actable}
             may={live?.may.agents ?? false}
-            inChat={chat?.agent ?? null}
+            inChat={chat !== null && showsAgent(chat) ? chat.agent : null}
           />
         {/if}
       </div>

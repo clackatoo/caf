@@ -11,6 +11,7 @@
   import { untrack } from 'svelte'
   import { attempt, type ChatActions } from './actions.ts'
   import AgentBanner from './AgentBanner.svelte'
+  import { showsAgent } from './shows.ts'
   import Composer from './Composer.svelte'
   import Questions from './Questions.svelte'
   import StateBanner from './StateBanner.svelte'
@@ -110,7 +111,7 @@
     <div class="looking-back" role="status">The app lets this viewer watch this chat, not act in it.</div>
   {/if}
   <StateBanner state={chat.state} />
-  {#if !closed}
+  {#if showsAgent(chat)}
     <AgentBanner
       name={chat.agent}
       agent={status}

@@ -6,9 +6,10 @@
 
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CafError, type AgentStatus } from '@clackatoo/caf'
+import { CafError, type AgentStatus, type Chat } from '@clackatoo/caf'
 import { bytes, cannotText, errorText, installLabel, refusedText, signInLabel, signInUrl, stateLabel } from '../../src/chat/words.ts'
-import { actions, chat, draw, item, life, status, statuses, turn } from './build.ts'
+import { showsAgent } from '../../src/chat/index.ts'
+import { actions, chat, draw, item, life, question, status, statuses, turn } from './build.ts'
 
 afterEach(cleanup)
 
@@ -310,6 +311,22 @@ describe('what the host lets this viewer do', () => {
     expect(screen.queryByRole('button', { name: 'Stop signing in' })).toBeNull()
   })
 
+  it('without act: a waiting question can\'t be answered, nor a failed turn sent again', async () => {
+    const again = life('Failed', { reason: { type: 'ProviderError' }, agent_said: null, remedy: { type: 'SendAgain' } })
+    const asked = question({
+      type: 'Permission',
+      value: { tool: 1, title: 'Run ls', options: [{ id: 'allow', label: 'Allow', kind: { type: 'AllowOnce' } }] },
+    } as never)
+    const { actions: given } = draw(chat({ turns: [turn({ life: again })], questions: [asked] }), {
+      may: { act: false, agents: true },
+    })
+    expect(screen.queryByRole('button', { name: 'Send again' })).toBeNull()
+    const allow = button('Allow')
+    expect(allow.disabled).toBe(true)
+    await fireEvent.click(allow)
+    expect(given.answer).not.toHaveBeenCalled()
+  })
+
   it('without act: the chat can be watched, not acted in', () => {
     const { container } = draw(chat({ state: waiting, turns: [turn({ life: failed })] }), {
       agent: missing,
@@ -382,4 +399,22 @@ describe('the words for agents', () => {
     expect(signInLabel({ type: 'SignedIn', value: { type: 'Passkey' } } as never)).toBe('Signed in (Passkey)')
     expect(stateLabel({ type: 'Hibernating' } as never)).toBe('Unknown state (Hibernating)')
   })
+})
+
+describe('where the chat shows its agent', () => {
+  const states: [Chat['state'], boolean][] = [
+    [{ type: 'Opening' }, true],
+    [{ type: 'Open', value: { session: 's' } }, true],
+    [{ type: 'WaitingForAgent' }, true],
+    [{ type: 'Lost', value: { reason: { type: 'Stopped' } } }, true],
+    [{ type: 'Closed' }, false],
+  ]
+  for (const [state, shows] of states) {
+    it(`${shows ? 'shows' : "doesn't show"} it on a chat ${state.type}, as showsAgent says`, () => {
+      const drawn = chat({ state })
+      expect(showsAgent(drawn)).toBe(shows)
+      const { container } = draw(drawn, { agent: status({ type: 'Host' }, link('https://claude.ai/x', null, true)) })
+      expect(container.querySelector('[data-agent-state]') !== null).toBe(shows)
+    })
+  }
 })
