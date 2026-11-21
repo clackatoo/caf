@@ -121,11 +121,14 @@ mod caf;
 mod policy;
 mod setup;
 mod steps;
+mod storage;
 mod timer;
 pub mod viewer;
 
 pub use agent::{AgentDriver, AgentLimits};
-pub use caf::{AgentsWatch, Caf, ChatHandle, ChatsWatch, Config, Error, Running, Update, Watch};
+pub use caf::{
+    AgentsWatch, Caf, ChatHandle, ChatsWatch, Config, Error, Running, SavedWatch, Update, Watch,
+};
 pub use policy::{AlwaysAsk, Policy, RefuseAll};
 pub use setup::SetupDriver;
 pub use steps::{Step, Steps};

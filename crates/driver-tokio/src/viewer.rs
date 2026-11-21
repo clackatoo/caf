@@ -28,10 +28,12 @@ use caf_core::chat::{AppData, AppItem};
 use caf_core::ids::AgentName;
 use caf_core::ids::{ChangeNo, ChatId, Shelf};
 use caf_core::save::RestoreChat;
-use caf_core::viewer::{AgentAction, FromViewer, OpenRequest, Outcome, Rights, ToViewer, VERSIONS};
+use caf_core::viewer::{
+    AgentAction, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer, VERSIONS,
+};
 use tokio::sync::mpsc;
 
-use crate::caf::{AgentsWatch, Caf, ChatsWatch, Error, Update, Watch, WeakCaf};
+use crate::caf::{AgentsWatch, Caf, ChatsWatch, Error, SavedWatch, Update, Watch, WeakCaf};
 
 /// Turns a viewer's request to open a chat into one, or refuses it: see
 /// [`ViewerRules::open`].
@@ -124,9 +126,12 @@ impl Default for ViewerRules {
 /// code, chooses whose account the agent signs in to.
 ///
 /// After that comes [`ToViewer::Saved`], if the host has listed any
-/// shelf ([`Caf::list_saved`]), and again each time it changes: only the
-/// latest, as for agents. A request to restore one
-/// ([`FromViewer::Restore`]) goes to [`ViewerRules::restore`].
+/// shelf ([`Caf::list_saved`]) and the store has answered, and again each
+/// time it changes: only the latest, as for agents. A request to restore
+/// one ([`FromViewer::Restore`]) goes to [`ViewerRules::restore`], and is
+/// answered [`Outcome::Opened`] once the chat is loaded, or
+/// [`Outcome::CannotRestore`] saying why not. Meanwhile the link goes on:
+/// the store may take a while.
 ///
 /// Every request gets exactly one [`ToViewer::Done`], unless the link
 /// ends first: one made while CAF shuts down is answered
@@ -165,8 +170,17 @@ pub async fn serve<A: AppItem, D: AppData>(
         run: caf.run().to_owned(),
         may: Rights::new(rules.act, rules.agents),
     };
+    let mut saved = caf.watch_saved();
+    let Some(listed) = saved.next_listed().await else {
+        return;
+    };
     let statuses = ToViewer::Agents(for_viewer(statuses, &rules));
     if to.send(welcome).await.is_err() || to.send(statuses).await.is_err() {
+        return;
+    }
+    if let Some(listed) = listed
+        && to.send(ToViewer::Saved(listed)).await.is_err()
+    {
         return;
     }
     let link = Link {
@@ -174,8 +188,10 @@ pub async fn serve<A: AppItem, D: AppData>(
         rules,
         chats,
         agents,
+        saved,
         gone: false,
         watches: Watches::default(),
+        restores: Restores::default(),
     };
     link.run(from, &to).await;
 }
@@ -213,9 +229,12 @@ struct Link<A: AppItem, D: AppData> {
     rules: Arc<ViewerRules>,
     chats: ChatsWatch,
     agents: AgentsWatch,
-    /// CAF has shut down: the link ends once every watch has.
+    saved: SavedWatch,
+    /// CAF has shut down: the link ends once every watch has, and every
+    /// restore under way is answered.
     gone: bool,
     watches: Watches<A>,
+    restores: Restores,
 }
 
 impl<A: AppItem, D: AppData> Link<A, D> {
@@ -224,7 +243,8 @@ impl<A: AppItem, D: AppData> Link<A, D> {
         // answer.
         let mut waiting = None;
         loop {
-            if self.gone && self.watches.is_empty() {
+            let idle = self.watches.is_empty() && self.restores.is_empty();
+            if self.gone && idle {
                 return;
             }
             // Room for one message first, so nothing is taken from a
@@ -244,9 +264,9 @@ impl<A: AppItem, D: AppData> Link<A, D> {
                     }
                     None => return,
                 },
-                // With no watched chat to say has ended, the link ends
-                // with CAF.
-                () = self.caf.ended(), if self.watches.is_empty() => return,
+                // With no watched chat to say has ended, nor restore to
+                // answer, the link ends with CAF.
+                () = self.caf.ended(), if idle => return,
             };
             if let Some(message) = waiting.take() {
                 self.take(message, room).await;
@@ -266,7 +286,14 @@ impl<A: AppItem, D: AppData> Link<A, D> {
                     Some(statuses) => room.send(ToViewer::Agents(for_viewer(statuses, &self.rules))),
                     None => self.gone = true,
                 },
+                listed = self.saved.next_listed(), if !self.gone => match listed {
+                    Some(Some(listed)) => room.send(ToViewer::Saved(listed)),
+                    // Never, once it's been listed.
+                    Some(None) => {}
+                    None => self.gone = true,
+                },
                 message = self.watches.next() => room.send(message),
+                (request, outcome) = self.restores.next() => room.send(ToViewer::Done { request, outcome }),
             }
         }
     }
@@ -332,7 +359,17 @@ impl<A: AppItem, D: AppData> Link<A, D> {
                 agent,
                 action,
             } => (request, about(caf, rules, &agent, action).await),
-            FromViewer::Restore { .. } => todo!(),
+            FromViewer::Restore {
+                request,
+                chat,
+                shelf,
+            } => match restoring(caf, rules, chat, &shelf) {
+                Ok(restore) => {
+                    self.restores.add(request, restore);
+                    return;
+                }
+                Err(outcome) => (request, outcome),
+            },
             // A second Hello, or a message of a later version: there's
             // nothing to do.
             _ => return,
@@ -364,6 +401,30 @@ async fn opened<A: AppItem, D: AppData>(
             .await
             .map(|chat| Outcome::Opened(chat.id)),
     )
+}
+
+/// Asks the host whether to restore the chat, and starts restoring it if
+/// so: its outcome, once it's over. Or how it went at once, if it isn't
+/// started.
+fn restoring<A: AppItem, D: AppData>(
+    caf: &WeakCaf<A, D>,
+    rules: &ViewerRules,
+    chat: ChatId,
+    shelf: &Shelf,
+) -> Result<Restore, Outcome> {
+    let restorer = &rules.restore;
+    let restore = match std::panic::catch_unwind(AssertUnwindSafe(|| restorer(chat, shelf))) {
+        Ok(Some(restore)) => restore,
+        Ok(None) => return Err(Outcome::NotAllowed),
+        Err(_) => {
+            log::warn!(target: "caf", "the host's restorer panicked on a viewer's request: not allowed");
+            return Err(Outcome::NotAllowed);
+        }
+    };
+    let restoring = caf.restore(restore);
+    Ok(Box::pin(async move {
+        outcome(restoring.await.map(Outcome::Opened))
+    }))
 }
 
 /// Sends, stops, answers or closes, if viewers may.
@@ -413,6 +474,7 @@ fn outcome(result: Result<Outcome, Error>) -> Outcome {
     match result {
         Ok(outcome) => outcome,
         Err(Error::Refused(refused)) => Outcome::Refused(refused),
+        Err(Error::CannotRestore(why)) => Outcome::CannotRestore(why),
         Err(_) => Outcome::Gone,
     }
 }
@@ -426,6 +488,40 @@ fn next_of<A: AppItem>(mut watch: Watch<A>) -> Next<A> {
         let update = watch.next().await;
         (watch, update)
     })
+}
+
+/// A restore under way: its outcome, once it's over.
+type Restore = Pin<Box<dyn Future<Output = Outcome> + Send>>;
+
+/// A viewer's restores under way, each with the viewer's number for it.
+#[derive(Default)]
+struct Restores {
+    each: Vec<(RequestNo, Restore)>,
+}
+
+impl Restores {
+    fn is_empty(&self) -> bool {
+        self.each.is_empty()
+    }
+
+    fn add(&mut self, request: RequestNo, restore: Restore) {
+        self.each.push((request, restore));
+    }
+
+    /// The next restore to be over, and its outcome. Never resolves while
+    /// none is under way. Cancel-safe.
+    async fn next(&mut self) -> (RequestNo, Outcome) {
+        std::future::poll_fn(|cx| {
+            for at in 0..self.each.len() {
+                if let Poll::Ready(outcome) = self.each[at].1.as_mut().poll(cx) {
+                    let (request, _) = self.each.swap_remove(at);
+                    return Poll::Ready((request, outcome));
+                }
+            }
+            Poll::Pending
+        })
+        .await
+    }
 }
 
 /// The chats a viewer watches, each waiting for its next update.
