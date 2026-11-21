@@ -93,6 +93,7 @@ fn every_agent_stands_somewhere_in_the_order_offered_and_a_survey_says_where() {
             { "name": "dl-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" } },
             { "name": "npm-twin", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" } },
             { "name": "npm-host", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" } },
+            { "name": "dl-host", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" } },
             { "name": "claude-npx", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" } },
         ])
     );
@@ -228,7 +229,7 @@ fn a_chat_waits_for_its_agent_to_be_installed_then_starts() {
     let install = one(&out, "install");
     assert_eq!(
         install,
-        json!({ "install": install["install"], "folder": "test-npm-2.0.0", "how": "Npm", "private": "test-npm-private" })
+        json!({ "install": install["install"], "folder": "test-npm-2.0.0", "how": "Npm", "private": "test-npm-private", "size": 40_000_000 })
     );
     let install = install["install"].as_u64().expect("a ticket");
     assert_has(
@@ -329,7 +330,7 @@ fn an_install_makes_the_private_folder_its_recipe_uses() {
     let install = one(&script.install("dl-agent").1, "install");
     assert_eq!(
         install,
-        json!({ "install": install["install"], "folder": "test-download-1.4.0", "how": "Download", "private": "test-download-private" })
+        json!({ "install": install["install"], "folder": "test-download-1.4.0", "how": "Download", "private": "test-download-private", "size": 900_000_000 })
     );
 }
 
@@ -1613,4 +1614,65 @@ fn a_status_command_from_before_a_sign_out_ended_never_undoes_it() {
         &script.setup(survey, found(&["test-download-1.4.0"])),
         "status",
     );
+}
+
+#[test]
+fn a_host_commands_status_is_asked_once_it_says_its_the_profiles_adapter() {
+    let status = json!({
+        "program": "/opt/dl-host/test-download",
+        "args": ["auth", "status"],
+        "env": [],
+    });
+    let init = json!({
+        "protocolVersion": 1,
+        "agentCapabilities": {},
+        "agentInfo": { "name": "test-download-acp", "version": "1.4.0" }
+    });
+    let started = |script: &mut Script, agent: &str| {
+        let (chat, out) = script.open(OpenChat::new(agent, "/work"));
+        chat.expect("opened");
+        let proc = one(&out, "start")["start"].as_u64().expect("a process");
+        let id = sent(&out, "initialize")["id"].as_u64().expect("an id");
+        let info = if agent == "dl-host" {
+            init.clone()
+        } else {
+            claude_init()
+        };
+        script.answers(proc, id, &info)
+    };
+    let mut per_chat = host();
+    per_chat.grouping = crate::host::Grouping::PerChat;
+    // Surveyed first: nothing can run until the adapter says what it is.
+    let mut script = Script::new(per_chat.clone());
+    let out = script.surveyed(&[]);
+    assert!(with(&out, "status").is_empty(), "{out:#?}");
+    let out = started(&mut script, "dl-host");
+    assert_eq!(one(&out, "status")["command"], status);
+    // The adapter first: asked then, and not again when the survey answers.
+    let mut script = Script::new(per_chat);
+    let survey = ticket_of(&script.check_agents(), "survey");
+    let out = started(&mut script, "dl-host");
+    let asked = ticket_of(&out, "status");
+    let out = script.setup(survey, found(&[]));
+    assert!(with(&out, "status").is_empty(), "{out:#?}");
+    script.setup(asked, SetupEvent::Status(Some(SignedInAs::ApiKey)));
+    assert_eq!(
+        script.agent_status("dl-host")["sign_in"],
+        signed_in("ApiKey")
+    );
+    // Only the first to say so asks: another process of it asks nothing.
+    assert!(with(&started(&mut script, "dl-host"), "status").is_empty());
+    // An adapter that says by itself, as Claude's does, isn't asked.
+    assert!(with(&started(&mut script, "claude"), "status").is_empty());
+    // Nor is CAF's own install of it, whose status was asked as the
+    // survey found it.
+    let mut script = Script::new(host());
+    let out = script.surveyed(&["test-download-1.4.0"]);
+    script.setup(ticket_of(&out, "status"), SetupEvent::Status(None));
+    let (chat, out) = script.open(OpenChat::new("dl-agent", "/work"));
+    chat.expect("opened");
+    let proc = one(&out, "start")["start"].as_u64().expect("a process");
+    let id = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let out = script.answers(proc, id, &init);
+    assert!(with(&out, "status").is_empty(), "{out:#?}");
 }

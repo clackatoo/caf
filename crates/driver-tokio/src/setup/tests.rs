@@ -69,6 +69,10 @@ fn driver(dir: &Dir) -> SetupDriver {
             npm_offline_cache: Some(dir.path("driver-npm-cache")),
             temp: Some(dir.path("temp")),
             env: Some(std::collections::HashMap::new()),
+            idle: None,
+            per_read: None,
+            npm: None,
+            sync_pause: None,
         },
     )
 }
@@ -119,6 +123,33 @@ async fn done(driver: &mut SetupDriver, ticket: Ticket) -> Vec<Ev> {
         "the job is forgotten once it's done"
     );
     events
+}
+
+/// What the driver reports about `ticket`, up to its last, if it comes
+/// within `within`; otherwise what came, to say what happened.
+async fn ended_within(
+    driver: &mut SetupDriver,
+    ticket: Ticket,
+    within: Duration,
+) -> Result<Vec<Ev>, Vec<Ev>> {
+    let mut events = Vec::new();
+    let ended = tokio::time::timeout(within, async {
+        loop {
+            let (about, event) = driver.next().await;
+            assert_eq!(about, ticket, "a report about another job: {event:?}");
+            let last = is_last(&event);
+            events.push(Ev(event));
+            if last {
+                return;
+            }
+        }
+    })
+    .await;
+    if ended.is_ok() {
+        Ok(events)
+    } else {
+        Err(events)
+    }
 }
 
 /// The next report about `ticket`, which mustn't be its last.
@@ -200,10 +231,19 @@ async fn a_survey_says_what_is_installed_and_cleans_up_what_was_cut_off() {
     assert_eq!(installed, &["claude-0.98.0", "codex-2.2.2+clackatoo.2"]);
     assert!(dir.root().join(".build-claude-0.99.0-1-1").exists());
     drop(held);
-    driver.apply(SetupDirective::Survey {
-        ticket: Ticket(1002),
-    });
-    done(&mut driver, Ticket(1002)).await;
+    // A process another test starts holds every file open here for a
+    // moment, the lock too: so a survey may find it held for that moment,
+    // and leave the hidden folders, as it should. The next one cleans.
+    for ticket in 1002..1100 {
+        driver.apply(SetupDirective::Survey {
+            ticket: Ticket(ticket),
+        });
+        done(&mut driver, Ticket(ticket)).await;
+        if !installs(&dir).iter().any(|name| name.starts_with('.')) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert_eq!(
         installs(&dir),
         [
@@ -214,6 +254,24 @@ async fn a_survey_says_what_is_installed_and_cleans_up_what_was_cut_off() {
         ],
         "only what was cut off is removed"
     );
+}
+
+#[tokio::test]
+async fn a_survey_that_cant_take_the_lock_still_says_whats_installed() {
+    let dir = Dir::new();
+    std::fs::create_dir_all(dir.root().join("fake-1.0.0")).unwrap();
+    // A root that can't be written to, so its lock can't be made.
+    std::fs::set_permissions(dir.root(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    let mut driver = driver(&dir);
+    driver.apply(SetupDirective::Survey {
+        ticket: Ticket(1000),
+    });
+    let events = done(&mut driver, Ticket(1000)).await;
+    std::fs::set_permissions(dir.root(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let [Ev(SetupEvent::Surveyed { installed, .. })] = events.as_slice() else {
+        panic!("{events:?}")
+    };
+    assert_eq!(installed, &["fake-1.0.0"]);
 }
 
 /// A package `fake-adapter` 1.0.0 with a program of the same name, packed
@@ -270,6 +328,7 @@ async fn npm_installs_from_the_lockfile_into_place() {
         folder: "fake-1.0.0".into(),
         install: Install::Npm(package),
         private: None,
+        size: 1 << 30,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert!(
@@ -286,9 +345,73 @@ async fn npm_installs_from_the_lockfile_into_place() {
     let program = dir.root().join("fake-1.0.0/node_modules/.bin/fake-adapter");
     assert!(program.exists(), "the package's program is linked");
     assert!(
-        !dir.path("installed-by-script").exists(),
+        // npm runs a package's install script in its folder,
+        // node_modules/fake-adapter: two up is the install itself.
+        !dir.root().join("fake-1.0.0/installed-by-script").exists(),
         "no install script runs"
     );
+}
+
+#[tokio::test]
+async fn stopping_an_npm_install_stops_all_it_started() {
+    let dir = Dir::new();
+    // An npm that starts something and waits on it, as npm does.
+    let pid_file = dir.path("started.pid");
+    let npm = dir.path("npm");
+    std::fs::write(
+        &npm,
+        format!(
+            "#!/bin/sh\nsleep 300 &\necho $! > {}.new && mv {0}.new {0}\nwait\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&npm, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut driver = SetupDriver::with_options(
+        dir.root(),
+        Options {
+            npm: Some(npm),
+            env: Some(std::collections::HashMap::new()),
+            ..Options::default()
+        },
+    );
+    driver.apply(SetupDirective::Install {
+        ticket: Ticket(1000),
+        folder: "fake-1.0.0".into(),
+        install: Install::Npm(NpmPackage::new("{}", "{}")),
+        private: None,
+        size: 1 << 30,
+    });
+    let started = tokio::time::timeout(PATIENCE, async {
+        loop {
+            if let Ok(pid) = std::fs::read_to_string(&pid_file) {
+                return pid.trim().parse::<i32>().unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("npm started");
+    driver.apply(SetupDirective::Stop {
+        ticket: Ticket(1000),
+    });
+    let events = tokio::time::timeout(Duration::from_secs(3), done(&mut driver, Ticket(1000)))
+        .await
+        .expect("stopped within a second or so");
+    assert_eq!(
+        events.last().expect("a last report"),
+        &SetupEvent::InstallFailed(InstallFailure::Stopped)
+    );
+    assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
+    let gone = tokio::time::timeout(Duration::from_secs(5), async {
+        // SAFETY: signal 0 sends nothing.
+        #[allow(unsafe_code)]
+        while unsafe { libc::kill(started, 0) } == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(gone.is_ok(), "what npm started was stopped with it");
 }
 
 #[tokio::test]
@@ -302,6 +425,7 @@ async fn a_failed_npm_install_leaves_nothing() {
         folder: "fake-1.0.0".into(),
         install: Install::Npm(package),
         private: None,
+        size: 1 << 30,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert!(
@@ -326,6 +450,7 @@ async fn a_package_that_doesnt_match_its_lockfile_is_thrown_away() {
         folder: "fake-1.0.0".into(),
         install: Install::Npm(package),
         private: None,
+        size: 1 << 30,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert_eq!(
@@ -476,6 +601,7 @@ async fn downloads_are_checked_and_unpacked_into_place() {
             folder: folder.clone(),
             install: download(&server.url, &body, unpack),
             private: None,
+            size: 1 << 30,
         });
         let events = done(&mut driver, ticket).await;
         assert!(
@@ -505,6 +631,373 @@ async fn downloads_are_checked_and_unpacked_into_place() {
     assert_eq!(installs(&dir), ["fake-0", "fake-1", "fake-2"]);
 }
 
+/// A zip of these entries, in order: a link is `(name, Some(target))`,
+/// a file `(name, None)`.
+fn zip_of(entries: &[(&str, Option<&str>)]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default().unix_permissions(0o644);
+    for (name, target) in entries {
+        match target {
+            Some(target) => archive.add_symlink(*name, *target, options).unwrap(),
+            None => {
+                archive.start_file(*name, options).unwrap();
+                archive.write_all(b"escaped").unwrap();
+            }
+        }
+    }
+    archive.finish().unwrap().into_inner()
+}
+
+/// A gzipped tar of these entries, as [`zip_of`]'s.
+fn tar_of(entries: &[(&str, Option<&str>)]) -> Vec<u8> {
+    let mut archive = tar::Builder::new(flate2::write::GzEncoder::new(
+        Vec::new(),
+        flate2::Compression::default(),
+    ));
+    for (name, target) in entries {
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o644);
+        match target {
+            Some(target) => {
+                header.set_entry_type(tar::EntryType::Symlink);
+                header.set_size(0);
+                archive.append_link(&mut header, *name, *target).unwrap();
+            }
+            None => {
+                header.set_size(7);
+                header.set_cksum();
+                archive
+                    .append_data(&mut header, *name, &b"escaped"[..])
+                    .unwrap();
+            }
+        }
+    }
+    archive.into_inner().unwrap().finish().unwrap()
+}
+
+#[tokio::test]
+async fn nothing_in_a_download_reaches_outside_its_install() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    // Each link's target, read as text, stays inside; followed, the chain
+    // climbs out, and files written through it would land above.
+    let chain: &[(&str, Option<&str>)] = &[
+        ("a/l1", Some("..")),
+        ("l2", Some("a/l1/..")),
+        ("l3", Some("l2/..")),
+        ("l2/escaped-into-root", None),
+        ("l3/escaped-above-root", None),
+    ];
+    let links_out: &[(&str, Option<&str>)] = &[("a/l1", Some("..")), ("l2", Some("a/l1/.."))];
+    let absolute: &[(&str, Option<&str>)] = &[("passwd", Some("/etc/passwd"))];
+    let up: &[(&str, Option<&str>)] = &[("up", Some("../../outside"))];
+    let nowhere: &[(&str, Option<&str>)] = &[("gone", Some("missing/file"))];
+    // A link whose own folder is reached through the chain: making that
+    // folder would make one outside.
+    let folder_in_root: &[(&str, Option<&str>)] = &[
+        ("a/l1", Some("..")),
+        ("l2", Some("a/l1/..")),
+        ("l2/made-in-root/x", Some("y")),
+    ];
+    let folder_above: &[(&str, Option<&str>)] = &[
+        ("a/l1", Some("..")),
+        ("l2", Some("a/l1/..")),
+        ("l3", Some("l2/..")),
+        ("l3/made-above-root/x", Some("y")),
+    ];
+    let mut n = 0;
+    for entries in [
+        chain,
+        links_out,
+        absolute,
+        up,
+        nowhere,
+        folder_in_root,
+        folder_above,
+    ] {
+        for (body, unpack) in [
+            (zip_of(entries), Unpack::Zip),
+            (tar_of(entries), Unpack::TarGz),
+        ] {
+            n += 1;
+            let server = serve(body.clone(), false).await;
+            let ticket = Ticket(1000 + n);
+            driver.apply(SetupDirective::Install {
+                ticket,
+                folder: "fake-1.0.0".into(),
+                install: download(&server.url, &body, unpack),
+                private: None,
+                size: 1 << 30,
+            });
+            let events = done(&mut driver, ticket).await;
+            let what = format!("{unpack:?} of {entries:?}");
+            let Some(Ev(SetupEvent::InstallFailed(InstallFailure::Other(why)))) = events.last()
+            else {
+                panic!("{what} is refused: {events:?}")
+            };
+            assert!(
+                !why.contains(&*dir.0.to_string_lossy()),
+                "{what}: no folder of the user's is told: {why}"
+            );
+            assert!(installs(&dir).is_empty(), "{what}: {:?}", installs(&dir));
+            for escaped in [
+                dir.root().join("escaped-into-root"),
+                dir.0.join("escaped-above-root"),
+                dir.root().join("made-in-root"),
+                dir.0.join("made-above-root"),
+            ] {
+                assert!(
+                    !escaped.exists(),
+                    "{what}: {} was written",
+                    escaped.display()
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_download_far_bigger_than_its_agent_is_cut_off() {
+    let dir = Dir::new();
+    let body = vec![7; 4 << 20];
+    let server = serve(body.clone(), false).await;
+    let mut driver = driver(&dir);
+    driver.apply(SetupDirective::Install {
+        ticket: Ticket(1000),
+        folder: "fake-1.0.0".into(),
+        install: download(&server.url, &body, Unpack::No),
+        private: None,
+        // Its agent takes 1,000 bytes: 4 MiB is far past that.
+        size: 1000,
+    });
+    let events = done(&mut driver, Ticket(1000)).await;
+    assert!(
+        matches!(events.last(), Some(Ev(SetupEvent::InstallFailed(InstallFailure::Other(why)))) if why.contains("bigger")),
+        "{events:?}"
+    );
+    assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
+}
+
+#[tokio::test]
+async fn a_download_holding_a_file_its_owner_cant_read_installs() {
+    use std::io::Write as _;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = |mode| zip::write::SimpleFileOptions::default().unix_permissions(mode);
+    zip.start_file("bin/agent", options(0o755)).unwrap();
+    zip.write_all(b"#!/bin/sh\necho agent\n").unwrap();
+    zip.start_file("write-only", options(0o200)).unwrap();
+    zip.write_all(b"x").unwrap();
+    let zip = zip.finish().unwrap().into_inner();
+    let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+        Vec::new(),
+        flate2::Compression::default(),
+    ));
+    let mut header = tar::Header::new_gnu();
+    header.set_size(1);
+    header.set_mode(0o200);
+    header.set_cksum();
+    tar.append_data(&mut header, "write-only", &b"x"[..])
+        .unwrap();
+    let tar = tar.into_inner().unwrap().finish().unwrap();
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    for (n, (body, unpack)) in [(zip, Unpack::Zip), (tar, Unpack::TarGz)]
+        .into_iter()
+        .enumerate()
+    {
+        let server = serve(body.clone(), false).await;
+        let ticket = Ticket(1000 + n as u64);
+        driver.apply(SetupDirective::Install {
+            ticket,
+            folder: format!("fake-{n}"),
+            install: download(&server.url, &body, unpack),
+            private: None,
+            size: 1 << 30,
+        });
+        let events = done(&mut driver, ticket).await;
+        assert_eq!(
+            events.last().expect("a last report"),
+            &SetupEvent::Installed,
+            "{unpack:?}"
+        );
+        let mode = std::fs::metadata(dir.root().join(format!("fake-{n}/write-only")))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o200, "{unpack:?}: kept as it came");
+    }
+}
+
+#[tokio::test]
+async fn stopping_an_install_while_it_is_synced_stops_it() {
+    let dir = Dir::new();
+    // An npm that makes many files, then says it's done.
+    let done_file = dir.path("npm-done");
+    let npm = dir.path("npm");
+    std::fs::write(
+        &npm,
+        format!(
+            "#!/bin/sh\nmkdir -p node_modules/many\ni=0; while [ $i -lt 200 ]; do echo $i > node_modules/many/$i; i=$((i+1)); done\ntouch {}\n",
+            done_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&npm, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut driver = SetupDriver::with_options(
+        dir.root(),
+        Options {
+            npm: Some(npm),
+            // Each file takes a while to sync, so there's time to stop it.
+            sync_pause: Some(Duration::from_millis(100)),
+            env: Some(std::collections::HashMap::new()),
+            ..Options::default()
+        },
+    );
+    driver.apply(SetupDirective::Install {
+        ticket: Ticket(1000),
+        folder: "fake-1.0.0".into(),
+        install: Install::Npm(NpmPackage::new("{}", "{}")),
+        private: None,
+        size: 1 << 30,
+    });
+    tokio::time::timeout(PATIENCE, async {
+        while !done_file.exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("npm ran");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    driver.apply(SetupDirective::Stop {
+        ticket: Ticket(1000),
+    });
+    // Stopping waits for the file being synced, which on a busy disk can
+    // take seconds: well within the 10 s allowed, and well short of the
+    // whole sync, 20 s. A sync that doesn't hear Stop between files runs to
+    // its end before it's stopped.
+    let events = ended_within(&mut driver, Ticket(1000), Duration::from_secs(10))
+        .await
+        .unwrap_or_else(|events| {
+            panic!("stopped within seconds, not once it's all synced: {events:?}")
+        });
+    assert_eq!(
+        events.last().expect("a last report"),
+        &SetupEvent::InstallFailed(InstallFailure::Stopped),
+        "{events:?}"
+    );
+    assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
+}
+
+#[tokio::test]
+async fn stopping_a_download_while_it_is_unpacked_stops_it() {
+    use std::io::Write as _;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default().unix_permissions(0o644);
+    // Each takes 50 ms more: unpacking takes 30 s, twice what the test
+    // waits for the stop to be heard.
+    for n in 0..600 {
+        zip.start_file(format!("many/{n}"), options).unwrap();
+        zip.write_all(b"x").unwrap();
+    }
+    let body = zip.finish().unwrap().into_inner();
+    let dir = Dir::new();
+    let server = serve(body.clone(), false).await;
+    let mut driver = SetupDriver::with_options(
+        dir.root(),
+        Options {
+            http_to_this_machine: true,
+            // Each file takes a while to sync, so there's time to stop it.
+            sync_pause: Some(Duration::from_millis(50)),
+            env: Some(std::collections::HashMap::new()),
+            ..Options::default()
+        },
+    );
+    driver.apply(SetupDirective::Install {
+        ticket: Ticket(1000),
+        folder: "fake-1.0.0".into(),
+        install: download(&server.url, &body, Unpack::Zip),
+        private: None,
+        size: 1 << 30,
+    });
+    // Once files appear in the half-built install, it's being unpacked.
+    let unpacking = tokio::time::timeout(PATIENCE, async {
+        loop {
+            let built = (dir.root().is_dir().then(|| installs(&dir)))
+                .into_iter()
+                .flatten()
+                .find(|name| name.starts_with(".build-"))
+                .map(|name| dir.root().join(name).join("many"));
+            if built.is_some_and(|many| {
+                std::fs::read_dir(many).is_ok_and(|mut files| files.next().is_some())
+            }) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(unpacking.is_ok(), "it's unpacked");
+    driver.apply(SetupDirective::Stop {
+        ticket: Ticket(1000),
+    });
+    // Stopping waits for the file being synced, which on a busy disk can
+    // take seconds: well within the 15 s allowed, and well short of the
+    // whole unpacking. Unpacking that doesn't hear Stop runs to its end.
+    let ended = ended_within(&mut driver, Ticket(1000), Duration::from_secs(15))
+        .await
+        .unwrap_or_else(|events| {
+            panic!("stopped within seconds, not once it's all unpacked: {events:?}")
+        });
+    assert_eq!(
+        ended.last().expect("a last report"),
+        &SetupEvent::InstallFailed(InstallFailure::Stopped),
+        "{ended:?}"
+    );
+    assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
+}
+
+#[tokio::test]
+async fn a_tar_holding_a_pipe_or_a_device_is_refused() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    for (n, kind) in [
+        tar::EntryType::Fifo,
+        tar::EntryType::Char,
+        tar::EntryType::Block,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut archive = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::default(),
+        ));
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(kind);
+        header.set_mode(0o644);
+        header.set_size(0);
+        header.set_cksum();
+        archive.append_data(&mut header, "odd", &[][..]).unwrap();
+        let body = archive.into_inner().unwrap().finish().unwrap();
+        let server = serve(body.clone(), false).await;
+        let ticket = Ticket(1000 + n as u64);
+        driver.apply(SetupDirective::Install {
+            ticket,
+            folder: "fake-1.0.0".into(),
+            install: download(&server.url, &body, Unpack::TarGz),
+            private: None,
+            size: 1 << 30,
+        });
+        let events = done(&mut driver, ticket).await;
+        assert!(
+            matches!(events.last(), Some(Ev(SetupEvent::InstallFailed(InstallFailure::Other(why)))) if why.contains("isn't a file")),
+            "{kind:?}: {events:?}"
+        );
+        assert!(installs(&dir).is_empty(), "{kind:?}: {:?}", installs(&dir));
+    }
+}
+
 #[tokio::test]
 async fn a_download_that_doesnt_match_its_checksum_is_thrown_away() {
     let dir = Dir::new();
@@ -515,6 +1008,7 @@ async fn a_download_that_doesnt_match_its_checksum_is_thrown_away() {
         folder: "fake-1.0.0".into(),
         install: download(&server.url, b"something else", Unpack::TarGz),
         private: None,
+        size: 1 << 30,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert_eq!(
@@ -537,6 +1031,7 @@ async fn downloads_must_be_https() {
         folder: "fake-1.0.0".into(),
         install: download(&server.url, &body, Unpack::TarGz),
         private: None,
+        size: 1 << 30,
     });
     let events = done(&mut driver, Ticket(1000)).await;
     assert!(
@@ -561,6 +1056,7 @@ async fn an_install_stopped_partway_leaves_nothing() {
         folder: "fake-1.0.0".into(),
         install: download(&server.url, &body, Unpack::No),
         private: None,
+        size: 1 << 30,
     });
     // Half of it comes, and is told.
     loop {
@@ -627,6 +1123,7 @@ async fn a_download_goes_through_the_proxy_the_environment_names() {
             folder: format!("fake-{n}"),
             install: download(url, &body, Unpack::TarGz),
             private: None,
+            size: 1 << 30,
         });
         let events = done(&mut driver, ticket).await;
         let last = events.last().expect("a last report");
@@ -699,6 +1196,158 @@ async fn proxy(body: Vec<u8>) -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
 }
 
 #[tokio::test]
+async fn a_download_that_stalls_with_nobody_stopping_it_ends_offline() {
+    let dir = Dir::new();
+    let body = vec![7; 4 << 20];
+    let stalled = serve(body.clone(), true).await.url;
+    let mut driver = SetupDriver::with_options(
+        dir.root(),
+        Options {
+            http_to_this_machine: true,
+            idle: Some(Duration::from_millis(500)),
+            env: Some(std::collections::HashMap::new()),
+            ..Options::default()
+        },
+    );
+    driver.apply(SetupDirective::Install {
+        ticket: Ticket(1000),
+        folder: "fake-1.0.0".into(),
+        install: download(&stalled, &body, Unpack::No),
+        private: None,
+        size: 1 << 30,
+    });
+    let events = tokio::time::timeout(Duration::from_secs(10), done(&mut driver, Ticket(1000)))
+        .await
+        .expect("it gives up once nothing comes");
+    assert_eq!(
+        events.last().expect("a last report"),
+        &SetupEvent::InstallFailed(InstallFailure::Offline)
+    );
+    assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
+    // The installs' lock is let go: another install goes ahead, on a
+    // driver with the usual limit, so a slow first byte on a loaded
+    // machine isn't taken as offline.
+    let mut driver = self::driver(&dir);
+    let good = tar_gz();
+    let server = serve(good.clone(), false).await;
+    driver.apply(SetupDirective::Install {
+        ticket: Ticket(1001),
+        folder: "fake-1.0.0".into(),
+        install: download(&server.url, &good, Unpack::TarGz),
+        private: None,
+        size: 1 << 30,
+    });
+    let events = done(&mut driver, Ticket(1001)).await;
+    assert_eq!(
+        events.last().expect("a last report"),
+        &SetupEvent::Installed
+    );
+}
+
+/// A server on this machine that sends every request elsewhere.
+async fn redirect(to: &str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/fake-adapter", listener.local_addr().unwrap());
+    let to = to.to_owned();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let to = to.clone();
+            tokio::spawn(async move {
+                if head(&mut socket).await.is_some() {
+                    let answer = format!(
+                        "HTTP/1.1 302 Found\r\nLocation: {to}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = socket.write_all(answer.as_bytes()).await;
+                }
+            });
+        }
+    });
+    url
+}
+
+#[tokio::test]
+async fn a_failed_download_says_what_went_wrong_but_not_where() {
+    let dir = Dir::new();
+    let body = tar_gz();
+    let server = serve(body.clone(), false).await;
+    let elsewhere = redirect("ftp://user:s3cret@files.example/agent?token=s3cret").await;
+    // A Location ureq can't read: its error quotes the whole header.
+    let malformed = redirect("http://s3cret host/agent?token=s3cret").await;
+    let cases = [
+        (
+            "HTTP_PROXY",
+            "socks9://user:s3cret@proxy:1080",
+            server.url.clone(),
+        ),
+        ("HTTP_PROXY", "http://user:s3cret@[::1", server.url.clone()),
+        ("NONE", "", elsewhere),
+        ("NONE", "", malformed),
+    ];
+    for (n, (name, value, url)) in cases.into_iter().enumerate() {
+        let env = [(name.to_owned(), value.to_owned())].into_iter().collect();
+        let mut driver = SetupDriver::with_options(
+            dir.root(),
+            Options {
+                http_to_this_machine: true,
+                env: Some(env),
+                ..Options::default()
+            },
+        );
+        let ticket = Ticket(1000 + n as u64);
+        driver.apply(SetupDirective::Install {
+            ticket,
+            folder: "fake-1.0.0".into(),
+            install: download(&url, &body, Unpack::TarGz),
+            private: None,
+            size: 1 << 30,
+        });
+        let events = done(&mut driver, ticket).await;
+        let Some(Ev(SetupEvent::InstallFailed(why))) = events.last() else {
+            panic!("{n}: it fails: {events:?}")
+        };
+        let said = format!("{why:?}");
+        assert!(!said.contains("s3cret"), "{n}: {said}");
+        if n < 2 {
+            assert!(said.contains("HTTP_PROXY"), "{n}: it says which: {said}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_download_ureq_wont_give_up_on_is_given_up_by_the_install() {
+    // As while finding its host, which ureq's timeouts don't cover: here,
+    // a stalled body with ureq told to wait an hour for each read.
+    let dir = Dir::new();
+    let body = vec![7; 4 << 20];
+    let stalled = serve(body.clone(), true).await.url;
+    let mut driver = SetupDriver::with_options(
+        dir.root(),
+        Options {
+            http_to_this_machine: true,
+            idle: Some(Duration::from_millis(500)),
+            per_read: Some(Duration::from_secs(60 * 60)),
+            env: Some(std::collections::HashMap::new()),
+            ..Options::default()
+        },
+    );
+    driver.apply(SetupDirective::Install {
+        ticket: Ticket(1000),
+        folder: "fake-1.0.0".into(),
+        install: download(&stalled, &body, Unpack::No),
+        private: None,
+        size: 1 << 30,
+    });
+    let events = tokio::time::timeout(Duration::from_secs(10), done(&mut driver, Ticket(1000)))
+        .await
+        .expect("the install's own watch gives up");
+    assert_eq!(
+        events.last().expect("a last report"),
+        &SetupEvent::InstallFailed(InstallFailure::Offline)
+    );
+    assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
+}
+
+#[tokio::test]
 async fn a_download_that_stalls_stops_at_once() {
     let dir = Dir::new();
     let body = vec![7; 4 << 20];
@@ -713,23 +1362,16 @@ async fn a_download_that_stalls_stops_at_once() {
             folder: "fake-1.0.0".into(),
             install: download(&url, &body, Unpack::No),
             private: None,
+            size: 1 << 30,
         });
         tokio::time::sleep(Duration::from_millis(500)).await;
         driver.apply(SetupDirective::Stop { ticket });
-        let events = tokio::time::timeout(Duration::from_secs(2), async {
-            let mut events = Vec::new();
-            loop {
-                let (about, event) = driver.next().await;
-                assert_eq!(about, ticket);
-                let last = is_last(&event);
-                events.push(Ev(event));
-                if last {
-                    return events;
-                }
-            }
-        })
-        .await
-        .unwrap_or_else(|_| panic!("{n}: stopped within a second or so"));
+        // A download waiting on the network would wait a minute. Stopped,
+        // it's left within a second; the half-built install's removal, on
+        // a busy disk, can take some seconds more.
+        let events = ended_within(&mut driver, ticket, Duration::from_secs(10))
+            .await
+            .unwrap_or_else(|events| panic!("{n}: stopped within seconds: {events:?}"));
         assert_eq!(
             events.last().expect("a last report"),
             &SetupEvent::InstallFailed(InstallFailure::Stopped),
@@ -752,6 +1394,7 @@ async fn two_drivers_installing_one_folder_install_it_once() {
             folder: "fake-1.0.0".into(),
             install: download(&server.url, &body, Unpack::TarGz),
             private: None,
+            size: 1 << 30,
         });
     }
     // One has the lock and is downloading; the other waits for it.
@@ -794,6 +1437,7 @@ async fn waiting_for_another_install_can_be_stopped() {
         folder: "fake-1.0.0".into(),
         install: Install::Download(Vec::new()),
         private: None,
+        size: 1 << 30,
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
     driver.apply(SetupDirective::Stop {
@@ -814,6 +1458,7 @@ async fn an_install_makes_its_agents_private_folder_and_never_removes_it() {
         folder: folder.into(),
         install: download(&server.url, &body, Unpack::TarGz),
         private: Some(private.into()),
+        size: 1 << 30,
     };
     driver.apply(install(1000, "fake-1.0.0", "fake-private"));
     let events = done(&mut driver, Ticket(1000)).await;
@@ -902,6 +1547,7 @@ async fn only_install_folders_can_be_installed_or_removed() {
             folder: folder.into(),
             install: Install::Download(Vec::new()),
             private: None,
+            size: 1 << 30,
         });
         let events = done(&mut driver, ticket).await;
         assert!(
@@ -1265,6 +1911,36 @@ async fn a_sign_in_that_takes_no_paste_has_no_input() {
 }
 
 #[tokio::test]
+async fn a_sign_in_that_never_reads_whats_pasted_still_stops() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    let mut command = SpawnCommand::new("/bin/sh");
+    command.args = vec!["-c".into(), "exec sleep 30".into()];
+    driver.apply(SetupDirective::SignIn {
+        ticket: Ticket(1000),
+        command,
+        link: LinkFrom::Browser,
+        code_after: None,
+        paste: true,
+    });
+    // More than its input's pipe holds, so writing waits.
+    for _ in 0..40 {
+        driver.apply(SetupDirective::Paste {
+            ticket: Ticket(1000),
+            text: "x".repeat(4000),
+        });
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    driver.apply(SetupDirective::Stop {
+        ticket: Ticket(1000),
+    });
+    let events = tokio::time::timeout(Duration::from_secs(3), done(&mut driver, Ticket(1000)))
+        .await
+        .expect("it stops within a second or so");
+    assert_eq!(events, [SetupEvent::Ended { ok: false }]);
+}
+
+#[tokio::test]
 async fn a_sign_in_that_fails_or_is_stopped_ends_not_ok() {
     let dir = Dir::new();
     let mut driver = driver(&dir);
@@ -1310,7 +1986,9 @@ async fn a_sign_in_that_fails_or_is_stopped_ends_not_ok() {
     driver.apply(SetupDirective::Stop {
         ticket: Ticket(1001),
     });
-    let events = done(&mut driver, Ticket(1001)).await;
+    let events = tokio::time::timeout(Duration::from_secs(3), done(&mut driver, Ticket(1001)))
+        .await
+        .expect("stopped within a second or so, not when it gives up waiting");
     assert_eq!(events, [SetupEvent::Ended { ok: false }]);
     // A paste or stop for a sign-in that has ended does nothing.
     driver.apply(SetupDirective::Paste {
@@ -1424,7 +2102,7 @@ async fn a_status_command_that_says_too_much_is_cut_off() {
     let dir = Dir::new();
     let mut driver = driver(&dir);
     let mut command = SpawnCommand::new("/bin/sh");
-    command.args = vec!["-c".into(), "yes | head -c 4000000; echo".into()];
+    command.args = vec!["-c".into(), "exec yes".into()];
     driver.apply(SetupDirective::Status {
         ticket: Ticket(1000),
         command,
@@ -1466,6 +2144,27 @@ async fn a_sign_in_ends_though_what_it_started_holds_its_output() {
             SetupEvent::Ended { ok: true }
         ]
     );
+}
+
+#[tokio::test]
+async fn a_status_command_is_read_though_what_it_started_holds_its_output() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    let mut command = SpawnCommand::new("/bin/sh");
+    command.args = vec![
+        "-c".into(),
+        r#"echo '{"loggedIn": true}'; sleep 30 & exit 0"#.into(),
+    ];
+    driver.apply(SetupDirective::Status {
+        ticket: Ticket(1000),
+        command,
+        signed_in: "/loggedIn".into(),
+        how: None,
+    });
+    let events = tokio::time::timeout(Duration::from_secs(5), done(&mut driver, Ticket(1000)))
+        .await
+        .expect("its answer is read once it has ended");
+    assert_eq!(events, [SetupEvent::Status(Some(SignedInAs::Unknown))]);
 }
 
 #[tokio::test]

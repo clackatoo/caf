@@ -26,7 +26,7 @@
 //!
 //! | Name | What it is |
 //! |---|---|
-//! | `<profile>-<version>/` | An install, complete, named after its profile, such as `claude-agent-acp-0.98.0`: only ever renamed into place whole. Its `.used` file says when a process last started from it |
+//! | `<profile>-<version>/` | An install, complete, named after its profile, such as `claude-agent-acp-0.98.0`: only ever renamed into place whole, once all it holds is synced to the disk, so even a power cut never leaves one that looks whole and isn't. Its `.used` file says when a process last started from it |
 //! | `<profile>-private/` | An agent's private folder, which outlives its versions: made, readable only by the user, by an install whose directive names it; never listed, never removed. One that's a link is refused |
 //! | `.lock` | The lock every install and removal takes, so only one runs at a time on the machine |
 //! | `.build-…/` | An install being built. Any left when nothing holds `.lock` is a cut-off one, removed |
@@ -61,7 +61,9 @@
 //! **Sign-in links** come one of two ways ([`LinkFrom`]):
 //! - `Browser`: the command is given `BROWSER`, a small shell script in a
 //!   folder of the driver's own under the system's temporary folder,
-//!   readable only by the user. Run with a link, it writes its arguments
+//!   readable only by the user, with a random name, so another user can't
+//!   take it first. Folders the user's programs left as they ended are
+//!   swept away as a new one is made. Run with a link, it writes its arguments
 //!   to a file beside it and exits; the driver looks for such files every
 //!   tenth of a second, and reports each argument that's a link (with
 //!   `://`), exactly as it came, once: options some programs give a
@@ -103,8 +105,12 @@ use tokio::sync::{mpsc, oneshot};
 /// - **Stopping** an install, sign-in or command kills what it runs and
 ///   reports it stopped within about a second, as
 ///   [`SetupDirective::Stop`] says. A download waiting on the network
-///   can't be woken: it's left to end by itself, within a minute, writing
-///   only to a file that went with the half-built folder.
+///   can't be woken: it's left to end by itself, writing only to a file
+///   that went with the half-built folder. It ends once a minute passes
+///   with nothing coming, or sooner. Unpacking a download, and syncing an
+///   install before it's renamed into place, are stopped between one file
+///   and the next: a stop waits for the file being written to reach the
+///   disk, which on a busy disk can take a few seconds.
 /// - **Dropping the driver** stops everything it's doing, as stopping
 ///   would, as far as the runtime lets it: a half-built install the runtime
 ///   shut down too soon to remove is removed by the next survey.
@@ -114,14 +120,26 @@ use tokio::sync::{mpsc, oneshot};
 ///   commands 1 minute, and finding Node's version or npm 30 seconds. A
 ///   sign-in has none, as it waits for the user: the core stops it.
 ///   Downloads give up when connecting takes over 30 seconds, or the
-///   answer doesn't start within a minute.
-/// - **Proxies:** a download goes through the proxy npm would use:
-///   `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY` or `http_proxy`, the first
-///   that's set, unless `NO_PROXY` (or `no_proxy`), a list split by commas,
-///   names its host or a domain the host is in (`example.com` and
-///   `.example.com` both cover `dl.example.com`). npm installs are npm's
-///   own, and read the same. A download asks the proxy for a tunnel
-///   (`CONNECT`), and its `https` is checked end to end through it.
+///   answer doesn't start within a minute, and give up as
+///   [`InstallFailure::Offline`](caf_core::agent::InstallFailure::Offline)
+///   when a minute passes with no byte coming, at any point. A slow
+///   download that keeps coming has no limit.
+/// - **Proxies:** a download reads the environment variables npm reads,
+///   and chooses as npm does: npm's own `npm_config_https_proxy` or
+///   `npm_config_proxy`, then `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY` or
+///   `http_proxy`, the first that's set, unless `npm_config_noproxy`,
+///   `NO_PROXY` or `no_proxy`, a list split by commas, names its host or a
+///   domain the host is in (`example.com` and `.example.com` both cover
+///   `dl.example.com`). A proxy set only in an `.npmrc` file is npm's
+///   alone: downloads don't read it. A download asks the proxy for a
+///   tunnel (`CONNECT`), and its `https` is checked end to end through it.
+///   A failure never says the proxy's value, which may hold a password,
+///   only which variable named it.
+/// - **Unpacking** keeps everything inside the install: each file is
+///   written only once its folder, followed through any links, is found
+///   inside; links are made after every file, and each must lead, followed
+///   all the way, to something inside. Anything else refuses the whole
+///   download, as do devices and pipes in a tar.
 /// - **A download unpacked as `Unpack::No`** is saved under the last part
 ///   of its URL's path, such as `agent` for `https://example.com/v1/agent`,
 ///   and made runnable.
@@ -192,6 +210,21 @@ pub(crate) struct Options {
     /// instead of this program's.
     #[cfg(test)]
     pub(crate) env: Option<std::collections::HashMap<String, String>>,
+    /// How long a download may go with nothing coming before it's given
+    /// up, instead of a minute.
+    #[cfg(test)]
+    pub(crate) idle: Option<std::time::Duration>,
+    /// How long ureq itself waits for each read, instead of `idle`: so a
+    /// test can leave the install's own watch to give up.
+    #[cfg(test)]
+    pub(crate) per_read: Option<std::time::Duration>,
+    /// The npm to run, instead of the one on `PATH`.
+    #[cfg(test)]
+    pub(crate) npm: Option<PathBuf>,
+    /// How long syncing each of an install's files takes, as well, so a
+    /// test can stop it meanwhile.
+    #[cfg(test)]
+    pub(crate) sync_pause: Option<std::time::Duration>,
 }
 
 impl Options {
@@ -277,11 +310,16 @@ impl SetupDriver {
                 folder,
                 install,
                 private,
+                size,
             } => {
                 let (reporter, stop) = self.stoppable(ticket);
                 tokio::spawn(install::install(
                     self.root.clone(),
-                    install::Folders { folder, private },
+                    install::Folders {
+                        folder,
+                        private,
+                        size,
+                    },
                     install,
                     self.options.clone(),
                     reporter,

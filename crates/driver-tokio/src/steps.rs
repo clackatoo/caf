@@ -12,7 +12,8 @@
 //! **Steps hold secrets.** A recording hides them, but a step can't: the
 //! values of MCP servers' variables and headers, in the host's
 //! [`Event::Host`] opening a chat and in the directive that starts its
-//! session, and the account's email, in Claude's sign-in status. So treat
+//! session, the account's email, in Claude's sign-in status, and what the
+//! user pastes into a sign-in, as they typed it. So treat
 //! what a watcher sees as private, as the host's own, and never write it
 //! out as it is: hide those first, as a recording does. Only a step's
 //! [`line`](Step::line), the recording's own, has them hidden.

@@ -26,6 +26,10 @@ use crate::agent::absolute_only;
 /// `BROWSER` folder looked in.
 pub(crate) const POLL: Duration = Duration::from_millis(100);
 
+/// How long a download may go with nothing coming, from connecting to
+/// its last byte, before it's given up as offline.
+const IDLE: Duration = Duration::from_secs(60);
+
 /// How long a stopped download is waited for before it's left to end by
 /// itself.
 const STOPPING: Duration = Duration::from_millis(500);
@@ -56,7 +60,10 @@ pub(super) async fn survey(root: PathBuf, reporter: Reporter) {
             if !root.is_dir() {
                 return Ok(Vec::new());
             }
-            if let Some(lock) = try_lock(&root.join(LOCK), Lock::Exclusive)? {
+            // Cleaned only while the lock is held. One that can't even be
+            // made, as in a root that can't be written to, leaves things
+            // as they are: what's there is still said.
+            if let Ok(Some(lock)) = try_lock(&root.join(LOCK), Lock::Exclusive) {
                 clean(&root);
                 drop(lock);
             }
@@ -90,6 +97,8 @@ pub(super) async fn survey(root: PathBuf, reporter: Reporter) {
 pub(super) struct Folders {
     pub(super) folder: String,
     pub(super) private: Option<String>,
+    /// About how many bytes the agent takes once installed.
+    pub(super) size: u64,
 }
 
 /// Installs `install` as `root/folder`, making the agent's private folder
@@ -160,19 +169,19 @@ async fn installing(
     if !prepared.map_err(failure)? {
         return Ok(());
     }
+    // What npm wrote is synced file by file before the rename; what a
+    // download put there was synced as it was written.
+    let files = matches!(install, Install::Npm(_));
     let built = match install {
         Install::Npm(package) => npm(&build, &package, options, reporter, stop).await,
-        Install::Download(artifacts) => download(&build, &artifacts, options, reporter, stop).await,
+        Install::Download(artifacts) => {
+            download(&build, &artifacts, folders.size, options, reporter, stop).await
+        }
         // No other kind is given yet.
         _ => Err(other("CAF doesn't know this kind of install".into())),
     };
     let done = match built {
-        Ok(()) => {
-            let (build, place) = (build.clone(), place.clone());
-            blocking(move || fs::rename(&build, &place))
-                .await
-                .map_err(failure)
-        }
+        Ok(()) => placed(&build, &place, files, options, stop).await,
         Err(failure) => Err(failure),
     };
     if done.is_err() {
@@ -238,6 +247,104 @@ async fn removing(root: &Path, folder: &str, unused_since: Wall) -> io::Result<b
             Ok(true)
         }
     }
+}
+
+/// Puts a built install into place, as [`into_place`] does, while still
+/// hearing Stop: the sync can take a while, and a stop then is a stop
+/// like any other.
+async fn placed(
+    build: &Path,
+    place: &Path,
+    files: bool,
+    options: &Options,
+    stop: &mut oneshot::Receiver<()>,
+) -> Result<(), InstallFailure> {
+    let stopped = Arc::new(AtomicBool::new(false));
+    let placing = {
+        let (build, place, stopped) = (build.to_owned(), place.to_owned(), Arc::clone(&stopped));
+        let pause = sync_pause(options);
+        tokio::task::spawn_blocking(move || into_place(&build, &place, files, pause, &stopped))
+    };
+    tokio::pin!(placing);
+    let placed = tokio::select! {
+        placed = &mut placing => placed,
+        _ = &mut *stop => {
+            // It sees that between files, and ends without the rename.
+            stopped.store(true, Ordering::Relaxed);
+            placing.await
+        }
+    };
+    match placed {
+        Ok(Ok(true)) => Ok(()),
+        Ok(Ok(false)) => Err(InstallFailure::Stopped),
+        Ok(Err(error)) => Err(failure(error)),
+        Err(_) => Err(other("putting the install in place panicked".into())),
+    }
+}
+
+/// How long syncing each file takes, as well: only tests make it longer.
+fn sync_pause(options: &Options) -> Duration {
+    #[cfg(test)]
+    if let Some(pause) = options.sync_pause {
+        return pause;
+    }
+    let _ = options;
+    Duration::ZERO
+}
+
+/// Renames a built install into place, once all it holds is on the disk:
+/// a power cut must never leave an install that looks whole and isn't.
+/// It's synced (its files too if `files`, as when npm wrote them; others
+/// were synced as they were written), then renamed, and the folder it's
+/// renamed in synced so the rename lasts too. Only its own are synced, not
+/// the whole disk, so it never waits on what others write. Returns `false`
+/// if `stopped` before the rename, which then isn't done.
+fn into_place(
+    build: &Path,
+    place: &Path,
+    files: bool,
+    pause: Duration,
+    stopped: &AtomicBool,
+) -> io::Result<bool> {
+    if !sync_all_in(build, files, pause, stopped)? {
+        return Ok(false);
+    }
+    fs::rename(build, place)?;
+    if let Some(root) = place.parent() {
+        File::open(root)?.sync_all()?;
+    }
+    Ok(true)
+}
+
+/// Syncs every folder under `folder`, and `folder` itself, to the disk,
+/// and every file too if `files`, until `stopped`: then it returns `false`.
+/// Links are left as they are: what they lead to is synced where it is.
+fn sync_all_in(
+    folder: &Path,
+    files: bool,
+    pause: Duration,
+    stopped: &AtomicBool,
+) -> io::Result<bool> {
+    let mut folders = vec![folder.to_owned()];
+    while let Some(folder) = folders.pop() {
+        for entry in fs::read_dir(&folder)? {
+            if stopped.load(Ordering::Relaxed) {
+                return Ok(false);
+            }
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                folders.push(entry.path());
+            } else if files && kind.is_file() {
+                File::open(entry.path())?.sync_all()?;
+                if !pause.is_zero() {
+                    std::thread::sleep(pause);
+                }
+            }
+        }
+        File::open(&folder)?.sync_all()?;
+    }
+    Ok(!stopped.load(Ordering::Relaxed))
 }
 
 /// Whether `name` can be an install's folder: one plain name, not hidden,
@@ -416,7 +523,11 @@ async fn npm(
     reporter: &Reporter,
     stop: &mut oneshot::Receiver<()>,
 ) -> Result<(), InstallFailure> {
-    let Some(npm) = on_path("npm") else {
+    #[cfg(test)]
+    let npm_given = options.npm.clone();
+    #[cfg(not(test))]
+    let npm_given = None;
+    let Some(npm) = npm_given.or_else(|| on_path("npm")) else {
         return Err(other("npm isn't on PATH".into()));
     };
     {
@@ -554,6 +665,7 @@ fn npm_failure(said: &str, code: Option<i32>) -> InstallFailure {
 async fn download(
     build: &Path,
     artifacts: &[Artifact],
+    size: u64,
     options: &Options,
     reporter: &Reporter,
     stop: &mut oneshot::Receiver<()>,
@@ -586,20 +698,22 @@ async fn download(
     let done = Arc::new(AtomicU64::new(0));
     let stopped = Arc::new(AtomicBool::new(false));
     let fetching = {
-        let (url, done, stopped) = (
-            artifact.url.clone(),
-            Arc::clone(&done),
-            Arc::clone(&stopped),
-        );
-        let proxy = proxy_for(&artifact.url, |name| env_var(options, name));
-        let https_only = !allowed_http(options);
-        tokio::task::spawn_blocking(move || {
-            fetch(&url, out, proxy.as_deref(), https_only, &done, &stopped)
-        })
+        let (done, stopped) = (Arc::clone(&done), Arc::clone(&stopped));
+        let how = Fetch {
+            url: artifact.url.clone(),
+            proxy: proxy_for(&artifact.url, |name| env_var(options, name)),
+            https_only: !allowed_http(options),
+            idle: per_read(options),
+            most: most_for(size),
+        };
+        tokio::task::spawn_blocking(move || fetch(&how, out, &done, &stopped))
     };
     tokio::pin!(fetching);
     let mut ticks = tokio::time::interval(PROGRESS);
     let mut told = 0;
+    // The fetch gives up by itself when nothing comes for `idle`; this is
+    // for when it can't, such as while finding its host.
+    let mut heard = tokio::time::Instant::now();
     let fetched = loop {
         tokio::select! {
             fetched = &mut fetching => break fetched,
@@ -616,7 +730,12 @@ async fn download(
                 let now = done.load(Ordering::Relaxed);
                 if now != told {
                     told = now;
+                    heard = tokio::time::Instant::now();
                     reporter.send(SetupEvent::Progress { done: now });
+                } else if heard.elapsed() > idle(options) {
+                    stopped.store(true, Ordering::Relaxed);
+                    let _ = tokio::time::timeout(STOPPING, &mut fetching).await;
+                    return Err(InstallFailure::Offline);
                 }
             }
         }
@@ -625,31 +744,79 @@ async fn download(
     if !sha256.eq_ignore_ascii_case(artifact.sha256.trim()) {
         return Err(InstallFailure::Corrupt);
     }
-    let (build, unpack, url) = (build.to_owned(), artifact.unpack, artifact.url.clone());
-    tokio::task::spawn_blocking(move || unpack_into(&build, &file, unpack, &url))
-        .await
-        .unwrap_or_else(|_| Err(other("unpacking panicked".into())))
+    // Unpacked while Stop is still heard, as unpacking syncs each file,
+    // which takes a while.
+    let stopped = Arc::new(AtomicBool::new(false));
+    let unpacking = {
+        let (build, unpack, url) = (build.to_owned(), artifact.unpack, artifact.url.clone());
+        let (stopped, pause) = (Arc::clone(&stopped), sync_pause(options));
+        tokio::task::spawn_blocking(move || {
+            unpack_into(&build, &file, unpack, &url, &stopped, pause)
+        })
+    };
+    tokio::pin!(unpacking);
+    let unpacked = tokio::select! {
+        unpacked = &mut unpacking => unpacked,
+        _ = &mut *stop => {
+            // It sees that between entries, and ends.
+            stopped.store(true, Ordering::Relaxed);
+            let _ = unpacking.await;
+            return Err(InstallFailure::Stopped);
+        }
+    };
+    unpacked.unwrap_or_else(|_| Err(other("unpacking panicked".into())))
 }
 
-/// The proxy a download of `url` goes through, if any, chosen as npm
-/// chooses it, from the variables `var` gives:
-/// - for `https`, `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY` or
-///   `http_proxy`, the first set; for `http`, `HTTP_PROXY` or `http_proxy`;
-/// - none if `NO_PROXY` (or `no_proxy`), a list split by commas, names the
-///   host or a domain it's in: `example.com` and `.example.com` both match
-///   `example.com` and `dl.example.com`.
-pub(crate) fn proxy_for(url: &str, var: impl Fn(&str) -> Option<String>) -> Option<String> {
-    let first = |names: &[&str]| {
-        (names.iter()).find_map(|name| var(name).filter(|value| !value.trim().is_empty()))
+/// The proxy a download of `url` goes through, if any, and the variable
+/// that named it, chosen from the environment variables npm reads, as npm
+/// chooses, from what `var` gives:
+/// - for `https`, npm's own `npm_config_https_proxy` or
+///   `npm_config_proxy` (in either case), then `HTTPS_PROXY`,
+///   `https_proxy`, `HTTP_PROXY` or `http_proxy`, the first set; for
+///   `http`, `npm_config_proxy`, then `HTTP_PROXY` or `http_proxy`;
+/// - none if `npm_config_noproxy`, `NO_PROXY` or `no_proxy`, a list split
+///   by commas, names the host or a domain it's in: `example.com` and
+///   `.example.com` both match `example.com` and `dl.example.com`.
+///
+/// What's set in an `.npmrc` file isn't read.
+pub(crate) fn proxy_for(
+    url: &str,
+    var: impl Fn(&str) -> Option<String>,
+) -> Option<(&'static str, String)> {
+    let first = |names: &[&'static str]| {
+        (names.iter()).find_map(|&name| {
+            let value = var(name).filter(|value| !value.trim().is_empty())?;
+            Some((name, value))
+        })
     };
     let lower = url.to_ascii_lowercase();
     let proxy = if lower.starts_with("https://") {
-        first(&["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"])
+        first(&[
+            "npm_config_https_proxy",
+            "NPM_CONFIG_HTTPS_PROXY",
+            "npm_config_proxy",
+            "NPM_CONFIG_PROXY",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "HTTP_PROXY",
+            "http_proxy",
+        ])
     } else {
-        first(&["HTTP_PROXY", "http_proxy"])
+        first(&[
+            "npm_config_proxy",
+            "NPM_CONFIG_PROXY",
+            "HTTP_PROXY",
+            "http_proxy",
+        ])
     }?;
     let host = host_of(&lower)?;
-    let skipped = first(&["NO_PROXY", "no_proxy"]).is_some_and(|list| {
+    let no_proxy = [
+        "npm_config_noproxy",
+        "NPM_CONFIG_NOPROXY",
+        "NO_PROXY",
+        "no_proxy",
+    ];
+    let skipped = first(&no_proxy).is_some_and(|(_, list)| {
         let host: Vec<&str> = host.split('.').rev().collect();
         (list.split(',')).any(|entry| {
             let entry = entry.trim().to_ascii_lowercase();
@@ -696,6 +863,26 @@ fn env_var(options: &Options, name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
+/// How long ureq waits for each read: as long as a download may go with
+/// nothing coming.
+fn per_read(options: &Options) -> Duration {
+    #[cfg(test)]
+    if let Some(per_read) = options.per_read {
+        return per_read;
+    }
+    idle(options)
+}
+
+/// How long a download may go with nothing coming.
+fn idle(options: &Options) -> Duration {
+    #[cfg(test)]
+    if let Some(idle) = options.idle {
+        return idle;
+    }
+    let _ = options;
+    IDLE
+}
+
 /// Whether downloads may come over plain `http` from this machine.
 fn allowed_http(options: &Options) -> bool {
     #[cfg(test)]
@@ -720,20 +907,43 @@ fn allowed_url(url: &str, options: &Options) -> bool {
             .any(|start| lower.starts_with(start))
 }
 
-/// Downloads `url` to `file`, counting into `done`, until it's done or
-/// `stopped`. Returns its SHA-256, in hex.
-fn fetch(
-    url: &str,
-    mut out: File,
-    proxy: Option<&str>,
+/// How big a download of an agent that takes `size` bytes installed may
+/// be: twice that, and a mebibyte, as what's downloaded is mostly no
+/// bigger than what's installed.
+fn most_for(size: u64) -> u64 {
+    size.saturating_mul(2).saturating_add(1 << 20)
+}
+
+/// A download to fetch.
+struct Fetch {
+    url: String,
+    /// The proxy, and the variable that named it.
+    proxy: Option<(&'static str, String)>,
     https_only: bool,
+    /// How long it may go with nothing coming.
+    idle: Duration,
+    /// The most it may be, in bytes: past that, it's cut off.
+    most: u64,
+}
+
+/// Downloads `how`'s URL to `out`, counting into `done`, until it's done,
+/// `stopped`, or past `how`'s most. Returns its SHA-256, in hex.
+fn fetch(
+    how: &Fetch,
+    mut out: File,
     done: &AtomicU64,
     stopped: &AtomicBool,
 ) -> Result<String, InstallFailure> {
+    let (url, https_only, idle) = (how.url.as_str(), how.https_only, how.idle);
+    let proxy = how
+        .proxy
+        .as_ref()
+        .map(|(name, value)| (*name, value.as_str()));
+    // Never the proxy's value in what's said: it may hold a password.
     let proxy = proxy
-        .map(|proxy| {
+        .map(|(name, proxy)| {
             ureq::Proxy::new(proxy)
-                .map_err(|error| other(format!("the proxy {proxy:?} can't be used: {error}")))
+                .map_err(|_| other(format!("the proxy {name} names can't be used")))
         })
         .transpose()?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -741,19 +951,11 @@ fn fetch(
         .https_only(https_only)
         .timeout_connect(Some(Duration::from_secs(30)))
         .timeout_recv_response(Some(Duration::from_secs(60)))
+        .timeout_per_read(Some(idle))
         .http_status_as_error(true)
         .build()
         .into();
-    let response = agent.get(url).call().map_err(|error| match error {
-        ureq::Error::StatusCode(code) => other(format!("the download answered HTTP {code}")),
-        ureq::Error::Io(error) => io_failure(&error, true),
-        ureq::Error::HostNotFound
-        | ureq::Error::ConnectionFailed
-        | ureq::Error::Timeout(_)
-        | ureq::Error::Tls(_)
-        | ureq::Error::Rustls(_) => InstallFailure::Offline,
-        error => other(format!("the download failed: {error}")),
-    })?;
+    let response = agent.get(url).call().map_err(download_failure)?;
     let mut body = response.into_body();
     let mut reader = body.with_config().limit(u64::MAX).reader();
     let mut hash = Sha256::new();
@@ -768,17 +970,63 @@ fn fetch(
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(io_failure(&error, true)),
         };
+        let so_far = done.fetch_add(n as u64, Ordering::Relaxed) + n as u64;
+        if so_far > how.most {
+            return Err(other(
+                "the download was far bigger than its agent should be".into(),
+            ));
+        }
         hash.update(&buffer[..n]);
         out.write_all(&buffer[..n])
             .map_err(|error| io_failure(&error, false))?;
-        done.fetch_add(n as u64, Ordering::Relaxed);
     }
     out.sync_all().map_err(|error| io_failure(&error, false))?;
     Ok(hex(&hash.finalize()))
 }
 
+/// Why a download failed, by the kind of failure alone: what ureq says
+/// may hold a URL a redirect gave, with its token.
+fn download_failure(error: ureq::Error) -> InstallFailure {
+    let why = match error {
+        ureq::Error::StatusCode(code) => {
+            return other(format!("the download answered HTTP {code}"));
+        }
+        ureq::Error::Io(error) => return io_failure(&error, true),
+        ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Timeout(_) => {
+            return InstallFailure::Offline;
+        }
+        ureq::Error::Tls(_)
+        | ureq::Error::Rustls(_)
+        | ureq::Error::Pem(_)
+        | ureq::Error::TlsRequired => "its site's certificate couldn't be checked",
+        ureq::Error::RequireHttpsOnly(_) => "it was sent somewhere that isn't https",
+        ureq::Error::TooManyRedirects | ureq::Error::RedirectFailed => {
+            "it was sent elsewhere too often, or somewhere it can't go"
+        }
+        ureq::Error::BadUri(_) | ureq::Error::Http(_) => "it was sent somewhere that isn't a link",
+        ureq::Error::InvalidProxyUrl | ureq::Error::ConnectProxyFailed(_) => {
+            "its proxy wouldn't take it"
+        }
+        ureq::Error::BodyExceedsLimit(_) => "it was bigger than it should be",
+        ureq::Error::BodyStalled => return InstallFailure::Offline,
+        ureq::Error::Protocol(_) | ureq::Error::LargeResponseHeader(..) => {
+            "its site's answer couldn't be read"
+        }
+        _ => "something went wrong",
+    };
+    other(format!("the download failed: {why}"))
+}
+
 /// Unpacks the checked download `file` into `build`, then removes it.
-fn unpack_into(build: &Path, file: &Path, unpack: Unpack, url: &str) -> Result<(), InstallFailure> {
+/// Stops between entries once `stopped` is set.
+fn unpack_into(
+    build: &Path,
+    file: &Path,
+    unpack: Unpack,
+    url: &str,
+    stopped: &AtomicBool,
+    pause: Duration,
+) -> Result<(), InstallFailure> {
     let unpacked = match unpack {
         Unpack::No => {
             let name = program_name(url);
@@ -788,8 +1036,8 @@ fn unpack_into(build: &Path, file: &Path, unpack: Unpack, url: &str) -> Result<(
                 .map_err(|error| io_failure(&error, false))?;
             return Ok(());
         }
-        Unpack::Zip => unzip(build, file),
-        Unpack::TarGz => untar(build, file),
+        Unpack::Zip => unzip(file, Placing::new(build, stopped, pause)?),
+        Unpack::TarGz => untar(file, Placing::new(build, stopped, pause)?),
         // No other kind is given yet.
         _ => Err(other("CAF doesn't know how to unpack this".into())),
     };
@@ -813,53 +1061,185 @@ fn program_name(url: &str) -> OsString {
     }
 }
 
-/// Unpacks a zip archive, keeping each entry inside `build`.
-fn unzip(build: &Path, file: &Path) -> Result<(), InstallFailure> {
-    let bad =
-        |error: &dyn std::fmt::Display| other(format!("the download can't be unzipped: {error}"));
-    let archive = File::open(file).map_err(|error| io_failure(&error, false))?;
-    let mut archive = zip::ZipArchive::new(archive).map_err(|error| bad(&error))?;
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|error| bad(&error))?;
-        let Some(name) = entry.enclosed_name() else {
-            return Err(bad(&format!("{:?} is outside the archive", entry.name())));
-        };
-        let path = build.join(&name);
-        if entry.is_dir() {
-            fs::create_dir_all(&path).map_err(|error| io_failure(&error, false))?;
-            continue;
+/// Where an archive's entries go: inside `build`, and nowhere else.
+///
+/// Folders and files are made as they come, each only once its folder is
+/// found, by following any links, to be inside the build folder. Links
+/// are made last, once every file is written, so nothing is ever written
+/// through one, and each must then lead, followed all the way, to
+/// something inside the build folder: a chain of links each harmless on
+/// its own can't climb out. Hard links must name a file already placed.
+struct Placing<'a> {
+    build: PathBuf,
+    /// `build`, with every link in its path followed.
+    real: PathBuf,
+    links: Vec<(PathBuf, PathBuf)>,
+    /// Set once the install is stopped: looked at between entries.
+    stopped: &'a AtomicBool,
+    /// How long syncing each file takes, as well: only tests make it
+    /// longer.
+    pause: Duration,
+}
+
+/// Why an archive is refused, in CAF's words: what's in it, never where
+/// on this machine it was being put.
+fn refused(why: &str) -> InstallFailure {
+    other(format!("the download can't be unpacked: {why}"))
+}
+
+impl<'a> Placing<'a> {
+    fn new(build: &Path, stopped: &'a AtomicBool, pause: Duration) -> Result<Self, InstallFailure> {
+        let real = fs::canonicalize(build).map_err(|error| io_failure(&error, false))?;
+        Ok(Self {
+            build: build.to_owned(),
+            real,
+            links: Vec::new(),
+            stopped,
+            pause,
+        })
+    }
+
+    /// Ends the unpacking if the install is stopped.
+    fn go_on(&self) -> Result<(), InstallFailure> {
+        if self.stopped.load(Ordering::Relaxed) {
+            return Err(InstallFailure::Stopped);
         }
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| io_failure(&error, false))?;
+        Ok(())
+    }
+
+    /// Where `name`, an entry's name, goes: refused unless it's a path
+    /// down from the archive's top.
+    fn path(&self, name: &Path) -> Result<PathBuf, InstallFailure> {
+        let plain = name
+            .components()
+            .all(|part| matches!(part, Component::Normal(_) | Component::CurDir));
+        if !plain || name.as_os_str().is_empty() {
+            return Err(refused(&format!("{} is outside it", name.display())));
         }
-        if entry.is_symlink() {
-            let mut target = String::new();
-            entry
-                .read_to_string(&mut target)
-                .map_err(|error| bad(&error))?;
-            if !link_stays_inside(&name, Path::new(&target)) {
-                return Err(bad(&format!("{name:?} links outside the archive")));
-            }
-            std::os::unix::fs::symlink(&target, &path)
-                .map_err(|error| io_failure(&error, false))?;
-            continue;
+        Ok(self.build.join(name))
+    }
+
+    /// Makes the folder `path` goes in, and checks it's inside.
+    fn folder_for(&self, path: &Path, name: &Path) -> Result<(), InstallFailure> {
+        self.make_folder(path.parent().unwrap_or(&self.build), name)
+    }
+
+    /// Makes `folder`, and what leads to it, all inside: the deepest part
+    /// of its path already there is checked first, followed through any
+    /// link, so no folder is ever made outside, empty or not.
+    fn make_folder(&self, folder: &Path, name: &Path) -> Result<(), InstallFailure> {
+        let there = folder
+            .ancestors()
+            .find(|ancestor| ancestor.exists())
+            .unwrap_or(&self.build);
+        self.inside(there, name)?;
+        fs::create_dir_all(folder).map_err(|error| io_failure(&error, false))?;
+        self.inside(folder, name)
+    }
+
+    /// Checks `path`, followed all the way, is inside the build folder.
+    fn inside(&self, path: &Path, name: &Path) -> Result<(), InstallFailure> {
+        match fs::canonicalize(path) {
+            Ok(real) if real.starts_with(&self.real) => Ok(()),
+            Ok(_) => Err(refused(&format!("{} leads outside it", name.display()))),
+            Err(_) => Err(refused(&format!(
+                "{} leads to nothing in it",
+                name.display()
+            ))),
         }
-        let mode = entry.unix_mode().map_or(0o644, |mode| mode & 0o777);
+    }
+
+    fn folder(&self, name: &Path) -> Result<(), InstallFailure> {
+        let path = self.path(name)?;
+        self.make_folder(&path, name)
+    }
+
+    /// Writes a file, with `mode`'s permissions alone.
+    fn file(&self, name: &Path, mode: u32, mut from: impl Read) -> Result<(), InstallFailure> {
+        let path = self.path(name)?;
+        self.folder_for(&path, name)?;
+        let mode = mode & 0o777;
+        // New, so nothing already there, a link least of all, is written
+        // through.
         let mut out = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(mode)
             .open(&path)
             .map_err(|error| io_failure(&error, false))?;
-        io::copy(&mut entry, &mut out).map_err(|error| io_failure(&error, false))?;
+        io::copy(&mut from, &mut out).map_err(|error| io_failure(&error, false))?;
+        // Synced while it's open: its mode may not let it be opened again.
+        out.sync_all().map_err(|error| io_failure(&error, false))?;
+        if !self.pause.is_zero() {
+            std::thread::sleep(self.pause);
+        }
         // The mode given when making it is cut by the umask.
         fs::set_permissions(&path, fs::Permissions::from_mode(mode))
-            .map_err(|error| io_failure(&error, false))?;
+            .map_err(|error| io_failure(&error, false))
     }
-    Ok(())
+
+    /// Notes a link, made once every file is.
+    fn link(&mut self, name: &Path, target: &Path) -> Result<(), InstallFailure> {
+        self.path(name)?;
+        if !link_stays_inside(name, target) {
+            return Err(refused(&format!("{} links outside it", name.display())));
+        }
+        self.links.push((name.to_owned(), target.to_owned()));
+        Ok(())
+    }
+
+    /// Makes a hard link to a file already placed.
+    fn hard_link(&self, name: &Path, target: &Path) -> Result<(), InstallFailure> {
+        let path = self.path(name)?;
+        let original = self.path(target)?;
+        self.inside(&original, target)?;
+        self.folder_for(&path, name)?;
+        fs::hard_link(&original, &path).map_err(|error| io_failure(&error, false))
+    }
+
+    /// Makes the links, then checks each, followed all the way.
+    fn finish(self) -> Result<(), InstallFailure> {
+        for (name, target) in &self.links {
+            let path = self.build.join(name);
+            self.folder_for(&path, name)?;
+            std::os::unix::fs::symlink(target, &path).map_err(|error| io_failure(&error, false))?;
+        }
+        for (name, _) in &self.links {
+            self.inside(&self.build.join(name), name)?;
+        }
+        Ok(())
+    }
 }
 
-/// Whether a link at `at` in an archive, to `target`, stays inside it.
+/// Unpacks a zip archive, keeping each entry inside `build`.
+fn unzip(file: &Path, mut placing: Placing<'_>) -> Result<(), InstallFailure> {
+    let bad = |error: &dyn std::fmt::Display| refused(&error.to_string());
+    let archive = File::open(file).map_err(|error| io_failure(&error, false))?;
+    let mut archive = zip::ZipArchive::new(archive).map_err(|error| bad(&error))?;
+    for index in 0..archive.len() {
+        placing.go_on()?;
+        let mut entry = archive.by_index(index).map_err(|error| bad(&error))?;
+        let Some(name) = entry.enclosed_name() else {
+            return Err(refused(&format!("{:?} is outside it", entry.name())));
+        };
+        if entry.is_dir() {
+            placing.folder(&name)?;
+        } else if entry.is_symlink() {
+            let mut target = String::new();
+            entry
+                .read_to_string(&mut target)
+                .map_err(|error| bad(&error))?;
+            placing.link(&name, Path::new(&target))?;
+        } else {
+            let mode = entry.unix_mode().unwrap_or(0o644);
+            placing.file(&name, mode, &mut entry)?;
+        }
+    }
+    placing.finish()
+}
+
+/// Whether a link at `at` in an archive, to `target`, stays inside it, as
+/// text: a first check, before the links are made and followed.
 fn link_stays_inside(at: &Path, target: &Path) -> bool {
     if target.is_absolute() {
         return false;
@@ -882,19 +1262,50 @@ fn link_stays_inside(at: &Path, target: &Path) -> bool {
     true
 }
 
-/// Unpacks a gzipped tar archive. The tar crate keeps every entry, link
-/// targets included, inside `build`.
-fn untar(build: &Path, file: &Path) -> Result<(), InstallFailure> {
+/// Unpacks a gzipped tar archive, keeping each entry inside `build`, as
+/// [`Placing`] does. Only folders, files and links are taken: a device or
+/// a pipe is refused.
+fn untar(file: &Path, mut placing: Placing<'_>) -> Result<(), InstallFailure> {
+    let bad = |error: &io::Error| match error.raw_os_error() {
+        Some(libc::ENOSPC | libc::EDQUOT) => InstallFailure::NoSpace,
+        // The tar crate's own words, which name no folder of this machine's.
+        _ => refused(&error.to_string()),
+    };
     let archive = File::open(file).map_err(|error| io_failure(&error, false))?;
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(io::BufReader::new(archive)));
-    archive.set_preserve_permissions(false);
-    archive.set_overwrite(false);
-    archive
-        .unpack(build)
-        .map_err(|error| match error.raw_os_error() {
-            Some(libc::ENOSPC) => InstallFailure::NoSpace,
-            _ => other(format!("the download can't be untarred: {error}")),
-        })
+    for entry in archive.entries().map_err(|error| bad(&error))? {
+        placing.go_on()?;
+        let mut entry = entry.map_err(|error| bad(&error))?;
+        let name = entry.path().map_err(|error| bad(&error))?.into_owned();
+        let kind = entry.header().entry_type();
+        if kind.is_dir() {
+            placing.folder(&name)?;
+        } else if kind.is_file() || kind == tar::EntryType::Continuous {
+            let mode = entry.header().mode().unwrap_or(0o644);
+            placing.file(&name, mode, &mut entry)?;
+        } else if kind.is_symlink() || kind.is_hard_link() {
+            let Some(target) = entry.link_name().map_err(|error| bad(&error))? else {
+                return Err(refused(&format!("{} links to nothing", name.display())));
+            };
+            if kind.is_symlink() {
+                placing.link(&name, &target)?;
+            } else {
+                placing.hard_link(&name, &target)?;
+            }
+        } else if kind.is_pax_global_extensions()
+            || kind.is_pax_local_extensions()
+            || kind.is_gnu_longname()
+            || kind.is_gnu_longlink()
+        {
+            // Read by the tar crate for the entries after them.
+        } else {
+            return Err(refused(&format!(
+                "{} isn't a file, folder or link",
+                name.display()
+            )));
+        }
+    }
+    placing.finish()
 }
 
 /// How many bytes the files under `path` hold. Anything that can't be read
@@ -1081,7 +1492,37 @@ mod tests {
                     .find(|(each, _)| *each == name)
                     .map(|(_, value)| (*value).to_owned())
             })
+            .map(|(_, value)| value)
         };
+        let named = |vars: &[(&str, &str)]| {
+            proxy_for("https://dl.example.com/x", |name| {
+                (vars.iter())
+                    .find(|(each, _)| *each == name)
+                    .map(|(_, value)| (*value).to_owned())
+            })
+        };
+        // npm's own settings come first, and the variable is told.
+        assert_eq!(
+            named(&[
+                ("HTTPS_PROXY", "http://env"),
+                ("npm_config_https_proxy", "http://npm")
+            ]),
+            Some(("npm_config_https_proxy", "http://npm".to_owned()))
+        );
+        assert_eq!(
+            named(&[
+                ("HTTPS_PROXY", "http://env"),
+                ("NPM_CONFIG_PROXY", "http://npm")
+            ]),
+            Some(("NPM_CONFIG_PROXY", "http://npm".to_owned()))
+        );
+        assert_eq!(
+            named(&[
+                ("HTTPS_PROXY", "http://env"),
+                ("npm_config_noproxy", "example.com")
+            ]),
+            None
+        );
         let https = "https://dl.example.com:443/agent.tar.gz";
         assert_eq!(with(&[], https), None);
         assert_eq!(
@@ -1132,6 +1573,60 @@ mod tests {
             None,
             "the host, not its user or port"
         );
+    }
+
+    #[tokio::test]
+    async fn a_fetch_that_stalls_ends_by_itself() {
+        // Half a body, then nothing, for good.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/x", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 1024];
+            let _ = socket.read(&mut buffer).await;
+            let _ = socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nhalf")
+                .await;
+            std::future::pending::<()>().await;
+        });
+        let temp = std::env::temp_dir().join(format!("caf-fetch-{}", std::process::id()));
+        let out = File::create(&temp).unwrap();
+        let fetched = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::task::spawn_blocking(move || {
+                let (done, stopped) = (AtomicU64::new(0), AtomicBool::new(false));
+                let how = Fetch {
+                    url,
+                    proxy: None,
+                    https_only: false,
+                    idle: Duration::from_millis(500),
+                    most: u64::MAX,
+                };
+                fetch(&how, out, &done, &stopped)
+            }),
+        )
+        .await
+        .expect("the fetch ends by itself")
+        .unwrap();
+        let _ = fs::remove_file(&temp);
+        assert_eq!(fetched, Err(InstallFailure::Offline));
+    }
+
+    #[test]
+    fn an_install_is_synced_whatever_it_holds() {
+        let folder = std::env::temp_dir().join(format!("caf-sync-{}", std::process::id()));
+        fs::create_dir_all(folder.join("bin/deep")).unwrap();
+        fs::write(folder.join("bin/deep/agent"), "x").unwrap();
+        std::os::unix::fs::symlink("missing", folder.join("link")).unwrap();
+        let synced = sync_all_in(&folder, true, Duration::ZERO, &AtomicBool::new(false));
+        let stopped = sync_all_in(&folder, true, Duration::ZERO, &AtomicBool::new(true));
+        fs::remove_dir_all(&folder).unwrap();
+        assert!(
+            synced.expect("folders, files and links, even one leading nowhere"),
+            "all synced"
+        );
+        assert!(!stopped.unwrap(), "stopped, it says so");
     }
 
     #[test]

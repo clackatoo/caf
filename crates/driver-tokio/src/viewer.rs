@@ -527,3 +527,40 @@ fn for_viewer(mut statuses: Vec<AgentStatus>, rules: &ViewerRules) -> Vec<AgentS
     }
     statuses
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One agent signing in, with its link and code.
+    fn signing_in() -> Vec<AgentStatus> {
+        serde_json::from_value(serde_json::json!([{
+            "name": "claude",
+            "install": { "type": "Host" },
+            "sign_in": { "type": "SigningIn", "value": {
+                "url": "https://claude.ai/oauth?state=s",
+                "code": "ABCD-1234",
+                "paste": true,
+            } },
+        }]))
+        .expect("a status")
+    }
+
+    #[test]
+    fn a_viewer_that_may_only_watch_never_sees_a_sign_ins_link_or_code() {
+        let watching = for_viewer(signing_in(), &ViewerRules::default());
+        let SignInState::SigningIn(link) = &watching[0].sign_in else {
+            panic!("{watching:?}")
+        };
+        assert_eq!((&link.url, &link.code, link.paste), (&None, &None, true));
+        let rules = ViewerRules {
+            agents: true,
+            ..ViewerRules::default()
+        };
+        assert_eq!(
+            for_viewer(signing_in(), &rules),
+            signing_in(),
+            "one that may act sees both"
+        );
+    }
+}

@@ -230,14 +230,18 @@ async fn installing_claude_for_real_then_asking_whether_its_signed_in() {
         .await
         .expect("installed, and asked whether it's signed in, within 20 minutes");
     eprintln!("Claude, installed: {:?}", statuses[0]);
-    let adapter = installs.join("claude-0.98.0/node_modules/.bin/claude-agent-acp");
+    let adapter = installs.join("claude-agent-acp-0.98.0/node_modules/.bin/claude-agent-acp");
     assert!(adapter.exists(), "{} is there", adapter.display());
     let names: Vec<String> = std::fs::read_dir(&installs)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .filter(|name| name != ".lock")
         .collect();
-    assert_eq!(names, ["claude-0.98.0"], "nothing half-built is left");
+    assert_eq!(
+        names,
+        ["claude-agent-acp-0.98.0"],
+        "nothing half-built is left"
+    );
 
     caf.shutdown().await;
     running.await;

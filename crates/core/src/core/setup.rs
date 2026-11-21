@@ -102,6 +102,7 @@ impl<A: AppItem> Core<A> {
                 folder: folder.clone(),
                 install,
                 private,
+                size,
             }));
         }
         for each in self.sharing(&folder) {
@@ -769,9 +770,11 @@ impl<A: AppItem> Core<A> {
 
     /// A process of `agent`'s answered `initialize`. One of the host's own
     /// command that said it's its profile's adapter may run its recipe's
-    /// commands. One of CAF's install at the version its profile was
-    /// checked at, that said it's that version, lets older versions that
-    /// nothing has used for a while be removed.
+    /// commands, so the first to say so has its status command run, if its
+    /// adapter doesn't say by itself whether it's signed in. One of CAF's
+    /// install at the version its profile was checked at, that said it's
+    /// that version, lets older versions that nothing has used for a while
+    /// be removed.
     pub(super) fn agent_answered(
         &mut self,
         now: Now,
@@ -780,8 +783,21 @@ impl<A: AppItem> Core<A> {
         checked: Checked,
         out: &mut Vec<Directive>,
     ) {
-        if let Some(standing) = self.setup.agents.get_mut(agent) {
-            standing.checked = matches!(checked, Checked::Yes | Checked::Newer);
+        let confirmed = matches!(checked, Checked::Yes | Checked::Newer);
+        let first = (self.setup.agents.get_mut(agent)).is_some_and(|standing| {
+            let first = confirmed && !standing.checked;
+            standing.checked = confirmed;
+            first
+        });
+        // The host's own command can now run its recipe's status command,
+        // which until now couldn't: needed only if the adapter doesn't say
+        // by itself. (One that does says so as it answers, and asking
+        // would take a ticket recordings made before didn't.)
+        let hosts =
+            (self.agents.get(agent)).is_some_and(|spec| matches!(spec.launch, Launch::Command(_)));
+        let pushes = (self.recipes.get(agent)).is_some_and(|recipe| recipe.status.pushed);
+        if first && hosts && !pushes {
+            self.check_status(agent, out);
         }
         let folder = self.procs.get(&proc).and_then(|each| each.folder.clone());
         let pinned = self.folder_of(agent);

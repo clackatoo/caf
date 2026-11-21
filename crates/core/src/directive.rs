@@ -269,6 +269,10 @@ pub enum SetupDirective {
         /// there, and never removed. One that's a link is refused, and the
         /// install fails.
         private: Option<String>,
+        /// About how many bytes it takes once installed, as its recipe
+        /// says. A download that goes far past it is cut off and thrown
+        /// away, so a bad server can't fill the disk.
+        size: u64,
     },
     /// Remove the folder `folder`, unless something runs from it.
     Remove {
