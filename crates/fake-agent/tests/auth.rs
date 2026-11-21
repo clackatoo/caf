@@ -199,3 +199,30 @@ fn auth_comes_before_any_script() {
     assert_eq!(status.status.code(), Some(1), "it ran auth, not the script");
     assert!(text(&status.stdout).contains("loggedIn"));
 }
+
+#[test]
+fn auth_after_the_script_it_was_started_with_is_auth() {
+    // A host that starts the fake as `caf-fake-agent SCRIPT` keeps those
+    // arguments when CAF runs its sign-in, and adds the recipe's after them.
+    let dir = Dir::new();
+    let settings = dir.settings(&Auth::default());
+    let script = dir.path("script.jsonl");
+    std::fs::write(&script, "{\"exit\": 7}\n").unwrap();
+    let script = script.to_str().unwrap();
+    for args in [
+        [script, "auth", "status"].as_slice(),
+        [script, "--cli", "auth", "status"].as_slice(),
+    ] {
+        let status = fake(&settings, args, &[], "");
+        assert_eq!(
+            status.status.code(),
+            Some(1),
+            "{args:?} ran auth, not the script"
+        );
+        assert!(text(&status.stdout).contains("loggedIn"), "{args:?}");
+    }
+    let login = fake(&settings, &[script, "auth", "login"], &[], "");
+    assert_eq!(login.status.code(), Some(0), "{}", text(&login.stderr));
+    // And the script alone is still a script.
+    assert_eq!(fake(&settings, &[script], &[], "").status.code(), Some(7));
+}
