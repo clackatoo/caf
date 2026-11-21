@@ -422,9 +422,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let mut list: Vec<SavedChat> = (headers.into_iter())
             .map(|header| {
                 let state = self.saved_state(&shelf, header.chat);
+                // Loaded or put away, it's as it is now, not as it was
+                // last written.
+                let away = (self.saving.away.get(&header.chat))
+                    .filter(|away| away.shelf == shelf)
+                    .map(|away| away.saved.header.clone());
                 let header = match state {
                     SavedState::Loaded => self.header(header.chat).unwrap_or(header),
-                    _ => header,
+                    _ => away.unwrap_or(header),
                 };
                 SavedChat {
                     shelf: shelf.clone(),

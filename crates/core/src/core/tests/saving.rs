@@ -62,6 +62,8 @@ struct Store {
     locked: BTreeSet<ChatId>,
     /// Work given and not done yet, oldest first.
     work: VecDeque<StorageDirective>,
+    /// How many snapshots, journal entries and failures it has seen.
+    counts: [usize; 3],
 }
 
 impl Store {
@@ -85,8 +87,10 @@ impl Store {
                     saved,
                 } => {
                     if fail {
+                        self.counts[2] += 1;
                         return Some((ticket.0, StorageEvent::Failed("disk full".to_owned())));
                     }
+                    self.counts[0] += 1;
                     let written = serde_json::to_vec(&saved).expect("JSON").len();
                     self.locked.insert(saved.chat.id);
                     self.chats
@@ -100,8 +104,10 @@ impl Store {
                     entries,
                 } => {
                     if fail {
+                        self.counts[2] += 1;
                         return Some((ticket.0, StorageEvent::Failed("disk full".to_owned())));
                     }
+                    self.counts[1] += entries.len();
                     let written = serde_json::to_vec(&entries).expect("JSON").len();
                     let (saved, journal) = (self.chats.get_mut(&(shelf, header.chat)))
                         .expect("a journal is added to after its snapshot");
@@ -824,6 +830,11 @@ fn putting_a_chat_away_cuts_its_turn_off_writes_it_whole_and_lets_it_go() {
     );
     assert!(script.core.chat(CHAT).is_none(), "gone from memory");
     assert!(!script.core.is_idle(), "until it's written and let go");
+    // A debugger sees it waiting to be written.
+    assert_has(
+        &script.state()["saving"]["away"][CHAT.to_string()],
+        &json!({ "shelf": SHELF, "writing": ticket(&snapshot) }),
+    );
     let saved = script.core.saved(&Shelf(SHELF.to_owned())).expect("listed");
     assert_has(
         &serde_json::to_value(&saved).expect("JSON"),
@@ -1217,4 +1228,166 @@ fn chat_ids_are_uuids_of_version_7_from_the_seed_and_the_time() {
             EPOCH
         );
     }
+}
+
+/// Dice for scripts made at random: xorshift, from a seed, so each script
+/// is the same every run.
+struct Dice(u64);
+
+impl Dice {
+    /// A number below `sides`.
+    fn roll(&mut self, sides: u64) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0 % sides
+    }
+}
+
+/// The id of the prompt written in `out`, if one is.
+fn prompt_in(out: &[Value]) -> Option<u64> {
+    (super::harness::writes(out).into_iter())
+        .find(|(_, message)| message["method"] == "session/prompt")
+        .and_then(|(_, message)| message["id"].as_u64())
+}
+
+/// Drives a saved chat through a script made at random from `seed`,
+/// with its store answering late and sometimes failing; then checks the
+/// store's copy, its snapshot with its journal applied, is the chat, and
+/// that restoring it gives the chat tidied.
+fn random_script(seed: u64) -> [usize; 3] {
+    let mut dice = Dice(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+    let mut host = host();
+    host.limits.kept_changes = 3;
+    let mut script = Script::new(host);
+    script.without_fixtures();
+    let mut store = Store::default();
+    script.open_saved("claude");
+    let words = ["Run", "ning ", "the ", "tests", ".\n", "All ", "pass."];
+    let (mut ms, mut prompt, mut tools, mut asked) = (0, None, 0, 0);
+    for _ in 0..150 {
+        ms += dice.roll(700);
+        script.at(ms);
+        let chunk = |kind: &str, dice: &mut Dice| {
+            let text = words[usize::try_from(dice.roll(7)).unwrap_or(0)];
+            json!({ "sessionUpdate": kind, "content": { "type": "text", "text": text } })
+        };
+        let out = match dice.roll(12) {
+            0 | 1 => {
+                let text = format!("message {}\nmore", dice.roll(100));
+                script.send(CHAT, &text).1
+            }
+            2..=4 => script.update(PROC, SESSION, &chunk("agent_message_chunk", &mut dice)),
+            5 => script.update(PROC, SESSION, &chunk("agent_thought_chunk", &mut dice)),
+            6 => {
+                tools += 1;
+                let call = json!({ "sessionUpdate": "tool_call", "toolCallId": format!("t{tools}"), "title": "Run", "kind": "execute", "status": "pending" });
+                script.update(PROC, SESSION, &call)
+            }
+            7 if tools > 0 => {
+                let tool = 1 + dice.roll(tools);
+                let update = json!({ "sessionUpdate": "tool_call_update", "toolCallId": format!("t{tool}"), "status": "completed", "rawOutput": "ok" });
+                script.update(PROC, SESSION, &update)
+            }
+            8 if prompt.is_some() && asked < 3 => {
+                asked += 1;
+                let out = script.says(PROC, &super::stop::permission(900 + asked, "t-ask"));
+                let decide = with(&out, "decide");
+                let ticket = decide.first().and_then(|each| each["decide"].as_u64());
+                let mut all = out.clone();
+                if let Some(ticket) = ticket {
+                    all.extend(script.policy(ticket, crate::event::PolicyAnswer::AskUser));
+                }
+                all
+            }
+            9 if prompt.is_some() => {
+                let id = prompt.take().unwrap_or_default();
+                let mut out = Vec::new();
+                let stop = if dice.roll(3) == 0 {
+                    let (stopped, stopping) = script.stop(CHAT);
+                    stopped.expect("there's a turn to stop");
+                    out.extend(stopping);
+                    "cancelled"
+                } else {
+                    "end_turn"
+                };
+                out.extend(script.answers(PROC, id, &json!({ "stopReason": stop })));
+                out
+            }
+            10 => script.set_data(CHAT).1,
+            _ => script.woken(),
+        };
+        if let Some(id) = prompt_in(&out) {
+            prompt = Some(id);
+        }
+        store.take(&out);
+        // The store answers some of its work, late, and fails some.
+        while dice.roll(3) == 0 {
+            let Some((ticket, event)) = store.next(dice.roll(8) == 0) else {
+                break;
+            };
+            let out = script.storage(ticket, event);
+            if let Some(id) = prompt_in(&out) {
+                prompt = Some(id);
+            }
+            store.take(&out);
+        }
+    }
+    // Everything written, retries and all.
+    for _ in 0..4 {
+        ms += 61_000;
+        script.at(ms);
+        let out = script.woken();
+        if let Some(id) = prompt_in(&out) {
+            prompt = Some(id);
+        }
+        store.take(&out);
+        script.serve(&mut store, false);
+    }
+    let shelf = Shelf(SHELF.to_owned());
+    let stored = store.read(&shelf, CHAT).expect("it's stored");
+    let live = script.core.chat(CHAT).cloned().expect("the chat");
+    assert_eq!(
+        stored.chat, live,
+        "seed {seed}: the store's copy is the chat"
+    );
+    assert_eq!(
+        serde_json::to_value(&stored.session).expect("JSON"),
+        script.state()["runs"][CHAT.to_string()]["session"],
+        "seed {seed}"
+    );
+    assert_eq!(stored.header.turns, live.turns.len() as u64);
+
+    // Restored, it's the chat, tidied as of when it was last changed.
+    let mut tidied = live;
+    for change in crate::core::saving::tidy(&tidied.clone(), stored.header.changed) {
+        tidied.apply(&change).expect("tidying fits");
+    }
+    let mut again = Script::new(super::harness::host());
+    again.without_fixtures();
+    again
+        .restore(RestoreChat::new(CHAT, shelf))
+        .0
+        .expect("restoring");
+    again.storage(1000, StorageEvent::Loaded(Box::new(stored)));
+    assert_eq!(again.core.chat(CHAT), Some(&tidied), "seed {seed}");
+
+    // The agent's questions are answered as its turn ends.
+    if let Some(id) = prompt {
+        script.answers(PROC, id, &json!({ "stopReason": "end_turn" }));
+    }
+    store.counts
+}
+
+#[test]
+fn a_saved_chat_reads_back_as_it_is_and_restores_tidied() {
+    let mut counts = [0; 3];
+    for seed in 1..=60 {
+        let each = random_script(seed);
+        for (all, each) in counts.iter_mut().zip(each) {
+            *all += each;
+        }
+    }
+    // Snapshots and journals both, and failures to try again.
+    assert!(counts.iter().all(|&count| count > 60), "{counts:?}");
 }
