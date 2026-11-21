@@ -33,6 +33,7 @@ use crate::question::{
 };
 use crate::save::{CannotRestore, Header, SavedChat, SavedState};
 use crate::settings::{KnownSettings, ModelUsed, SettingChoice};
+use crate::shape::settings;
 use crate::time::{End, Wall, Window};
 use crate::viewer::{
     AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
@@ -263,7 +264,7 @@ fn chat() -> Chat {
                 }),
             },
         ],
-        settings: crate::shape::settings(),
+        settings: settings(),
     }
 }
 
@@ -339,7 +340,7 @@ fn changes() -> Vec<Change> {
         end: End::At(wall(900)),
     };
     let mut changes: Vec<Change> = states.into_iter().map(Change::State).collect();
-    changes.push(Change::Settings(crate::shape::settings()));
+    changes.push(Change::Settings(settings()));
     changes.push(Change::TurnAdded(turn(
         30,
         Starter::User(UserMessage::text("And the docs")),
@@ -479,7 +480,7 @@ fn agents() -> Vec<AgentStatus> {
         settings: [
             KnownSettings::Unknown,
             KnownSettings::Learning,
-            KnownSettings::Known(crate::shape::settings().offered),
+            KnownSettings::Known(settings().offered),
             KnownSettings::Failed("the agent didn't start".into()),
         ][at % 4]
             .clone(),
