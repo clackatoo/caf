@@ -977,6 +977,35 @@ async fn a_chat_closed_while_a_move_of_its_shelf_waits_is_shown_as_it_was_left()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_watch_made_after_a_chat_was_put_away_is_shown_nothing_of_it() {
+    let dir = Dir::new();
+    let spy = Spy::default();
+    let script = dir.script("idle.jsonl", &handshake("s1"));
+    let (caf, running) = start_with::<NoAppData>(&dir, &script, Some(spy.store(&dir)), None);
+    let mut saved = caf.watch_saved();
+    caf.list_saved(shelf("a")).await.unwrap();
+    let chat = caf.open_chat(saved_open(&dir, "a")).await.unwrap();
+    let id = chat.id;
+    chat.set_data(NoAppData).await.unwrap();
+    listed(&mut saved, "the chat, written", |saved| {
+        state_of(saved, id) == Some(&SavedState::Loaded)
+    })
+    .await;
+    // Put away unwatched, its write waiting for a move.
+    let go = spy.hold("move");
+    caf.move_shelf(shelf("a"), shelf("b")).await.unwrap();
+    spy.held().await;
+    chat.put_away().await.unwrap();
+    let mut watch = caf.chat(id).watch();
+    // Another step, with the chat still away.
+    caf.list_saved(shelf("a")).await.unwrap();
+    let next = tokio::time::timeout(PATIENCE, watch.next()).await.unwrap();
+    assert!(next.is_none(), "{next:?}");
+    go.send(()).unwrap();
+    stop(&caf, running).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn saved_chats_are_listed_in_the_order_they_were_made_whatever_their_shelf() {
     let dir = Dir::new();
     let script = dir.script("idle.jsonl", &handshake("s1"));

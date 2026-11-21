@@ -925,6 +925,11 @@ impl<A: AppItem> Drop for Watch<A> {
             *count -= 1;
             if *count == 0 {
                 last.watched.remove(&self.chat);
+                // Once CAF has ended, nothing else is kept for it.
+                if last.ended {
+                    last.chats.remove(&self.chat);
+                    last.left.remove(&self.chat);
+                }
             }
         }
     }
@@ -1277,8 +1282,9 @@ struct Last<A: AppItem> {
     watched: HashMap<ChatId, usize>,
     /// Each of them as CAF left it. Empty until the task ends.
     chats: HashMap<ChatId, (Chat<A>, ChangeNo)>,
-    /// Each of them put away, as it was left, that some watch made before
-    /// hadn't seen yet. Empty until the task ends.
+    /// Each of them put away, as it was left, and not loaded again, while
+    /// watched. Empty until the task ends. Only watches made before it
+    /// was put away are shown it, as each reads it.
     left: HashMap<ChatId, Left<A>>,
     /// The task has ended, and `chats` is filled in.
     ended: bool,
@@ -1468,7 +1474,9 @@ struct Task<A: AppItem, D: AppData> {
     /// deleted, or the step after its last watch is dropped.
     put_away: HashMap<ChatId, Left<A>>,
     /// The number of each loaded chat's latest change, as viewers were
-    /// last told: what a chat put away was shown up to.
+    /// last told: what a chat put away was shown up to. Every loaded chat
+    /// has one, from when it was opened or restored, so it also says which
+    /// chats were loaded as the last step ended.
     numbered: HashMap<ChatId, ChangeNo>,
     /// The lists of chats, open and saved, may have changed since the
     /// watches were last told: after a host's call or the store's answer,
@@ -1517,16 +1525,16 @@ impl<A: AppItem, D: AppData> Task<A, D> {
             }
         }
         {
-            let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
-            let Last {
-                watched,
-                chats,
-                left,
-                ended,
-                ..
-            } = &mut *last;
-            *ended = true;
-            for &chat in watched.keys() {
+            // No watch is counted from now on: the chats watched are known.
+            let watched: Vec<ChatId> = {
+                let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+                last.ended = true;
+                last.watched.keys().copied().collect()
+            };
+            // Copied with the lock let go, as a chat may be big.
+            let mut chats = HashMap::new();
+            let mut left = HashMap::new();
+            for chat in watched {
                 if let Some(Read::Picture {
                     chat: whole,
                     latest,
@@ -1537,6 +1545,24 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                     left.insert(chat, away);
                 }
             }
+            // Only for those still watched: a watch dropped meanwhile was
+            // the last of its chat's.
+            let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+            let Last {
+                watched,
+                chats: kept,
+                left: kept_left,
+                ..
+            } = &mut *last;
+            kept.extend(
+                chats
+                    .into_iter()
+                    .filter(|(chat, _)| watched.contains_key(chat)),
+            );
+            kept_left.extend(
+                left.into_iter()
+                    .filter(|(chat, _)| watched.contains_key(chat)),
+            );
         }
         // Nothing more is taken, so no watch waits on a read sent from
         // now on. Then closing every watch's wake-up channel tells them
@@ -1944,8 +1970,14 @@ impl<A: AppItem, D: AppData> Task<A, D> {
             let last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
             (self.put_away)
                 .retain(|chat, _| last.watched.contains_key(chat) && core.chat(*chat).is_none());
+            // Only chats loaded as the last step ended, so put away in this
+            // one: a watch made since doesn't count it as there.
             let left: Vec<ChatId> = (last.watched.keys())
-                .filter(|chat| !self.put_away.contains_key(chat) && core.chat(**chat).is_none())
+                .filter(|chat| {
+                    self.numbered.contains_key(chat)
+                        && !self.put_away.contains_key(chat)
+                        && core.chat(**chat).is_none()
+                })
                 .copied()
                 .collect();
             (left, last.made)
@@ -2806,6 +2838,47 @@ mod tests {
         let next = tokio::time::timeout(Duration::from_secs(5), watch.next()).await;
         assert!(matches!(next, Ok(None)), "the watch ends with CAF");
         drop((reads, inbox));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn what_caf_kept_for_a_watch_once_it_ended_goes_with_its_last_watch() {
+        use caf_core::agent::{EnvChange, SpawnCommand};
+        use caf_core::profiles::ProfileChoice;
+        let dir = std::env::temp_dir().join(format!("caf-last-words-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("script.jsonl");
+        std::fs::write(
+            &script,
+            [
+                r#"{"wait": {"method": "initialize"}}"#,
+                r#"{"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {}, "agentInfo": {"name": "fake", "version": "1.0.0"}}}}"#,
+                r#"{"wait": {"method": "session/new"}}"#,
+                r#"{"respond": {"result": {"sessionId": "s1"}}}"#,
+                "",
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let mut command = SpawnCommand::new(caf_fake_agent::binary());
+        command.env = vec![EnvChange::Set(
+            caf_fake_agent::SCRIPT_VAR.into(),
+            script.into(),
+        )];
+        let fake = AgentSpec::command("fake", command, ProfileChoice::Cautious);
+        let (caf, running) =
+            Caf::<NoAppItems>::start(Config::new(Host::new("test", "1.0.0"), vec![fake]));
+        let chat = caf.open_chat(OpenChat::new("fake", &dir)).await.unwrap();
+        let first = chat.watch();
+        let second = chat.watch();
+        caf.shutdown().await;
+        running.await;
+        let kept = |caf: &Caf| caf.shared.last.lock().unwrap().chats.len();
+        assert_eq!(kept(&caf), 1, "the chat as CAF left it");
+        drop(first);
+        assert_eq!(kept(&caf), 1, "a watch of it is left");
+        drop(second);
+        assert_eq!(kept(&caf), 0, "nothing, with its last watch gone");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
