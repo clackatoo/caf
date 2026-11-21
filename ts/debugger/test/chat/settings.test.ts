@@ -3,7 +3,7 @@
 // waiting until the agent takes it; before the session opens, what CAF
 // knows the agent offers, or learning it; and the model each turn used.
 
-import type { Setting, SettingChoice } from '@clackatoo/caf'
+import type { AgentStatus, Setting, SettingChoice } from '@clackatoo/caf'
 import { CafError } from '@clackatoo/caf'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -158,6 +158,19 @@ describe("the agent's settings", () => {
     await waitFor(() => expect(bar().getAttribute('aria-busy')).toBe('false'))
   })
 
+  it('puts a refused choice back as the setting is now, if it changed meanwhile', async () => {
+    const given = actions()
+    let refuse = (_: unknown) => {}
+    given.setSetting.mockImplementation(() => new Promise<void>((_, reject) => (refuse = reject)))
+    const { rerender } = draw(chat({ settings: { offered: offered(), chosen: [] } }), { actions: given })
+    await fireEvent.change(select('Model'), { target: { value: 'haiku' } })
+    // The agent fell back to Sonnet by itself while the change was sent.
+    await rerender({ chat: chat({ settings: { offered: offered('sonnet'), chosen: [] } }) })
+    refuse(new CafError({ type: 'Refused', value: { type: 'NoSuchSetting' } }))
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
+    expect(select('Model').value).toBe('sonnet')
+  })
+
   it('puts a switch back as it was if the change is refused', async () => {
     const given = actions()
     let refuse = (_: unknown) => {}
@@ -249,6 +262,29 @@ describe('before the session opens', () => {
     expect(container.querySelector('.caf-settings')).toBeNull()
   })
 
+  it('says how learning goes in one status, keeping Learn in its place, then moves focus to the first setting', async () => {
+    const at = (settings: AgentStatus['settings']) => status({ type: 'Host' }, undefined, false, settings)
+    const { container, rerender, actions } = draw(opening, { agent: at({ type: 'Unknown' }) })
+    const said = container.querySelector('.caf-settings [role=status]')!
+    const learn = screen.getByRole('button', { name: 'Learn it now' })
+    learn.focus()
+    await fireEvent.click(learn)
+    expect(actions.learnSettings).toHaveBeenCalledOnce()
+    await rerender({ agent: at({ type: 'Learning' }) })
+    // The same status and button, the one's text changed and the other off.
+    expect(container.querySelector('.caf-settings [role=status]')).toBe(said)
+    expect(said.textContent).toContain('Learning what the agent offers')
+    expect(screen.getByRole('button', { name: 'Learn it now' })).toBe(learn)
+    expect(learn.getAttribute('aria-disabled')).toBe('true')
+    await fireEvent.click(learn)
+    expect(actions.learnSettings).toHaveBeenCalledOnce()
+    await rerender({ agent: at({ type: 'Failed', value: 'It wouldn’t start.' }) })
+    expect(container.querySelector('.caf-settings [role=status]')).toBe(said)
+    expect(said.textContent).toContain("couldn't be learned: It wouldn’t start.")
+    await rerender({ agent: at({ type: 'Known', value: offered() }) })
+    await waitFor(() => expect(document.activeElement).toBe(select('Model')))
+  })
+
   it('says while it learns, and why it couldn\'t, offering to try again', async () => {
     const learning = draw(opening, { agent: status({ type: 'Host' }, undefined, false, { type: 'Learning' }) })
     expect(learning.container.querySelector('.caf-settings [role=status]')?.textContent).toContain('Learning what the agent offers')
@@ -275,17 +311,29 @@ describe('opening a chat with its settings', () => {
   it('opens it, then chooses each', async () => {
     const chosen: [string, SettingChoice][] = []
     const choose = async (chat: string, choice: SettingChoice) => void chosen.push([chat, choice])
-    expect(await openThenChoose(open, choose, [sonnet, fast])).toEqual({ chat: chatId(9), problem: null })
+    expect(await openThenChoose(open, choose, [sonnet, fast])).toEqual({ chat: chatId(9), failed: [] })
     expect(chosen).toEqual([
       [chatId(9), sonnet],
       [chatId(9), fast],
     ])
   })
 
-  it('resolves with the chat, and why, if its settings couldn\'t be chosen, so it isn\'t opened again', async () => {
+  it('tries every choice, and resolves with the chat and each that couldn\'t be chosen, so it isn\'t opened again', async () => {
     const refused = new CafError({ type: 'Refused', value: { type: 'NoSuchSetting' } })
-    const choose = async () => Promise.reject(refused)
-    expect(await openThenChoose(open, choose, [sonnet, fast])).toEqual({ chat: chatId(9), problem: refused })
+    const effort: SettingChoice = { kind: { type: 'Effort' }, value: { type: 'Choice', value: 'max' } }
+    const tried: SettingChoice[] = []
+    const choose = async (_: string, choice: SettingChoice) => {
+      tried.push(choice)
+      if (choice !== fast) throw refused
+    }
+    expect(await openThenChoose(open, choose, [sonnet, fast, effort])).toEqual({
+      chat: chatId(9),
+      failed: [
+        { choice: sonnet, problem: refused },
+        { choice: effort, problem: refused },
+      ],
+    })
+    expect(tried).toEqual([sonnet, fast, effort])
   })
 
   it("rejects if it didn't open", async () => {

@@ -53,7 +53,9 @@
   /**
    * Chooses `value` for a setting, its control showing `was` before.
    * `show` puts a value in the control: what it showed, if the choice
-   * isn't sent, because another is being sent, or isn't taken.
+   * isn't sent because another is being sent, or the setting as it is
+   * now, if the choice isn't taken (`was`, unless the chat's settings
+   * have changed meanwhile).
    */
   async function choose(
     setting: DeepReadonly<Setting>,
@@ -71,12 +73,23 @@
     sending = null
     if (error !== null) {
       problem = errorText(error)
-      show(was)
+      const now = shown.find((each) => each.kind.type === setting.kind.type)
+      show(now === undefined ? was : standing(now, settings.chosen).value)
     }
   }
 
-  async function learnNow() {
-    if (!canLearn || busy) return
+  /** The bar's settings, once shown: focus moves to the first if Learn had it. */
+  let group = $state<HTMLElement>()
+  let refocus = false
+  $effect(() => {
+    if (group === undefined || !refocus) return
+    refocus = false
+    group.querySelector<HTMLElement>('select, input')?.focus()
+  })
+
+  async function learnNow(event: MouseEvent) {
+    if (!canLearn || busy || known?.type === 'Learning') return
+    refocus = event.currentTarget === document.activeElement
     learning = true
     problem = null
     const error = await attempt(learn)
@@ -111,7 +124,7 @@
 </script>
 
 {#if shown.length > 0}
-  <div class="caf-settings" role="group" aria-label="The agent's settings" aria-busy={busy}>
+  <div class="caf-settings" role="group" aria-label="The agent's settings" aria-busy={busy} bind:this={group}>
     <div class="row">
       {#each shown as setting (setting.kind.type)}
         {@const { value, waiting } = standing(setting, settings.chosen)}
@@ -180,17 +193,22 @@
     </div>
     {#if problem !== null}<div class="problem" role="alert">{problem}</div>{/if}
   </div>
-{:else if known?.type === 'Learning'}
-  <div class="caf-settings"><span role="status">Learning what the agent offers, such as its models…</span></div>
-{:else if (known?.type === 'Unknown' || known?.type === 'Failed') && canLearn}
+{:else if known !== undefined && (known.type === 'Learning' || (canLearn && (known.type === 'Unknown' || known.type === 'Failed')))}
+  <!-- One status throughout, its text changing as learning goes, and Learn
+       kept in its place, so neither is lost to a screen reader or focus. -->
+  {@const now = known.type === 'Learning' || learning}
   <div class="caf-settings">
     <div class="row">
-      {#if known.type === 'Failed'}
-        <span>What the agent offers couldn't be learned: {known.value}</span>
-      {:else}
-        <span>What the agent offers, such as its models, shows once its session opens.</span>
+      <span role="status">
+        {now
+          ? 'Learning what the agent offers, such as its models…'
+          : known.type === 'Failed'
+            ? `What the agent offers couldn't be learned: ${known.value}`
+            : 'What the agent offers, such as its models, shows once its session opens.'}
+      </span>
+      {#if canLearn}
+        <button type="button" aria-disabled={now} onclick={learnNow}>{known.type === 'Failed' ? 'Try again' : 'Learn it now'}</button>
       {/if}
-      <button type="button" aria-busy={learning} onclick={learnNow}>{known.type === 'Failed' ? 'Try again' : 'Learn it now'}</button>
     </div>
     {#if problem !== null}<div class="problem" role="alert">{problem}</div>{/if}
   </div>
@@ -237,6 +255,10 @@
   button {
     padding: 0.15em 0.7em;
     cursor: pointer;
+  }
+  button[aria-disabled='true'] {
+    opacity: 0.5;
+    cursor: default;
   }
   select:disabled,
   input:disabled,

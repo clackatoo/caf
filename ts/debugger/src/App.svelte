@@ -104,9 +104,12 @@
     paste: (text: string) => live?.caf.paste(agentOf(chat), text),
     stopSignIn: () => live?.caf.stopSignIn(agentOf(chat)),
     setSetting: async (choice: SettingChoice) => {
-      await live?.caf.setSetting(need(selected), choice)
-      // Chosen again, as the notice asked.
-      if (notice?.chat === selected) notice = null
+      const chat = need(selected)
+      await live?.caf.setSetting(chat, choice)
+      // Chosen again, as the notice asked: once each that failed is, it's done.
+      if (notice?.chat !== chat) return
+      const kinds = notice.kinds.filter((kind) => kind !== choice.kind.type)
+      notice = kinds.length === 0 ? null : { ...notice, kinds }
     },
     learnSettings: () => live?.caf.learnSettings(agentOf(chat)),
   }
@@ -132,19 +135,38 @@
       const caf = live.caf
       // Opening can't carry settings: they're chosen once it's open, and
       // applied as its session opens.
-      const { chat, problem } = await openThenChoose(
+      const { chat, failed } = await openThenChoose(
         () => caf.open({ agent, cwd, session: { type: 'New' } }),
         (chat, choice) => caf.setSetting(chat, choice),
         settings,
       )
       selected = chat
+      const [first] = failed
       notice =
-        problem === null ? null : { chat, text: `The chat is open, but its settings couldn't be chosen: ${errorText(problem)} Choose them below.` }
+        first === undefined
+          ? null
+          : {
+              chat,
+              kinds: failed.map((each) => each.choice.kind.type),
+              text: `The chat is open, but its settings couldn't be chosen: ${clause(errorText(first.problem))}. Choose them below.`,
+            }
     },
   }
 
-  /** What went wrong choosing a chat's settings as it opened, shown in that chat. */
-  let notice = $state<{ chat: ChatId; text: string } | null>(null)
+  /**
+   * What went wrong choosing a chat's settings as it opened, shown in
+   * that chat until each kind that failed is chosen, or it closes.
+   */
+  let notice = $state<{ chat: ChatId; kinds: string[]; text: string } | null>(null)
+  // A closed chat can't be chosen for: what it said is done with.
+  $effect(() => {
+    if (notice !== null && chat?.id === notice.chat && !lookingBack && chat.state.type === 'Closed') notice = null
+  })
+
+  /** A sentence as it reads after a colon: "The agent …." as "the agent …". */
+  function clause(sentence: string): string {
+    return sentence.charAt(0).toLowerCase() + sentence.slice(1).replace(/\.$/, '')
+  }
 
   const savedActions: SavedActions = {
     select: (chat: ChatId) => (selected = chat),
@@ -284,7 +306,7 @@
             actions={chatActions}
             readOnly={!actable}
             {readOnlyWhy}
-            notice={notice?.chat === chat.id ? notice.text : null}
+            notice={!lookingBack && notice?.chat === chat.id && chat.state.type !== 'Closed' ? notice.text : null}
           />
         {:else}
           <p class="empty">

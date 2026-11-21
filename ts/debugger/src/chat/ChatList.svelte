@@ -37,6 +37,8 @@
   let picked = false
   /** The agent `model` was picked for. */
   let pickedFor: AgentName | null = null
+  /** This list's own, for its elements' ids. */
+  const uid = $props.id()
   let opening = $state(false)
   let problem = $state<string | null>(null)
 
@@ -112,9 +114,10 @@
       </label>
       {#if cwd !== '' && !absolute}<div class="hint">A full path, starting with /.</div>{/if}
       {#if models !== null}
+        {@const about = models.choices.find((choice) => choice.id === model)?.description ?? null}
         <label>
           Model
-          <select bind:value={model} onchange={() => (picked = true)}>
+          <select bind:value={model} onchange={() => (picked = true)} aria-describedby={about === null ? undefined : `${uid}-about`}>
             {#if theirs === ''}<option value="">The agent's own</option>{/if}
             {#each runs(models.choices) as run, r (r)}
               {#if run.group === null}
@@ -127,8 +130,7 @@
             {/each}
           </select>
         </label>
-        {@const about = models.choices.find((choice) => choice.id === model)?.description ?? null}
-        {#if about !== null}<div class="hint">{about}</div>{/if}
+        {#if about !== null}<div class="hint" id="{uid}-about">{about}</div>{/if}
       {/if}
       {#if problem !== null}<div class="problem" role="alert">{problem}</div>{/if}
       <div class="buttons">

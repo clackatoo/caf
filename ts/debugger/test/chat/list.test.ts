@@ -124,7 +124,8 @@ describe('the chat list', () => {
       const model = screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement
       expect([...model.options].map((option) => option.textContent)).toEqual(['Default', 'Sonnet'])
       expect(model.value).toBe('default')
-      expect(screen.getByText('Opus 4.7, for most work')).toBeTruthy()
+      const about = screen.getByText('Opus 4.7, for most work')
+      expect(model.getAttribute('aria-describedby')).toBe(about.id)
       await fireEvent.change(model, { target: { value: 'sonnet' } })
       await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
       expect(actions.open).toHaveBeenCalledWith('claude', '/home/me/new', [
