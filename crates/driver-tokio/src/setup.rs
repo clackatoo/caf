@@ -103,8 +103,9 @@ use tokio::sync::{mpsc, oneshot};
 /// - **Stopping** an install, sign-in or command kills what it runs and
 ///   reports it stopped within about a second, as
 ///   [`SetupDirective::Stop`] says. A download waiting on the network
-///   can't be woken: it's left to end by itself, within a minute, writing
-///   only to a file that went with the half-built folder.
+///   can't be woken: it's left to end by itself, writing only to a file
+///   that went with the half-built folder. It ends once a minute passes
+///   with nothing coming, or sooner.
 /// - **Dropping the driver** stops everything it's doing, as stopping
 ///   would, as far as the runtime lets it: a half-built install the runtime
 ///   shut down too soon to remove is removed by the next survey.
@@ -114,7 +115,10 @@ use tokio::sync::{mpsc, oneshot};
 ///   commands 1 minute, and finding Node's version or npm 30 seconds. A
 ///   sign-in has none, as it waits for the user: the core stops it.
 ///   Downloads give up when connecting takes over 30 seconds, or the
-///   answer doesn't start within a minute.
+///   answer doesn't start within a minute, and give up as
+///   [`InstallFailure::Offline`](caf_core::agent::InstallFailure::Offline)
+///   when a minute passes with no byte coming, at any point. A slow
+///   download that keeps coming has no limit.
 /// - **Proxies:** a download goes through the proxy npm would use:
 ///   `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY` or `http_proxy`, the first
 ///   that's set, unless `NO_PROXY` (or `no_proxy`), a list split by commas,
@@ -192,6 +196,10 @@ pub(crate) struct Options {
     /// instead of this program's.
     #[cfg(test)]
     pub(crate) env: Option<std::collections::HashMap<String, String>>,
+    /// How long a download may go with nothing coming before it's given
+    /// up, instead of a minute.
+    #[cfg(test)]
+    pub(crate) idle: Option<std::time::Duration>,
 }
 
 impl Options {

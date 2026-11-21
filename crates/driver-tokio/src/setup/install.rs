@@ -26,6 +26,10 @@ use crate::agent::absolute_only;
 /// `BROWSER` folder looked in.
 pub(crate) const POLL: Duration = Duration::from_millis(100);
 
+/// How long a download may go with nothing coming, from connecting to
+/// its last byte, before it's given up as offline.
+const IDLE: Duration = Duration::from_secs(60);
+
 /// How long a stopped download is waited for before it's left to end by
 /// itself.
 const STOPPING: Duration = Duration::from_millis(500);
@@ -593,13 +597,25 @@ async fn download(
         );
         let proxy = proxy_for(&artifact.url, |name| env_var(options, name));
         let https_only = !allowed_http(options);
+        let idle = idle(options);
         tokio::task::spawn_blocking(move || {
-            fetch(&url, out, proxy.as_deref(), https_only, &done, &stopped)
+            fetch(
+                &url,
+                out,
+                proxy.as_deref(),
+                https_only,
+                idle,
+                &done,
+                &stopped,
+            )
         })
     };
     tokio::pin!(fetching);
     let mut ticks = tokio::time::interval(PROGRESS);
     let mut told = 0;
+    // The fetch gives up by itself when nothing comes for `idle`; this is
+    // for when it can't, such as while finding its host.
+    let mut heard = tokio::time::Instant::now();
     let fetched = loop {
         tokio::select! {
             fetched = &mut fetching => break fetched,
@@ -616,7 +632,12 @@ async fn download(
                 let now = done.load(Ordering::Relaxed);
                 if now != told {
                     told = now;
+                    heard = tokio::time::Instant::now();
                     reporter.send(SetupEvent::Progress { done: now });
+                } else if heard.elapsed() > idle(options) {
+                    stopped.store(true, Ordering::Relaxed);
+                    let _ = tokio::time::timeout(STOPPING, &mut fetching).await;
+                    return Err(InstallFailure::Offline);
                 }
             }
         }
@@ -696,6 +717,16 @@ fn env_var(options: &Options, name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
+/// How long a download may go with nothing coming.
+fn idle(options: &Options) -> Duration {
+    #[cfg(test)]
+    if let Some(idle) = options.idle {
+        return idle;
+    }
+    let _ = options;
+    IDLE
+}
+
 /// Whether downloads may come over plain `http` from this machine.
 fn allowed_http(options: &Options) -> bool {
     #[cfg(test)]
@@ -727,6 +758,7 @@ fn fetch(
     mut out: File,
     proxy: Option<&str>,
     https_only: bool,
+    idle: Duration,
     done: &AtomicU64,
     stopped: &AtomicBool,
 ) -> Result<String, InstallFailure> {
@@ -741,6 +773,7 @@ fn fetch(
         .https_only(https_only)
         .timeout_connect(Some(Duration::from_secs(30)))
         .timeout_recv_response(Some(Duration::from_secs(60)))
+        .timeout_per_read(Some(idle))
         .http_status_as_error(true)
         .build()
         .into();
@@ -1132,6 +1165,45 @@ mod tests {
             None,
             "the host, not its user or port"
         );
+    }
+
+    #[tokio::test]
+    async fn a_fetch_that_stalls_ends_by_itself() {
+        // Half a body, then nothing, for good.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/x", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 1024];
+            let _ = socket.read(&mut buffer).await;
+            let _ = socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nhalf")
+                .await;
+            std::future::pending::<()>().await;
+        });
+        let temp = std::env::temp_dir().join(format!("caf-fetch-{}", std::process::id()));
+        let out = File::create(&temp).unwrap();
+        let fetched = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::task::spawn_blocking(move || {
+                let (done, stopped) = (AtomicU64::new(0), AtomicBool::new(false));
+                fetch(
+                    &url,
+                    out,
+                    None,
+                    false,
+                    Duration::from_millis(500),
+                    &done,
+                    &stopped,
+                )
+            }),
+        )
+        .await
+        .expect("the fetch ends by itself")
+        .unwrap();
+        let _ = fs::remove_file(&temp);
+        assert_eq!(fetched, Err(InstallFailure::Offline));
     }
 
     #[test]

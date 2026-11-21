@@ -69,6 +69,7 @@ fn driver(dir: &Dir) -> SetupDriver {
             npm_offline_cache: Some(dir.path("driver-npm-cache")),
             temp: Some(dir.path("temp")),
             env: Some(std::collections::HashMap::new()),
+            idle: None,
         },
     )
 }
@@ -698,6 +699,50 @@ async fn proxy(body: Vec<u8>) -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
         }
     });
     (url, tunnels)
+}
+
+#[tokio::test]
+async fn a_download_that_stalls_with_nobody_stopping_it_ends_offline() {
+    let dir = Dir::new();
+    let body = vec![7; 4 << 20];
+    let stalled = serve(body.clone(), true).await.url;
+    let mut driver = SetupDriver::with_options(
+        dir.root(),
+        Options {
+            http_to_this_machine: true,
+            idle: Some(Duration::from_millis(500)),
+            env: Some(std::collections::HashMap::new()),
+            ..Options::default()
+        },
+    );
+    driver.apply(SetupDirective::Install {
+        ticket: Ticket(1000),
+        folder: "fake-1.0.0".into(),
+        install: download(&stalled, &body, Unpack::No),
+        private: None,
+    });
+    let events = tokio::time::timeout(Duration::from_secs(10), done(&mut driver, Ticket(1000)))
+        .await
+        .expect("it gives up once nothing comes");
+    assert_eq!(
+        events.last().expect("a last report"),
+        &SetupEvent::InstallFailed(InstallFailure::Offline)
+    );
+    assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
+    // The installs' lock is let go: another install goes ahead.
+    let good = tar_gz();
+    let server = serve(good.clone(), false).await;
+    driver.apply(SetupDirective::Install {
+        ticket: Ticket(1001),
+        folder: "fake-1.0.0".into(),
+        install: download(&server.url, &good, Unpack::TarGz),
+        private: None,
+    });
+    let events = done(&mut driver, Ticket(1001)).await;
+    assert_eq!(
+        events.last().expect("a last report"),
+        &SetupEvent::Installed
+    );
 }
 
 #[tokio::test]
