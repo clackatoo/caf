@@ -543,6 +543,7 @@ mod tests {
                 "code": "ABCD-1234",
                 "paste": true,
             } },
+            "can_sign_in": true,
         }]))
         .expect("a status")
     }
