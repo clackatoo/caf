@@ -171,7 +171,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return self.prompt_lost_session(now, chat, turn, stopping, out);
         }
         let life = match reply {
-            Reply::Result(result) => ended_by(&result),
+            Reply::Result(result) => {
+                // The session works: a setting that finds it gone may have
+                // it opened again.
+                if let Some(run) = self.runs.get_mut(&chat) {
+                    run.choosing.reopened = false;
+                }
+                ended_by(&result)
+            }
             Reply::Error(error) => {
                 let mut failure = self.failure(chat, turn, &error);
                 self.sign_in_failure(chat, &mut failure);

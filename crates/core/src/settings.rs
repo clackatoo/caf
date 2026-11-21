@@ -20,14 +20,23 @@
 //!   turn running, it's sent at once;
 //! - only the latest change of a setting counts;
 //! - while a change is asked for, the agent's reports about that setting
-//!   don't move the choice: its answer decides;
+//!   don't move the choice: its answer decides. One never answered isn't
+//!   applied; if its answer comes late, for the same session, what it
+//!   says is followed, and it's applied after all if it says so;
 //! - when a session opens or reopens, the choices are sent first, and the
 //!   messages waiting go once they're answered. One of the chat's own
-//!   that can't be applied (a model gone, a change refused) fails every
-//!   message waiting, saying why, with
-//!   [`Remedy::SendAgain`](crate::chat::Remedy::SendAgain), and the
-//!   setting goes back to what the agent uses: a message never goes on a
-//!   model nobody chose;
+//!   that can't be applied (a model gone, a change refused, one never
+//!   answered) fails every message waiting, saying why, with
+//!   [`Remedy::SendAgain`](crate::chat::Remedy::SendAgain);
+//! - one of the chat's own that can't be applied, or that the agent stops
+//!   offering, falls back as a restore would have it: to the host's
+//!   default, if the agent offers that, and otherwise to what the agent
+//!   uses. It's no longer the chat's own;
+//! - **a message never goes with a choice silently replaced**: either it
+//!   fails, as when a choice waiting to be sent can't be applied, or the
+//!   chat says what changed, as when one applied already stops being
+//!   offered ([`Note::NotOffered`](crate::chat::Note::NotOffered)), and
+//!   messages go on what's used then;
 //! - a choice is checked against what the agent offers when it's made, so
 //!   an effort level only the model being changed to offers can be chosen
 //!   once that change is answered, not with it;
@@ -40,8 +49,7 @@
 //! [`Core::set_setting`](crate::Core::set_setting)); the host's default for
 //! the agent ([`AgentSpec::settings`](crate::agent::AgentSpec::settings));
 //! the agent's own. A host default the agent doesn't offer is dropped
-//! quietly; a chat's own choice it doesn't offer fails the messages
-//! waiting, saying so. Which choices are the chat's own is saved with it
+//! quietly. Which choices are the chat's own is saved with it
 //! ([`Settings::own`]): a restored chat takes the host's defaults as they
 //! are then for the rest, and leaves what the agent chose by itself to
 //! the agent.
@@ -193,7 +201,8 @@ pub struct Settings {
     /// what the agent changed to by itself, or went back to: one the agent
     /// doesn't offer is dropped quietly, and a restored chat takes the
     /// host's defaults as they are then in their place, or leaves them to
-    /// the agent. Saves made before it was added read as empty.
+    /// the agent. Missing, as in a chat saved before CAF had settings, it
+    /// reads as empty.
     #[serde(default)]
     pub own: Vec<SettingKind>,
 }

@@ -266,9 +266,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
             super::state::Purpose::Set {
                 chat,
+                choice,
+                session,
                 given_up: true,
-                ..
-            } => self.late_set_answered(now, chat, &reply, out),
+            } => self.late_set_answered(now, (chat, &choice, &session), &reply, out),
             super::state::Purpose::Set { chat, choice, .. } => {
                 self.set_answered(now, (proc, id), chat, choice, reply, out);
             }

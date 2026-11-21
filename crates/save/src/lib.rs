@@ -124,11 +124,13 @@ mod common;
 /// 2. a chat lost because CAF can't turn off its agent's own tools
 ///    ([`Incompatible::OwnTools`](caf_core::chat::Incompatible::OwnTools));
 /// 3. the agent's settings ([`Chat::settings`](caf_core::Chat::settings)),
-///    the model a turn was sent on ([`Turn::model`](caf_core::chat::Turn::model),
+///    the model a turn was sent on
+///    ([`Turn::model`](caf_core::chat::Turn::model),
 ///    [`Change::TurnModel`](caf_core::change::Change::TurnModel)), CAF's
 ///    notes about settings, and a message failed as a setting couldn't be
-///    applied
-///    ([`FailureReason::SettingNotApplied`](caf_core::chat::FailureReason::SettingNotApplied)).
+///    applied ([`FailureReason::SettingNotApplied`]).
+///
+/// [`FailureReason::SettingNotApplied`]: caf_core::chat::FailureReason::SettingNotApplied
 pub const VERSION: u32 = 3;
 
 /// How hard to compress.

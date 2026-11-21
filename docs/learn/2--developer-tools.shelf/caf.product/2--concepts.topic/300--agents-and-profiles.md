@@ -224,10 +224,12 @@ stays as the agent set it.
 A chat's choices are sent before any message, one at a time and the model
 first, as which effort levels there are depends on it; a change made while
 a turn runs waits for it to end. A message never goes on a setting nobody
-chose: one that can't be applied fails the messages waiting for it, and a
-change the agent makes by itself is followed, and said. The agent's status
+chose without saying so: a choice of the chat's own that can't be
+applied fails the messages waiting, and one that stops being offered, or
+that the agent changes by itself, is said in the chat. The agent's status
 says what it offers before any chat, once CAF has learned it
-(`Core::learn_settings`). See [Choosing the model](~caf/getting-started/choosing-the-model).
+(`Core::learn_settings`). See
+[Choosing the model](~caf/getting-started/choosing-the-model).
 
 ## Sharing an adapter
 

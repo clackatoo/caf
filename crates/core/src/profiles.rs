@@ -104,8 +104,9 @@
 //! option `fast`, offered only while the model supports it), set with
 //! `session/set_config_option`; it declares that it takes on/off options
 //! (`session.configOptions.boolean`), and an on/off option offered as a
-//! choice of `on` and `off` is read as a switch all the same. The rest it offers (its
-//! modes, `ultracode`, `agent`) stay hidden, as it set them. It reads the
+//! choice of `on` and `off` is read as a switch all the same. The rest it
+//! offers (its modes, `ultracode`, `agent`) stay hidden, as it set them.
+//! It reads the
 //! user's own `settings.model` even with no settings sources, and on
 //! resume prefers it to the session's own model, so CAF always applies the
 //! chat's choice itself once a session opens. A model the agent changes

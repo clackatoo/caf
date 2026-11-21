@@ -304,6 +304,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             let purpose = Purpose::Set {
                 chat,
                 choice: choice.clone(),
+                session: session.clone(),
                 given_up: false,
             };
             let id = self.request(now, proc, request, purpose, Some(wait), out);
@@ -340,7 +341,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         let offered = offers(&whole.settings.offered, choice);
         let own = whole.settings.own.contains(&choice.kind);
-        self.change_settings(chat, |settings| drop_or_fall_back(settings, choice.kind));
+        self.drop_or_fall_back(chat, choice.kind);
         let why = match (&refused, offered) {
             (Some(words), _) => format!("the agent refused it: {words}"),
             (None, true) => "the agent refused it".to_owned(),
@@ -533,17 +534,62 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// The agent answered, late, a request setting one of `chat`'s settings
     /// that CAF gave up on: what it lists is read as the agent's word on
     /// what it offers and uses now, as if it said it by itself.
+    ///
+    /// Only for the session it was asked of: a session opened since may
+    /// use something else. If it says the setting is what was asked, and
+    /// nothing has been chosen of it since, the choice was applied after
+    /// all, and is the chat's own again.
     pub(super) fn late_set_answered(
         &mut self,
         now: Now,
-        chat: ChatId,
+        (chat, choice, session): (ChatId, &SettingChoice, &AgentSessionId),
         reply: &Reply,
         out: &mut Vec<Directive<A, D>>,
     ) {
+        let same = (self.runs.get(&chat)).is_some_and(|run| {
+            matches!(run.open, Open::Live { .. }) && run.session.as_ref() == Some(session)
+        });
+        if !same {
+            return report(
+                out,
+                Level::Debug,
+                format!(
+                    "chat {}: a late answer about a session it no longer has, ignored",
+                    chat.0
+                ),
+            );
+        }
         let listed = match reply {
             Reply::Result(result) => result.get("configOptions").and_then(Value::as_array),
             _ => None,
         };
+        let style = self.profile_of_chat(chat).settings();
+        let applied = listed.is_some_and(|options| {
+            let offer = options_offer(style, options);
+            let says = (offer.settings.iter())
+                .find(|setting| setting.kind == choice.kind)
+                .and_then(|setting| setting.current.as_ref());
+            says == Some(&choice.value)
+        });
+        let own =
+            (self.chats.get(&chat)).is_some_and(|whole| whole.settings.own.contains(&choice.kind));
+        if applied && !own {
+            self.change_settings(chat, |settings| {
+                make_own(settings, choice.kind);
+                choose(settings, choice.clone());
+            });
+            // Something else of it may be on its way meanwhile, such as the
+            // host's default it fell back to: this goes again after it.
+            if let Some(run) = self.runs.get_mut(&chat)
+                && run
+                    .choosing
+                    .asked
+                    .as_ref()
+                    .is_some_and(|asked| asked.choice.kind == choice.kind)
+            {
+                run.choosing.unsent.insert(choice.kind);
+            }
+        }
         match listed {
             Some(options) => self.options_updated(now, chat, Some(options), out),
             None => report(
@@ -554,6 +600,38 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     chat.0
                 ),
             ),
+        }
+    }
+
+    /// `chat`'s choice of `kind` can't be applied, or is no longer offered:
+    /// dropped, if it isn't the chat's own. One of its own falls back as a
+    /// restore would have it: to the host's default, if the agent offers
+    /// that, which is then sent; and otherwise to what the agent says it
+    /// uses (see [`fall_back`]). Either way it's no longer the chat's own.
+    fn drop_or_fall_back(&mut self, chat: ChatId, kind: SettingKind) {
+        let Some(whole) = self.chats.get(&chat) else {
+            return;
+        };
+        let default = (self.host_defaults(&whole.agent).into_iter())
+            .find(|choice| choice.kind == kind)
+            .filter(|choice| offers(&whole.settings.offered, choice));
+        let mut send = false;
+        self.change_settings(chat, |settings| {
+            if !settings.own.contains(&kind) {
+                settings.chosen.retain(|each| each.kind != kind);
+                return;
+            }
+            settings.own.retain(|each| *each != kind);
+            match default {
+                Some(choice) => {
+                    send = current(settings, kind) != Some(&choice.value);
+                    choose(settings, choice);
+                }
+                None => fall_back(settings, kind),
+            }
+        });
+        if send && let Some(run) = self.runs.get_mut(&chat) {
+            run.choosing.unsent.insert(kind);
         }
     }
 
@@ -596,6 +674,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         self.change_settings(chat, |settings| settings.offered = offer.settings);
         self.follow(now, chat, &before);
+        // A choice that fell back to the host's default goes to the agent.
+        self.pump(now, chat, out);
     }
 
     /// Follows what the agent changed by itself, or no longer offers, of
@@ -624,7 +704,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             };
             if !offers(&whole.settings.offered, &choice) {
                 let own = whole.settings.own.contains(&choice.kind);
-                self.change_settings(chat, |settings| drop_or_fall_back(settings, choice.kind));
+                self.drop_or_fall_back(chat, choice.kind);
                 if own {
                     self.tell(now, chat, Note::NotOffered(choice));
                 }
@@ -1151,18 +1231,6 @@ fn choose(settings: &mut Settings, choice: SettingChoice) {
     settings.chosen.retain(|each| each.kind != choice.kind);
     settings.chosen.push(choice);
     settings.chosen.sort_by_key(|each| each.kind);
-}
-
-/// A choice that can't be applied goes: dropped, if it isn't the chat's
-/// own, and otherwise back to what the agent says it is (see
-/// [`fall_back`]), which is the agent's, not the chat's.
-fn drop_or_fall_back(settings: &mut Settings, kind: SettingKind) {
-    if settings.own.contains(&kind) {
-        settings.own.retain(|each| *each != kind);
-        fall_back(settings, kind);
-    } else {
-        settings.chosen.retain(|each| each.kind != kind);
-    }
 }
 
 /// Marks `kind` as chosen for the chat itself.

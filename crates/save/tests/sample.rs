@@ -432,7 +432,7 @@ fn settings() -> Vec<Value> {
                 { "kind": { "type": "Effort" }, "value": { "type": "Choice", "value": "high" } },
                 { "kind": { "type": "Fast" }, "value": { "type": "Switch", "value": true } },
             ],
-            "own": [{ "type": "Model" }, { "type": "Fast" }],
+            "own": [{ "type": "Effort" }, { "type": "Fast" }],
         }}),
         json!({ "type": "TurnModel", "value": { "turn": 8, "model": { "id": "sonnet", "name": "Sonnet 4.6" } } }),
         note(

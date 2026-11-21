@@ -1097,6 +1097,15 @@
               },
               {
                 "kind": {
+                  "type": "Effort"
+                },
+                "value": {
+                  "type": "Choice",
+                  "value": "high"
+                }
+              },
+              {
+                "kind": {
                   "type": "Fast"
                 },
                 "value": {
@@ -1107,7 +1116,10 @@
             ],
             "own": [
               {
-                "type": "Model"
+                "type": "Effort"
+              },
+              {
+                "type": "Fast"
               }
             ]
           }
@@ -1474,6 +1486,15 @@
                   },
                   {
                     "kind": {
+                      "type": "Effort"
+                    },
+                    "value": {
+                      "type": "Choice",
+                      "value": "high"
+                    }
+                  },
+                  {
+                    "kind": {
                       "type": "Fast"
                     },
                     "value": {
@@ -1484,7 +1505,10 @@
                 ],
                 "own": [
                   {
-                    "type": "Model"
+                    "type": "Effort"
+                  },
+                  {
+                    "type": "Fast"
                   }
                 ]
               }

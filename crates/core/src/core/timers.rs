@@ -232,6 +232,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 chat,
                 ref choice,
                 ref mut given_up,
+                ..
             } => {
                 *given_up = true;
                 pending.deadline = Some(now.mono.after(self.host.timers.request));

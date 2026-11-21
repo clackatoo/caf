@@ -56,12 +56,19 @@ choice is checked against what's offered when it's made, so an effort
 level only a new model has can be chosen once the model change is
 answered, not with it.
 
-A message never goes on a setting nobody chose. If a choice can't be
-applied, because the agent no longer offers it or refuses it, every
-message waiting fails (`FailureReason::SettingNotApplied`), with Send
-again, and the setting goes back to what the agent uses. If the agent
-had lost the session, it's opened again and the choice sent to it, as a
-message would be.
+A message never goes with a choice silently replaced: either it fails, or
+the chat says what changed. If a choice can't be applied, because the
+agent doesn't offer it, refuses it, or never answers, every message
+waiting fails (`FailureReason::SettingNotApplied`), with Send again. The
+setting falls back to your program's default, if the agent offers it,
+and otherwise to what the agent uses. If the agent's answer comes late,
+for the same session, what it says is followed, and the choice counts as
+applied after all if it says so. If the agent had lost the session, it's
+opened again and the choice sent to it, as a message would be.
+
+A choice already applied that the agent stops offering, such as fast mode
+when the model changes to one without it, falls back the same way, and
+the chat says so (`Note::NotOffered`); the messages go on.
 
 ## Choose before the chat opens
 
@@ -94,9 +101,8 @@ opens.
 
 An agent may change a setting itself, as Claude falls back to another
 model when one refuses. The choice follows it, and the chat says so with a
-note (`Note::AgentChanged`), in the turn it happened in. A choice the agent
-stops offering, such as fast mode on a model without it, is dropped, with
-`Note::NotOffered`.
+note (`Note::AgentChanged`), in the turn it happened in. Either way, the
+choice is the agent's now, not the chat's own.
 
 Each turn records the model it was sent on (`Turn::model`).
 
@@ -114,9 +120,9 @@ sent, so it costs nothing. Where it stands is in the agent's status from
 `watch_agents`, as `settings`: `Unknown`, `Learning`, `Known(settings)`
 or `Failed(why)`. What was learned before stays shown while it's learned
 again, and if that fails. If the agent's adapter serves chats and can't
-close sessions, the session stays until the adapter stops. Every chat's session tells it too. It isn't saved: it
-depends on the account and the agent's version, so it's learned again
-each run.
+close sessions, the session stays until the adapter stops. Every chat's
+session tells it too. It isn't saved: it depends on the account and the
+agent's version, so it's learned again each run.
 
 ## Saving
 

@@ -30,6 +30,7 @@ chosen: Array<SettingChoice>,
  * what the agent changed to by itself, or went back to: one the agent
  * doesn't offer is dropped quietly, and a restored chat takes the
  * host's defaults as they are then in their place, or leaves them to
- * the agent. Saves made before it was added read as empty.
+ * the agent. Missing, as in a chat saved before CAF had settings, it
+ * reads as empty.
  */
 own: Array<SettingKind>, };
