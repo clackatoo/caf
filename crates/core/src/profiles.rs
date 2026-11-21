@@ -103,6 +103,15 @@ pub enum Builtin {
     #[cfg(test)]
     #[cfg_attr(feature = "ts", ts(skip))]
     TestDownload,
+    /// CAF's fake agent, `caf-fake-agent`, for trying installs and
+    /// sign-ins with no real agent: its install always fails at once, as
+    /// offline, and it signs in, out and says whether it's signed in
+    /// through `caf-fake-agent auth`, as the file `CAF_FAKE_AGENT_AUTH`
+    /// names says. Only with the `fake` feature, for tools and their
+    /// tests, such as caf-debugger's.
+    #[cfg(feature = "fake")]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    Fake,
 }
 
 impl Builtin {
@@ -114,6 +123,8 @@ impl Builtin {
             Self::TestNpm => "test-npm-acp",
             #[cfg(test)]
             Self::TestDownload => "test-download-acp",
+            #[cfg(feature = "fake")]
+            Self::Fake => FAKE_NAME,
         }
     }
 
@@ -125,6 +136,8 @@ impl Builtin {
             Self::TestNpm => [2, 0, 0],
             #[cfg(test)]
             Self::TestDownload => [1, 4, 0],
+            #[cfg(feature = "fake")]
+            Self::Fake => [0, 0, 0],
         }
     }
 
@@ -136,6 +149,8 @@ impl Builtin {
             Self::TestNpm => tests::npm_recipe(),
             #[cfg(test)]
             Self::TestDownload => tests::download_recipe(),
+            #[cfg(feature = "fake")]
+            Self::Fake => fake_recipe(),
         }
     }
 }
@@ -254,6 +269,74 @@ fn claude_recipe() -> Recipe {
     }
 }
 
+/// The fake agent, as it names itself in `initialize`.
+#[cfg(feature = "fake")]
+const FAKE_NAME: &str = "caf-fake-agent";
+
+/// The fake agent's recipe. Its install is a download, for every
+/// platform, from port 1 of this machine, where nothing listens, so it
+/// fails at once, as offline, and never installs anything. It signs in,
+/// out and says whether it's signed in with its adapter's `auth`
+/// commands: the sign-in opens its link with `BROWSER`, shows a code
+/// after `Your code: `, and takes a paste, and its link must be to
+/// `caf.example`.
+#[cfg(feature = "fake")]
+fn fake_recipe() -> Recipe {
+    use crate::install::{Artifact, Platform, Unpack};
+
+    let adapter = |args: &[&str]| Bundled {
+        program: Program::Adapter,
+        args: args.iter().map(|&arg| arg.to_owned()).collect(),
+        env: Vec::new(),
+    };
+    let platforms = ["linux", "macos", "windows"]
+        .into_iter()
+        .flat_map(|os| ["x86_64", "aarch64"].map(|arch| Platform::new(os, arch)));
+    let artifacts = platforms
+        .map(|platform| {
+            Artifact::new(
+                platform,
+                "https://127.0.0.1:1/caf-fake-agent",
+                "0".repeat(64),
+                Unpack::No,
+            )
+        })
+        .collect();
+    Recipe {
+        version: "0.0.0".to_owned(),
+        install: Install::Download(artifacts),
+        size: 4_000_000,
+        needs: Needs::default(),
+        adapter: Bundled {
+            program: Program::InInstall("caf-fake-agent".into()),
+            args: Vec::new(),
+            env: Vec::new(),
+        },
+        sign_in: Some(SignIn {
+            command: adapter(&["auth", "login"]),
+            link: LinkFrom::Browser,
+            code_after: Some("Your code: ".to_owned()),
+            paste: true,
+            sites: vec!["caf.example".to_owned()],
+        }),
+        sign_out: Some(adapter(&["auth", "logout"])),
+        status: Status {
+            pushed: false,
+            command: Some(StatusCommand {
+                command: adapter(&["auth", "status"]),
+                signed_in: "/loggedIn".to_owned(),
+                how: Some((
+                    "/authMethod".to_owned(),
+                    vec![
+                        ("claude.ai".to_owned(), SignedInAs::Account),
+                        ("api_key".to_owned(), SignedInAs::ApiKey),
+                    ],
+                )),
+            }),
+        },
+    }
+}
+
 /// ACP's error for "the user must sign in first".
 pub(crate) const AUTH_REQUIRED: i64 = -32000;
 
@@ -275,6 +358,8 @@ impl ProfileChoice {
             }
             #[cfg(test)]
             Self::Builtin(Builtin::TestNpm | Builtin::TestDownload) => {}
+            #[cfg(feature = "fake")]
+            Self::Builtin(Builtin::Fake) => {}
             Self::Cautious => {}
         }
         declared
@@ -325,6 +410,8 @@ impl ProfileChoice {
             Self::Builtin(Builtin::TestNpm) => true,
             #[cfg(test)]
             Self::Builtin(Builtin::TestDownload) => false,
+            #[cfg(feature = "fake")]
+            Self::Builtin(Builtin::Fake) => false,
             Self::Cautious => false,
         }
     }
@@ -370,6 +457,8 @@ impl ProfileChoice {
             }
             #[cfg(test)]
             Self::Builtin(Builtin::TestNpm | Builtin::TestDownload) => false,
+            #[cfg(feature = "fake")]
+            Self::Builtin(Builtin::Fake) => false,
             Self::Cautious => false,
         }
     }
@@ -385,6 +474,8 @@ impl ProfileChoice {
             }
             #[cfg(test)]
             Self::Builtin(Builtin::TestNpm | Builtin::TestDownload) => false,
+            #[cfg(feature = "fake")]
+            Self::Builtin(Builtin::Fake) => false,
             Self::Cautious => false,
         }
     }
@@ -609,6 +700,8 @@ pub(crate) mod tests {
             Builtin::ClaudeAgentAcp,
             Builtin::TestNpm,
             Builtin::TestDownload,
+            #[cfg(feature = "fake")]
+            Builtin::Fake,
         ] {
             let profile = ProfileChoice::Builtin(builtin);
             assert_eq!(profile.pushes_status(), builtin.recipe().status.pushed);
@@ -625,5 +718,39 @@ pub(crate) mod tests {
         assert!(declared.get("_meta").is_none(), "no AIR");
         let cautious = ProfileChoice::Cautious.declarations();
         assert!(cautious.get("elicitation").is_none() && cautious.get("session").is_none());
+    }
+
+    #[cfg(feature = "fake")]
+    #[test]
+    fn the_fake_profile_never_installs_and_signs_in_through_its_auth_commands() {
+        let fake = ProfileChoice::Builtin(Builtin::Fake);
+        let report = fake.check(adapter("caf-fake-agent", "0.0.0"));
+        assert_eq!(
+            (report.checked, report.profile),
+            (Checked::Yes, fake.clone())
+        );
+        let recipe = fake.recipe().expect("it has one");
+        let Install::Download(artifacts) = &recipe.install else {
+            panic!("a download, not {:?}", recipe.install);
+        };
+        // From nowhere, on every platform, so it fails as offline rather
+        // than as a platform it isn't for.
+        for os in ["linux", "macos", "windows"] {
+            for arch in ["x86_64", "aarch64"] {
+                assert!(artifacts.iter().any(|artifact| artifact.platform
+                    == crate::install::Platform::new(os, arch)
+                    && artifact.url == "https://127.0.0.1:1/caf-fake-agent"));
+            }
+        }
+        let sign_in = recipe.sign_in.expect("it signs in");
+        assert_eq!(sign_in.command.program, Program::Adapter);
+        assert_eq!(sign_in.command.args, ["auth", "login"]);
+        assert_eq!(sign_in.sites, ["caf.example"]);
+        assert!(sign_in.paste);
+        assert_eq!(
+            recipe.sign_out.expect("it signs out").args,
+            ["auth", "logout"]
+        );
+        assert!(!fake.pushes_status());
     }
 }

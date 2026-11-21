@@ -15,6 +15,9 @@
 //! 2. CAF answers [`ToViewer::Welcome`] with the newest version both
 //!    speak, the agents on offer, the open chats, and which run of CAF
 //!    this is; or [`ToViewer::NoCommonVersion`], and ends the link.
+//!    Right after the welcome, before anything else, comes
+//!    [`ToViewer::Agents`], where every agent stands, so a viewer knows
+//!    that from the start.
 //! 3. The viewer watches chats ([`FromViewer::Watch`]): it gets each one
 //!    whole ([`ToViewer::Picture`]), then its changes
 //!    ([`ToViewer::Changes`]). It may act on them: send, stop, answer,
@@ -234,8 +237,8 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
         chat: ChatId,
     },
     /// Where every agent stands, installed or not and signed in or not:
-    /// after `Welcome`, and again whenever any of it changes. The whole
-    /// list, each time.
+    /// right after `Welcome`, before any other message, and again
+    /// whenever any of it changes. The whole list, each time.
     Agents(Vec<AgentStatus>),
     /// How a request went.
     Done {
