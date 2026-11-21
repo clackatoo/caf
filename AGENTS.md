@@ -41,18 +41,21 @@ sample. `CAF_BLESS` never touches it; only while a version is
 unreleased may `CAF_BLESS_SAMPLE=1 cargo test -p caf-core version_1`
 rewrite its sample.
 
-`samples/save/v1/` holds a chat saved by version 1 of the saved format,
-with one of every kind of item, turn, change and journal entry, an app
-item and data slot included: the format's own bytes (`header`,
+`samples/save/v<N>/` holds a chat saved by version N of the saved
+format, with one of every kind of item, turn, change and journal entry,
+an app item and data slot included: the format's own bytes (`header`,
 `snapshot`, `journal`), and the same chat as caf-save's `FileStore`
-keeps it (`files/`, with a second chat, squeezed). A test fails if it no
-longer reads as the values in `crates/save/tests/sample.rs` say: it's
-pinned by what it reads as, not its bytes, as zstd may compress the
-same thing differently from one version to the next. Saves stay
-readable forever, and `caf_save::VERSION` goes up with every change to
-what's saved, a field or variant added included, so an older CAF never
-reads a newer save and writes it back short. `shapes.ts` pins the saved
-types' shapes, from the TypeScript types: a test fails if they, or what
-CAF writes of the sample's values, change while `VERSION` doesn't. A new
-version gets a sample of its own. Only while a version is unreleased may
-`CAF_BLESS_SAMPLE=1 cargo test -p caf-save version_1` rewrite its sample.
+keeps it (`files/`, with a second chat, squeezed). A test fails if any
+version's sample no longer reads as the values in
+`crates/save/tests/sample.rs` say: it's pinned by what it reads as, not
+its bytes, as zstd may compress the same thing differently from one
+version to the next. Saves stay readable forever, and
+`caf_save::VERSION` goes up with every change to what's saved, a field
+or variant added included, so an older CAF never reads a newer save and
+writes it back short. The current version's sample also pins the saved
+types' shapes, from the TypeScript types (`shapes.ts`) and from serde
+itself, through the newest viewer sample (`variants.txt`), and what CAF
+writes of its values: a test fails if any of them change while
+`VERSION` doesn't. A new version gets a sample of its own. Only while a
+version is unreleased may `CAF_BLESS_SAMPLE=1 cargo test -p caf-save
+--test sample` rewrite its sample.

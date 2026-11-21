@@ -1,39 +1,45 @@
-//! The sample that pins version 1 of the saved format: `samples/save/v1/`,
-//! a chat with one of every kind of item, turn and change in it, an app
-//! item and data slot included, saved by version 1.
+//! The samples that pin each version of the saved format:
+//! `samples/save/v<VERSION>/`, a chat with one of every kind of item, turn
+//! and change in it, an app item and data slot included, saved by that
+//! version.
 //!
 //! - `header`, `snapshot` and `journal` are the format's own bytes, as
 //!   [`encode_header`], [`encode_snapshot`] and [`encode_record`] wrote
 //!   them;
-//! - `files/` is the same chat as [`FileStore`] keeps it.
+//! - `files/` is the same chat as [`FileStore`] keeps it, with a second
+//!   chat, squeezed;
+//! - `shapes.ts` and `variants.txt` are every saved type's shape as that
+//!   version had it: its fields and variants.
 //!
-//! The files are what's pinned, not the values below: the test reads
-//! them, and they must read as the values say, so a change to how any of
-//! it is read fails. They aren't compared byte for byte, as zstd may
-//! compress the same thing differently from one version to the next. The
-//! values below only write the files, and only under
-//! `CAF_BLESS_SAMPLE=1`, which is for a version not yet released.
+//! Every version's sample must always read as the values below say, so a
+//! change to how any of it is read fails. They aren't compared byte for
+//! byte, as zstd may compress the same thing differently from one zstd to
+//! the next; what's inside them is, for the version this CAF writes, so
+//! a change to what's saved fails until [`VERSION`] goes up. The values
+//! only write the files, and only under `CAF_BLESS_SAMPLE`, for the
+//! version this CAF writes, which is for a version not yet released.
 //!
-//! The app's types here are part of the sample: they're the app that
-//! saved it, so they never change either.
+//! The app's types here are part of the samples: they're the app that
+//! saved them, so they never change either.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use caf_core::save::{Entry, Saved};
-use caf_core::{AppData, AppItem, ChatId, Shelf};
+use caf_core::save::{Entry, Header, Saved};
+use caf_core::{AppData, AppItem, ChatId, ItemKind, NoAppData, NoAppItems, Shelf};
 use caf_save::{
-    FileStore, Squeeze, Store, decode, decode_header, encode_header, encode_record, encode_snapshot,
+    FileStore, Squeeze, Store, VERSION, decode, decode_header, encode_header, encode_record,
+    encode_snapshot,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// What a test failing here means.
-const CHANGED: &str = "samples/save/v1 no longer reads as it did: version 1 of the saved format \
-    has changed. Saves stay readable forever: what changes a released version's shape needs a new \
-    version (caf_save::VERSION), with a migration from this one, and a sample of its own. Only \
-    while version 1 is unreleased may `CAF_BLESS_SAMPLE=1 cargo test -p caf-save version_1` \
-    rewrite its sample";
+const CHANGED: &str = "a sample no longer reads as it did: what reads a released version of the \
+    saved format has changed. Saves stay readable forever: a change to what's saved needs a new \
+    version (caf_save::VERSION), with a sample of its own, and a migration if it's a change of \
+    shape. Only while a version is unreleased may `CAF_BLESS_SAMPLE=1 cargo test -p caf-save \
+    --test sample` rewrite its sample";
 
 /// The app's own item, as the app that saved the sample had it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -64,15 +70,39 @@ impl AppData for Notes {
     }
 }
 
-/// Where it's kept, written first under `CAF_BLESS_SAMPLE`, once for
-/// every test.
-fn folder() -> PathBuf {
+/// Where a version's sample is kept: the one this CAF writes written
+/// first under `CAF_BLESS_SAMPLE`, once for every test.
+fn folder(version: u32) -> PathBuf {
     static BLESSED: std::sync::Once = std::sync::Once::new();
-    let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/save/v1");
-    if std::env::var_os("CAF_BLESS_SAMPLE").is_some() {
+    let folder = (Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/save"))
+        .join(format!("v{version}"));
+    if version == VERSION && std::env::var_os("CAF_BLESS_SAMPLE").is_some() {
         BLESSED.call_once(|| bless(&folder));
     }
     folder
+}
+
+/// What a version's sample holds, as the values that wrote it.
+struct Sample {
+    header: Header,
+    before: Saved<Pin, Notes>,
+    records: Vec<Vec<Entry<Pin, Notes>>>,
+    after: Saved<Pin, Notes>,
+    squeezed: Saved<Pin, Notes>,
+}
+
+/// A version's sample's values.
+fn sample(version: u32) -> Sample {
+    match version {
+        1 => Sample {
+            header: from(header(9)),
+            before: before(),
+            records: records(),
+            after: after(),
+            squeezed: squeezed(),
+        },
+        _ => panic!("samples/save/v{version} has no values here: add them, and bless its sample"),
+    }
 }
 
 /// The chat's id.
@@ -435,140 +465,231 @@ fn shapes() -> String {
     (seen.values().map(|shape| format!("{shape}\n"))).collect()
 }
 
-/// Writes the sample.
+/// The saved types' fields and variants as serde writes them, with no
+/// generated types between: every object in the chats, changes and
+/// headers of the newest viewer sample, which caf-core's own tests make
+/// hold one of every variant of every enum in them, by where it is, its
+/// variant and its fields; and the variants of the two enums that sample
+/// can't hold, as serde names them.
+fn variants() -> String {
+    let viewer = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/viewer");
+    let newest = (1..)
+        .map(|version| viewer.join(format!("v{version}.json")))
+        .take_while(|path| path.exists())
+        .last()
+        .expect("a viewer sample");
+    let sample: Value =
+        serde_json::from_str(&fs::read_to_string(&newest).expect("it reads")).expect("JSON");
+    let mut seen = std::collections::BTreeSet::new();
+    for message in sample["to_viewer"].as_array().expect("messages") {
+        let value = &message["value"];
+        match message["type"].as_str() {
+            Some("Picture") => walk(&value["chat"], "chat", &mut seen),
+            Some("Changes") => {
+                for change in value["changes"].as_array().expect("changes") {
+                    walk(&change["change"], "change", &mut seen);
+                }
+            }
+            Some("Saved") => {
+                for saved in value.as_array().expect("saved chats") {
+                    walk(&saved["header"], "header", &mut seen);
+                }
+            }
+            _ => {}
+        }
+    }
+    /// The variants serde knows of an enum: as it says a tag isn't one.
+    fn named<T: serde::de::DeserializeOwned>() -> String {
+        let error = serde_json::from_value::<T>(json!({ "type": "?", "value": null }))
+            .err()
+            .expect("no such variant")
+            .to_string();
+        let (_, named) = error.split_once("expected one of ").expect("its variants");
+        named.to_owned()
+    }
+    seen.insert(format!(
+        "Entry: {}",
+        named::<Entry<NoAppItems, NoAppData>>()
+    ));
+    seen.insert(format!("ItemKind: {}", named::<ItemKind<NoAppItems>>()));
+    (seen.into_iter().map(|line| line + "\n")).collect()
+}
+
+/// Notes every object in `value`, at `at`: where it is, its variant if
+/// it's one, and its fields. What an agent or tool sent, kept as it came,
+/// isn't a saved type's shape, so isn't looked inside.
+fn walk(value: &Value, at: &str, seen: &mut std::collections::BTreeSet<String>) {
+    match value {
+        Value::Object(fields) => {
+            let here = match fields.get("type").and_then(Value::as_str) {
+                Some(variant) => format!("{at}<{variant}>"),
+                None => at.to_owned(),
+            };
+            let names: Vec<&str> = fields.keys().map(String::as_str).collect();
+            seen.insert(format!("{here} {{{}}}", names.join(", ")));
+            for (name, inner) in fields {
+                if !["type", "raw", "input"].contains(&name.as_str()) {
+                    walk(inner, &format!("{here}.{name}"), seen);
+                }
+            }
+        }
+        Value::Array(each) => each
+            .iter()
+            .for_each(|inner| walk(inner, &format!("{at}[]"), seen)),
+        _ => {}
+    }
+}
+
+/// A folder of the test's own, removed when it's done with.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(name: &str) -> Self {
+        let path = std::env::temp_dir().join(format!("caf-save-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        Self(path)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Writes the sample of the version this CAF writes.
 fn bless(folder: &Path) {
+    let values = sample(VERSION);
     let _ = fs::remove_dir_all(folder);
     fs::create_dir_all(folder).expect("the sample's folder");
-    let header = encode_header(&from(header(9)));
-    let snapshot = encode_snapshot(&before(), Squeeze::Fast);
-    let records: Vec<Vec<u8>> = records().iter().map(|each| encode_record(each)).collect();
+    let header = encode_header(&values.header);
+    let snapshot = encode_snapshot(&values.before, Squeeze::Fast);
+    let records: Vec<Vec<u8>> = (values.records.iter())
+        .map(|each| encode_record(each))
+        .collect();
     fs::write(folder.join("header"), &header).expect("written");
     fs::write(folder.join("snapshot"), &snapshot).expect("written");
     fs::write(folder.join("journal"), records.concat()).expect("written");
     fs::write(folder.join("shapes.ts"), shapes()).expect("written");
-    let mut store = FileStore::new(folder.join("files"));
+    fs::write(folder.join("variants.txt"), variants()).expect("written");
+    let files = folder.join("files");
+    let mut store = FileStore::new(&files);
     store
-        .snapshot(&shelf(), id(), &encode_header(&before().header), &snapshot)
+        .snapshot(
+            &shelf(),
+            id(),
+            &encode_header(&values.before.header),
+            &snapshot,
+        )
         .expect("written");
     for record in &records {
         store
             .append(&shelf(), id(), &header, record)
             .expect("written");
     }
-    let other = squeezed();
+    let other = &values.squeezed;
     store
         .snapshot(
             &shelf(),
             squeezed_id(),
             &encode_header(&other.header),
-            &encode_snapshot(&other, Squeeze::Fast),
+            &encode_snapshot(other, Squeeze::Fast),
         )
         .expect("written");
     store.release(&shelf(), squeezed_id());
     // The first held, so only the second is squeezed.
-    FileStore::new(folder.join("files"))
+    FileStore::new(&files)
         .squeeze(std::time::Duration::ZERO)
         .expect("squeezed");
     store.release(&shelf(), id());
     for chat in [id(), squeezed_id()] {
-        fs::remove_file(folder.join(format!("files/work/{chat}.lock"))).expect("its lock");
+        fs::remove_file(files.join(format!("work/{chat}.lock"))).expect("its lock");
     }
+    fs::remove_file(files.join("work/.shelf.lock")).expect("its shelf's lock");
+}
+
+/// Reads a version's sample's file.
+fn read(version: u32, name: &str) -> Vec<u8> {
+    fs::read(folder(version).join(name))
+        .unwrap_or_else(|error| panic!("samples/save/v{version}/{name}: {error}"))
 }
 
 #[test]
-fn version_1_reads_as_its_sample_says() {
-    let folder = folder();
-    let read = |name: &str| {
-        fs::read(folder.join(name))
-            .unwrap_or_else(|error| panic!("samples/save/v1/{name}: {error}"))
-    };
-    assert_eq!(
-        decode_header(&read("header")),
-        Ok(from(header(9))),
-        "{CHANGED}"
-    );
-    let saved = decode::<Pin, Notes>(&read("snapshot"), &read("journal"));
-    assert_eq!(saved, Ok(after()), "{CHANGED}");
+fn every_version_reads_as_its_sample_says() {
+    for version in 1..=VERSION {
+        let values = sample(version);
+        let read = |name| read(version, name);
+        let changed = format!("v{version}: {CHANGED}");
+        assert_eq!(
+            decode_header(&read("header")),
+            Ok(values.header.clone()),
+            "{changed}"
+        );
+        let saved = decode::<Pin, Notes>(&read("snapshot"), &read("journal"));
+        assert_eq!(saved, Ok(values.after.clone()), "{changed}");
 
-    // As the file store keeps it, read from a copy, as loading locks it.
-    let copy = std::env::temp_dir().join(format!("caf-save-sample-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&copy);
-    fs::create_dir_all(copy.join("work")).expect("a copy");
-    for entry in fs::read_dir(folder.join("files/work")).expect("samples/save/v1/files") {
-        let entry = entry.expect("a file");
-        fs::copy(entry.path(), copy.join("work").join(entry.file_name())).expect("copied");
+        // As the file store keeps it, read from a copy, as loading locks it.
+        let copy = Scratch::new(&format!("sample-v{version}"));
+        fs::create_dir_all(copy.0.join("work")).expect("a copy");
+        let kept = folder(version).join("files/work");
+        for entry in fs::read_dir(&kept).expect("the sample's files") {
+            let entry = entry.expect("a file");
+            fs::copy(entry.path(), copy.0.join("work").join(entry.file_name())).expect("copied");
+        }
+        let mut store = FileStore::new(&copy.0);
+        let mut listed = store.list(&shelf()).expect("it lists");
+        listed.sort();
+        let stored = store.load(&shelf(), id()).expect("it loads");
+        let other = store.load(&shelf(), squeezed_id()).expect("it loads");
+        let flags =
+            fs::read(copy.0.join(format!("work/{}.caf", squeezed_id()))).expect("it's there")[8];
+        assert_eq!(listed.len(), 2, "{changed}");
+        assert_eq!(decode_header(&listed[0].1), Ok(values.header), "{changed}");
+        let read = decode(&stored.snapshot, &stored.journal);
+        assert_eq!(read, Ok(values.after), "{changed}");
+        assert_eq!(flags, 1, "{changed}: the second chat is squeezed");
+        let read = decode(&other.snapshot, &other.journal);
+        assert_eq!(read, Ok(values.squeezed), "{changed}");
     }
-    let mut store = FileStore::new(&copy);
-    let mut listed = store.list(&shelf()).expect("it lists");
-    listed.sort();
-    let stored = store.load(&shelf(), id()).expect("it loads");
-    let other = store.load(&shelf(), squeezed_id()).expect("it loads");
-    let flags = fs::read(copy.join(format!("work/{}.caf", squeezed_id()))).expect("it's there")[8];
-    let _ = fs::remove_dir_all(&copy);
-    assert_eq!(listed.len(), 2, "{CHANGED}");
-    assert_eq!(
-        decode_header(&listed[0].1),
-        Ok(from(header(9))),
-        "{CHANGED}"
-    );
-    assert_eq!(
-        decode(&stored.snapshot, &stored.journal),
-        Ok(after()),
-        "{CHANGED}"
-    );
-    assert_eq!(flags, 1, "{CHANGED}: the second chat is squeezed");
-    assert_eq!(
-        decode(&other.snapshot, &other.journal),
-        Ok(squeezed()),
-        "{CHANGED}"
-    );
 }
 
 /// What a test failing here means.
-const SHAPE_CHANGED: &str = "what's saved has changed shape, but caf_save::VERSION hasn't: every \
-    change to a saved type, a field or variant added included, needs a new version, so an older \
-    CAF knows it can't read it, with a sample of its own (samples/save/v<VERSION>/). Only while \
-    version 1 is unreleased may `CAF_BLESS_SAMPLE=1 cargo test -p caf-save version_1` rewrite \
-    its sample";
+const SHAPE_CHANGED: &str = "what's saved has changed, but caf_save::VERSION hasn't: every change \
+    to a saved type, a field or variant added included, needs a new version, so an older CAF knows \
+    it can't read it, with a sample of its own (samples/save/v<VERSION>/). Only while a version is \
+    unreleased may `CAF_BLESS_SAMPLE=1 cargo test -p caf-save --test sample` rewrite its sample";
 
 #[test]
-fn version_1_is_what_this_caf_writes_unless_the_version_changed() {
-    // Every saved type, every field and variant, as the TypeScript types
-    // generated from them say, as this version's sample pins them.
-    let version = caf_save::VERSION;
-    let path = format!("samples/save/v{version}/shapes.ts");
-    let pinned = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(&path),
-    )
-    .unwrap_or_else(|error| panic!("{path}: {error}: {SHAPE_CHANGED}"));
-    assert!(pinned == shapes(), "{SHAPE_CHANGED}");
-    if version != 1 {
-        return;
-    }
-    let folder = folder();
-    let read = |name: &str| {
-        fs::read(folder.join(name))
-            .unwrap_or_else(|error| panic!("samples/save/v1/{name}: {error}"))
-    };
-    // What it writes of the sample's values is what version 1 wrote.
-    let header = encode_header(&from(header(9)));
+fn this_version_writes_what_its_sample_holds() {
+    let read = |name| read(VERSION, name);
+    let pinned = |name| String::from_utf8(read(name)).expect("text");
+    // Every saved type, every field and variant: as the TypeScript types
+    // generated from them say, and as serde itself writes them.
+    assert!(
+        pinned("shapes.ts") == shapes(),
+        "shapes.ts: {SHAPE_CHANGED}"
+    );
+    assert!(
+        pinned("variants.txt") == variants(),
+        "variants.txt: {SHAPE_CHANGED}"
+    );
+    // What it writes of the sample's values is what's in the sample.
+    let values = sample(VERSION);
+    let header = encode_header(&values.header);
     assert!(
         inside(&header) == inside(&read("header")),
-        "{SHAPE_CHANGED}"
+        "header: {SHAPE_CHANGED}"
     );
-    let snapshot = encode_snapshot(&before(), Squeeze::Fast);
+    let snapshot = encode_snapshot(&values.before, Squeeze::Fast);
     assert!(
         inside(&snapshot) == inside(&read("snapshot")),
-        "{SHAPE_CHANGED}"
+        "snapshot: {SHAPE_CHANGED}"
     );
-    let records: Vec<u8> = records()
-        .iter()
+    let records: Vec<u8> = (values.records.iter())
         .flat_map(|each| encode_record(each))
         .collect();
     assert!(
         insides(&records) == insides(&read("journal")),
-        "{SHAPE_CHANGED}"
+        "journal: {SHAPE_CHANGED}"
     );
 }
