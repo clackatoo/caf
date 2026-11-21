@@ -94,6 +94,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// The id the next chat made gets: a UUID of version 7, from `now`'s
     /// time and, through the host's seed, how many chats came before.
     pub(super) fn next_chat_id(&self, now: Now) -> ChatId {
+        #[cfg(test)]
+        if self.numbered {
+            return ChatId::from_number(self.ids.next);
+        }
         let first = mix(self.host.seed ^ mix(self.saving.made));
         let second = mix(first);
         let mut random = [0; 10];

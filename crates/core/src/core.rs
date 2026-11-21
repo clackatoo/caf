@@ -114,6 +114,11 @@ pub struct Core<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     /// What tests saw of each chat's record, change by change.
     #[cfg(test)]
     applied: BTreeMap<ChatId, record::Applied<A>>,
+    /// Chats get numbered ids ([`ChatId::from_number`]), from the same
+    /// counter as every other id, rather than UUIDs: so tests' ids are
+    /// 1000, 1003…
+    #[cfg(test)]
+    numbered: bool,
 }
 
 /// What to open a chat with.
@@ -293,6 +298,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             misfits: Vec::new(),
             #[cfg(test)]
             applied: BTreeMap::new(),
+            #[cfg(test)]
+            numbered: true,
         }
     }
 

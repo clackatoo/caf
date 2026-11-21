@@ -58,6 +58,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             report(out, Level::Warn, format!("chat {} is already open", chat.0));
             return Ok(());
         }
+        // A numbered id, as recordings made before chats had UUIDs hold,
+        // came from the counter every other id does.
+        if let Ok(number) = u64::try_from(chat.0.as_u128()) {
+            self.ids.seen(number);
+        }
         self.saving.made += 1;
         self.data.insert(chat, D::default());
         self.shutting_down = false;

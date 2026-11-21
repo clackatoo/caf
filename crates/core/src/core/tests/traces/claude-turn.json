@@ -6,14 +6,15 @@
       "value": {
         "type": "OpenChat",
         "value": {
-          "chat": 1000,
+          "chat": "00000000-0000-0000-0000-0000000003e8",
           "open": {
             "agent": "claude",
             "cwd": "/work",
             "session": {
               "type": "New"
             },
-            "mcp_servers": []
+            "mcp_servers": [],
+            "shelf": null
           }
         }
       }
@@ -118,7 +119,7 @@
       "value": {
         "type": "Send",
         "value": {
-          "chat": 1000,
+          "chat": "00000000-0000-0000-0000-0000000003e8",
           "turn": 1003,
           "message": {
             "parts": [
