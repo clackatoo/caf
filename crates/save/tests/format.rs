@@ -203,9 +203,10 @@ fn a_last_record_a_crash_left_whole_in_length_but_not_in_bytes_is_left_out() {
     let before_last = encoded[..2].concat();
     let expected = Ok(applied(saved, &records[..2].concat()));
     let last = &encoded[2];
-    // Garbage anywhere in it after its length. A length made shorter
-    // leaves bytes after it, so it isn't the last: that's damage.
-    for at in 4..last.len() {
+    // Garbage anywhere in it, its length included: longer than what's
+    // left, or shorter, leaving bytes after it that aren't a whole record,
+    // it's still an end a crash cut off.
+    for at in 0..last.len() {
         let mut wrong = last.clone();
         wrong[at] ^= 0x40;
         let read = decode::<Pin, Notes>(&snapshot, &[&before_last[..], &wrong].concat());

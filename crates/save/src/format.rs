@@ -558,27 +558,33 @@ enum Tree {
     Str(String),
     Bytes(Vec<u8>),
     List(Vec<Tree>),
-    /// A map, by its keys, written as text.
-    Map(BTreeMap<String, Tree>),
+    /// A map: its keys are anything MessagePack's can be, such as a list
+    /// for a tuple, and compared as what they are, never as text.
+    Map(Vec<(Tree, Tree)>),
 }
 
 impl Tree {
-    /// A map's value, by key.
+    /// A map's value, by a key that's text.
     fn get(&self, key: &str) -> Option<&Tree> {
         match self {
-            Tree::Map(map) => map.get(key),
+            Tree::Map(map) => (map.iter())
+                .find(|(each, _)| matches!(each, Tree::Str(each) if each == key))
+                .map(|(_, value)| value),
             _ => None,
         }
     }
 
     /// Whether `back` holds all of this: every key of a map, with what it
     /// holds; every list as long, with each of what it holds; and every
-    /// thing else equal. Keys `back` has that this hasn't, as a newer
-    /// version adds, are fine; nothing else may differ.
+    /// thing else equal, a whole number held as a float of just the same
+    /// value included, as a type widened from one to the other writes it.
+    /// Keys `back` has that this hasn't, as a newer version adds, are
+    /// fine; nothing else may differ.
     fn within(&self, back: &Tree) -> bool {
         match (self, back) {
-            (Tree::Map(saved), Tree::Map(back)) => (saved.iter())
-                .all(|(key, saved)| back.get(key).is_some_and(|back| saved.within(back))),
+            (Tree::Map(saved), Tree::Map(back)) => saved.iter().all(|(key, saved)| {
+                (back.iter()).any(|(each, back)| key.same(each) && saved.within(back))
+            }),
             (Tree::List(saved), Tree::List(back)) => {
                 saved.len() == back.len()
                     && saved
@@ -586,10 +592,32 @@ impl Tree {
                         .zip(back)
                         .all(|(saved, back)| saved.within(back))
             }
-            (Tree::Float(saved), Tree::Float(back)) => {
-                saved == back || (saved.is_nan() && back.is_nan())
+            (Tree::Int(saved), Tree::Float(back)) => {
+                // Both ways, so neither is rounded.
+                *saved as f64 == *back && *back as i128 == *saved
             }
-            (saved, back) => saved == back,
+            (saved, back) => saved.same(back),
+        }
+    }
+
+    /// Whether this is just what `other` is: floats bit for bit, but any
+    /// not-a-number as any other.
+    fn same(&self, other: &Tree) -> bool {
+        match (self, other) {
+            (Tree::Float(one), Tree::Float(other)) => {
+                one.to_bits() == other.to_bits() || (one.is_nan() && other.is_nan())
+            }
+            (Tree::List(one), Tree::List(other)) => {
+                one.len() == other.len()
+                    && one.iter().zip(other).all(|(one, other)| one.same(other))
+            }
+            (Tree::Map(one), Tree::Map(other)) => {
+                one.len() == other.len()
+                    && one.iter().all(|(key, value)| {
+                        (other.iter()).any(|(each, other)| key.same(each) && value.same(other))
+                    })
+            }
+            (one, other) => one == other,
         }
     }
 }
@@ -669,45 +697,67 @@ impl<'de> Visitor<'de> for TreeVisitor {
     }
 
     fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Tree, M::Error> {
-        let mut entries = BTreeMap::new();
-        while let Some((key, value)) = map.next_entry::<KeyName, Tree>()? {
-            entries.insert(key.0, value);
+        let mut entries = Vec::new();
+        while let Some(entry) = map.next_entry::<Tree, Tree>()? {
+            entries.push(entry);
         }
         Ok(Tree::Map(entries))
     }
 }
 
-/// A map's key, written as text, whatever it was.
-struct KeyName(String);
+#[cfg(test)]
+mod tests {
+    use super::Tree::{self, Bool, Float, Int, List, Map, Nil, Str};
 
-impl<'de> Deserialize<'de> for KeyName {
-    fn deserialize<De: Deserializer<'de>>(deserializer: De) -> Result<Self, De::Error> {
-        /// Reads a key.
-        struct Name;
-        impl Visitor<'_> for Name {
-            type Value = KeyName;
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("a key")
-            }
-            fn visit_str<E>(self, key: &str) -> Result<KeyName, E> {
-                Ok(KeyName(key.to_owned()))
-            }
-            fn visit_bytes<E>(self, key: &[u8]) -> Result<KeyName, E> {
-                Ok(KeyName(format!("{key:?}")))
-            }
-            fn visit_i64<E>(self, key: i64) -> Result<KeyName, E> {
-                Ok(KeyName(key.to_string()))
-            }
-            fn visit_u64<E>(self, key: u64) -> Result<KeyName, E> {
-                Ok(KeyName(key.to_string()))
-            }
-            fn visit_f64<E>(self, key: f64) -> Result<KeyName, E> {
-                Ok(KeyName(key.to_string()))
-            }
-            fn visit_bool<E>(self, key: bool) -> Result<KeyName, E> {
-                Ok(KeyName(key.to_string()))
-            }
+    #[test]
+    fn what_holds_what() {
+        let map = |entries: Vec<(Tree, Tree)>| Map(entries);
+        let text = |text: &str| Str(text.into());
+        // What was saved, what's written back, and whether it holds it.
+        let cases = [
+            (Float(f64::NAN), Float(-f64::NAN), true),
+            (Float(0.0), Float(-0.0), false),
+            (Float(-0.0), Float(0.0), false),
+            (Float(1.5), Float(1.5), true),
+            (Int(1), Float(1.0), true),
+            (Int(-3), Float(-3.0), true),
+            (Int(1), Float(1.5), false),
+            (Float(1.0), Int(1), false),
+            (Int((1 << 60) + 1), Float(((1_i64 << 60) + 1) as f64), false),
+            (Int(1), Int(1), true),
+            (Int(1), Bool(true), false),
+            (Nil, map(vec![]), false),
+            (map(vec![]), Nil, false),
+            (map(vec![]), map(vec![(text("a"), Nil)]), true),
+            (map(vec![(text("a"), Nil)]), map(vec![]), false),
+            (List(vec![Int(1), Int(2)]), List(vec![Int(1)]), false),
+            (List(vec![Int(1)]), Int(1), false),
+            (
+                map(vec![(List(vec![Int(1), Int(2)]), text("x"))]),
+                map(vec![
+                    (List(vec![Int(1), Int(2)]), text("x")),
+                    (text("y"), Nil),
+                ]),
+                true,
+            ),
+            (
+                map(vec![(Int(1), text("x"))]),
+                map(vec![(text("1"), text("x"))]),
+                false,
+            ),
+            (
+                map(vec![(text("1"), text("x"))]),
+                map(vec![(Int(1), text("x"))]),
+                false,
+            ),
+            (
+                map(vec![(Float(1.0), Nil)]),
+                map(vec![(Int(1), Nil)]),
+                false,
+            ),
+        ];
+        for (saved, back, holds) in cases {
+            assert_eq!(saved.within(&back), holds, "{saved:?} in {back:?}");
         }
-        deserializer.deserialize_any(Name)
     }
 }

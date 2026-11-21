@@ -259,3 +259,101 @@ fn an_app_item_in_a_tool_call_read_back_short_is_not_restored() {
     let read = decode::<Nested, Nested>(&snapshot, &[changed(&short), changed(&fine)].concat());
     assert!(read.is_ok(), "what counts is what it was set to last");
 }
+
+/// Data keyed by something other than text: a grid's cells.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct Grid {
+    cells: std::collections::BTreeMap<(u32, u32), String>,
+}
+app!(Grid);
+
+/// Data whose count was a whole number, and is a float now.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct Whole {
+    count: u32,
+}
+app!(Whole);
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct Widened {
+    count: f64,
+}
+app!(Widened);
+
+/// A chat with `data` in its data slot, and nothing else of the app's.
+fn with_data<D: AppData>(data: D) -> Vec<u8> {
+    let mut json = common::saved_with(1, vec![]);
+    json["data"] = serde_json::to_value(D::default()).expect("JSON");
+    let mut saved: Saved<Json, D> = from(json);
+    saved.data = data;
+    encode_snapshot(&saved, Squeeze::Fast)
+}
+
+#[test]
+fn data_keyed_by_anything_reads() {
+    let grid = Grid {
+        cells: [((1, 2), "a".to_owned()), ((3, 4), "b".to_owned())].into(),
+    };
+    let read = decode::<Json, Grid>(&with_data(grid.clone()), &[]).expect("it reads");
+    assert_eq!(read.data, grid);
+}
+
+#[test]
+fn a_whole_number_read_as_a_float_of_the_same_value_is_kept() {
+    let snapshot = with_data(Whole { count: 3 });
+    let read = decode::<Json, Widened>(&snapshot, &[]).expect("it reads");
+    assert_eq!(read.data, Widened { count: 3.0 });
+    // Not back the other way: a float isn't a whole number.
+    let snapshot = with_data(Widened { count: 3.0 });
+    assert!(decode::<Json, Whole>(&snapshot, &[]).is_err());
+}
+
+#[test]
+fn an_app_item_in_a_tool_call_added_by_the_journal_is_checked_too() {
+    let lost = CannotRestore::AppData(
+        "this version of the app can't keep all of an app item in a tool call".into(),
+    );
+    let snapshot = encode_snapshot(
+        &from::<Saved<Json, Json>>(common::saved_with(1, vec![])),
+        Squeeze::Fast,
+    );
+    let tool = |id: u64, app: &Value| {
+        common::item(
+            id,
+            json!({ "type": "Tool", "value": {
+                "title": "Move the map",
+                "kind": { "type": "Other" },
+                "status": { "type": "Done" },
+                "input": null,
+                "output": "",
+                "app": app,
+            }}),
+        )
+    };
+    let (fine, short) = (
+        json!({ "inner": { "a": 1 } }),
+        json!({ "inner": { "a": 1, "b": 2 } }),
+    );
+    let added = |app: &Value| {
+        let entries: Vec<Entry<Json, Json>> = from(json!([
+            { "type": "Change", "value": { "type": "TurnAdded", "value":
+                common::turn(10, "Move it", vec![]) } },
+            { "type": "Change", "value": { "type": "ItemAdded", "value": {
+                "turn": 10, "item": tool(11, app),
+            } } },
+        ]));
+        encode_record(&entries)
+    };
+    let in_turn = |app: &Value| {
+        let entries: Vec<Entry<Json, Json>> = from(json!([
+            { "type": "Change", "value": { "type": "TurnAdded", "value":
+                common::turn(10, "Move it", vec![tool(11, app)]) } },
+        ]));
+        encode_record(&entries)
+    };
+    for record in [&added as &dyn Fn(&Value) -> Vec<u8>, &in_turn] {
+        let read = decode::<Nested, Json>(&snapshot, &record(&short));
+        assert_eq!(read.map(|_| ()), Err(lost.clone()));
+        assert!(decode::<Nested, Json>(&snapshot, &record(&fine)).is_ok());
+    }
+}

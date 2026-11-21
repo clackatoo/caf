@@ -660,7 +660,7 @@ pub(crate) fn snapshot(
     header: &[u8],
     snapshot: &[u8],
 ) -> Result<(), StoreError> {
-    let (place, _) = hold(path, held, shelf, chat, true)?.expect("made");
+    let (place, taken) = hold(path, held, shelf, chat, true)?.expect("made");
     let key = (shelf.clone(), chat);
     // Not known again until it's done: a snapshot that fails partway may
     // leave the journal from before it, which counts for nothing.
@@ -669,6 +669,22 @@ pub(crate) fn snapshot(
     }
     let folder = &place.folder;
     let (caf, journal) = (file(chat, "caf"), file(chat, "journal"));
+    // Never over a newer CAF's, which this one can't read. An older
+    // version's is written over: a chat loaded from one is written whole
+    // in this one's before anything's added to it.
+    if let Some(start) = read_start(folder, &caf, CAF_PREFIX as u64 + 7)?
+        && start.len() >= CAF_PREFIX
+        && (start[8] & !SQUEEZED != 0
+            || matches!(
+                format::version(&start[CAF_PREFIX..]),
+                Err(CannotRestore::Newer { .. })
+            ))
+    {
+        if taken {
+            held.remove(&key);
+        }
+        return Err(newer(&start[CAF_PREFIX..]));
+    }
     let was = generation(folder, &caf)?;
     // Past any journal too, as one may be left of a chat deleted halfway.
     let generation = (was

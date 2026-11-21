@@ -301,6 +301,10 @@ fn a_save_this_caf_cannot_read_is_left_byte_for_byte() {
     age(root, 1);
     other.squeeze(Duration::ZERO).expect("it squeezes");
     store.release(&work, chat);
+    // Nor written over, and let go of again.
+    let wrote = other.snapshot(&work, chat, &head(1), &snap(1));
+    assert!(matches!(wrote, Err(StoreError::Newer { .. })), "{wrote:?}");
+    assert!(!other.holds(&work, chat));
     assert_eq!(files(), before);
     // Marked by a newer store in a way this one doesn't know.
     let mut bytes = fs::read(&caf).expect("one");
@@ -315,6 +319,8 @@ fn a_save_this_caf_cannot_read_is_left_byte_for_byte() {
         "{loaded:?}"
     );
     other.squeeze(Duration::ZERO).expect("it squeezes");
+    let wrote = other.snapshot(&work, chat, &head(1), &snap(1));
+    assert!(matches!(wrote, Err(StoreError::Newer { .. })), "{wrote:?}");
     assert_eq!(files(), before);
 }
 

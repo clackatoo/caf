@@ -40,7 +40,14 @@ use crate::time::Window;
 /// and everything else equal. Keys the type adds are fine; nothing else
 /// may differ. So never drop, shorten, narrow or replace what the type
 /// read, as `skip_serializing_if`, `#[serde(other)]` or a lossy
-/// `deserialize_with` would.
+/// `deserialize_with` would; and keep sets in a stable order, as a
+/// `BTreeSet` or `Vec` does, not a `HashSet`, whose order changes from
+/// one run to the next. Change a field's type with care: what the old
+/// type wrote must be held in what the new one writes of it. A whole
+/// number read as a float of the same value is; a float read as a whole
+/// number isn't, nor is anything read as a struct that writes it
+/// differently, such as a field that was `NoAppData`'s `null` read as a
+/// struct.
 pub trait AppItem:
     Clone + Debug + PartialEq + Serialize + DeserializeOwned + Send + 'static
 {

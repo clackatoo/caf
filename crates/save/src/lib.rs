@@ -298,7 +298,9 @@ pub trait Store: Send + 'static {
     ///
     /// # Errors
     ///
-    /// [`StoreError::InUse`] or [`StoreError::Io`].
+    /// [`StoreError::InUse`], [`StoreError::Newer`] if it keeps the chat
+    /// from a newer CAF, which it never writes over, or
+    /// [`StoreError::Io`].
     fn snapshot(
         &mut self,
         shelf: &Shelf,
