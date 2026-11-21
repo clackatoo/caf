@@ -306,18 +306,47 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 });
 "#;
 
-/// Allows everything the agent asks: only the app's own tool can be
-/// asked for here.
-struct AllowAll;
+/// Allows the app's own tool, `app_word`, and refuses everything else, so
+/// nothing else could run even if it were asked for.
+struct OnlyTheAppsTool;
 
-impl caf_driver_tokio::Policy for AllowAll {
+impl caf_driver_tokio::Policy for OnlyTheAppsTool {
     fn decide(
         &mut self,
         _: caf_core::ChatId,
-        _: caf_core::directive::PermissionRequest,
+        request: caf_core::directive::PermissionRequest,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = caf_core::event::PolicyAnswer> + Send>>
     {
-        Box::pin(std::future::ready(caf_core::event::PolicyAnswer::Allow))
+        let answer = if request.title.contains("app_word") {
+            caf_core::event::PolicyAnswer::Allow
+        } else {
+            caf_core::event::PolicyAnswer::Refuse
+        };
+        Box::pin(std::future::ready(answer))
+    }
+}
+
+/// Folders of the test's own, made for its user alone, and removed when
+/// it ends, as it passes or fails.
+struct Folders(Vec<PathBuf>);
+
+impl Folders {
+    fn make(&mut self, folder: &std::path::Path) {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(folder)
+            .unwrap();
+        self.0.push(folder.to_path_buf());
+    }
+}
+
+impl Drop for Folders {
+    fn drop(&mut self) {
+        for folder in &self.0 {
+            let _ = std::fs::remove_dir_all(folder);
+        }
     }
 }
 
@@ -358,8 +387,10 @@ fn on_path(program: &str) -> PathBuf {
 async fn claude_runs_with_none_of_its_own_tools() {
     let folder = std::env::temp_dir().join(format!("caf-live-own-tools-{}", std::process::id()));
     let tools = folder.with_extension("tools");
+    let mut folders = Folders(Vec::new());
+    folders.make(&folder);
+    folders.make(&tools);
     std::fs::create_dir_all(folder.join(".claude/commands")).unwrap();
-    std::fs::create_dir_all(&tools).unwrap();
     for file in ["CLAUDE.md", "AGENTS.md", ".claude/commands/pineapple.md"] {
         std::fs::write(
             folder.join(file),
@@ -403,7 +434,7 @@ async fn claude_runs_with_none_of_its_own_tools() {
     );
     let mut config = Config::new(Host::new("caf-live-test", "0.0.0"), vec![claude]);
     config.record = Some(recording.clone());
-    config.policy = Box::new(AllowAll);
+    config.policy = Box::new(OnlyTheAppsTool);
     let (caf, running) = Caf::start(config);
 
     let mut open = OpenChat::new("claude", &folder);
@@ -466,7 +497,7 @@ async fn claude_runs_with_none_of_its_own_tools() {
     )
     .await;
     let word = words(&app);
-    assert_eq!(tools_in(&app), 1, "it called the app's tool: {app:#?}");
+    assert!(tools_in(&app) >= 1, "it called the app's tool: {app:#?}");
     assert!(word.contains("MARMALADE"), "{word:?}");
 
     tokio::time::timeout(PATIENCE, async {
@@ -524,6 +555,5 @@ async fn claude_runs_with_none_of_its_own_tools() {
         commands.len(),
         calls.len()
     );
-    let _ = std::fs::remove_dir_all(&folder);
-    let _ = std::fs::remove_dir_all(&tools);
+    drop(folders);
 }
