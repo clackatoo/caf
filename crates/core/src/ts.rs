@@ -92,7 +92,7 @@ mod tests {
     use crate::shape::{Samples, every_type, traces};
     use crate::time::{End, Mono, Now, Wall, Window};
     use crate::viewer::{
-        AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, ToViewer,
+        AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
     };
 
     /// The TypeScript caf-sdk, which keeps the generated files.
@@ -251,6 +251,7 @@ mod tests {
             OpenRequest,
             Outcome,
             RequestNo,
+            Rights,
             ToViewer,
         );
         let index: String = files(dir)

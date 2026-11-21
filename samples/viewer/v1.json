@@ -211,7 +211,11 @@
             "cwd": "/work"
           }
         ],
-        "run": "7f3a9c2e"
+        "run": "7f3a9c2e",
+        "may": {
+          "act": true,
+          "agents": false
+        }
       }
     },
     {

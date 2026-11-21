@@ -202,6 +202,8 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
         /// restarted CAF from the one it was watching. A `since` holds
         /// only within one run.
         run: String,
+        /// What the host lets this viewer do, so it offers only that.
+        may: Rights,
     },
     /// No version in common: CAF ends the link after sending this.
     NoCommonVersion {
@@ -269,6 +271,29 @@ pub struct ChatSummary {
     pub agent: AgentName,
     /// The folder the agent works in.
     pub cwd: PathBuf,
+}
+
+/// What the host lets a viewer do, as [`ToViewer::Welcome`] says it, so
+/// a view offers only what it may: a request for anything else is
+/// answered [`Outcome::NotAllowed`]. Opening a chat isn't here: the host
+/// decides each request as it comes, and may allow some and not others.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Rights {
+    /// Whether it may send, stop, answer and close.
+    pub act: bool,
+    /// Whether it may install agents, and sign in and out of them. A
+    /// viewer that may not gets no sign-in's link or code.
+    pub agents: bool,
+}
+
+impl Rights {
+    /// What a viewer may do: `act` on chats, and on `agents`.
+    #[must_use]
+    pub fn new(act: bool, agents: bool) -> Self {
+        Self { act, agents }
+    }
 }
 
 impl ChatSummary {
