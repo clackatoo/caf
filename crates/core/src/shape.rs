@@ -323,6 +323,7 @@ fn agent_status() -> AgentStatus {
             paste: true,
         }),
         can_sign_in: true,
+        own_tools_off: true,
     }
 }
 

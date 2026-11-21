@@ -31,4 +31,15 @@ sign_in: SignInState,
  * runs, and the status is told again when it does: offer Sign in only
  * while it's true.
  */
-can_sign_in: boolean, };
+can_sign_in: boolean, 
+/**
+ * Whether CAF can turn off the agent's own tools (its built-in ones,
+ * and the user's MCP servers, skills, plugins, hooks and instruction
+ * files), as it must before it runs it: an agent has only the tools
+ * the app gives it ([`OpenChat::mcp_servers`](crate::OpenChat::mcp_servers)).
+ * Its profile says how. CAF never runs an agent it can't strip: one
+ * with the cautious profile is refused ([`Refused::OwnTools`](crate::Refused::OwnTools)).
+ *
+ * Statuses written before it was added read as `true`.
+ */
+own_tools_off: boolean, };

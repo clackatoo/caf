@@ -141,6 +141,10 @@ pub struct RestoreChat {
     /// hold tokens and things that last one run, such as sockets: the
     /// host gives them again.
     pub mcp_servers: Vec<McpServer>,
+    /// What the app tells the agent, as
+    /// [`OpenChat::instructions`](crate::OpenChat::instructions): given
+    /// again, as it isn't saved.
+    pub instructions: Option<String>,
 }
 
 impl RestoreChat {
@@ -151,6 +155,7 @@ impl RestoreChat {
             chat,
             shelf,
             mcp_servers: Vec::new(),
+            instructions: None,
         }
     }
 }

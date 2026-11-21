@@ -137,6 +137,13 @@ pub struct OpenChat {
     /// Where to keep it, if it's to be saved. `None` (the default) keeps
     /// it in memory only, gone when CAF stops.
     pub shelf: Option<Shelf>,
+    /// What the app tells the agent about itself and the work, such as
+    /// framewright describing the project open: added to CAF's own short
+    /// instructions, which take the place of the agent's built-in ones
+    /// (they describe tools it no longer has). `None` (the default) adds
+    /// nothing. Not saved: the host gives them again when it restores the
+    /// chat ([`RestoreChat::instructions`](crate::save::RestoreChat::instructions)).
+    pub instructions: Option<String>,
 }
 
 impl OpenChat {
@@ -150,6 +157,7 @@ impl OpenChat {
             session: SessionChoice::New,
             mcp_servers: Vec::new(),
             shelf: None,
+            instructions: None,
         }
     }
 }
@@ -223,6 +231,10 @@ pub enum Refused {
     Loaded,
     /// The shelf's name is empty, too long, or has control characters.
     BadShelf,
+    /// CAF can't turn off this agent's own tools, so it won't run it: its
+    /// profile is the cautious one, which doesn't say how
+    /// ([`AgentStatus::own_tools_off`](crate::agent::AgentStatus::own_tools_off)).
+    OwnTools,
 }
 
 /// What the host can see of a connection: one adapter process.

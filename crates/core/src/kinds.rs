@@ -150,6 +150,7 @@ kinds!(Refused {
     "NotSaved" => Refused::NotSaved,
     "Loaded" => Refused::Loaded,
     "BadShelf" => Refused::BadShelf,
+    "OwnTools" => Refused::OwnTools,
 });
 
 kinds!(SessionChoice {
@@ -219,6 +220,7 @@ kinds!(Incompatible {
     "Protocol" => Incompatible::Protocol { .. },
     "HttpMcp" => Incompatible::HttpMcp,
     "BadAnswer" => Incompatible::BadAnswer,
+    "OwnTools" => Incompatible::OwnTools,
 });
 
 kinds!(Starter {

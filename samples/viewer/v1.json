@@ -1132,7 +1132,10 @@
                 "type": "Lost",
                 "value": {
                   "reason": {
-                    "type": "InUse"
+                    "type": "Incompatible",
+                    "value": {
+                      "type": "OwnTools"
+                    }
                   }
                 }
               }
@@ -1146,7 +1149,7 @@
                 "type": "Lost",
                 "value": {
                   "reason": {
-                    "type": "ShutDown"
+                    "type": "InUse"
                   }
                 }
               }
@@ -1157,7 +1160,12 @@
             "change": {
               "type": "State",
               "value": {
-                "type": "Closed"
+                "type": "Lost",
+                "value": {
+                  "reason": {
+                    "type": "ShutDown"
+                  }
+                }
               }
             }
           },
@@ -1166,7 +1174,7 @@
             "change": {
               "type": "State",
               "value": {
-                "type": "WaitingForAgent"
+                "type": "Closed"
               }
             }
           },
@@ -1175,12 +1183,21 @@
             "change": {
               "type": "State",
               "value": {
-                "type": "Idle"
+                "type": "WaitingForAgent"
               }
             }
           },
           {
             "no": 23,
+            "change": {
+              "type": "State",
+              "value": {
+                "type": "Idle"
+              }
+            }
+          },
+          {
+            "no": 24,
             "change": {
               "type": "TurnAdded",
               "value": {
@@ -1211,7 +1228,7 @@
             }
           },
           {
-            "no": 24,
+            "no": 25,
             "change": {
               "type": "TurnInserted",
               "value": {
@@ -1256,7 +1273,7 @@
             }
           },
           {
-            "no": 25,
+            "no": 26,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1271,7 +1288,7 @@
             }
           },
           {
-            "no": 26,
+            "no": 27,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1286,7 +1303,7 @@
             }
           },
           {
-            "no": 27,
+            "no": 28,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1301,7 +1318,7 @@
             }
           },
           {
-            "no": 28,
+            "no": 29,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1317,7 +1334,7 @@
             }
           },
           {
-            "no": 29,
+            "no": 30,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1333,7 +1350,7 @@
             }
           },
           {
-            "no": 30,
+            "no": 31,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1349,7 +1366,7 @@
             }
           },
           {
-            "no": 31,
+            "no": 32,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1374,7 +1391,7 @@
             }
           },
           {
-            "no": 32,
+            "no": 33,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1399,7 +1416,7 @@
             }
           },
           {
-            "no": 33,
+            "no": 34,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1424,7 +1441,7 @@
             }
           },
           {
-            "no": 34,
+            "no": 35,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1447,7 +1464,7 @@
             }
           },
           {
-            "no": 35,
+            "no": 36,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1472,7 +1489,7 @@
             }
           },
           {
-            "no": 36,
+            "no": 37,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1497,7 +1514,7 @@
             }
           },
           {
-            "no": 37,
+            "no": 38,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1522,7 +1539,7 @@
             }
           },
           {
-            "no": 38,
+            "no": 39,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1545,7 +1562,7 @@
             }
           },
           {
-            "no": 39,
+            "no": 40,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1570,7 +1587,7 @@
             }
           },
           {
-            "no": 40,
+            "no": 41,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1595,7 +1612,7 @@
             }
           },
           {
-            "no": 41,
+            "no": 42,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1620,7 +1637,7 @@
             }
           },
           {
-            "no": 42,
+            "no": 43,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1643,7 +1660,7 @@
             }
           },
           {
-            "no": 43,
+            "no": 44,
             "change": {
               "type": "ItemAdded",
               "value": {
@@ -1679,7 +1696,7 @@
             }
           },
           {
-            "no": 44,
+            "no": 45,
             "change": {
               "type": "Appended",
               "value": {
@@ -1689,7 +1706,7 @@
             }
           },
           {
-            "no": 45,
+            "no": 46,
             "change": {
               "type": "ToolChanged",
               "value": {
@@ -1712,7 +1729,7 @@
             }
           },
           {
-            "no": 46,
+            "no": 47,
             "change": {
               "type": "ItemEnded",
               "value": {
@@ -1725,7 +1742,7 @@
             }
           },
           {
-            "no": 47,
+            "no": 48,
             "change": {
               "type": "Usage",
               "value": {
@@ -1736,7 +1753,7 @@
             }
           },
           {
-            "no": 48,
+            "no": 49,
             "change": {
               "type": "QuestionAsked",
               "value": {
@@ -1767,7 +1784,7 @@
             }
           },
           {
-            "no": 49,
+            "no": 50,
             "change": {
               "type": "QuestionGone",
               "value": 26
@@ -1793,7 +1810,8 @@
           "sign_in": {
             "type": "Unknown"
           },
-          "can_sign_in": true
+          "can_sign_in": true,
+          "own_tools_off": false
         },
         {
           "name": "agent-1",
@@ -1803,7 +1821,8 @@
           "sign_in": {
             "type": "SignedOut"
           },
-          "can_sign_in": false
+          "can_sign_in": false,
+          "own_tools_off": true
         },
         {
           "name": "agent-2",
@@ -1821,7 +1840,8 @@
               "paste": false
             }
           },
-          "can_sign_in": true
+          "can_sign_in": true,
+          "own_tools_off": true
         },
         {
           "name": "agent-3",
@@ -1840,7 +1860,8 @@
               "paste": true
             }
           },
-          "can_sign_in": true
+          "can_sign_in": true,
+          "own_tools_off": false
         },
         {
           "name": "agent-4",
@@ -1856,7 +1877,8 @@
               "type": "Account"
             }
           },
-          "can_sign_in": true
+          "can_sign_in": true,
+          "own_tools_off": true
         },
         {
           "name": "agent-5",
@@ -1876,7 +1898,8 @@
               "type": "ApiKey"
             }
           },
-          "can_sign_in": false
+          "can_sign_in": false,
+          "own_tools_off": true
         },
         {
           "name": "agent-6",
@@ -1896,7 +1919,8 @@
               "type": "Gateway"
             }
           },
-          "can_sign_in": true
+          "can_sign_in": true,
+          "own_tools_off": false
         },
         {
           "name": "agent-7",
@@ -1912,7 +1936,8 @@
               "type": "Unknown"
             }
           },
-          "can_sign_in": false
+          "can_sign_in": false,
+          "own_tools_off": true
         },
         {
           "name": "agent-8",
@@ -1925,7 +1950,8 @@
           "sign_in": {
             "type": "Unknown"
           },
-          "can_sign_in": true
+          "can_sign_in": true,
+          "own_tools_off": true
         },
         {
           "name": "agent-9",
@@ -1938,7 +1964,8 @@
           "sign_in": {
             "type": "SignedOut"
           },
-          "can_sign_in": false
+          "can_sign_in": false,
+          "own_tools_off": false
         },
         {
           "name": "agent-10",
@@ -1959,7 +1986,8 @@
               "paste": false
             }
           },
-          "can_sign_in": true
+          "can_sign_in": true,
+          "own_tools_off": true
         },
         {
           "name": "agent-11",
@@ -1980,7 +2008,8 @@
               "paste": true
             }
           },
-          "can_sign_in": true
+          "can_sign_in": true,
+          "own_tools_off": true
         },
         {
           "name": "agent-12",
@@ -1999,7 +2028,8 @@
               "type": "Account"
             }
           },
-          "can_sign_in": true
+          "can_sign_in": true,
+          "own_tools_off": false
         },
         {
           "name": "agent-13",
@@ -2018,7 +2048,8 @@
               "type": "ApiKey"
             }
           },
-          "can_sign_in": false
+          "can_sign_in": false,
+          "own_tools_off": true
         },
         {
           "name": "agent-14",
@@ -2038,7 +2069,8 @@
               "type": "Gateway"
             }
           },
-          "can_sign_in": true
+          "can_sign_in": true,
+          "own_tools_off": true
         }
       ]
     },
@@ -2504,6 +2536,18 @@
           "type": "Refused",
           "value": {
             "type": "BadShelf"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 25,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "OwnTools"
           }
         }
       }

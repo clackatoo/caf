@@ -28,4 +28,13 @@ mcp_servers: Array<McpServer>,
  * Where to keep it, if it's to be saved. `None` (the default) keeps
  * it in memory only, gone when CAF stops.
  */
-shelf: Shelf | null, };
+shelf: Shelf | null, 
+/**
+ * What the app tells the agent about itself and the work, such as
+ * framewright describing the project open: added to CAF's own short
+ * instructions, which take the place of the agent's built-in ones
+ * (they describe tools it no longer has). `None` (the default) adds
+ * nothing. Not saved: the host gives them again when it restores the
+ * chat ([`RestoreChat::instructions`](crate::save::RestoreChat::instructions)).
+ */
+instructions: string | null, };

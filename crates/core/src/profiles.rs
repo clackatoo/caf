@@ -14,6 +14,14 @@
 //! into CAF's own terms, so nothing past this module knows which agent it
 //! is talking to.
 //!
+//! **Every agent runs with none of its own tools.** Its built-in tools,
+//! and the user's MCP servers, skills, plugins, hooks and instruction
+//! files, are all turned off, as its profile says how; it has only the
+//! tools the app gives it. Each will come back, one at a time, once CAF
+//! supports it fully: its typed action, its permissions, and how it shows
+//! in the record. CAF never runs an agent it can't strip, so an agent with
+//! the cautious profile is refused.
+//!
 //! Profiles are CAF's own. Apps choose one for each agent but never
 //! change one. Users will be able to add profiles as data in CAF's shared
 //! folder (*later*).
@@ -40,6 +48,31 @@
 //!   like a turn of their own.
 //! - **no files and no terminals**: CAF serves neither yet, and refuses
 //!   them if asked.
+//!
+//! It **strips Claude Code of its own tools** (see below), through the
+//! options the adapter hands on to Claude Code (`_meta.claudeCode.options`
+//! in `session/new`, `session/load` and `session/resume`):
+//! - `tools: []`: no built-in tools (Bash, Read, Edit, Write, Agent…);
+//! - `settingSources: []`: none of the user's or project's settings files,
+//!   so no CLAUDE.md or AGENTS.md, skills, subagents, plugins, hooks or
+//!   permission rules of theirs;
+//! - `strictMcpConfig: true`, `settings.disableClaudeAiConnectors`: only
+//!   the MCP servers the app gives;
+//! - `systemPrompt`: CAF's own short instructions, saying what the agent
+//!   is in and that it has only the app's tools, then the app's own
+//!   ([`OpenChat::instructions`](crate::OpenChat::instructions)), in place
+//!   of Claude Code's, which describe tools it no longer has;
+//! - `promptSuggestions: false`, `verbatimPrompts: true`,
+//!   `allowDangerouslySkipPermissions: false`, slash commands off, and
+//!   auto-memory and bundled skills off through their variables.
+//!
+//! What can't be turned off this way: settings an organisation manages on
+//! the machine, the adapter's own hooks (which only report), and the
+//! plugins built into Claude Code. Sign-in is untouched (its credentials
+//! live in `~/.claude`), but a sign-in that lives in the user's
+//! `settings.json` (an API key helper, a gateway's variables) isn't seen,
+//! so the chat asks the user to sign in. The user's model choice still
+//! applies.
 //!
 //! It declares **nothing of JetBrains AIR**. Any AIR key switches the
 //! adapter into AIR's shapes for the whole connection: reads and searches
@@ -75,7 +108,11 @@ pub enum ProfileChoice {
     /// One CAF knows.
     Builtin(Builtin),
     /// The cautious profile, for agents CAF doesn't know: plain ACP,
-    /// nothing risky switched on.
+    /// nothing risky switched on. CAF can't turn off such an agent's own
+    /// tools, so it doesn't run one: a chat with it is refused
+    /// ([`Refused::OwnTools`](crate::Refused::OwnTools)). It's here for
+    /// user profiles (*later*), which will say an agent behaves like one
+    /// CAF knows, and so how to strip it.
     Cautious,
 }
 
