@@ -359,15 +359,19 @@ async fn viewers_hear_every_agents_status_and_act_on_agents_only_if_allowed() {
     .await;
     assert_eq!(link, LINK, "the link reaches the viewer");
     // A viewer that may only watch sees the sign-in, but not its link: who
-    // opens it chooses whose account the agent signs in to.
-    let seen = next_that(&mut watcher, |message| match message {
-        ToViewer::Agents(statuses) => match &statuses[0].sign_in {
-            SignInState::SigningIn(link) => Some(link.clone()),
-            _ => None,
-        },
-        _ => None,
-    })
-    .await;
+    // opens it chooses whose account the agent signs in to. Its statuses
+    // since the link came are read to the last, which would hold it.
+    let mut latest = None;
+    while let Ok(Some(message)) =
+        tokio::time::timeout(std::time::Duration::from_secs(1), watcher.recv()).await
+    {
+        if let ToViewer::Agents(statuses) = message
+            && let SignInState::SigningIn(link) = &statuses[0].sign_in
+        {
+            latest = Some(link.clone());
+        }
+    }
+    let seen = latest.expect("the watcher sees the sign-in");
     assert_eq!((seen.url, seen.code), (None, None));
     drop(watcher_to);
     to.send(FromViewer::Agent {
