@@ -129,15 +129,18 @@ fn damage_anywhere_but_a_cut_off_end_is_damage() {
         matches!(result, Err(CannotRestore::Damaged(_)))
     };
 
-    // A byte wrong in the middle of every record, the last included, and
-    // in the snapshot.
+    // A byte wrong in the middle of every record but the last, which is
+    // one a crash cut off, and in the snapshot.
     let mut start = 0;
-    for record in &encoded {
+    for record in &encoded[..encoded.len() - 1] {
         let mut wrong = journal.clone();
         wrong[start + record.len() / 2] ^= 0x40;
         assert!(damaged(decode(&snapshot, &wrong)), "the record at {start}");
         start += record.len();
     }
+    // Zeros before a record.
+    let zeros = [&encoded[0][..], &[0; 8], &encoded[1]].concat();
+    assert!(damaged(decode(&snapshot, &zeros)));
     let mut wrong = snapshot.clone();
     let middle = wrong.len() / 2;
     wrong[middle] ^= 0x40;
@@ -161,7 +164,31 @@ fn damage_anywhere_but_a_cut_off_end_is_damage() {
     )));
 
     // An empty record.
-    assert!(damaged(decode(&snapshot, &[0, 0, 0, 0])));
+    assert!(damaged(decode(&snapshot, &[0, 0, 0, 0, 7])));
+}
+
+#[test]
+fn a_last_record_a_crash_left_whole_in_length_but_not_in_bytes_is_left_out() {
+    let saved = small(1);
+    let snapshot = encode_snapshot(&saved, Squeeze::Fast);
+    let records = records();
+    let encoded: Vec<Vec<u8>> = records.iter().map(|each| encode_record(each)).collect();
+    let before_last = encoded[..2].concat();
+    let expected = Ok(applied(saved, &records[..2].concat()));
+    let last = &encoded[2];
+    // Garbage anywhere in it after its length. A length made shorter
+    // leaves bytes after it, so it isn't the last: that's damage.
+    for at in 4..last.len() {
+        let mut wrong = last.clone();
+        wrong[at] ^= 0x40;
+        let read = decode::<Pin, Notes>(&snapshot, &[&before_last[..], &wrong].concat());
+        assert_eq!(read, expected, "a byte wrong at {at}");
+    }
+    // Zeros, as long as it, or any length.
+    for zeros in [1, 4, last.len(), 1000] {
+        let read = decode::<Pin, Notes>(&snapshot, &[&before_last[..], &vec![0; zeros]].concat());
+        assert_eq!(read, expected, "{zeros} zeros");
+    }
 }
 
 #[test]
@@ -261,6 +288,46 @@ fn an_unknown_item_from_the_agent_stays_unknown() {
         (unknown.what.as_str(), unknown.summary.as_deref()),
         ("plan", None)
     );
+}
+
+#[test]
+fn an_agent_unknown_item_said_to_be_app_stays_the_agent_s() {
+    // It reads as the app's type, but it's the agent's: it has no summary,
+    // as an envelope always has.
+    let unknown = json!({ "type": "Unknown", "value": {
+        "what": "App", "raw": { "place": "Kyiv", "zoom": 9 }, "summary": null,
+    }});
+    let saved: Saved<Pin, Notes> = from(common::saved_with(
+        1,
+        vec![common::turn(1, "Hi", vec![common::item(2, unknown)])],
+    ));
+    let read = decode::<Pin, Notes>(&encode_snapshot(&saved, Squeeze::Fast), &[]);
+    assert_eq!(read, Ok(saved));
+}
+
+/// An app's item JSON can't hold.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct Odd {
+    value: f64,
+}
+
+impl caf_core::AppItem for Odd {
+    fn summary(&self) -> String {
+        "Odd".into()
+    }
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "doesn't read back from JSON")]
+fn an_app_item_json_cannot_hold_is_found_in_debug_builds() {
+    let odd = json!({ "type": "App", "value": { "value": 1.0 } });
+    let mut saved: Saved<Odd, Notes> = from(common::saved_with(
+        1,
+        vec![common::turn(1, "Hi", vec![common::item(2, odd)])],
+    ));
+    saved.chat.turns[0].items[0].kind = ItemKind::App(Odd { value: f64::NAN });
+    let _ = encode_snapshot(&saved, Squeeze::Fast);
 }
 
 #[test]

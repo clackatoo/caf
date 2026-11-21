@@ -2,8 +2,8 @@
 
 mod common;
 
-use caf_core::save::Saved;
-use caf_save::{Squeeze, encode_snapshot, recompress};
+use caf_core::save::{Entry, Saved};
+use caf_save::{Squeeze, encode_record, encode_snapshot, recompress};
 use common::{Notes, Pin, from};
 use serde_json::json;
 
@@ -17,6 +17,13 @@ const MIT: &str = include_str!("../../../LICENSE-MIT");
 const RAW: usize = 4_180_000;
 const FAST: usize = 168_000;
 const HARDEST: usize = 141_000;
+
+/// The budgets for a journal's records, in bytes, each about a tenth over
+/// what was measured when they were set: a save's worth of a streamed
+/// answer, 106 words in 698 bytes of text, took 511, and a tool call's
+/// with 2,000 bytes of output, 1,045.
+const STREAMED: usize = 562;
+const TOOL: usize = 1_150;
 
 /// A long working session: 300 turns of the agent's words and thinking,
 /// made up of the licences' words, files read and read again, and
@@ -100,4 +107,31 @@ fn a_long_chat_saves_small() {
     assert!(raw <= RAW, "{raw} bytes of MessagePack");
     assert!(fast.len() <= FAST, "{} bytes fast", fast.len());
     assert!(hardest.len() <= HARDEST, "{} bytes squeezed", hardest.len());
+}
+
+#[test]
+fn a_save_while_an_answer_streams_is_small() {
+    // A second or so of words, squashed to one change, with the usage
+    // the agent said.
+    let words: String = (APACHE.split_whitespace().skip(400).take(106))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let streamed: Vec<Entry<Pin, Notes>> = from(json!([
+        { "type": "Change", "value": { "type": "Appended", "value": { "item": 1041, "text": words } } },
+        { "type": "Change", "value": { "type": "Usage", "value": { "used": 51_234, "size": 200_000, "cost": null } } },
+    ]));
+    let output: String = APACHE.chars().skip(3000).take(2000).collect();
+    let tool: Vec<Entry<Pin, Notes>> = from(json!([
+        { "type": "Change", "value": { "type": "ItemAdded", "value": {
+            "turn": 1040,
+            "item": common::tool(1042, "src/lib.rs", &output),
+        } } },
+    ]));
+    let (streamed, tool) = (encode_record(&streamed).len(), encode_record(&tool).len());
+    eprintln!(
+        "{} bytes of words: {streamed}; a tool call: {tool}",
+        words.len()
+    );
+    assert!(streamed <= STREAMED, "{streamed} bytes streamed");
+    assert!(tool <= TOOL, "{tool} bytes for a tool call");
 }

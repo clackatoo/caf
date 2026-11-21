@@ -80,9 +80,9 @@ pub(crate) fn read<A: AppItem, D: AppData>(
     let inside = unpack(frame).map_err(|why| damaged("its snapshot", &why))?;
     let mut saved: Saved<A, D> =
         parse_app::<_, Saved<Anything, Anything>>(&inside, "its snapshot")?;
-    for (no, frame) in records(journal)?.into_iter().enumerate() {
+    let (records, _) = records(journal)?;
+    for (no, inside) in records.into_iter().enumerate() {
         let what = format!("its journal's record {}", no + 1);
-        let inside = unpack(frame).map_err(|why| damaged(&what, &why))?;
         let entries: Vec<Entry<A, D>> =
             parse_app::<_, Vec<Entry<Anything, Anything>>>(&inside, &what)?;
         for entry in entries {
@@ -112,38 +112,58 @@ pub(crate) fn squeeze(snapshot: &[u8], squeeze: Squeeze) -> Result<Vec<u8>, Cann
     Ok(seal(version, &inside, squeeze))
 }
 
-/// How many bytes of `journal` are whole records: those after are one
-/// cut off as it was written. Only its framing is read.
-pub(crate) fn whole_records(journal: &[u8]) -> usize {
+/// The version of a snapshot, checked: what the store looks at before it
+/// changes anything of a chat's.
+pub(crate) fn version(snapshot: &[u8]) -> Result<u32, CannotRestore> {
+    open(snapshot).map(|(version, _)| version)
+}
+
+/// How many bytes of `journal` are records that count: what follows is a
+/// last record a crash cut off. The store appends after them.
+pub(crate) fn kept(journal: &[u8]) -> Result<usize, CannotRestore> {
+    records(journal).map(|(_, kept)| kept)
+}
+
+/// What a journal's records hold, in order, and how many of its bytes
+/// they take, leaving out a last one cut off by a crash.
+///
+/// Each record is synced before the next is written, so only the last
+/// can be cut off. A crash may leave it short of its length, or, on a
+/// file system that writes a file's size before its data, as long as it
+/// should be but zeros or garbage. So a last record that's short, that
+/// fails its checksum or doesn't decompress, or a run of zeros at the
+/// end, is a record cut off, and left out. The same anywhere else is
+/// damage.
+fn records(journal: &[u8]) -> Result<(Vec<Vec<u8>>, usize), CannotRestore> {
+    let mut records = Vec::new();
     let mut at = 0;
-    while let Some(length) = journal.get(at..at + 4) {
-        let length = u32::from_le_bytes(length.try_into().expect("four bytes")) as usize;
-        if journal.len() - at - 4 < length {
+    loop {
+        let rest = &journal[at..];
+        if rest.iter().all(|&byte| byte == 0) {
             break;
+        }
+        let what = || format!("its journal's record {}", records.len() + 1);
+        let Some((length, rest)) = rest.split_first_chunk::<4>() else {
+            break;
+        };
+        let length = u32::from_le_bytes(*length) as usize;
+        if length == 0 {
+            return Err(damaged(&what(), "it's empty"));
+        }
+        let Some(frame) = rest.get(..length) else {
+            break;
+        };
+        match unpack(frame) {
+            Ok(inside) => records.push(inside),
+            Err(_) if rest.len() == length => break,
+            Err(why) => return Err(damaged(&what(), &why)),
         }
         at += 4 + length;
     }
-    at
+    Ok((records, at))
 }
 
-/// A journal's records' frames, in order, leaving out a last one cut off.
-fn records(journal: &[u8]) -> Result<Vec<&[u8]>, CannotRestore> {
-    let whole = whole_records(journal);
-    let mut frames = Vec::new();
-    let mut at = 0;
-    while at < whole {
-        let length = u32::from_le_bytes(journal[at..at + 4].try_into().expect("four bytes"));
-        if length == 0 {
-            let what = format!("its journal's record {}", frames.len() + 1);
-            return Err(damaged(&what, "it's empty"));
-        }
-        frames.push(&journal[at + 4..at + 4 + length as usize]);
-        at += 4 + length as usize;
-    }
-    Ok(frames)
-}
-
-/// `bytes` as MessagePack, with field names.
+/// `value` as MessagePack, with field names.
 fn named<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>, String> {
     rmp_serde::to_vec_named(value).map_err(|error| error.to_string())
 }
@@ -312,6 +332,13 @@ fn envelop<A: AppItem>(item: &mut Item<A>) -> Result<(), String> {
     };
     let raw = serde_json::to_value(app)
         .map_err(|error| format!("an app item can't be written as JSON: {error}"))?;
+    // What JSON can't hold comes back as something else, with no error:
+    // a float that isn't finite as null, say. Writing is infallible, so
+    // only a debug build can say so, here, where the app's tests find it.
+    debug_assert!(
+        A::deserialize(&raw).is_ok_and(|back| back == *app),
+        "an app item doesn't read back from JSON as it was, as AppItem's rules say it must: {app:?}"
+    );
     let envelope = serde_json::json!({ "what": APP, "raw": raw, "summary": app.summary() });
     let unknown = Unknown::deserialize(envelope).expect("an envelope is an unknown item");
     item.kind = ItemKind::Unknown(unknown);
@@ -321,6 +348,8 @@ fn envelop<A: AppItem>(item: &mut Item<A>) -> Result<(), String> {
 /// An app item saved in its envelope, as the app item again, if the
 /// app's type reads it.
 fn open_envelope<A: AppItem>(item: &mut Item<A>) {
+    // An envelope always has a summary, and an agent's unknown item never
+    // has: that, not `what`, which is the agent's to say, tells them apart.
     if let ItemKind::Unknown(unknown) = &item.kind
         && unknown.what == APP
         && unknown.summary.is_some()

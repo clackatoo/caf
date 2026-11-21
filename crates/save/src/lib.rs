@@ -30,17 +30,34 @@
 //! ```
 //!
 //! Every zstd frame carries the checksum of what it holds, so a record cut
-//! off by a crash, or a byte gone wrong, is found: a journal's last record
-//! that's cut off is dropped, as it was never wholly written; anything
-//! else that's wrong is [`CannotRestore::Damaged`].
+//! off by a crash, or a byte gone wrong, is found. Each record is written
+//! whole and synced before the next, so only a journal's last record can
+//! be cut off: short of its length, or, on a file system that writes a
+//! file's size before its data, as long as it should be but zeros or
+//! garbage. So a last record that's short, fails its checksum or doesn't
+//! decompress, or a run of zeros at the end, is dropped, as it was never
+//! wholly written, and the next append is written over it. Anything else
+//! that's wrong is [`CannotRestore::Damaged`].
 //!
-//! **Saves stay readable forever.** New fields need no new version: what
-//! an old CAF didn't write reads as its default. Only a change of shape
-//! gets one, with a migration from every older version, each tested
-//! against a sample saved by it (`samples/save/`). A save from a newer
-//! version is [`CannotRestore::Newer`], and left untouched.
-//!
-//! A journal's records are in the version of the snapshot before them.
+//! **Saves stay readable forever, and a CAF never changes one it can't
+//! read.**
+//! - [`VERSION`] goes up with *every* change to what's saved: a field or
+//!   an enum's variant added anywhere in a saved type, as well as a change
+//!   of shape. So an older CAF meeting a newer save always knows it
+//!   ([`CannotRestore::Newer`]) and leaves it untouched, rather than read
+//!   it, losing what it doesn't know, and write it back without it.
+//! - An addition needs no migration: an older version's save reads as it
+//!   is, with defaults for what it didn't have. A change of shape needs
+//!   one, from every older version.
+//! - Every version has a sample saved by it (`samples/save/`), which must
+//!   always read as it did; a test fails if a saved type's shape changes
+//!   while [`VERSION`] doesn't.
+//! - A journal's records are in the version of the snapshot before them,
+//!   so a journal never mixes versions: a CAF that loads a save of an
+//!   older version writes a snapshot in its own before it adds anything
+//!   to its journal. That's the core's, on
+//!   [`StorageEvent::Loaded`]; [`FileStore`] refuses an append to a
+//!   snapshot of another version.
 //!
 //! **App items are kept even when the app can't read them.** One is saved
 //! in an [`Unknown`](caf_core::chat::Unknown) item's shape, its envelope:
@@ -184,10 +201,15 @@ impl Stored {
 pub enum StoreError {
     /// It has no such chat on that shelf.
     NotFound,
-    /// Another program has the chat locked.
+    /// Another program has the chat locked; or, moving a shelf, the shelf
+    /// it goes to has one of its chats already.
     InUse,
     /// The system failed.
     Io(io::Error),
+    /// What it keeps of the chat is damaged, in its own way of keeping
+    /// it, such as a file missing: what's wrong, in its words. A load
+    /// that meets it is [`CannotRestore::Damaged`].
+    Damaged(String),
 }
 
 impl From<io::Error> for StoreError {
@@ -203,6 +225,7 @@ impl StoreError {
             Self::NotFound => "the store has no such chat".into(),
             Self::InUse => "another program has the chat open".into(),
             Self::Io(error) => error.to_string(),
+            Self::Damaged(why) => format!("it's damaged: {why}"),
         }
     }
 }
@@ -322,6 +345,9 @@ pub fn carry_out<A: AppItem, D: AppData>(
                 Err(StoreError::Io(error)) => {
                     StorageEvent::NotLoaded(CannotRestore::Store(error.to_string()))
                 }
+                Err(StoreError::Damaged(why)) => {
+                    StorageEvent::NotLoaded(CannotRestore::Damaged(why))
+                }
             };
             (ticket, event)
         }
@@ -363,7 +389,14 @@ pub fn carry_out<A: AppItem, D: AppData>(
             chat,
         } => (ticket, answer(store.delete(&shelf, chat))),
         StorageDirective::MoveShelf { ticket, from, to } => {
-            (ticket, answer(store.move_shelf(&from, &to)))
+            let event = match store.move_shelf(&from, &to) {
+                Err(StoreError::InUse) => StorageEvent::Failed(
+                    "a chat on it is open in another program, or on the shelf it goes to already"
+                        .into(),
+                ),
+                done => answer(done),
+            };
+            (ticket, event)
         }
         // None the core gives yet.
         _ => return None,
@@ -380,6 +413,11 @@ fn list<A: AppItem, D: AppData>(store: &mut dyn Store, shelf: &Shelf) -> Storage
     let mut chats = Vec::new();
     let mut unreadable = Vec::new();
     for (chat, head) in heads {
+        if head.is_empty() {
+            let why = CannotRestore::Damaged("its header is missing".into());
+            unreadable.push((chat, why));
+            continue;
+        }
         match decode_header(&head) {
             Ok(header) if header.chat == chat => chats.push(header),
             Ok(_) => unreadable.push((
@@ -411,9 +449,10 @@ fn answer<A: AppItem, D: AppData>(done: Result<(), StoreError>) -> StorageEvent<
 /// <root>/<shelf>/<chat>.lock      held while a program has it loaded
 /// ```
 ///
-/// A shelf's folder is its name with anything but letters, digits, `-`
-/// and `_` written as `%` and two hex digits, so any name is one folder,
-/// and different names are different folders. A name that would make a
+/// A shelf's folder is its name with anything but small letters, digits,
+/// `-` and `_` written as `%` and two hex digits, capitals included, so
+/// any name is one folder, and different names are different folders,
+/// even where the file system ignores case. A name that would make a
 /// folder name longer than 200 bytes, such as a long path, is cut to its
 /// first 136 bytes so written, then `~` and the SHA-256 of the whole name
 /// in hex: still one folder per name. Folders and files are readable only
@@ -427,14 +466,32 @@ fn answer<A: AppItem, D: AppData>(done: Result<(), StoreError>) -> StorageEvent<
 /// a number the store counts up: a journal counts only with the snapshot
 /// of its generation, so a new snapshot empties the journal the moment
 /// it's in place, and a crash between the two files leaves one or the
-/// other whole. A journal's last record that a crash cut off is cut off
-/// the file when it's next loaded, so the next append follows a whole
-/// record.
+/// other whole. A new chat's journal is written before its snapshot, so
+/// a snapshot without one is damaged ([`StoreError::Damaged`]), never
+/// read as having nothing to add.
 ///
-/// It never follows a link inside its root: a shelf's folder or a chat's
-/// file that's a link is an error, and isn't listed. Moving a shelf with
-/// a chat another program has open is [`StoreError::InUse`], as that
-/// program would go on writing it where it was.
+/// Loading changes nothing, so a save this CAF can't read, such as a
+/// newer version's, is left as it was. An append goes after the records
+/// that count, as the format reads them, writing over a last one a crash
+/// cut off; it takes the chat's lock if it isn't held, and refuses a
+/// snapshot of another version than this CAF's.
+///
+/// A chat a crash left with a snapshot and no header is listed with an
+/// empty header, which reads as damaged, so it can be seen and deleted.
+/// Deleting removes the snapshot first and the header last, so a chat
+/// half deleted is still listed.
+///
+/// Moving a shelf to a new one renames its folder. Moving it to one in
+/// use moves a chat at a time, linking each file where it goes before
+/// removing it where it was, so a crash leaves each chat whole in one
+/// place or both, and moving again finishes. Moving a shelf with a chat
+/// another program has open, or onto a shelf that has one of its chats
+/// already, is [`StoreError::InUse`].
+///
+/// It never follows a link inside its root, nor opens anything but a file
+/// as one: a shelf's folder or a chat's file that's a link is an error,
+/// and isn't listed. [`squeeze`](FileStore::squeeze) also removes what
+/// crashes left that nobody uses.
 #[derive(Debug)]
 pub struct FileStore {
     root: PathBuf,

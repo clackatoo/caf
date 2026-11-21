@@ -27,8 +27,9 @@ use crate::time::Window;
 /// saves them with the chat, and never looks inside.
 ///
 /// Its serialized form must use text keys and no raw bytes, as derived
-/// structs and enums do, so one CAF can't read is kept, unchanged, as an
-/// [`Unknown`] item. Read old items leniently, with `#[serde(default)]`
+/// structs and enums do, its floats must be finite, and its integers fit
+/// in 64 bits: what JSON holds. So one CAF can't read is kept, unchanged,
+/// as an [`Unknown`] item. Read old items leniently, with `#[serde(default)]`
 /// on fields added later.
 pub trait AppItem:
     Clone + Debug + PartialEq + Serialize + DeserializeOwned + Send + 'static

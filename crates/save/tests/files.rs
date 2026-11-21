@@ -8,10 +8,13 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use caf_core::save::{Header, Saved};
-use caf_core::{ChatId, Shelf};
+use caf_core::directive::StorageDirective;
+use caf_core::event::StorageEvent;
+use caf_core::save::{CannotRestore, Header, Saved};
+use caf_core::{ChatId, Shelf, Ticket};
 use caf_save::{
-    FileStore, Squeeze, Store, StoreError, decode, encode_header, encode_record, encode_snapshot,
+    FileStore, Squeeze, Store, StoreError, VERSION, carry_out, decode, encode_header,
+    encode_record, encode_snapshot,
 };
 use common::{Folder, Notes, Pin, from, records, small};
 use sha2::{Digest, Sha256};
@@ -184,31 +187,124 @@ fn a_snapshot_replaces_the_old_with_its_journal_in_one_step() {
 }
 
 #[test]
-fn a_record_cut_off_by_a_crash_is_cut_off_the_file() {
-    let folder = Folder::new("torn");
+fn a_record_cut_off_by_a_crash_is_written_over() {
+    let records = written_records();
+    let half = records[0][..records[0].len() / 2].to_vec();
+    let mut garbage = records[0].clone();
+    let middle = garbage.len() / 2;
+    garbage[middle] ^= 0x40;
+    // Short of its length; as long as it should be, but zeros, as a file
+    // system that writes sizes first leaves it; or garbage.
+    for tail in [half, vec![0; 300], garbage] {
+        let folder = Folder::new("torn");
+        let root = folder.path();
+        let (work, chat) = (shelf("work"), ChatId::from_number(1));
+        let mut store = FileStore::new(root);
+        save(&mut store, &work, 1);
+        let journal = file(root, "work", 1, "journal");
+        let whole = fs::read(&journal).expect("one");
+        let torn = [&whole[..], &tail].concat();
+        fs::write(&journal, &torn).expect("a torn record");
+        let stored = store.load(&work, chat).expect("it loads");
+        assert_eq!(
+            fs::read(&journal).expect("one"),
+            torn,
+            "loading changes nothing"
+        );
+        assert_eq!(decode(&stored.snapshot, &stored.journal), Ok(saved(1)));
+        // What's added next goes after the records that count.
+        store
+            .append(&work, chat, &head(1), &records[2])
+            .expect("it's added");
+        store
+            .append(&work, chat, &head(1), &records[2])
+            .expect("it's added");
+        store.release(&work, chat);
+        let stored = store.load(&work, chat).expect("it loads");
+        let expected = [&whole[8..], &records[2], &records[2]].concat();
+        assert_eq!(stored.journal, expected);
+        assert!(decode::<Pin, Notes>(&stored.snapshot, &stored.journal).is_ok());
+    }
+}
+
+#[test]
+fn a_save_this_caf_cannot_read_is_left_byte_for_byte() {
+    let folder = Folder::new("newer");
     let root = folder.path();
     let (work, chat) = (shelf("work"), ChatId::from_number(1));
     let mut store = FileStore::new(root);
     save(&mut store, &work, 1);
-    let records = written_records();
+    // A newer version's, with a record cut off at its end.
+    let caf = file(root, "work", 1, "caf");
+    let mut bytes = fs::read(&caf).expect("one");
+    bytes[12..16].copy_from_slice(&(VERSION + 1).to_le_bytes());
+    fs::write(&caf, bytes).expect("newer");
     let journal = file(root, "work", 1, "journal");
-    let whole = fs::read(&journal).expect("one");
-    let half = &records[0][..records[0].len() / 2];
-    fs::write(&journal, [&whole[..], half].concat()).expect("a torn record");
-    let stored = store.load(&work, chat).expect("it loads");
-    assert_eq!(stored.journal, records.concat());
-    assert_eq!(fs::read(&journal).expect("one"), whole);
-    // What's added next follows a whole record.
-    store
-        .append(&work, chat, &head(1), &records[0])
-        .expect("it's added");
-    store.release(&work, chat);
-    let stored = store.load(&work, chat).expect("it loads");
-    assert!(decode::<Pin, Notes>(&stored.snapshot, &stored.journal).is_ok());
-    assert_eq!(
-        stored.journal,
-        [records.concat(), records[0].clone()].concat()
+    let mut torn = fs::read(&journal).expect("one");
+    torn.extend_from_slice(&[9, 9, 0, 0, 1, 2]);
+    fs::write(&journal, torn).expect("torn");
+    let files = || {
+        let mut files: Vec<_> = (fs::read_dir(root.join("work")).expect("the shelf"))
+            .map(|entry| {
+                let path = entry.expect("a file").path();
+                let bytes = fs::read(&path).expect("it reads");
+                (path, bytes)
+            })
+            .collect();
+        files.sort();
+        files
+    };
+    let before = files();
+    let loaded = carry_out::<Pin, Notes>(
+        &mut store,
+        StorageDirective::Load {
+            ticket: Ticket(1),
+            shelf: work.clone(),
+            chat,
+        },
     );
+    let newer = CannotRestore::Newer {
+        version: VERSION + 1,
+    };
+    assert!(
+        matches!(&loaded, Some((_, StorageEvent::NotLoaded(why))) if *why == newer),
+        "{loaded:?}"
+    );
+    let added = store.append(&work, chat, &head(1), &written_records()[0]);
+    assert!(matches!(added, Err(StoreError::Io(_))), "{added:?}");
+    store.release(&work, chat);
+    assert_eq!(files(), before);
+}
+
+#[test]
+fn a_snapshot_without_its_journal_is_damaged() {
+    let folder = Folder::new("unpaired");
+    let root = folder.path();
+    let (work, chat) = (shelf("work"), ChatId::from_number(1));
+    let mut store = FileStore::new(root);
+    save(&mut store, &work, 1);
+    let (caf, journal) = (
+        file(root, "work", 1, "caf"),
+        file(root, "work", 1, "journal"),
+    );
+    let whole = fs::read(&journal).expect("one");
+    let damaged = |store: &mut FileStore| {
+        let loaded = store.load(&work, chat);
+        matches!(loaded, Err(StoreError::Damaged(_)))
+    };
+    fs::remove_file(&journal).expect("removed");
+    assert!(damaged(&mut store), "with none");
+    let mut newer = whole.clone();
+    newer[..8].copy_from_slice(&2_u64.to_le_bytes());
+    fs::write(&journal, newer).expect("written");
+    assert!(damaged(&mut store), "with a newer one");
+    fs::write(&journal, &whole[..5]).expect("written");
+    assert!(damaged(&mut store), "with one cut off");
+    fs::write(&journal, &whole).expect("written");
+    fs::write(&caf, [1, 0, 0]).expect("written");
+    assert!(damaged(&mut store), "itself cut off");
+    // Not held after: another can have it.
+    assert!(damaged(&mut FileStore::new(root)));
 }
 
 #[test]
@@ -336,7 +432,8 @@ fn any_shelf_name_is_one_folder_of_its_own() {
         ("a/b c.d", "a%2Fb%20c%2Ed".to_owned()),
         ("..", "%2E%2E".to_owned()),
         ("~x", "%7Ex".to_owned()),
-        ("Projekt ü", "Projekt%20%C3%BC".to_owned()),
+        ("Projekt ü", "%50rojekt%20%C3%BC".to_owned()),
+        ("projekt ü", "projekt%20%C3%BC".to_owned()),
         (
             "/home/jack/projects/caf",
             "%2Fhome%2Fjack%2Fprojects%2Fcaf".to_owned(),
@@ -488,4 +585,188 @@ fn chats_left_alone_are_squeezed_once() {
         0,
         "once"
     );
+}
+
+/// How a chat reads from `shelf` with a store of its own: whole, or not
+/// at all, but never with less than it had.
+fn reads_whole_or_not_at_all(root: &Path, on: &Shelf, id: u64) -> bool {
+    let mut store = FileStore::new(root);
+    let loaded = carry_out::<Pin, Notes>(
+        &mut store,
+        StorageDirective::Load {
+            ticket: Ticket(1),
+            shelf: on.clone(),
+            chat: ChatId::from_number(id),
+        },
+    );
+    match loaded {
+        Some((_, StorageEvent::Loaded(read))) => *read == saved(id),
+        Some((_, StorageEvent::NotLoaded(CannotRestore::NotFound | CannotRestore::Damaged(_)))) => {
+            true
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Whether a chat is listed on `shelf`.
+fn listed(root: &Path, on: &Shelf, id: u64) -> bool {
+    let listed = FileStore::new(root).list(on).expect("it lists");
+    listed
+        .iter()
+        .any(|(chat, _)| *chat == ChatId::from_number(id))
+}
+
+#[test]
+fn a_move_cut_off_at_any_step_loses_nothing() {
+    let (work, done) = (shelf("work"), shelf("done"));
+    let name = |extension| format!("{}.{extension}", ChatId::from_number(1));
+    // The steps of a move to a shelf in use, as the store takes them.
+    let mut steps: Vec<(bool, String)> = ["lock", "caf", "journal", "head"]
+        .map(|extension| (true, name(extension)))
+        .to_vec();
+    steps.extend(["caf", "journal", "head", "lock"].map(|extension| (false, name(extension))));
+    for cut in 0..=steps.len() {
+        let folder = Folder::new("moving");
+        let root = folder.path();
+        let mut store = FileStore::new(root);
+        save(&mut store, &work, 1);
+        save(&mut store, &done, 2);
+        drop(store);
+        for (link, name) in &steps[..cut] {
+            let (here, there) = (root.join("work").join(name), root.join("done").join(name));
+            if *link {
+                fs::hard_link(&here, &there).expect("linked");
+            } else {
+                fs::remove_file(&here).expect("removed");
+            }
+        }
+        for on in [&work, &done] {
+            assert!(reads_whole_or_not_at_all(root, on, 1), "cut at {cut}");
+        }
+        assert!(
+            listed(root, &work, 1) || listed(root, &done, 1),
+            "cut at {cut}: it's listed somewhere"
+        );
+        FileStore::new(root)
+            .move_shelf(&work, &done)
+            .unwrap_or_else(|error| panic!("cut at {cut}, moving again: {error:?}"));
+        let stored = FileStore::new(root)
+            .load(&done, ChatId::from_number(1))
+            .expect("it's moved");
+        assert_eq!(decode(&stored.snapshot, &stored.journal), Ok(saved(1)));
+        assert!(!root.join("work").exists(), "cut at {cut}");
+    }
+}
+
+#[test]
+fn a_deletion_cut_off_at_any_step_is_seen_and_finished() {
+    let work = shelf("work");
+    let chat = ChatId::from_number(1);
+    let steps = ["caf", "journal", "head", "lock"];
+    for cut in 0..=steps.len() {
+        let folder = Folder::new("deleting");
+        let root = folder.path();
+        let mut store = FileStore::new(root);
+        save(&mut store, &work, 1);
+        for extension in &steps[..cut] {
+            fs::remove_file(file(root, "work", 1, extension)).expect("removed");
+        }
+        assert!(reads_whole_or_not_at_all(root, &work, 1), "cut at {cut}");
+        let anything = ["caf", "journal", "head"]
+            .iter()
+            .any(|extension| file(root, "work", 1, extension).exists());
+        assert_eq!(listed(root, &work, 1), anything, "cut at {cut}");
+        store.delete(&work, chat).expect("it's deleted");
+        assert_eq!(
+            fs::read_dir(root.join("work")).expect("the shelf").count(),
+            0
+        );
+    }
+}
+
+#[test]
+fn a_chat_left_without_a_header_is_listed() {
+    let folder = Folder::new("headless");
+    let root = folder.path();
+    let mut store = FileStore::new(root);
+    save(&mut store, &shelf("work"), 1);
+    fs::remove_file(file(root, "work", 1, "head")).expect("removed");
+    let listed = store.list(&shelf("work")).expect("it lists");
+    assert_eq!(listed, vec![(ChatId::from_number(1), vec![])]);
+}
+
+#[test]
+fn what_is_not_a_file_is_never_opened_as_one() {
+    let folder = Folder::new("fifo");
+    let root = folder.path();
+    let mut store = FileStore::new(root);
+    save(&mut store, &shelf("work"), 1);
+    let fifo = |path: PathBuf| {
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &path,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::from_raw_mode(0o600),
+            0,
+        )
+        .expect("a pipe");
+    };
+    fifo(file(root, "work", 2, "head"));
+    fifo(file(root, "work", 3, "caf"));
+    fifo(file(root, "work", 3, "lock"));
+    let listed = store.list(&shelf("work")).expect("it lists, not waiting");
+    assert_eq!(listed, vec![(ChatId::from_number(1), head(1))]);
+    let loaded = store.load(&shelf("work"), ChatId::from_number(3));
+    assert!(matches!(loaded, Err(StoreError::Io(_))), "{loaded:?}");
+}
+
+#[test]
+fn squeezing_tidies_what_crashes_left() {
+    let folder = Folder::new("tidy");
+    let root = folder.path();
+    let mut store = FileStore::new(root);
+    save(&mut store, &shelf("work"), 1);
+    // A lock of a chat with nothing else, held by nobody, and one held.
+    let (orphan, held) = (file(root, "work", 2, "lock"), file(root, "work", 3, "lock"));
+    fs::write(&orphan, b"").expect("a lock");
+    let mut holder = FileStore::new(root);
+    holder
+        .snapshot(&shelf("work"), ChatId::from_number(3), &head(3), &snap(3))
+        .expect("it's written");
+    fs::remove_file(file(root, "work", 3, "caf")).expect("half made");
+    fs::remove_file(file(root, "work", 3, "journal")).expect("half made");
+    fs::remove_file(file(root, "work", 3, "head")).expect("half made");
+    // A squeeze's new file just made, maybe another's, at work.
+    let new = root.join(format!("work/{}.caf.squeeze-1.new", ChatId::from_number(1)));
+    fs::write(&new, b"working").expect("a new file");
+    FileStore::new(root)
+        .squeeze(Duration::from_secs(3600))
+        .expect("it squeezes");
+    assert!(!orphan.exists(), "given up");
+    assert!(held.exists(), "held");
+    assert!(new.exists(), "too new to be left by a crash");
+    assert!(file(root, "work", 1, "lock").exists(), "a chat's");
+}
+
+#[test]
+fn a_chat_added_to_lately_is_not_left_alone() {
+    let folder = Folder::new("lately");
+    let root = folder.path();
+    let mut store = FileStore::new(root);
+    save(&mut store, &shelf("work"), 1);
+    let long_ago = std::time::SystemTime::now() - Duration::from_secs(7200);
+    let age = |extension, when| {
+        let opened = fs::File::options()
+            .write(true)
+            .open(file(root, "work", 1, extension))
+            .expect("it opens");
+        opened.set_modified(when).expect("it's aged");
+    };
+    age("caf", long_ago);
+    let hour = Duration::from_secs(3600);
+    assert_eq!(store.squeeze(hour).expect("it squeezes"), 0);
+    assert_eq!(fs::read(file(root, "work", 1, "caf")).expect("one")[8], 0);
+    age("journal", long_ago);
+    store.squeeze(hour).expect("it squeezes");
+    assert_eq!(fs::read(file(root, "work", 1, "caf")).expect("one")[8], 1);
 }
