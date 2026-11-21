@@ -54,6 +54,8 @@
         return `question ${change.value.id} (${change.value.kind.type})`
       case 'QuestionGone':
         return `question ${change.value}`
+      case 'Settings':
+        return change.value.chosen.map((choice) => `${choice.kind.type} ${String(choice.value.value)}`).join(', ') || 'none chosen'
       default:
         return typeof value === 'object' ? '' : String(value)
     }
