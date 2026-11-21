@@ -1007,6 +1007,47 @@ async fn a_program_still_open_for_writing_is_waited_for_briefly() {
 }
 
 #[tokio::test]
+async fn starting_from_an_install_marks_it_used() {
+    let dir = Dir::new();
+    let install = dir.root().join("fake-1.0.0");
+    std::fs::create_dir_all(&install).unwrap();
+    let used = install.join(".used");
+    let long_ago = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+    std::fs::File::create(&used)
+        .unwrap()
+        .set_modified(long_ago)
+        .unwrap();
+    let mut agents = AgentDriver::new(AgentLimits::default());
+    agents.apply(AgentDirective::Start {
+        process: Ticket(1000),
+        command: SpawnCommand::new("/bin/true"),
+        hold: Some(install.clone()),
+    });
+    let (_, event) = tokio::time::timeout(PATIENCE, agents.next()).await.unwrap();
+    assert!(matches!(event, AgentEvent::Started { .. }), "{event:?}");
+    let touched = std::fs::metadata(&used).unwrap().modified().unwrap();
+    assert!(
+        touched > long_ago + Duration::from_secs(60 * 60 * 24 * 365),
+        "its use is marked: {touched:?}"
+    );
+    // One never used before gets the mark.
+    std::fs::remove_file(&used).unwrap();
+    agents.apply(AgentDirective::Start {
+        process: Ticket(1001),
+        command: SpawnCommand::new("/bin/true"),
+        hold: Some(install.clone()),
+    });
+    loop {
+        let (process, event) = tokio::time::timeout(PATIENCE, agents.next()).await.unwrap();
+        if process == Ticket(1001) {
+            assert!(matches!(event, AgentEvent::Started { .. }), "{event:?}");
+            break;
+        }
+    }
+    assert!(used.exists());
+}
+
+#[tokio::test]
 async fn a_process_whose_install_is_missing_doesnt_start() {
     let dir = Dir::new();
     let mut agents = AgentDriver::new(AgentLimits::default());

@@ -32,6 +32,7 @@ use std::fs::File;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -157,7 +158,8 @@ impl Default for AgentLimits {
 ///   ([`SetupDirective::Remove`](caf_core::directive::SetupDirective::Remove)). If the folder can't
 ///   be opened, or a removal holds it for over two seconds, the start
 ///   fails. Something the process started that outlives it doesn't hold
-///   the install.
+///   the install. Once held, the install is marked used: its `.used`
+///   file's time is set to now, for the setup driver's survey to report.
 /// - **A program open for writing** can't be run ("text file busy"). One
 ///   just written, such as one CAF just installed, can be, for a moment,
 ///   in a process another thread is starting. So starting one waits up to
@@ -1062,6 +1064,7 @@ async fn hold_folder(folder: &Path) -> io::Result<File> {
             )
         })?;
         if let Some(held) = lock_file(file, Lock::SharedNow)? {
+            mark_used(folder);
             return Ok(held);
         }
         if Instant::now() >= give_up {
@@ -1071,6 +1074,21 @@ async fn hold_folder(folder: &Path) -> io::Result<File> {
             ));
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Marks `folder`, an install, as used now: its `.used` file is made if
+/// it isn't there, and its time set to now, for a survey to report. If it
+/// can't be marked, the process starts anyway.
+fn mark_used(folder: &Path) {
+    let marked = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(folder.join(".used"))
+        .and_then(|used| used.set_modified(std::time::SystemTime::now()));
+    if let Err(error) = marked {
+        log::debug!(target: "caf", "can't mark {} as used: {error}", folder.display());
     }
 }
 
