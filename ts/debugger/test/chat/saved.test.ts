@@ -7,6 +7,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/sv
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CafError, type SavedChat, type ToViewer } from '@clackatoo/caf'
 import SavedList from '../../src/chat/SavedList.svelte'
+import { restoreOnceFree } from '../../src/chat/actions.ts'
 import { errorText, refusedText } from '../../src/chat/words.ts'
 import { chatId, NOON } from './build.ts'
 
@@ -273,5 +274,25 @@ describe('the words for restoring', () => {
   it('says why a chat could not be restored', () => {
     const error = new CafError({ type: 'CannotRestore', value: { type: 'NotFound' } })
     expect(errorText(error)).toBe("It can't be restored: it isn't on its shelf any more.")
+  })
+})
+
+describe('restoring a chat just put away', () => {
+  const loaded = () => new CafError({ type: 'Refused', value: { type: 'Loaded' } })
+
+  it('tries again for a moment while CAF holds it, then has it', async () => {
+    const restore = vi.fn().mockRejectedValueOnce(loaded()).mockRejectedValueOnce(loaded()).mockResolvedValue(chatId(7))
+    await expect(restoreOnceFree(restore, { wait: 1 })).resolves.toBe(chatId(7))
+    expect(restore).toHaveBeenCalledTimes(3)
+  })
+
+  it('gives up after a while, and never tries again after any other failure', async () => {
+    const held = vi.fn().mockRejectedValue(loaded())
+    await expect(restoreOnceFree(held, { tries: 3, wait: 1 })).rejects.toEqual(loaded())
+    expect(held).toHaveBeenCalledTimes(3)
+    const inUse = new CafError({ type: 'CannotRestore', value: { type: 'InUse' } })
+    const other = vi.fn().mockRejectedValue(inUse)
+    await expect(restoreOnceFree(other, { wait: 1 })).rejects.toBe(inUse)
+    expect(other).toHaveBeenCalledTimes(1)
   })
 })

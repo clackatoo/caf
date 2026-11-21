@@ -83,3 +83,26 @@ fn sigterm_and_sighup_shut_caf_down_as_ctrl_c_does() {
         );
     }
 }
+
+#[test]
+fn a_store_it_cant_write_in_stops_it_before_it_starts() {
+    let state = std::env::temp_dir().join(format!("caf-debugger-cli-store-{}", std::process::id()));
+    std::fs::create_dir_all(&state).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_caf-debugger"))
+        .args(["--port", "0", "--store", "/proc/caf-debugger-nowhere"])
+        .env("XDG_STATE_HOME", &state)
+        .env("XDG_DATA_HOME", &state)
+        .env(caf_fake_agent::BIN_VAR, caf_fake_agent::binary())
+        .env("PATH", "/usr/bin:/bin")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(&state).unwrap();
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{said}");
+    assert!(
+        said.contains("can't keep chats in /proc/caf-debugger-nowhere"),
+        "{said}"
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("Open http"));
+}

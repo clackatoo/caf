@@ -147,6 +147,14 @@ async fn run(args: Args) -> Result<(), String> {
                     None
                 }),
             };
+            if let Some(store) = &store {
+                files::check_store(store).map_err(|error| {
+                    format!(
+                        "can't keep chats in {}: {error}: give a folder it can write in with --store",
+                        store.display()
+                    )
+                })?;
+            }
             let live = live::start(agents, Some(recording), store);
             let names: Vec<_> = live
                 .caf

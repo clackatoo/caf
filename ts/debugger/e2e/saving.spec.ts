@@ -54,6 +54,17 @@ test('a chat saved in one run is restored in the next, and carries on', async ({
     await expect(turns.last().locator('.message')).toHaveText('again')
     await expect(turns.last().locator('.life')).toHaveText('Finished')
     await expect(turns.last().locator('.words .markdown')).toContainText("CAF's fake agent")
+
+    // Closed, it's put away, and shown closed; restored again at once, it
+    // comes back as soon as CAF has written it.
+    await page.locator('.caf-chat header').getByRole('button', { name: 'Close' }).click()
+    await expect(page.locator('.caf-chat [data-state]')).toHaveText('Closed')
+    await expect(row).toHaveAttribute('data-state', 'Saved')
+    await expect(row).toContainText('closed')
+    await row.getByRole('button', { name: 'Restore hello' }).click()
+    await expect(row).toHaveAttribute('data-state', 'Loaded')
+    await expect(turns).toHaveCount(2)
+    await expect(saved.getByRole('alert')).toHaveCount(0)
   } finally {
     await stop(again)
   }

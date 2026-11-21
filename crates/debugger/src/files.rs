@@ -1,7 +1,7 @@
-//! Where the debugger keeps its files: recordings of every live run, and
-//! the fake agent's script.
+//! Where the debugger keeps its files: recordings of every live run, the
+//! fake agent's script, and the folder its chats are kept in.
 
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -31,6 +31,29 @@ pub fn make(dir: &Path) -> std::io::Result<()> {
         .mode(0o700)
         .create(dir)?;
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+}
+
+/// Checks chats can be kept in `dir`: it's made, readable only by its
+/// owner, with any folders it's in, if it isn't there, and something is
+/// written in it and removed. One that's there keeps its permissions.
+/// Checked as the debugger starts, as CAF tries a chat it can't write
+/// again until it can, and so would never finish shutting down.
+///
+/// # Errors
+///
+/// If it can't be made, or written in.
+pub fn check_store(dir: &Path) -> std::io::Result<()> {
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
+    let probe = dir.join(format!(".caf-debugger-check-{}", std::process::id()));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&probe)?;
+    std::fs::remove_file(&probe)
 }
 
 /// A new recording's path in `dir`, named for `now` in UTC and this
@@ -90,7 +113,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::time::{Duration, SystemTime};
 
-    use super::{make, new_recording, stamp};
+    use super::{check_store, make, new_recording, stamp};
 
     #[test]
     fn recordings_are_named_for_when_they_start_and_the_process() {
@@ -125,6 +148,34 @@ mod tests {
             std::fs::metadata(&inner).unwrap().permissions().mode() & 0o777,
             0o700
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_store_is_made_private_if_it_isnt_there_and_must_take_writes() {
+        let dir = std::env::temp_dir().join(format!("caf-debugger-store-{}", std::process::id()));
+        let store = dir.join("data/chats");
+        check_store(&store).unwrap();
+        let mode = std::fs::metadata(&store).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        assert_eq!(
+            std::fs::read_dir(&store).unwrap().count(),
+            0,
+            "nothing left"
+        );
+        // One that's there keeps its permissions, and must take writes.
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let writable = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(store.join("root-writes-anywhere"))
+            .is_ok();
+        if !writable {
+            assert!(check_store(&store).is_err(), "read-only");
+        }
+        let mode = std::fs::metadata(&store).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o500);
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
