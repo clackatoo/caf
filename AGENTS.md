@@ -45,10 +45,14 @@ rewrite its sample.
 with one of every kind of item, turn, change and journal entry, an app
 item and data slot included: the format's own bytes (`header`,
 `snapshot`, `journal`), and the same chat as caf-save's `FileStore`
-keeps it (`files/`). A test fails if it no longer reads as the values in
-`crates/save/tests/sample.rs` say. It's pinned by what it reads as, not
-its bytes, as zstd may compress the same thing differently from one
-version to the next. Saves stay readable forever: a change to a released
-version's shape needs a new version, with a migration from every older
-one and a sample of its own. Only while a version is unreleased may
+keeps it (`files/`, with a second chat, squeezed). A test fails if it no
+longer reads as the values in `crates/save/tests/sample.rs` say: it's
+pinned by what it reads as, not its bytes, as zstd may compress the
+same thing differently from one version to the next. Saves stay
+readable forever, and `caf_save::VERSION` goes up with every change to
+what's saved, a field or variant added included, so an older CAF never
+reads a newer save and writes it back short. `shapes.ts` pins the saved
+types' shapes, from the TypeScript types: a test fails if they, or what
+CAF writes of the sample's values, change while `VERSION` doesn't. A new
+version gets a sample of its own. Only while a version is unreleased may
 `CAF_BLESS_SAMPLE=1 cargo test -p caf-save version_1` rewrite its sample.
