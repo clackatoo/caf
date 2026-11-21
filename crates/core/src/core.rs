@@ -477,7 +477,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// Opens a chat, and returns its id. Its agent is started, or its
     /// running adapter shared, as the host's grouping says; messages sent
-    /// before the session is open wait for it.
+    /// before the session is open wait for it. It calls a shutdown off
+    /// ([`Core::shutdown`]).
     ///
     /// # Errors
     ///
@@ -500,7 +501,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// If another turn is running, or the session isn't open yet, the new
     /// turn waits, in order: messages are never dropped. If the chat's
     /// session was lost, sending opens it again, continuing it where the
-    /// agent can.
+    /// agent can. It calls a shutdown off ([`Core::shutdown`]).
     ///
     /// # Errors
     ///
@@ -739,8 +740,19 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Stops everything: closes every session, stops every adapter
-    /// gently, then firmly, and saves every saved chat whole. Done once
-    /// [`Core::is_idle`] is true.
+    /// gently, then firmly, and saves every saved chat whole, letting it
+    /// go in the store. Done once [`Core::is_idle`] is true.
+    ///
+    /// Saved chats stay loaded. One that changes after, as when the app
+    /// sets its data, is written whole at once and let go again, so
+    /// [`Core::is_idle`] may go from true back to false until it is.
+    /// Sending a message or opening a chat calls the shutdown off: chats
+    /// already let go are written whole at once, which locks them again.
+    /// Restoring, setting data, closing and the rest don't call it off.
+    ///
+    /// If another program takes a chat's lock between its being let go and
+    /// the shutdown being called off, writing it fails, and is tried again,
+    /// with a report each time, until the lock is free.
     pub fn shutdown(&mut self, now: Now, out: &mut Vec<Directive<A, D>>) {
         // Shutting down is never refused.
         let _ = self.command(now, HostCommand::Shutdown, out);
@@ -752,7 +764,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// store: no chat being put away, restored, deleted or moved, nor
     /// saved as CAF shuts down and not yet let go, nor, while it's shutting
     /// down, any saved chat with a change not yet written, nor any lock
-    /// this run has no use for left.
+    /// this run has no use for left. Shut down, it goes back to false if a
+    /// saved chat changes, until that's written and let go.
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.procs.is_empty()

@@ -1310,7 +1310,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// Saves every saved chat whole and lets it go in the store, as CAF
     /// shuts down. It stays loaded: if it changes again, it's written
-    /// whole, which takes it again.
+    /// whole at once and let go again; if the shutdown is called off, it's
+    /// written whole, which locks it again.
     pub(super) fn save_all(&mut self, now: Now) {
         for kept in self.saving.kept.values_mut() {
             kept.releasing = true;

@@ -1614,6 +1614,14 @@ fn random_script(seed: u64) -> [usize; 5] {
             );
             assert!(script.core.is_idle(), "seed {seed}: idle once shut down");
             assert!(store.locked.is_empty(), "seed {seed}: every chat let go");
+            // And what it let go is the chat as it is.
+            let shelf = store.shelf_of(CHAT).expect("it's stored");
+            let stored = store.read(&shelf, CHAT).expect("it's stored");
+            assert_eq!(
+                Some(&stored.chat),
+                script.core.chat(CHAT),
+                "seed {seed}: written whole as it was let go"
+            );
             continue;
         }
         let chunk = |kind: &str, dice: &mut Dice| {
@@ -2666,12 +2674,14 @@ fn random_lives(seed: u64) {
         let chat = chats[usize::try_from(dice.roll(chats.len() as u64)).unwrap_or(0)];
         let shelf = shelves[usize::try_from(dice.roll(2)).unwrap_or(0)];
         let elsewhere = if shelf == SHELF { "else" } else { SHELF };
-        let out = match dice.roll(11) {
+        let out = match dice.roll(12) {
             0 | 1 => {
                 script
                     .restore(RestoreChat::new(chat, Shelf(shelf.to_owned())))
                     .1
             }
+            // Sending calls a shutdown off.
+            10 => script.send(chat, "Go on").1,
             2 => script.put_away(chat).1,
             3 => script.close(chat).1,
             4 => script.delete(chat, shelf).1,
@@ -2734,6 +2744,23 @@ fn random_lives(seed: u64) {
             json!(shelf.0),
             "seed {seed}: chat {chat} is held, loaded, where it's kept"
         );
+    }
+    // Not shutting down, each loaded chat written as it is is locked.
+    if !script.core.shutting_down {
+        for (chat, kept) in saving["kept"].as_object().into_iter().flatten() {
+            let written = kept["behind"] == false
+                && kept["unsaved"] == json!([])
+                && kept["due"].is_null()
+                && kept["writing"].is_null();
+            if written {
+                let chat: ChatId = serde_json::from_value(json!(chat)).expect("a chat id");
+                let shelf: Shelf = serde_json::from_value(kept["shelf"].clone()).expect("a shelf");
+                assert!(
+                    store.locked.contains(&(shelf, chat)),
+                    "seed {seed}: chat {chat} is loaded and written, so locked"
+                );
+            }
+        }
     }
     // Shut down, everything is let go: by the shutdown already asked for,
     // if it wasn't called off, which must see to changes since by itself.
@@ -2838,5 +2865,35 @@ fn a_deletion_answered_with_anything_but_done_or_failed_has_failed() {
     assert_eq!(
         storage(&out),
         [json!({ "type": "Release", "value": { "shelf": SHELF, "chat": CHAT } })]
+    );
+}
+
+#[test]
+fn a_chat_let_go_behind_a_move_and_called_back_is_let_go_then_written_whole_after_it() {
+    let mut script = Script::new(host());
+    script.open_saved("claude");
+    script.at(1000);
+    let snapshot = ticket(&one_storage(&script.woken()));
+    script.storage(snapshot, done(10_000));
+    let last = ticket(&one_storage(&script.shutdown()));
+    // A move of its shelf waits for its last write; letting it go waits for
+    // the move.
+    assert!(storage(&script.move_shelf(SHELF, "renamed").1).is_empty());
+    let out = script.storage(last, done(10_000));
+    let moving = ticket(&one_storage(&out));
+    // Called off: it's to be written whole again, after the move.
+    script.at(2000);
+    let out = script.send(CHAT, "One more thing").1;
+    assert!(storage(&out).is_empty(), "it waits for the move");
+    let out = script.storage(moving, done(0));
+    let mut work = storage(&out).into_iter().map(|each| each["type"].clone());
+    assert_eq!(work.next(), Some(json!("Release")));
+    assert_eq!(work.next(), Some(json!("Snapshot")));
+    assert_has(
+        &json!(storage(&out)),
+        &json!([
+            { "type": "Release", "value": { "shelf": "renamed", "chat": CHAT } },
+            { "type": "Snapshot", "value": { "shelf": "renamed" } }
+        ]),
     );
 }
