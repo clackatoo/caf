@@ -231,12 +231,13 @@ fn a_failed_initialize_fails_the_connection_with_a_typed_reason() {
 fn capabilities_are_read_leniently() {
     let mut script = Script::new(host());
     script
-        .open(OpenChat::new("claude", "/work"))
+        .open(OpenChat::new("plain", "/work"))
         .0
         .expect("opened");
     let init = json!({
         "protocolVersion": 1,
         "agentCapabilities": { "loadSession": "yes", "sessionCapabilities": { "resume": true, "close": null }, "mcpCapabilities": 7 },
+        "agentInfo": { "name": "plain-acp", "version": "1.0.0" },
     });
     let out = script.answers(PROC, 1000, &init);
     sent(&out, "session/new");
@@ -244,7 +245,17 @@ fn capabilities_are_read_leniently() {
         script.state()["procs"]["1002"]["init"],
         json!({ "type": "Ready", "value": { "load": false, "resume": false, "close": false, "mcp_http": false } })
     );
-    // No agentInfo: the cautious profile.
+}
+
+#[test]
+fn an_adapter_that_doesnt_say_what_it_is_gets_the_cautious_profile() {
+    let mut script = Script::new(host());
+    script
+        .open(OpenChat::new("claude", "/work"))
+        .0
+        .expect("opened");
+    let init = json!({ "protocolVersion": 1, "agentCapabilities": {} });
+    script.answers(PROC, 1000, &init);
     assert_has(
         &script.state(),
         &json!({ "conns": { "1001": { "profile": { "profile": { "type": "Cautious" }, "adapter": null, "checked": { "type": "Mismatch" } } } } }),

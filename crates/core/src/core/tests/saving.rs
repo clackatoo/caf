@@ -852,6 +852,53 @@ fn a_chat_whose_agent_is_gone_comes_back_and_sending_to_it_is_refused() {
 }
 
 #[test]
+fn a_restored_chat_is_given_its_instructions_again_as_its_session_opens() {
+    let mut script = Script::new(host());
+    let mut restore = RestoreChat::new(CHAT, Shelf(SHELF.to_owned()));
+    restore.instructions = Some("Given again.".to_owned());
+    script.restore(restore).0.expect("restoring");
+    let saved = saved(&mid_turn("claude"), Some("old"), 0);
+    script.storage(1000, StorageEvent::Loaded(Box::new(saved)));
+    let out = script.send(CHAT, "Go on").1;
+    let proc = with(&out, "start")[0]["start"].as_u64().expect("a process");
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let out = script.answers(proc, init, &claude_init());
+    let options = &sent(&out, "session/resume")["params"]["_meta"]["claudeCode"]["options"];
+    assert_eq!(
+        options["systemPrompt"],
+        crate::profiles::own_instructions("caf-test") + "\n\nGiven again."
+    );
+    assert_eq!(options["tools"], json!([]));
+}
+
+#[test]
+fn a_chat_whose_agent_caf_cant_strip_comes_back_and_sending_to_it_is_refused() {
+    let mut agents = super::harness::agents();
+    agents.push(crate::agent::AgentSpec::command(
+        "unknown",
+        crate::agent::SpawnCommand::new("/opt/unknown-acp"),
+        crate::profiles::ProfileChoice::Cautious,
+    ));
+    let mut script = Script::offering(host(), agents);
+    script
+        .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
+        .0
+        .expect("restoring");
+    let mut saved = saved(&mid_turn("unknown"), Some("old"), 0);
+    saved.header.profile = None;
+    script.storage(1000, StorageEvent::Loaded(Box::new(saved)));
+    assert_eq!(script.chat(CHAT)["agent"], "unknown");
+    let (turn, out) = script.send(CHAT, "hello?");
+    assert_eq!(turn, Err(Refused::OwnTools));
+    assert!(with(&out, "start").is_empty(), "nothing is started");
+    assert_eq!(
+        script.chat(CHAT)["state"],
+        json!({ "type": "Idle" }),
+        "it's as it was restored"
+    );
+}
+
+#[test]
 fn a_chat_whose_agent_two_agents_could_be_isnt_rebound() {
     // Two of the test's agents have Claude's profile.
     let mut script = Script::new(host());

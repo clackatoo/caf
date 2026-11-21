@@ -38,7 +38,10 @@
 //!
 //! **A chat whose agent the host no longer offers still comes back**, with
 //! its record, and sending to it is refused
-//! ([`Refused::NoSuchAgent`](crate::Refused::NoSuchAgent)). If the host
+//! ([`Refused::NoSuchAgent`](crate::Refused::NoSuchAgent)). So does one
+//! whose agent now has the cautious profile, whose own tools CAF can't
+//! turn off: sending to it is refused
+//! ([`Refused::OwnTools`](crate::Refused::OwnTools)). If the host
 //! offers no agent by its name but exactly one with its built-in profile
 //! ([`Header::profile`]), as when the host renamed it, the chat comes back
 //! with that one, under its new name.

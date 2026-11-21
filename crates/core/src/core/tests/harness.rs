@@ -83,10 +83,11 @@ pub(crate) fn agents() -> Vec<AgentSpec> {
             claude,
             ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
         ),
+        // A plain ACP adapter, with no tools of its own.
         AgentSpec::command(
             "plain",
             SpawnCommand::new("/opt/caf/plain-acp"),
-            ProfileChoice::Cautious,
+            ProfileChoice::Builtin(Builtin::TestPlain),
         ),
         // Two made-up agents CAF installs, with recipes of different
         // shapes, so nothing assumes Claude.

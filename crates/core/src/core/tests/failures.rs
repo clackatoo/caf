@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 
-use super::harness::{Script, assert_has, host, sent, with};
+use super::harness::{Script, assert_has, host, sent, with, writes};
 use super::{CHAT, PROC, SESSION, claude_init};
 use crate::core::OpenChat;
 
@@ -133,30 +133,51 @@ fn the_agents_failure_text_is_cleaned_and_capped() {
 }
 
 #[test]
-fn an_adapter_that_isnt_the_one_its_profile_is_for_is_read_cautiously() {
-    let mut script = Script::new(host());
-    script
-        .open(OpenChat::new("claude", "/work"))
-        .0
-        .expect("opened");
-    let mut init = claude_init();
-    init["agentInfo"]["version"] = json!("0.97.0");
-    script.answers(PROC, 1000, &init);
-    script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
-    assert_has(
-        &script.state(),
-        &json!({ "conns": { "1001": { "profile": { "profile": { "type": "Cautious" }, "checked": { "type": "Mismatch" } } } } }),
-    );
-    script.send(CHAT, "go").0.expect("sent");
-    script.fails(
-        PROC,
-        1002,
-        &json!({ "code": -32603, "message": "x", "data": { "errorKind": "rate_limit" } }),
-    );
-    assert_has(
-        &script.chat(CHAT),
-        &json!({ "turns": [{ "life": { "type": "Failed", "value": { "reason": { "type": "Other" } } } }] }),
-    );
+fn an_adapter_that_isnt_the_one_its_profile_is_for_is_read_cautiously_and_never_run() {
+    let older = {
+        let mut init = claude_init();
+        init["agentInfo"]["version"] = json!("0.97.0");
+        init
+    };
+    let other = {
+        let mut init = claude_init();
+        init["agentInfo"]["name"] = json!("someone-elses-acp");
+        init
+    };
+    let unnamed = {
+        let mut init = claude_init();
+        init.as_object_mut().expect("an object").remove("agentInfo");
+        init
+    };
+    for init in [older, other, unnamed] {
+        let mut script = Script::new(host());
+        script
+            .open(OpenChat::new("claude", "/work"))
+            .0
+            .expect("opened");
+        // A message waiting for the session.
+        script.send(CHAT, "go").0.expect("sent");
+        let out = script.answers(PROC, 1000, &init);
+        assert!(writes(&out).is_empty(), "no session asked for: {out:#?}");
+        assert_has(
+            &script.state(),
+            &json!({ "conns": { "1001": { "profile": { "profile": { "type": "Cautious" }, "checked": { "type": "Mismatch" } } } } }),
+        );
+        let lost = json!({ "type": "Lost", "value": { "reason": { "type": "Incompatible", "value": { "type": "OwnTools" } } } });
+        let failed = json!({ "type": "Failed", "value": { "reason": { "type": "AgentStopped" }, "remedy": { "type": "SendAgain" } } });
+        assert_has(
+            &script.chat(CHAT),
+            &json!({ "state": lost, "turns": [{ "life": failed }] }),
+        );
+        // Sending again asks the same adapter, and fails the same way.
+        let (turn, out) = script.send(CHAT, "again?");
+        turn.expect("sent");
+        assert!(writes(&out).is_empty(), "no session asked for: {out:#?}");
+        assert_has(
+            &script.chat(CHAT),
+            &json!({ "state": lost, "turns": [{ "life": failed }, { "life": failed }] }),
+        );
+    }
 }
 
 #[test]
@@ -168,10 +189,17 @@ fn a_newer_claude_keeps_its_profile() {
         .expect("opened");
     let mut init = claude_init();
     init["agentInfo"]["version"] = json!("0.99.0");
-    script.answers(PROC, 1000, &init);
+    let out = script.answers(PROC, 1000, &init);
     assert_has(
         &script.state(),
         &json!({ "conns": { "1001": { "profile": { "profile": { "type": "Builtin", "value": { "type": "ClaudeAgentAcp" } }, "checked": { "type": "Newer" } } } } }),
+    );
+    // And is stripped the same way.
+    assert_eq!(
+        sent(&out, "session/new")["params"]["_meta"],
+        crate::profiles::ProfileChoice::Builtin(crate::profiles::Builtin::ClaudeAgentAcp)
+            .stripped(&crate::profiles::own_instructions("caf-test"), None)
+            .expect("stripped")
     );
 }
 
@@ -361,7 +389,7 @@ fn a_turn_being_stopped_isnt_sent_again_when_its_session_was_dropped() {
 }
 
 #[test]
-fn a_cautious_profile_matches_no_agents_text() {
+fn another_profile_matches_none_of_claudes_text() {
     let mut script = Script::new(host());
     script
         .open(OpenChat::new("plain", "/work"))

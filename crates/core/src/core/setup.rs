@@ -263,9 +263,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     install: standing.install.clone(),
                     sign_in: standing.sign_in.clone(),
                     can_sign_in: self.signing_in(name).is_some() || self.can_sign_in(name),
-                    own_tools_off: self.agents.get(name).is_some_and(|agent| {
-                        !matches!(agent.profile, crate::profiles::ProfileChoice::Cautious)
-                    }),
+                    own_tools_off: (self.agents.get(name))
+                        .is_some_and(|agent| agent.profile.strips()),
                 })
             })
             .collect()

@@ -306,6 +306,9 @@ pub(super) struct Run<A: AppItem> {
     pub(super) mcp: Vec<McpServer>,
     /// The tools given to it, as they're sent.
     pub(super) mcp_sent: Vec<serde_json::Value>,
+    /// What the app tells the agent, after CAF's own instructions, each
+    /// time its session is opened.
+    pub(super) instructions: Option<String>,
     /// Its session as the agent knows it: open, or to be continued.
     pub(super) session: Option<AgentSessionId>,
     /// Where it is with its session.

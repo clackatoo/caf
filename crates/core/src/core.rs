@@ -141,8 +141,10 @@ pub struct OpenChat {
     /// framewright describing the project open: added to CAF's own short
     /// instructions, which take the place of the agent's built-in ones
     /// (they describe tools it no longer has). `None` (the default) adds
-    /// nothing. Not saved: the host gives them again when it restores the
-    /// chat ([`RestoreChat::instructions`](crate::save::RestoreChat::instructions)).
+    /// nothing. They're sent each time its session is opened, so at most
+    /// 64 KiB, else the chat is refused ([`Refused::Unsendable`]). Not
+    /// saved: the host gives them again when it restores the chat
+    /// ([`RestoreChat::instructions`](crate::save::RestoreChat::instructions)).
     pub instructions: Option<String>,
 }
 
@@ -194,9 +196,11 @@ pub enum Refused {
     /// The folder isn't absolute.
     RelativeFolder,
     /// Something can't be sent to the agent exactly as it is: a folder,
-    /// program, argument or variable that isn't valid UTF-8, or what ACP
+    /// program, argument or variable that isn't valid UTF-8, what ACP
     /// can't say for an MCP server (a variable to remove, or a folder to
-    /// start in). CAF never sends something else in its place.
+    /// start in), or instructions longer than 64 KiB
+    /// ([`OpenChat::instructions`]). CAF never sends something else in
+    /// its place.
     Unsendable,
     /// The chat already has as many messages waiting as the host allows.
     QueueFull,
@@ -234,6 +238,8 @@ pub enum Refused {
     /// CAF can't turn off this agent's own tools, so it won't run it: its
     /// profile is the cautious one, which doesn't say how
     /// ([`AgentStatus::own_tools_off`](crate::agent::AgentStatus::own_tools_off)).
+    /// A chat with it is refused as it's opened, and, as a restored chat's
+    /// agent is known only once it's read, as a message is sent to it.
     OwnTools,
 }
 
@@ -494,7 +500,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     ///
     /// # Errors
     ///
-    /// [`Refused::NoSuchAgent`], [`Refused::RelativeFolder`],
+    /// [`Refused::NoSuchAgent`], [`Refused::OwnTools`] if CAF can't turn
+    /// off the agent's own tools, [`Refused::RelativeFolder`],
     /// [`Refused::Unsendable`], or [`Refused::BadShelf`] for its shelf.
     pub fn open_chat(
         &mut self,
@@ -518,7 +525,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// # Errors
     ///
     /// [`Refused::NoSuchChat`], [`Refused::Closed`], [`Refused::QueueFull`],
-    /// [`Refused::Unsupported`] or [`Refused::CommandNotAlone`].
+    /// [`Refused::Unsupported`] or [`Refused::CommandNotAlone`]; for a
+    /// restored chat, [`Refused::NoSuchAgent`] if the host no longer
+    /// offers its agent, and [`Refused::OwnTools`] if CAF can't turn off
+    /// its agent's own tools.
     pub fn send(
         &mut self,
         now: Now,
@@ -644,9 +654,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// # Errors
     ///
     /// [`Refused::Loaded`], [`Refused::BadShelf`], or
-    /// [`Refused::Unsendable`] for its MCP servers. A chat whose agent the
-    /// host no longer offers is still restored, and sending to it is
-    /// refused ([`Refused::NoSuchAgent`]): see [`save`](crate::save).
+    /// [`Refused::Unsendable`] for its MCP servers or instructions. Which
+    /// agent the chat is with is known only once it's read, so a chat
+    /// whose agent the host no longer offers, or whose own tools CAF can't
+    /// turn off, is still restored, and sending to it is refused
+    /// ([`Refused::NoSuchAgent`], [`Refused::OwnTools`]): see
+    /// [`save`](crate::save).
     pub fn restore(
         &mut self,
         now: Now,

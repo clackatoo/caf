@@ -34,7 +34,9 @@ shelf: Shelf | null,
  * framewright describing the project open: added to CAF's own short
  * instructions, which take the place of the agent's built-in ones
  * (they describe tools it no longer has). `None` (the default) adds
- * nothing. Not saved: the host gives them again when it restores the
- * chat ([`RestoreChat::instructions`](crate::save::RestoreChat::instructions)).
+ * nothing. They're sent each time its session is opened, so at most
+ * 64 KiB, else the chat is refused ([`Refused::Unsendable`]). Not
+ * saved: the host gives them again when it restores the chat
+ * ([`RestoreChat::instructions`](crate::save::RestoreChat::instructions)).
  */
 instructions: string | null, };
