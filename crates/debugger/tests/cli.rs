@@ -19,6 +19,13 @@ fn stopped_by(signal: libc::c_int) -> (std::process::ExitStatus, serde_json::Val
         .args(["--port", "0"])
         .env("XDG_STATE_HOME", &state)
         .env("XDG_DATA_HOME", &state)
+        // No proxy: nothing here downloads, and nothing should try one.
+        .env_remove("HTTPS_PROXY")
+        .env_remove("https_proxy")
+        .env_remove("HTTP_PROXY")
+        .env_remove("http_proxy")
+        .env_remove("ALL_PROXY")
+        .env_remove("all_proxy")
         .env(caf_fake_agent::BIN_VAR, caf_fake_agent::binary())
         .env("PATH", "/usr/bin:/bin")
         .stdout(Stdio::piped())

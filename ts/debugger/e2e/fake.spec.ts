@@ -35,6 +35,17 @@ test.use({ setup: { agents, auth } })
 
 const row = (page: Page, name: string) => page.locator(`.agents [data-agent="${name}"]`)
 
+/**
+ * Waits for CAF's look at its agents, as it starts, to be done: the
+ * installed fake is then known to be missing. A status command runs when
+ * that look ends, and for an agent the host starts itself only if its
+ * adapter has answered by then, so a test that waits first never has one
+ * land partway through it.
+ */
+async function surveyed(page: Page) {
+  await expect(row(page, 'offline')).toHaveAttribute('data-install', 'Missing')
+}
+
 async function openChat(page: Page, agent: string) {
   await page.getByRole('button', { name: 'New chat' }).click()
   await page.getByRole('combobox').selectOption(agent)
@@ -70,7 +81,7 @@ test('an install that fails says why, offers Try again, and stops the waiting me
     "The agent's install failed, so the message that waited for it was stopped.",
   )
   await expect(row(page, 'offline')).toContainText('the network was out of reach')
-  await expect(row(page, 'offline').getByRole('button', { name: 'Try again' })).toBeVisible()
+  await expect(row(page, 'offline').getByRole('button', { name: 'Try again to install offline' })).toBeVisible()
   await noDivergence(page)
 })
 
@@ -92,17 +103,17 @@ test("signs in from the panel, with the link, the code and a paste, then out", a
   await openChat(page, 'signs-in')
   await send(page, 'hello')
   await expect(page.locator('.caf-chat .turn .life').last()).toHaveText('Finished')
-  await expect(agent.getByRole('button', { name: 'Sign in' })).toBeVisible()
+  await expect(agent.getByRole('button', { name: 'Sign in to signs-in' })).toBeVisible()
+  // Another agent's chat beside, so the panel shows this sign-in itself.
+  await openChat(page, 'offline')
 
-  await agent.getByRole('button', { name: 'Sign in' }).click()
+  await agent.getByRole('button', { name: 'Sign in to signs-in' }).click()
   await expect(agent).toHaveAttribute('data-sign-in', 'SigningIn')
   const link = agent.getByRole('link', { name: 'the sign-in page on caf.example' })
   await expect(link).toHaveAttribute('href', 'https://caf.example/sign-in?state=e2e')
   await expect(link).toHaveAttribute('target', '_blank')
   await expect(link).toHaveAttribute('rel', 'noopener noreferrer')
   await expect(agent.locator('code.code')).toHaveText('WXYZ-9876')
-  // The chat shows it too: the sign-in is the agent's, not the panel's.
-  await expect(page.locator('.caf-chat [data-agent-state="SigningIn"]')).toContainText('WXYZ-9876')
 
   await agent.getByRole('textbox').fill('code#state')
   await agent.getByRole('button', { name: 'Send the code' }).click()
@@ -118,15 +129,22 @@ test("signs in from the panel, with the link, the code and a paste, then out", a
 
 test('a sign-in stopped goes back as it was', async ({ page, server }) => {
   await page.goto(server.url)
+  await surveyed(page)
   await openChat(page, 'signs-in')
   await send(page, 'hello')
   await expect(page.locator('.caf-chat .turn .life').last()).toHaveText('Finished')
   const agent = row(page, 'signs-in')
-  const before = await agent.getAttribute('data-sign-in')
-  await agent.getByRole('button', { name: 'Sign in' }).click()
-  await expect(agent.locator('code.code')).toHaveText('WXYZ-9876')
-  await agent.getByRole('button', { name: 'Stop signing in' }).click()
-  await expect(agent).toHaveAttribute('data-sign-in', before!)
+  // Not known: its status command ran before it could, as CAF started.
+  await expect(agent).toHaveAttribute('data-sign-in', 'Unknown')
+  await agent.getByRole('button', { name: 'Sign in to signs-in' }).click()
+  // The chat beside is this agent's, so it shows the sign-in, and the
+  // panel points there: one paste box on the page.
+  const banner = page.locator('.caf-chat [data-agent-state="SigningIn"]')
+  await expect(banner.locator('code.code')).toHaveText('WXYZ-9876')
+  await expect(agent).toContainText('Signing in: see the chat.')
+  await expect(page.getByRole('textbox', { name: /paste it here/ })).toHaveCount(1)
+  await banner.getByRole('button', { name: 'Stop signing in' }).click()
+  await expect(agent).toHaveAttribute('data-sign-in', 'Unknown')
   await noDivergence(page)
 })
 
@@ -152,14 +170,18 @@ test("a turn that failed for want of signing in offers Sign in; once signed in, 
 
 test('a wrong code fails the sign-in, and it goes back as it was', async ({ page, server }) => {
   await page.goto(server.url)
+  await surveyed(page)
   await openChat(page, 'signs-in')
   await send(page, 'hello')
   await expect(page.locator('.caf-chat .turn .life').last()).toHaveText('Finished')
   const agent = row(page, 'signs-in')
-  await agent.getByRole('button', { name: 'Sign in' }).click()
-  await agent.getByRole('textbox').fill('wrong')
-  await agent.getByRole('button', { name: 'Send the code' }).click()
-  await expect(agent).not.toHaveAttribute('data-sign-in', 'SigningIn')
-  await expect(agent).not.toHaveAttribute('data-sign-in', 'SignedIn')
+  await expect(agent).toHaveAttribute('data-sign-in', 'Unknown')
+  await agent.getByRole('button', { name: 'Sign in to signs-in' }).click()
+  const banner = page.locator('.caf-chat [data-agent-state="SigningIn"]')
+  await banner.getByRole('textbox', { name: /paste it here/ }).fill('wrong')
+  await banner.getByRole('button', { name: 'Send the code' }).click()
+  // A failed sign-in may say the agent is signed out, or leave it as it
+  // was: never signed in, nor still signing in.
+  await expect(agent).toHaveAttribute('data-sign-in', /^(Unknown|SignedOut)$/)
   await noDivergence(page)
 })

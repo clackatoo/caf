@@ -57,8 +57,10 @@ export function start(args: string[], setup: Setup = {}): Promise<Server & { pro
   return new Promise((done, fail) => {
     // Agents CAF installs would go under $XDG_DATA_HOME: the same folder, so
     // a test never sees, nor touches, the agents installed on this machine.
+    // No proxy, so a download to nowhere fails as offline, as the fake
+    // profile's must, whatever this machine's settings.
     const env = {
-      ...process.env,
+      ...withoutProxies(process.env),
       XDG_STATE_HOME: state,
       XDG_DATA_HOME: state,
       CAF_FAKE_AGENT_BIN: fake,
@@ -76,6 +78,11 @@ export function start(args: string[], setup: Setup = {}): Promise<Server & { pro
     child.on('error', fail)
     child.on('exit', (code) => fail(new Error(`caf-debugger exited (${code}) before it was ready:\n${printed}`)))
   })
+}
+
+/** `env` without any proxy settings, in either case. */
+function withoutProxies(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !/^(https?|all|no)_proxy$/i.test(name)))
 }
 
 /**

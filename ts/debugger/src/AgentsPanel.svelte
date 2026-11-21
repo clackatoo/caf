@@ -86,7 +86,7 @@
             {:else if canRetry(install)}
               <button
                 type="button"
-                aria-label="Try installing {agent.name} again"
+                aria-label="Try again to install {agent.name}"
                 disabled={working}
                 onclick={() => run(agent.name, actions.install)}>Try again</button
               >
