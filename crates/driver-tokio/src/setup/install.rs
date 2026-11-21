@@ -818,8 +818,6 @@ fn allowed_url(url: &str, options: &Options) -> bool {
             .any(|start| lower.starts_with(start))
 }
 
-/// Downloads `url` to `file`, counting into `done`, until it's done or
-/// `stopped`. Returns its SHA-256, in hex.
 /// How big a download of an agent that takes `size` bytes installed may
 /// be: twice that, and a mebibyte, as what's downloaded is mostly no
 /// bigger than what's installed.
@@ -839,6 +837,8 @@ struct Fetch {
     most: u64,
 }
 
+/// Downloads `how`'s URL to `out`, counting into `done`, until it's done,
+/// `stopped`, or past `how`'s most. Returns its SHA-256, in hex.
 fn fetch(
     how: &Fetch,
     mut out: File,
