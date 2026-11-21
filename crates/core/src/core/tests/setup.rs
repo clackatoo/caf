@@ -86,10 +86,10 @@ fn every_agent_stands_somewhere_in_the_order_offered_and_a_survey_says_where() {
     assert_eq!(
         script.agents(),
         json!([
-            { "name": "claude", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" } },
-            { "name": "plain", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" } },
-            { "name": "npm-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" } },
-            { "name": "dl-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" } },
+            { "name": "claude", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
+            { "name": "plain", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
+            { "name": "npm-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
+            { "name": "dl-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false },
         ])
     );
     let out = script.surveyed(&["dl-agent-1.4.0", "someone-else-1.0.0"]);
@@ -953,4 +953,98 @@ fn shutting_down_stops_installs_and_sign_ins() {
         script.agent_status("dl-agent")["sign_in"],
         json!({ "type": "Unknown" })
     );
+}
+
+impl Script {
+    /// Checks each agent's `can_sign_in` says what [`Core::sign_in`]
+    /// would answer now, asking a copy of the core, so nothing here
+    /// changes. Returns each agent's, in order.
+    ///
+    /// [`Core::sign_in`]: crate::Core::sign_in
+    #[track_caller]
+    fn can_sign_in(&self) -> Vec<bool> {
+        let statuses = self.core.agents();
+        for status in &statuses {
+            let mut copy = self.copy();
+            let accepted = copy.sign_in(self.now(), &status.name, &mut Vec::new());
+            assert_eq!(
+                status.can_sign_in,
+                accepted.is_ok(),
+                "{}: can_sign_in says {}, and sign_in answers {accepted:?}",
+                status.name.0,
+                status.can_sign_in
+            );
+        }
+        statuses.iter().map(|status| status.can_sign_in).collect()
+    }
+}
+
+#[test]
+fn can_sign_in_is_what_sign_in_would_answer_at_every_step() {
+    // claude (the host's command), plain (no recipe), npm-agent and
+    // dl-agent (CAF installs them).
+    let mut script = Script::new(host());
+    // Nothing known: Claude's adapter hasn't said it's Claude's, and
+    // neither installed agent is there.
+    assert_eq!(script.can_sign_in(), [false, false, false, false]);
+    // Claude, once its adapter has answered as Claude's.
+    script.open_claude();
+    assert_eq!(script.can_sign_in(), [true, false, false, false]);
+    // The survey runs both status commands, Claude's and dl-agent's.
+    let out = script.surveyed(&["dl-agent-1.4.0"]);
+    assert_eq!(script.can_sign_in(), [true, false, false, true]);
+    for status in with(&out, "status") {
+        let ticket = status["status"].as_u64().expect("a ticket");
+        script.setup(ticket, SetupEvent::Status(None));
+    }
+    assert_eq!(script.can_sign_in(), [true, false, false, true]);
+
+    // Installing: only once it's there.
+    let install = ticket_of(&script.install("npm-agent").1, "install");
+    script.setup(install, SetupEvent::Progress { done: 1000 });
+    assert_eq!(script.can_sign_in(), [true, false, false, true]);
+    script.setup(install, SetupEvent::Installed);
+    assert_eq!(script.can_sign_in(), [true, false, true, true]);
+
+    // A sign-in under way: sign_in accepts it as it stands.
+    let ticket = ticket_of(&script.sign_in("dl-agent").1, "sign_in");
+    assert_eq!(script.can_sign_in(), [true, false, true, true]);
+    script.setup(
+        ticket,
+        SetupEvent::Link("https://accounts.download.example/device".into()),
+    );
+    assert_eq!(script.can_sign_in(), [true, false, true, true]);
+    script.stop_sign_in("dl-agent").0.expect("stopped");
+    assert_eq!(script.can_sign_in(), [true, false, true, true]);
+    let ticket = ticket_of(&script.sign_in("npm-agent").1, "sign_in");
+    script.setup(ticket, SetupEvent::Ended { ok: true });
+    assert_eq!(script.can_sign_in(), [true, false, true, true]);
+    script.sign_out("npm-agent").0.expect("signing out");
+    assert_eq!(script.can_sign_in(), [true, false, true, true]);
+
+    // Shutting down.
+    script.shutdown();
+    script.can_sign_in();
+}
+
+#[test]
+fn can_sign_in_stays_false_for_a_host_command_that_isnt_its_profiles_adapter() {
+    let mut script = Script::new(host());
+    let (_, out) = script.open(OpenChat::new("claude", "/work"));
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let mut other = claude_init();
+    other["agentInfo"]["name"] = json!("someone-elses-acp");
+    script.answers(PROC, init, &other);
+    assert!(!script.can_sign_in()[0]);
+}
+
+#[test]
+fn can_sign_in_is_false_where_the_machine_cant_install() {
+    let mut script = Script::new(host());
+    let out = script.check_agents();
+    script.setup(
+        ticket_of(&out, "survey"),
+        found_on(&[], None, false, "riscv64"),
+    );
+    assert_eq!(script.can_sign_in(), [false, false, false, false]);
 }

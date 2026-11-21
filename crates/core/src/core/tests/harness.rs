@@ -436,6 +436,21 @@ impl Script {
         serde_json::to_value(self.core.chat(chat).expect("the chat")).expect("chats serialise")
     }
 
+    /// A core of its own, as this one is now: a fresh one given every
+    /// event so far. What's done to it changes nothing here.
+    pub(crate) fn copy(&self) -> Core {
+        let mut core = Core::starting_ids_at(self.host.clone(), agents(), FIRST);
+        for (ms, json) in &self.trace {
+            let event: Event = serde_json::from_str(json).expect("recorded events read back");
+            let now = Now {
+                wall: Wall(EPOCH + i64::try_from(*ms).unwrap_or(0)),
+                mono: Mono(ms * 1_000_000),
+            };
+            core.handle(now, event, &mut Vec::new());
+        }
+        core
+    }
+
     /// Feeds the recording to a fresh core, checking it gives the same
     /// directives at every step and ends in the same state.
     pub(crate) fn replay(&self) {

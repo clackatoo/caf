@@ -320,6 +320,7 @@ fn agent_status() -> AgentStatus {
             code: None,
             paste: true,
         }),
+        can_sign_in: true,
     }
 }
 

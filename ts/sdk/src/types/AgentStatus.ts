@@ -20,4 +20,15 @@ install: InstallState,
 /**
  * Whether it's signed in.
  */
-sign_in: SignInState, };
+sign_in: SignInState, 
+/**
+ * Whether [`Core::sign_in`](crate::Core::sign_in) would be accepted
+ * now: its profile says how to sign in, and that can run now. For an
+ * agent CAF installs, it's installed. For one the host starts with
+ * its own command, a process of it has answered as the adapter its
+ * profile is for, in this run. It's also true while a sign-in is under
+ * way, which `sign_in` accepts as it stands. So it changes as CAF
+ * runs, and the status is told again when it does: offer Sign in only
+ * while it's true.
+ */
+can_sign_in: boolean, };

@@ -458,6 +458,8 @@ fn agents() -> Vec<AgentStatus> {
         .enumerate())
     .map(|(at, (install, sign_in))| AgentStatus {
         name: AgentName(format!("agent-{at}")),
+        // Both ways, and always while signing in, as the core says it.
+        can_sign_in: matches!(sign_in, SignInState::SigningIn(_)) || at % 2 == 0,
         install,
         sign_in,
     })
