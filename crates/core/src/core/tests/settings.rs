@@ -429,17 +429,21 @@ fn the_chats_choice_beats_the_hosts_default_and_a_default_not_offered_is_skipped
     assert_eq!(prompts(&out).len(), 1, "the message goes");
     let whole = script.chat(CHAT);
     assert_eq!(notes(&whole), []);
+    assert_has(
+        &whole,
+        &json!({ "turns": [{ "life": { "type": "Running" } }] }),
+    );
+    // Dropped from what's chosen, the agent's own applying.
     assert_eq!(
         whole["settings"]["chosen"],
-        json!([
-            chosen(&SettingChoice::model("default")),
-            chosen(&SettingChoice::effort("high"))
-        ])
+        json!([chosen(&SettingChoice::effort("high"))])
     );
 
-    // A chat that chooses nothing has the host's defaults.
+    // A chat that chooses nothing has the host's defaults: viewers see
+    // them chosen, waiting, before its session opens.
     let (other, _) = script.open(OpenChat::new("claude", "/work"));
     let other = other.expect("opened");
+    assert_eq!(script.chat(other)["settings"]["offered"], json!([]));
     assert_eq!(
         script.chat(other)["settings"]["chosen"],
         json!([
@@ -1296,4 +1300,38 @@ fn learning_from_an_adapter_that_never_starts_says_so() {
         script.agent_status("plain")["settings"],
         json!({ "type": "Failed", "value": "the agent didn't start in time" })
     );
+}
+
+#[test]
+fn a_set_answered_without_saying_what_it_is_now_is_taken_as_asked() {
+    let mut script = Script::new(host());
+    let mut listed = claude_options("default", "default", false);
+    // An effort option that doesn't say its current value.
+    if let Some(effort) = listed
+        .as_array_mut()
+        .and_then(|options| options.iter_mut().find(|option| option["id"] == "effort"))
+        .and_then(Value::as_object_mut)
+    {
+        effort.remove("currentValue");
+    }
+    script.open_offering(OpenChat::new("claude", "/work"), &listed);
+    assert_eq!(
+        script.chat(CHAT)["settings"]["offered"][1]["current"],
+        Value::Null
+    );
+    let (_, out) = script.set_setting(CHAT, SettingChoice::effort("high"));
+    let (id, _) = set(&out);
+    // The list again, still not saying.
+    script.answers(PROC, id, &json!({ "configOptions": listed }));
+    let whole = script.chat(CHAT);
+    assert_eq!(
+        whole["settings"]["offered"][1]["current"],
+        json!({ "type": "Choice", "value": "high" }),
+        "not waiting for ever"
+    );
+    assert_eq!(
+        whole["settings"]["chosen"],
+        json!([chosen(&SettingChoice::effort("high"))])
+    );
+    assert_eq!(notes(&whole), []);
 }

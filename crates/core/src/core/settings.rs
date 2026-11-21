@@ -333,7 +333,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let offered = offers(&whole.settings.offered, choice);
         let default = (self.runs.get_mut(&chat))
             .is_some_and(|run| run.choosing.defaults.remove(&choice.kind));
-        self.change_settings(chat, |settings| fall_back(settings, choice.kind));
+        self.change_settings(chat, |settings| {
+            drop_or_fall_back(settings, choice.kind, default)
+        });
         let why = match (&refused, offered) {
             (Some(words), _) => format!("the agent refused it: {words}"),
             (None, true) => "the agent refused it".to_owned(),
@@ -411,16 +413,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                         if let Some(run) = self.runs.get_mut(&chat) {
                             run.choosing.via = offer.via;
                         }
-                        self.change_settings(chat, |settings| settings.offered = offer.settings);
+                        self.change_settings(chat, |settings| {
+                            settings.offered = offer.settings;
+                            // Listed, but not saying what it is now: as asked.
+                            as_asked(settings, &choice, false);
+                        });
                     }
                     // An answer that doesn't say: as asked.
-                    None => self.change_settings(chat, |settings| {
-                        let setting = (settings.offered.iter_mut())
-                            .find(|setting| setting.kind == choice.kind);
-                        if let Some(setting) = setting {
-                            setting.current = Some(choice.value.clone());
-                        }
-                    }),
+                    None => {
+                        self.change_settings(chat, |settings| as_asked(settings, &choice, true))
+                    }
                 }
                 // Set, but to something else: the agent's word stands.
                 let current = (self.chats.get(&chat))
@@ -557,7 +559,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             if !offers(&whole.settings.offered, &choice) {
                 let default = (self.runs.get_mut(&chat))
                     .is_some_and(|run| run.choosing.defaults.remove(&choice.kind));
-                self.change_settings(chat, |settings| fall_back(settings, choice.kind));
+                self.change_settings(chat, |settings| {
+                    drop_or_fall_back(settings, choice.kind, default);
+                });
                 if !default {
                     self.tell(now, chat, Note::NotOffered(choice));
                 }
@@ -1062,6 +1066,30 @@ fn choose(settings: &mut Settings, choice: SettingChoice) {
     settings.chosen.retain(|each| each.kind != choice.kind);
     settings.chosen.push(choice);
     settings.chosen.sort_by_key(|each| each.kind);
+}
+
+/// A choice that can't be applied goes: dropped, if it's the host's
+/// default (`default`), and otherwise back to what the agent says it is
+/// (see [`fall_back`]).
+fn drop_or_fall_back(settings: &mut Settings, kind: SettingKind, default: bool) {
+    if default {
+        settings.chosen.retain(|each| each.kind != kind);
+    } else {
+        fall_back(settings, kind);
+    }
+}
+
+/// After the agent answered setting `choice` without saying what it is
+/// now, it's taken as `choice`, so the change never looks waiting for
+/// ever: whatever it was before, if `always`, as the answer listed
+/// nothing; only if the list it gave says nothing of it, if not.
+fn as_asked(settings: &mut Settings, choice: &SettingChoice, always: bool) {
+    let setting = (settings.offered.iter_mut()).find(|setting| setting.kind == choice.kind);
+    if let Some(setting) = setting
+        && (always || setting.current.is_none())
+    {
+        setting.current = Some(choice.value.clone());
+    }
 }
 
 /// The choice of `kind` goes back to what the agent says it is, or goes,
