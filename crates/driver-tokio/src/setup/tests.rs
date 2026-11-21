@@ -1668,7 +1668,7 @@ async fn a_status_command_that_says_too_much_is_cut_off() {
     let dir = Dir::new();
     let mut driver = driver(&dir);
     let mut command = SpawnCommand::new("/bin/sh");
-    command.args = vec!["-c".into(), "yes | head -c 4000000; echo".into()];
+    command.args = vec!["-c".into(), "exec yes".into()];
     driver.apply(SetupDirective::Status {
         ticket: Ticket(1000),
         command,
@@ -1710,6 +1710,27 @@ async fn a_sign_in_ends_though_what_it_started_holds_its_output() {
             SetupEvent::Ended { ok: true }
         ]
     );
+}
+
+#[tokio::test]
+async fn a_status_command_is_read_though_what_it_started_holds_its_output() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    let mut command = SpawnCommand::new("/bin/sh");
+    command.args = vec![
+        "-c".into(),
+        r#"echo '{"loggedIn": true}'; sleep 30 & exit 0"#.into(),
+    ];
+    driver.apply(SetupDirective::Status {
+        ticket: Ticket(1000),
+        command,
+        signed_in: "/loggedIn".into(),
+        how: None,
+    });
+    let events = tokio::time::timeout(Duration::from_secs(5), done(&mut driver, Ticket(1000)))
+        .await
+        .expect("its answer is read once it has ended");
+    assert_eq!(events, [SetupEvent::Status(Some(SignedInAs::Unknown))]);
 }
 
 #[tokio::test]

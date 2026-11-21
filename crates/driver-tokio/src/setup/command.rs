@@ -365,19 +365,25 @@ pub(super) async fn status(
             return;
         }
     };
-    let stdout = child.stdout.take();
-    let answer = async {
-        let mut answer = Vec::new();
-        if let Some(stdout) = stdout {
-            let _ = stdout.take(LONGEST_ANSWER).read_to_end(&mut answer).await;
-            // Closed, so one with more to say than is read stops, rather
-            // than waiting to be read.
-        }
-        let status = child.wait().await;
-        (answer, status)
-    };
-    let (answer, status) = tokio::select! {
-        done = answer => done,
+    // Read on a task of its own, while the command is waited for: up to
+    // the most that's read, then closed, so one with more to say stops,
+    // rather than waiting to be read.
+    let answer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let reader = child.stdout.take().map(|stdout| {
+        let answer = std::sync::Arc::clone(&answer);
+        tokio::spawn(async move {
+            let mut stdout = stdout.take(LONGEST_ANSWER);
+            let mut buffer = vec![0; 8 << 10];
+            while let Ok(n @ 1..) = stdout.read(&mut buffer).await {
+                let mut answer = answer
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                answer.extend_from_slice(&buffer[..n]);
+            }
+        })
+    });
+    let status = tokio::select! {
+        status = child.wait() => status,
         _ = &mut stop => {
             kill_group(&child);
             let _ = child.wait().await;
@@ -391,6 +397,18 @@ pub(super) async fn status(
             return;
         }
     };
+    // What it said before it ended: something it started may hold its
+    // output open, so that's waited for only a moment.
+    if let Some(mut reader) = reader
+        && tokio::time::timeout(POLL * 5, &mut reader).await.is_err()
+    {
+        reader.abort();
+    }
+    let answer = std::mem::take(
+        &mut *answer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
     let event = match read_status(&answer, &signed_in, how.as_ref()) {
         Some(status) => SetupEvent::Status(status),
         None => SetupEvent::Failed(match status {
