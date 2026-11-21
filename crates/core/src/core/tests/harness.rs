@@ -39,6 +39,7 @@ use crate::ids::{AgentName, ChatId, QuestionId, Shelf, Ticket, TurnId};
 use crate::profiles::{Builtin, ProfileChoice};
 use crate::question::Answer;
 use crate::save::RestoreChat;
+use crate::settings::SettingChoice;
 use crate::time::{Mono, Now, Wall};
 
 /// The first id a test's core gives out.
@@ -380,6 +381,31 @@ impl Script {
                 chat,
                 data: NoAppData,
             },
+        )
+    }
+
+    /// Chooses a setting of `chat`'s agent.
+    pub(crate) fn set_setting(
+        &mut self,
+        chat: ChatId,
+        choice: SettingChoice,
+    ) -> (Result<(), Refused>, Vec<Value>) {
+        let recorded = choice.clone();
+        self.host_call(
+            |core, now, out| core.set_setting(now, chat, choice, out),
+            |()| HostCommand::SetSetting {
+                chat,
+                choice: recorded,
+            },
+        )
+    }
+
+    /// Learns what settings `agent` offers.
+    pub(crate) fn learn_settings(&mut self, agent: &str) -> (Result<(), Refused>, Vec<Value>) {
+        let name = AgentName(agent.to_owned());
+        self.host_call(
+            |core, now, out| core.learn_settings(now, &name, out),
+            |()| HostCommand::LearnSettings(AgentName(agent.to_owned())),
         )
     }
 
