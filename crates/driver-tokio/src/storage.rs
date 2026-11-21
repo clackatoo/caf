@@ -130,5 +130,7 @@ fn ticket_of<A: AppItem, D: AppData>(directive: &StorageDirective<A, D>) -> Opti
         | StorageDirective::Delete { ticket, .. }
         | StorageDirective::MoveShelf { ticket, .. } => Some(*ticket),
         StorageDirective::Release { .. } => None,
+        // None the core gives yet: `carry_out` answers nothing for one.
+        _ => None,
     }
 }
