@@ -1664,4 +1664,15 @@ fn a_host_commands_status_is_asked_once_it_says_its_the_profiles_adapter() {
     assert!(with(&started(&mut script, "dl-host"), "status").is_empty());
     // An adapter that says by itself, as Claude's does, isn't asked.
     assert!(with(&started(&mut script, "claude"), "status").is_empty());
+    // Nor is CAF's own install of it, whose status was asked as the
+    // survey found it.
+    let mut script = Script::new(host());
+    let out = script.surveyed(&["test-download-1.4.0"]);
+    script.setup(ticket_of(&out, "status"), SetupEvent::Status(None));
+    let (chat, out) = script.open(OpenChat::new("dl-agent", "/work"));
+    chat.expect("opened");
+    let proc = one(&out, "start")["start"].as_u64().expect("a process");
+    let id = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let out = script.answers(proc, id, &init);
+    assert!(with(&out, "status").is_empty(), "{out:#?}");
 }
