@@ -140,6 +140,12 @@ CAF says where its agents stand right after its hello, and `open` resolves
 once it has, so `agents` is right from the start. `onChats` and `onAgents`
 each return a function that stops them.
 
+`caf.may` says what the host lets this page do: `act` on chats (send,
+stop, answer and close), and on `agents` (install them, and sign in and
+out). Offer only what it may: anything else is answered `NotAllowed`. A
+page that may not act on agents gets no sign-in's link or code. Whether it
+may open chats isn't said, as the host decides each request.
+
 ### Watch a chat
 
 ```ts
@@ -240,9 +246,16 @@ new tab with `rel="noopener noreferrer"`, and only if it starts with
 page should check for itself too.
 
 The host decides whether viewers may do any of this, as it does for opening
-chats. When it doesn't let them, each rejects with `NotAllowed`. The core
-may refuse too, with `NotInstallable`, `AlreadyInstalled`, `CannotSignIn`
-or `NotSigningIn`.
+chats, and `caf.may.agents` says so. When it doesn't let them, each rejects
+with `NotAllowed`. The core may refuse too:
+
+- `NoSuchAgent`, for an agent it doesn't offer;
+- `NotInstallable` or `AlreadyInstalled`, for an install;
+- `NothingToStop`, for stopping an install that isn't under way;
+- `CannotSignIn`, for signing in or out where CAF can't now;
+- `NotSigningIn`, for a paste or a stop with no sign-in under way;
+- `Unsupported`, for a paste the sign-in doesn't take: empty, more than
+  one line, or too long.
 
 A chat with an agent that isn't installed yet is `WaitingForAgent`, and its
 messages wait. They're sent once the agent is installed. Stopping the chat
@@ -318,9 +331,17 @@ user acts, and it calls them. It never talks to CAF itself, so it doesn't
 care where the chat came from:
 
 ```svelte
+<script lang="ts">
+  // Kept as it changes, so the view follows an install's progress and a
+  // sign-in's link as they come.
+  let agents = $state.raw(caf.agents);
+  caf.onAgents((now) => (agents = now));
+</script>
+
 <ChatView
   {chat}
-  agent={caf.agents.find((agent) => agent.name === chat.agent)}
+  agent={agents.find((agent) => agent.name === chat.agent)}
+  may={caf.may}
   actions={{
     send: (message) => caf.send(chat.id, message),
     stop: () => caf.stop(chat.id),
@@ -335,6 +356,10 @@ care where the chat came from:
   }}
 />
 ```
+
+It offers only what `may` lets it: without `act`, the chat can be watched,
+not acted in; without `agents`, it says what's happening to the agent but
+offers no Install or sign-in.
 
 Given its agent's status, the view also shows what the agent needs before
 the chat can go on. While the chat waits for an agent that isn't

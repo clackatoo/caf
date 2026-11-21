@@ -22,8 +22,8 @@ MessagePack with field names; TypeScript sends them as JSON.
 1. The viewer says **Hello**, with the oldest and newest versions of the
    wire it speaks. Anything else first ends the link.
 2. CAF answers **Welcome**, with the version both will speak, the agents a
-   viewer may open chats with, the open chats, and which run of CAF this
-   is. If there's no version in common, it says so and ends the link.
+   viewer may open chats with, the open chats, which run of CAF this is,
+   and what the host lets this viewer do: act on chats, and on agents. If there's no version in common, it says so and ends the link.
    Right after the welcome, CAF says where every agent stands (**Agents**):
    installed or not, signed in or not. It says so again, the whole list,
    each time any of it changes.
