@@ -915,6 +915,29 @@ fn a_chat_loaded_or_being_restored_isnt_restored_again() {
 }
 
 #[test]
+fn a_restore_is_under_way_until_its_chat_loads_or_fails_or_is_deleted() {
+    let mut script = Script::new(host());
+    let shelf = Shelf(SHELF.to_owned());
+    let restore = |chat| RestoreChat::new(chat, shelf.clone());
+    let load = ticket(&one_storage(&script.restore(restore(CHAT)).1));
+    assert!(script.core.restoring(CHAT));
+    let stored = saved(&mid_turn("claude"), Some("old"), 0);
+    script.storage(load, StorageEvent::Loaded(Box::new(stored)));
+    assert!(!script.core.restoring(CHAT) && script.core.chat(CHAT).is_some());
+    let other = ChatId::from_number(4242);
+    let load = ticket(&one_storage(&script.restore(restore(other)).1));
+    assert!(script.core.restoring(other));
+    let missing = crate::save::CannotRestore::NotFound;
+    script.storage(load, StorageEvent::NotLoaded(missing));
+    assert!(!script.core.restoring(other) && script.core.chat(other).is_none());
+    // Deleted while its load is under way: over at once, whatever the
+    // load then finds.
+    script.restore(restore(other)).0.expect("restoring");
+    script.delete(other, SHELF).0.expect("deleting");
+    assert!(!script.core.restoring(other));
+}
+
+#[test]
 fn what_cant_be_saved_or_restored_is_refused() {
     let mut script = Script::new(host());
     let long = "x".repeat(257);
