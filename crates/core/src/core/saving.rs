@@ -620,6 +620,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.chats.insert(id, whole);
         self.data.insert(id, data);
         self.logs.insert(id, Log::new(self.ids.first));
+        // Its changes are numbered again from the first, as each loaded
+        // chat's are: a fixture is of one load's changes.
+        #[cfg(test)]
+        self.applied.remove(&id);
         self.dirty.insert(id);
         self.runs.insert(
             id,
