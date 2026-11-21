@@ -424,6 +424,7 @@ describe("watching a chat", () => {
     const settings: Settings = {
       offered: [model("default")],
       chosen: [{ kind: { type: "Model" }, value: { type: "Choice", value: "sonnet" } }],
+      own: [{ type: "Model" }],
     };
     link.deliver(changes(numbered(11, { type: "Settings", value: settings })));
     const last = events.at(-1)!;

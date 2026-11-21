@@ -209,10 +209,11 @@ describe("apply", () => {
   });
 
   test("Settings replaces the chat's settings whole, sharing everything else", () => {
-    const before: Chat = { ...busy(), settings: { offered: [model("default")], chosen: [] } };
+    const before: Chat = { ...busy(), settings: { offered: [model("default")], chosen: [], own: [] } };
     const settings: Settings = {
       offered: [model("sonnet")],
       chosen: [{ kind: { type: "Model" }, value: { type: "Choice", value: "haiku" } }],
+      own: [{ type: "Model" }],
     };
     const after = applied(before, { type: "Settings", value: settings });
     expect(after.settings).toStrictEqual(settings);

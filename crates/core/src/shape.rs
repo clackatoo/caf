@@ -1211,8 +1211,9 @@ fn what_the_traces_hold_reads_back() {
 }
 
 /// What recordings made before chats had UUIDs hold still reads: a chat id
-/// as a number, an `OpenChat` with no shelf or instructions, and a host
-/// with no seed.
+/// as a number, an `OpenChat` with no shelf, instructions or settings, an
+/// agent with no default settings, a status with nothing of settings, and
+/// a host with no seed.
 #[test]
 fn recordings_from_before_saving_still_read() {
     let line = r#"{"type":"Host","value":{"type":"OpenChat","value":{"chat":1,"open":{"agent":"claude","cwd":"/work","session":{"type":"New"},"mcp_servers":[]}}}}"#;
@@ -1223,6 +1224,11 @@ fn recordings_from_before_saving_still_read() {
     assert_eq!(chat, ChatId::from_number(1));
     assert_eq!(open.shelf, None);
     assert_eq!(open.instructions, None);
+    assert!(open.settings.is_empty());
+    // An agent from before the host could choose its settings.
+    let line = r#"{"name":"claude","launch":{"type":"Installed"},"profile":{"type":"Builtin","value":{"type":"ClaudeAgentAcp"}}}"#;
+    let agent: AgentSpec = serde_json::from_str(line).expect("an old agent reads");
+    assert!(agent.settings.is_empty());
     // A status from a CAF that didn't turn agents' tools off.
     let status = serde_json::to_value(agent_status()).expect("a status");
     let mut old = status.clone();
@@ -1231,6 +1237,11 @@ fn recordings_from_before_saving_still_read() {
         .remove("own_tools_off");
     let old: AgentStatus = serde_json::from_value(old).expect("an old status reads");
     assert!(!old.own_tools_off);
+    // And one from before CAF knew agents' settings.
+    let mut old = status;
+    old.as_object_mut().expect("an object").remove("settings");
+    let old: AgentStatus = serde_json::from_value(old).expect("an old status reads");
+    assert_eq!(old.settings, KnownSettings::Unknown);
     let mut host = serde_json::to_value(Host::new("caf", "0.0.0")).expect("a host");
     host.as_object_mut().expect("an object").remove("seed");
     let host: Host = serde_json::from_value(host).expect("a host with no seed reads");

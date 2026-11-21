@@ -79,7 +79,7 @@ export function chat(turns: Turn[] = [], questions: Question[] = []): Chat {
     turns,
     usage: null,
     questions,
-    settings: { offered: [], chosen: [] },
+    settings: { offered: [], chosen: [], own: [] },
   };
 }
 
