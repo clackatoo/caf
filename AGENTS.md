@@ -40,3 +40,15 @@ sends never changes: a change to it needs a new version with its own
 sample. `CAF_BLESS` never touches it; only while a version is
 unreleased may `CAF_BLESS_SAMPLE=1 cargo test -p caf-core version_1`
 rewrite its sample.
+
+`samples/save/v1/` holds a chat saved by version 1 of the saved format,
+with one of every kind of item, turn, change and journal entry, an app
+item and data slot included: the format's own bytes (`header`,
+`snapshot`, `journal`), and the same chat as caf-save's `FileStore`
+keeps it (`files/`). A test fails if it no longer reads as the values in
+`crates/save/tests/sample.rs` say. It's pinned by what it reads as, not
+its bytes, as zstd may compress the same thing differently from one
+version to the next. Saves stay readable forever: a change to a released
+version's shape needs a new version, with a migration from every older
+one and a sample of its own. Only while a version is unreleased may
+`CAF_BLESS_SAMPLE=1 cargo test -p caf-save version_1` rewrite its sample.

@@ -1,0 +1,425 @@
+//! The sample that pins version 1 of the saved format: `samples/save/v1/`,
+//! a chat with one of every kind of item, turn and change in it, an app
+//! item and data slot included, saved by version 1.
+//!
+//! - `header`, `snapshot` and `journal` are the format's own bytes, as
+//!   [`encode_header`], [`encode_snapshot`] and [`encode_record`] wrote
+//!   them;
+//! - `files/` is the same chat as [`FileStore`] keeps it.
+//!
+//! The files are what's pinned, not the values below: the test reads
+//! them, and they must read as the values say, so a change to how any of
+//! it is read fails. They aren't compared byte for byte, as zstd may
+//! compress the same thing differently from one version to the next. The
+//! values below only write the files, and only under
+//! `CAF_BLESS_SAMPLE=1`, which is for a version not yet released.
+//!
+//! The app's types here are part of the sample: they're the app that
+//! saved it, so they never change either.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use caf_core::save::{Entry, Saved};
+use caf_core::{AppData, AppItem, ChatId, Shelf};
+use caf_save::{
+    FileStore, Squeeze, Store, decode, decode_header, encode_header, encode_record, encode_snapshot,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+/// What a test failing here means.
+const CHANGED: &str = "samples/save/v1 no longer reads as it did: version 1 of the saved format \
+    has changed. Saves stay readable forever: what changes a released version's shape needs a new \
+    version (caf_save::VERSION), with a migration from this one, and a sample of its own. Only \
+    while version 1 is unreleased may `CAF_BLESS_SAMPLE=1 cargo test -p caf-save version_1` \
+    rewrite its sample";
+
+/// The app's own item, as the app that saved the sample had it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct Pin {
+    place: String,
+    zoom: u8,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+impl AppItem for Pin {
+    fn summary(&self) -> String {
+        format!("Moved the map to {}", self.place)
+    }
+}
+
+/// The app's data, as the app that saved the sample had it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct Notes {
+    title: String,
+    pinned: bool,
+    project: Option<PathBuf>,
+}
+
+impl AppData for Notes {
+    fn label(&self) -> Option<String> {
+        Some(self.title.clone())
+    }
+}
+
+/// Where it's kept.
+fn folder() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/save/v1")
+}
+
+/// The chat's id.
+fn id() -> ChatId {
+    ChatId::from_number(1)
+}
+
+/// The shelf it's on in `files/`.
+fn shelf() -> Shelf {
+    Shelf("work".into())
+}
+
+/// `ms` milliseconds into the sample's time.
+fn wall(ms: i64) -> i64 {
+    1_800_000_000_000 + ms
+}
+
+/// A window from `start` to `end`.
+fn ended(start: i64, end: i64) -> Value {
+    json!({ "start": wall(start), "end": { "type": "At", "value": wall(end) } })
+}
+
+/// An item.
+fn item(id: u64, parent: Option<u64>, kind: Value) -> Value {
+    json!({ "id": id, "window": ended(id as i64, id as i64 + 1), "parent": parent, "kind": kind })
+}
+
+/// A tool call.
+fn tool(kind: &str, status: &str, app: Value) -> Value {
+    json!({
+        "title": format!("{kind} lib.rs"),
+        "kind": { "type": kind },
+        "status": { "type": status },
+        "input": { "path": "lib.rs", "lines": [1, 20] },
+        "output": "fn main() {}\n",
+        "app": app,
+    })
+}
+
+/// A turn.
+fn turn(id: u64, starter: Value, life: Value, items: Vec<Value>) -> Value {
+    json!({
+        "id": id,
+        "starter": starter,
+        "life": life,
+        "window": ended(id as i64 * 100, id as i64 * 100 + 50),
+        "items": items,
+        "imported": false,
+    })
+}
+
+/// A message.
+fn said(text: &str) -> Value {
+    json!({ "parts": [{ "type": "Text", "value": text }] })
+}
+
+/// The chat as its snapshot has it.
+fn before() -> Saved<Pin, Notes> {
+    let kinds = [
+        "Read", "Edit", "Delete", "Move", "Search", "Execute", "Think", "Fetch", "Other",
+    ];
+    let statuses = ["Pending", "Running", "Done", "Failed"];
+    let mut work = vec![
+        item(
+            10,
+            None,
+            json!({ "type": "Words", "value": "On it: **two** things." }),
+        ),
+        item(
+            11,
+            Some(10),
+            json!({ "type": "Thinking", "value": "Reading the tests." }),
+        ),
+    ];
+    work.extend((12..).zip(kinds).map(|(id, kind)| {
+        let status = statuses[id as usize % statuses.len()];
+        item(
+            id,
+            None,
+            json!({ "type": "Tool", "value": tool(kind, status, Value::Null) }),
+        )
+    }));
+    let pinned = json!({ "place": "Odesa", "zoom": 7, "tags": ["coast"] });
+    work.extend([
+        item(30, None, json!({ "type": "Tool", "value": tool("Other", "Done", pinned) })),
+        item(31, None, json!({ "type": "Compacted", "value": {} })),
+        item(32, None, json!({ "type": "App", "value": { "place": "Kyiv", "zoom": 9, "tags": [] } })),
+        item(
+            33,
+            None,
+            json!({ "type": "Unknown", "value": {
+                "what": "plan",
+                "raw": { "sessionUpdate": "plan", "entries": [{ "content": "Fix it", "priority": 1 }] },
+                "summary": null,
+            }}),
+        ),
+    ]);
+    let notes = [
+        "SessionGone",
+        "CannotContinue",
+        "SessionStuck",
+        "NotInstalled",
+        "InstallFailed",
+        "SignedIn",
+    ];
+    let notes = (40..).zip(notes).map(|(id, note)| {
+        item(
+            id,
+            None,
+            json!({ "type": "Note", "value": { "type": note } }),
+        )
+    });
+    let failed = json!({ "type": "Failed", "value": {
+        "reason": { "type": "UsageLimit" },
+        "agent_said": "Try again at 5pm",
+        "remedy": { "type": "SendAgain" },
+    }});
+    let finished = json!({ "type": "Finished" });
+    let turns = vec![
+        json!({
+            "id": 1,
+            "starter": { "type": "User", "value": said("Earlier") },
+            "life": finished,
+            "window": { "start": null, "end": { "type": "Unknown" } },
+            "items": [{
+                "id": 2,
+                "window": { "start": null, "end": { "type": "Unknown" } },
+                "parent": null,
+                "kind": { "type": "Words", "value": "From before." },
+            }],
+            "imported": true,
+        }),
+        turn(
+            3,
+            json!({ "type": "User", "value": said("Fix the tests") }),
+            finished.clone(),
+            work,
+        ),
+        turn(
+            4,
+            json!({ "type": "Caf" }),
+            finished.clone(),
+            notes.collect(),
+        ),
+        turn(
+            5,
+            json!({ "type": "Agent" }),
+            json!({ "type": "CutOff" }),
+            vec![],
+        ),
+        turn(
+            6,
+            json!({ "type": "OtherChat", "value": { "from": ChatId::from_number(2), "message": said("Over to you") } }),
+            failed,
+            vec![],
+        ),
+        turn(
+            7,
+            json!({ "type": "Notice", "value": "The map moved" }),
+            json!({ "type": "Stopped" }),
+            vec![],
+        ),
+        turn(
+            8,
+            json!({ "type": "User", "value": said("And the docs") }),
+            json!({ "type": "Running" }),
+            vec![json!({
+                "id": 80,
+                "window": { "start": wall(800), "end": { "type": "Open" } },
+                "parent": null,
+                "kind": { "type": "Words", "value": "Starting" },
+            })],
+        ),
+    ];
+    from(json!({
+        "header": header(4),
+        "chat": {
+            "id": id(),
+            "agent": "claude",
+            "cwd": "/work",
+            "state": { "type": "Open", "value": { "session": "s1" } },
+            "turns": turns,
+            "usage": { "used": 5000, "size": 200_000, "cost": { "amount": 0.25, "currency": "USD" } },
+            "questions": [
+                {
+                    "id": 90,
+                    "window": { "start": wall(810), "end": { "type": "Open" } },
+                    "kind": { "type": "Permission", "value": {
+                        "tool": 17,
+                        "title": "Run cargo test",
+                        "options": [
+                            { "id": "allow", "label": "Allow", "kind": { "type": "AllowOnce" } },
+                            { "id": "always", "label": "Always", "kind": { "type": "AllowAlways" } },
+                            { "id": "reject", "label": "Reject", "kind": { "type": "RejectOnce" } },
+                            { "id": "never", "label": "Never", "kind": { "type": "RejectAlways" } },
+                            { "id": "other", "label": "Other", "kind": { "type": "Other" } },
+                        ],
+                    }},
+                },
+                {
+                    "id": 91,
+                    "window": { "start": wall(820), "end": { "type": "Open" } },
+                    "kind": { "type": "SlowToOpen", "value": { "adapter_answered": true } },
+                },
+            ],
+        },
+        "session": "s1",
+        "data": { "title": "Fix the tests", "pinned": true, "project": "/work/caf" },
+    }))
+}
+
+/// The chat's header, with `turns` turns.
+fn header(turns: u64) -> Value {
+    json!({
+        "chat": id(),
+        "agent": "claude",
+        "profile": "claude-agent-acp",
+        "cwd": "/work",
+        "made": wall(0),
+        "changed": wall(2000),
+        "label": "Fix the tests",
+        "first": "Fix the tests",
+        "turns": turns,
+        "closed": false,
+    })
+}
+
+/// What the journal adds, a record at a time: one of every kind of
+/// change, and of entry.
+fn records() -> Vec<Vec<Entry<Pin, Notes>>> {
+    let change = |change: Value| json!({ "type": "Change", "value": change });
+    from(json!([
+        [
+            change(json!({ "type": "Appended", "value": { "item": 80, "text": " on the docs." } })),
+            change(json!({ "type": "ItemEnded", "value": { "item": 80, "end": { "type": "At", "value": wall(900) } } })),
+            change(json!({ "type": "ItemAdded", "value": {
+                "turn": 8,
+                "item": item(81, None, json!({ "type": "App", "value": { "place": "Lviv", "zoom": 4, "tags": [] } })),
+            }})),
+            change(json!({ "type": "ToolChanged", "value": { "item": 12, "tool": tool("Read", "Done", Value::Null) } })),
+            change(json!({ "type": "Usage", "value": { "used": 6000, "size": 200_000, "cost": null } })),
+            change(json!({ "type": "QuestionGone", "value": 90 })),
+            change(json!({ "type": "QuestionAsked", "value": {
+                "id": 92,
+                "window": { "start": wall(950), "end": { "type": "Open" } },
+                "kind": { "type": "Permission", "value": { "tool": null, "title": "Fetch docs.rs", "options": [] } },
+            }})),
+        ],
+        [
+            change(json!({ "type": "TurnLife", "value": {
+                "turn": 8, "life": { "type": "Finished" }, "end": { "type": "At", "value": wall(1000) },
+            }})),
+            change(json!({ "type": "TurnAdded", "value": turn(9, json!({ "type": "User", "value": said("Thanks") }), json!({ "type": "Waiting" }), vec![]) })),
+            change(json!({ "type": "TurnInserted", "value": {
+                "before": 9,
+                "turn": turn(10, json!({ "type": "Caf" }), json!({ "type": "Finished" }), vec![
+                    item(100, None, json!({ "type": "Note", "value": { "type": "SessionGone" } })),
+                ]),
+            }})),
+            change(json!({ "type": "State", "value": { "type": "Lost", "value": {
+                "reason": { "type": "AgentStopped", "value": { "stderr": ["out of memory"] } },
+            }}})),
+            { "type": "Session", "value": "s2" },
+        ],
+        [
+            { "type": "Data", "value": { "title": "Fix the tests and docs", "pinned": false, "project": null } },
+            { "type": "Session", "value": null },
+            change(json!({ "type": "State", "value": { "type": "Idle" } })),
+        ],
+    ]))
+}
+
+/// The chat as it reads, its journal applied.
+fn after() -> Saved<Pin, Notes> {
+    let mut saved = before();
+    for entry in records().into_iter().flatten() {
+        match entry {
+            Entry::Change(change) => saved.chat.apply(&change).expect("it fits"),
+            Entry::Session(session) => saved.session = session,
+            Entry::Data(data) => saved.data = data,
+            _ => unreachable!(),
+        }
+    }
+    saved
+}
+
+/// A value of `T`, from JSON.
+fn from<T: serde::de::DeserializeOwned>(value: Value) -> T {
+    serde_json::from_value(value).expect("the sample's JSON is the type's")
+}
+
+/// Writes the sample.
+fn bless(folder: &Path) {
+    let _ = fs::remove_dir_all(folder);
+    fs::create_dir_all(folder).expect("the sample's folder");
+    let header = encode_header(&from(header(9)));
+    let snapshot = encode_snapshot(&before(), Squeeze::Fast);
+    let records: Vec<Vec<u8>> = records().iter().map(|each| encode_record(each)).collect();
+    fs::write(folder.join("header"), &header).expect("written");
+    fs::write(folder.join("snapshot"), &snapshot).expect("written");
+    fs::write(folder.join("journal"), records.concat()).expect("written");
+    let mut store = FileStore::new(folder.join("files"));
+    store
+        .snapshot(&shelf(), id(), &encode_header(&before().header), &snapshot)
+        .expect("written");
+    for record in &records {
+        store
+            .append(&shelf(), id(), &header, record)
+            .expect("written");
+    }
+    store.release(&shelf(), id());
+    fs::remove_file(folder.join(format!("files/work/{}.lock", id()))).expect("its lock");
+}
+
+#[test]
+fn version_1_reads_as_its_sample_says() {
+    let folder = folder();
+    if std::env::var_os("CAF_BLESS_SAMPLE").is_some() {
+        bless(&folder);
+    }
+    let read = |name: &str| {
+        fs::read(folder.join(name))
+            .unwrap_or_else(|error| panic!("samples/save/v1/{name}: {error}"))
+    };
+    assert_eq!(
+        decode_header(&read("header")),
+        Ok(from(header(9))),
+        "{CHANGED}"
+    );
+    let saved = decode::<Pin, Notes>(&read("snapshot"), &read("journal"));
+    assert_eq!(saved, Ok(after()), "{CHANGED}");
+
+    // As the file store keeps it, read from a copy, as loading locks it.
+    let copy = std::env::temp_dir().join(format!("caf-save-sample-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&copy);
+    fs::create_dir_all(copy.join("work")).expect("a copy");
+    for entry in fs::read_dir(folder.join("files/work")).expect("samples/save/v1/files") {
+        let entry = entry.expect("a file");
+        fs::copy(entry.path(), copy.join("work").join(entry.file_name())).expect("copied");
+    }
+    let mut store = FileStore::new(&copy);
+    let listed = store.list(&shelf()).expect("it lists");
+    let stored = store.load(&shelf(), id()).expect("it loads");
+    let _ = fs::remove_dir_all(&copy);
+    assert_eq!(listed.len(), 1, "{CHANGED}");
+    assert_eq!(
+        decode_header(&listed[0].1),
+        Ok(from(header(9))),
+        "{CHANGED}"
+    );
+    assert_eq!(
+        decode(&stored.snapshot, &stored.journal),
+        Ok(after()),
+        "{CHANGED}"
+    );
+}

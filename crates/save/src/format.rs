@@ -1,24 +1,6 @@
 //! The format's bytes: the version in front, zstd's frames, MessagePack
-//! inside them, and the envelope app items are saved in.
-//!
-//! # App items
-//!
-//! An app item is saved in the shape of an [`Unknown`] item: `what` is
-//! `App`, `raw` is the item as JSON, and `summary` is its summary. Read
-//! back, each one the app's type reads is its app item again; one it
-//! can't stays as it was saved, an [`Unknown`] item, and is written back
-//! byte for byte, so a version of the app that reads it gets it back. A
-//! program that doesn't know the app's type at all, such as a debugger,
-//! reads every app item as an [`Unknown`] item with its summary.
-//!
-//! Through JSON, an app item keeps what serde writes with text keys and
-//! no raw bytes, as [`AppItem`] asks: bytes would come back as a list of
-//! numbers, a float that isn't a number as `null`, and a number past 64
-//! bits doesn't fit. The app item a tool call holds
-//! ([`ToolCall::app`](caf_core::chat::ToolCall::app)) is saved as it is,
-//! with no envelope, as the chat's type gives no way to keep it otherwise:
-//! one the app can't read stops the chat restoring
-//! ([`CannotRestore::AppData`]).
+//! inside them, and the envelope app items are saved in, as the crate's
+//! docs say.
 
 use std::borrow::Cow;
 use std::io::{Cursor, Read};

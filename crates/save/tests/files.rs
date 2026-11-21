@@ -220,7 +220,10 @@ fn a_chat_deleted_is_gone_whole() {
     save(&mut store, &work, 1);
     save(&mut store, &work, 2);
     store.load(&work, chat).expect("it loads");
+    let left = root.join(format!("work/{chat}.caf.squeeze-1.new"));
+    fs::write(&left, b"left by a crash").expect("a new file");
     store.delete(&work, chat).expect("it's deleted");
+    assert!(!left.exists());
     for extension in ["head", "caf", "journal", "lock"] {
         assert!(!file(root, "work", 1, extension).exists(), "{extension}");
     }

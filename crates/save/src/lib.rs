@@ -40,6 +40,23 @@
 //! against a sample saved by it (`samples/save/`). A save from a newer
 //! version is [`CannotRestore::Newer`], and left untouched.
 //!
+//! A journal's records are in the version of the snapshot before them.
+//!
+//! **App items are kept even when the app can't read them.** One is saved
+//! in an [`Unknown`](caf_core::chat::Unknown) item's shape, its envelope:
+//! `what` is `App`, `raw` is the item as JSON, and `summary` is its
+//! [summary](AppItem::summary). Read back, each one the app's type reads
+//! is its item again; one it can't, as when the app changed the type, is
+//! an [`Unknown`](caf_core::chat::Unknown) item, which is saved back
+//! byte for byte, so a version of the app that reads it gets it back. A
+//! program that doesn't know the app's type at all, such as a debugger,
+//! reads them all as unknown items, with their summaries. Through JSON,
+//! an app item keeps what serde writes with text keys and no raw bytes,
+//! as [`AppItem`] asks. The app's item in a tool call
+//! ([`ToolCall::app`](caf_core::chat::ToolCall::app)) has no envelope,
+//! as the chat's type leaves it none: one the app can't read stops the
+//! chat restoring, as data it can't read does ([`CannotRestore::AppData`]).
+//!
 //! **Small, losslessly.** Live chats are compressed fast (zstd's level 3:
 //! hundreds of MB/s, so never a wait). A chat left alone a while is
 //! compressed again once at zstd's strongest, with a long window that
@@ -405,6 +422,19 @@ fn answer<A: AppItem, D: AppData>(done: Result<(), StoreError>) -> StorageEvent<
 /// Snapshots and headers are written to a new file and renamed into
 /// place, then synced with their folder; appends are synced before they
 /// count as done. Locks are `flock`s, so a program that dies lets go.
+///
+/// A snapshot and its journal each start with the snapshot's generation,
+/// a number the store counts up: a journal counts only with the snapshot
+/// of its generation, so a new snapshot empties the journal the moment
+/// it's in place, and a crash between the two files leaves one or the
+/// other whole. A journal's last record that a crash cut off is cut off
+/// the file when it's next loaded, so the next append follows a whole
+/// record.
+///
+/// It never follows a link inside its root: a shelf's folder or a chat's
+/// file that's a link is an error, and isn't listed. Moving a shelf with
+/// a chat another program has open is [`StoreError::InUse`], as that
+/// program would go on writing it where it was.
 #[derive(Debug)]
 pub struct FileStore {
     root: PathBuf,

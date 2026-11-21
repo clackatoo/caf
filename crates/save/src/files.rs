@@ -486,12 +486,24 @@ pub(crate) fn delete(
         return Ok(());
     };
     hold(held, &folder, shelf, chat)?;
-    // Its header first, so it's gone from lists, then the rest, the lock
-    // last.
+    // Its header first, so it's gone from lists, then the rest, new files
+    // a crash left included, and the lock last.
     let mut names = vec![file(chat, "head"), file(chat, "caf"), file(chat, "journal")];
-    names.extend(["head", "caf", "journal"].map(|extension| new_file(chat, extension)));
-    let removed = (names.iter()).try_for_each(|name| remove(&folder, name));
-    let removed = removed
+    let others = entries(&folder).and_then(|entries| {
+        for entry in entries {
+            let entry = entry.map_err(io::Error::from)?;
+            if let Ok(name) = entry.file_name().to_str()
+                && chat_of(name).is_some_and(|(of, _)| of == chat)
+                && !names.iter().any(|named| named == name)
+                && name != file(chat, "lock")
+            {
+                names.push(name.to_owned());
+            }
+        }
+        Ok(())
+    });
+    let removed = others
+        .and_then(|()| names.iter().try_for_each(|name| remove(&folder, name)))
         .and_then(|()| remove(&folder, &file(chat, "lock")))
         .and_then(|()| sync(&folder));
     held.remove(&(shelf.clone(), chat));

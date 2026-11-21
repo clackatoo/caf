@@ -22,6 +22,8 @@ uuid.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]
+# How big a chat is before it's compressed.
+rmp-serde.workspace = true
 # A long shelf name's folder, as the tests expect it.
 sha2.workspace = true
 # Looking inside what's written: the field names in it, and its frames.
