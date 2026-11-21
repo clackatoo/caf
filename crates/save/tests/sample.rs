@@ -94,11 +94,11 @@ struct Sample {
 /// A version's sample's values.
 fn sample(version: u32) -> Sample {
     match version {
-        1 => Sample {
+        1 | 2 => Sample {
             header: from(header(9)),
             before: before(),
-            records: records(),
-            after: after(),
+            records: records(version),
+            after: after(version),
             squeezed: squeezed(),
         },
         _ => panic!("samples/save/v{version} has no values here: add them, and bless its sample"),
@@ -331,9 +331,25 @@ fn header(turns: u64) -> Value {
 }
 
 /// What the journal adds, a record at a time: one of every kind of
-/// change, and of entry.
-fn records() -> Vec<Vec<Entry<Pin, Notes>>> {
+/// change, and of entry, and, from version 2, a chat lost as CAF can't
+/// turn off its agent's own tools.
+fn records(version: u32) -> Vec<Vec<Entry<Pin, Notes>>> {
     let change = |change: Value| json!({ "type": "Change", "value": change });
+    let own_tools = change(
+        json!({ "type": "State", "value": { "type": "Lost", "value": {
+            "reason": { "type": "Incompatible", "value": { "type": "OwnTools" } },
+        }}}),
+    );
+    let mut last = vec![
+        json!({ "type": "Data", "value": { "title": "Fix the tests and docs", "pinned": false, "project": null } }),
+        json!({ "type": "Session", "value": null }),
+    ];
+    if version >= 2 {
+        last.push(own_tools);
+    }
+    last.push(change(
+        json!({ "type": "State", "value": { "type": "Idle" } }),
+    ));
     from(json!([
         [
             change(json!({ "type": "Appended", "value": { "item": 80, "text": " on the docs." } })),
@@ -367,18 +383,14 @@ fn records() -> Vec<Vec<Entry<Pin, Notes>>> {
             }}})),
             { "type": "Session", "value": "s2" },
         ],
-        [
-            { "type": "Data", "value": { "title": "Fix the tests and docs", "pinned": false, "project": null } },
-            { "type": "Session", "value": null },
-            change(json!({ "type": "State", "value": { "type": "Idle" } })),
-        ],
+        last,
     ]))
 }
 
-/// The chat as it reads, its journal applied.
-fn after() -> Saved<Pin, Notes> {
+/// The chat as it reads, its journal of `version`'s sample applied.
+fn after(version: u32) -> Saved<Pin, Notes> {
     let mut saved = before();
-    for entry in records().into_iter().flatten() {
+    for entry in records(version).into_iter().flatten() {
         match entry {
             Entry::Change(change) => saved.chat.apply(&change).expect("it fits"),
             Entry::Session(session) => saved.session = session,

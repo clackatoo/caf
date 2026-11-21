@@ -111,8 +111,11 @@ mod format;
 #[path = "../tests/common/mod.rs"]
 mod common;
 
-/// The version of the format this CAF writes.
-pub const VERSION: u32 = 1;
+/// The version of the format this CAF writes. What each added:
+/// 1. the first;
+/// 2. a chat lost because CAF can't turn off its agent's own tools
+///    ([`Incompatible::OwnTools`](caf_core::chat::Incompatible::OwnTools)).
+pub const VERSION: u32 = 2;
 
 /// How hard to compress.
 #[non_exhaustive]
