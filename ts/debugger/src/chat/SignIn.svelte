@@ -50,7 +50,7 @@
 </script>
 
 <div class="sign-in">
-  <div>Signing in to <strong>{name}</strong>.</div>
+  <div role="status">Signing in to <strong>{name}</strong>.</div>
   {#if link.url === null}
     <div class="step">Waiting for the sign-in page's address…</div>
   {:else if url !== null}

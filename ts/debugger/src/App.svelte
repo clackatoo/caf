@@ -209,11 +209,26 @@
         <div class="chats">
           <ChatList chats={summaries} agents={agents.map((agent) => agent.name)} {selected} actions={listActions} readOnly={!actable} />
         </div>
-        {#if mode === 'Live' && !lookingBack}<AgentsPanel {agents} actions={agentActions} readOnly={!actable} />{/if}
+        {#if mode === 'Live' && !lookingBack}
+          <AgentsPanel
+            {agents}
+            actions={agentActions}
+            readOnly={!actable}
+            may={live?.may.agents ?? false}
+            inChat={chat?.agent ?? null}
+          />
+        {/if}
       </div>
       <div class="chat">
         {#if chat !== null}
-          <ChatView {chat} agent={agentStatus} actions={chatActions} readOnly={!actable} {readOnlyWhy} />
+          <ChatView
+            {chat}
+            agent={agentStatus}
+            may={lookingBack ? undefined : live?.may}
+            actions={chatActions}
+            readOnly={!actable}
+            {readOnlyWhy}
+          />
         {:else}
           <p class="empty">
             {#if selected === null}

@@ -21,9 +21,18 @@ function actions(): { [K in keyof AgentActions]: ReturnType<typeof vi.fn> } & Ag
   }
 }
 
-function draw(agents: AgentStatus[], options: { readOnly?: boolean; actions?: AgentActions } = {}) {
+function draw(
+  agents: AgentStatus[],
+  options: { readOnly?: boolean; actions?: AgentActions; may?: boolean; inChat?: string } = {},
+) {
   const given = options.actions ?? actions()
-  const view = render(AgentsPanel, { agents, actions: given, readOnly: options.readOnly ?? false })
+  const view = render(AgentsPanel, {
+    agents,
+    actions: given,
+    readOnly: options.readOnly ?? false,
+    may: options.may ?? true,
+    inChat: options.inChat ?? null,
+  })
   return { ...view, actions: given }
 }
 
@@ -56,7 +65,7 @@ describe('the Agents panel', () => {
     expect(buttons('agent-2')).toEqual(['Install', 'Stop signing in'])
     // agent-3: installing.
     expect(within(row('agent-3')).getByRole('progressbar')).toBeTruthy()
-    expect(buttons('agent-3')).toContain('Stop')
+    expect(buttons('agent-3')).toContain('Stop installing')
     // agent-4: installed and signed in.
     expect(text(row('agent-4'))).toContain('Installed, version 0.98.0')
     expect(text(row('agent-4'))).toContain('Signed in with an account')
@@ -64,8 +73,11 @@ describe('the Agents panel', () => {
     // agent-5: can't, for want of Node.
     expect(text(row('agent-5'))).toContain('it needs Node 22 or newer, and this machine has Node 20.')
     expect(buttons('agent-5')).toEqual([])
-    // agent-9: a failed install may be tried again.
-    expect(buttons('agent-9')).toEqual(['Try again'])
+    // agent-9: CAF has no recipe for it.
+    expect(text(row('agent-9'))).toContain('CAF has no recipe for installing it')
+    expect(buttons('agent-9')).toEqual([])
+    // agent-13: a failed install may be tried again.
+    expect(buttons('agent-13')).toEqual(['Try again'])
     for (const agent of all) expect(text(row(agent.name))).not.toContain('Unknown (')
   })
 
@@ -76,10 +88,11 @@ describe('the Agents panel', () => {
       { name: 'c', install: { type: 'Installed', value: { version: '1' } }, sign_in: { type: 'SignedOut' }, can_sign_in: true },
       { name: 'd', install: { type: 'Host' }, sign_in: { type: 'SignedIn', value: { type: 'ApiKey' } }, can_sign_in: true },
     ])
-    await fireEvent.click(within(row('a')).getByRole('button', { name: 'Install' }))
-    await fireEvent.click(within(row('b')).getByRole('button', { name: 'Stop' }))
-    await fireEvent.click(within(row('c')).getByRole('button', { name: 'Sign in' }))
-    await fireEvent.click(within(row('d')).getByRole('button', { name: 'Sign out' }))
+    // Each named with its agent, for a screen reader.
+    await fireEvent.click(screen.getByRole('button', { name: 'Install a' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Stop installing b' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign in to c' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign out of d' }))
     expect(given.install).toHaveBeenCalledWith('a')
     expect(given.stopInstall).toHaveBeenCalledWith('b')
     expect(given.signIn).toHaveBeenCalledWith('c')
@@ -118,7 +131,7 @@ describe('the Agents panel', () => {
       ],
       { actions: given },
     )
-    await fireEvent.click(within(row('a')).getByRole('button', { name: 'Install' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Install a' }))
     await waitFor(() => expect(within(row('a')).getByRole('alert').textContent).toContain("CAF can't install this agent"))
     expect(within(row('b')).queryByRole('alert')).toBeNull()
   })
@@ -142,6 +155,27 @@ describe('the Agents panel', () => {
     // Signing out is its own command.
     expect(buttons('out')).toEqual(['Sign out'])
     expect(buttons('yes')).toEqual(['Sign in'])
+  })
+
+  it('offers nothing to a viewer the host doesn\'t let act on agents, but shows where each stands', () => {
+    draw(statuses(), { may: false })
+    expect(screen.queryAllByRole('button')).toEqual([])
+    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(text(row('agent-4'))).toContain('Installed, version 0.98.0')
+    expect(text(row('agent-4'))).toContain('Signed in with an account')
+  })
+
+  it('leaves the sign-in of the chat shown beside to the chat, so there is one paste box', () => {
+    const signingIn = (name: string): AgentStatus => ({
+      name,
+      install: { type: 'Host' },
+      sign_in: { type: 'SigningIn', value: { url: 'https://caf.example/x', code: null, paste: true } },
+      can_sign_in: true,
+    })
+    draw([signingIn('shown'), signingIn('other')], { inChat: 'shown' })
+    expect(text(row('shown'))).toContain('Signing in: see the chat.')
+    expect(within(row('shown')).queryByRole('textbox')).toBeNull()
+    expect(within(row('other')).getByRole('textbox')).toBeTruthy()
   })
 
   it('says when none are offered', () => {

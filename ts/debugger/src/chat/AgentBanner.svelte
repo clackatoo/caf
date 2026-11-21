@@ -8,6 +8,10 @@
   // - Otherwise, while the chat waits for its agent: Install (with its
   //   size) and Not now, progress while it installs, or why it can't be
   //   installed.
+  //
+  // It offers only what the host lets this viewer do: without the right
+  // to act on agents, it says what's happening and offers no Install or
+  // sign-in; without the right to act, no Not now.
   import type { AgentStatus, DeepReadonly } from '@clackatoo/caf'
   import { attempt } from './actions.ts'
   import SignIn from './SignIn.svelte'
@@ -18,6 +22,8 @@
     agent,
     waiting,
     readOnly,
+    act,
+    agents,
     install,
     stopInstall,
     notNow,
@@ -30,7 +36,12 @@
     agent: DeepReadonly<AgentStatus> | undefined
     /** Whether the chat is waiting for its agent. */
     waiting: boolean
+    /** Looking back: nothing can be done. */
     readOnly: boolean
+    /** Whether the host lets this viewer act on chats: Not now stops the chat's messages. */
+    act: boolean
+    /** Whether the host lets this viewer install agents and sign in to them. */
+    agents: boolean
     install: () => Promise<unknown> | void
     stopInstall: () => Promise<unknown> | void
     /** Not now: stop the chat's waiting message. */
@@ -52,48 +63,67 @@
   }
 </script>
 
+<!-- Only the first line of each is a live region: it says what changed,
+     without reading out progress, codes or buttons each time. -->
 {#if agent?.sign_in.type === 'SigningIn'}
-  <div class="banner" role="status" data-agent-state="SigningIn">
-    <SignIn {name} link={agent.sign_in.value} {readOnly} {paste} stop={stopSignIn} />
+  <div class="banner" data-agent-state="SigningIn">
+    {#if agents}
+      <SignIn {name} link={agent.sign_in.value} {readOnly} {paste} stop={stopSignIn} />
+    {:else}
+      <div role="status">Signing in to <strong>{name}</strong>, from the app.</div>
+    {/if}
   </div>
 {:else if waiting}
   {@const standing = agent?.install}
-  <div class="banner" role="status" data-agent-state={standing?.type ?? 'None'}>
+  <div class="banner" data-agent-state={standing?.type ?? 'None'}>
     {#if standing === undefined}
-      <div>Waiting for <strong>{name}</strong>: your message is sent once it's ready.</div>
+      <div role="status">Waiting for <strong>{name}</strong>. Messages you send wait until it's ready.</div>
     {:else if standing.type === 'Missing'}
+      <div role="status"><strong>{name}</strong> isn't installed.</div>
       <div>
-        <strong>{name}</strong> isn't installed. Installing it downloads about {bytes(standing.value.size)}; your message waits
-        until it's done.
+        {agents ? 'Installing it' : 'The app can install it, which'} downloads about {bytes(standing.value.size)}. Messages
+        you send wait until it's installed.
       </div>
       <div class="buttons">
-        <button type="button" disabled={readOnly || busy} onclick={() => run(install)}>Install</button>
-        <button type="button" class="quiet" disabled={readOnly || busy} onclick={() => run(notNow)}>Not now</button>
+        {#if agents}
+          <button type="button" disabled={readOnly || busy} onclick={() => run(install)}>Install</button>
+        {/if}
+        {#if act}
+          <button type="button" class="quiet" disabled={readOnly || busy} onclick={() => run(notNow)}>Not now</button>
+        {/if}
       </div>
     {:else if standing.type === 'Installing'}
       {@const share = installed(standing.value.done, standing.value.size)}
+      <div role="status">Installing <strong>{name}</strong>.</div>
       <div>
-        Installing <strong>{name}</strong>: {bytes(standing.value.done)} of about {bytes(standing.value.size)}. Your message is
-        sent once it's done.
+        {bytes(standing.value.done)} of about {bytes(standing.value.size)}. Messages you send wait until it's done.
       </div>
       <progress max="1" value={share} aria-label="Installing {name}">{Math.round(share * 100)}%</progress>
-      <div class="buttons">
-        <button type="button" class="quiet" disabled={readOnly || busy} onclick={() => run(stopInstall)}>Stop installing</button>
-      </div>
+      {#if agents}
+        <div class="buttons">
+          <button type="button" class="quiet" disabled={readOnly || busy} onclick={() => run(stopInstall)}>
+            Stop installing
+          </button>
+        </div>
+      {/if}
     {:else if standing.type === 'Cannot'}
-      <div><strong>{name}</strong> can't be installed: {cannotText(standing.value)}</div>
+      <div role="status"><strong>{name}</strong> can't be installed: {cannotText(standing.value)}</div>
       <div class="buttons">
-        {#if canRetry(standing)}
+        {#if agents && canRetry(standing)}
           <button type="button" disabled={readOnly || busy} onclick={() => run(install)}>Try again</button>
         {/if}
-        <button type="button" class="quiet" disabled={readOnly || busy} onclick={() => run(notNow)}>Not now</button>
+        {#if act}
+          <button type="button" class="quiet" disabled={readOnly || busy} onclick={() => run(notNow)}>Not now</button>
+        {/if}
       </div>
     {:else if standing.type === 'Unknown'}
-      <div>Checking whether <strong>{name}</strong> is installed…</div>
+      <div role="status">Checking whether <strong>{name}</strong> is installed…</div>
     {:else if standing.type === 'Installed' || standing.type === 'Host'}
-      <div>Starting <strong>{name}</strong>…</div>
+      <div role="status">Starting <strong>{name}</strong>…</div>
     {:else}
-      <div>Waiting for <strong>{name}</strong>, which is in a state this viewer doesn't know ({tagOf(standing)}).</div>
+      <div role="status">
+        Waiting for <strong>{name}</strong>, which is in a state this viewer doesn't know ({tagOf(standing)}).
+      </div>
     {/if}
     {#if problem !== null}<div class="problem" role="alert">{problem}</div>{/if}
   </div>

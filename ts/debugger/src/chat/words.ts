@@ -319,7 +319,7 @@ export function refusedText(reason: DeepReadonly<Refused>): string {
     case 'AlreadyInstalled':
       return 'The agent is already installed.'
     case 'CannotSignIn':
-      return "CAF can't sign in to this agent now."
+      return "CAF can't sign in to or out of this agent now."
     case 'NotSigningIn':
       return "The agent isn't being signed in to."
     default:
@@ -396,6 +396,8 @@ export function cannotText(why: DeepReadonly<CannotInstall>): string {
       return 'it needs npm, and this machine has none.'
     case 'Platform':
       return "it isn't made for this machine's system or processor."
+    case 'NoRecipe':
+      return 'CAF has no recipe for installing it: the app starts it itself.'
     case 'Failed':
       return failedText(why.value)
     default:
@@ -430,7 +432,7 @@ export function canRetry(state: DeepReadonly<InstallState>): boolean {
 export function signInLabel(state: DeepReadonly<SignInState>): string {
   switch (state.type) {
     case 'Unknown':
-      return 'Not known'
+      return 'Sign-in not known yet'
     case 'SignedOut':
       return 'Signed out'
     case 'SigningIn':

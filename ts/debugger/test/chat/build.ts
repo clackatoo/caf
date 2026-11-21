@@ -1,7 +1,7 @@
 // Chats built by hand for the chat view's tests, and the view drawn with
 // actions that record what they're asked.
 
-import type { AgentStatus, Chat, ChatState, Item, ItemKind, Question, ToViewer, Turn, TurnLife } from '@clackatoo/caf'
+import type { AgentStatus, Chat, ChatState, Item, ItemKind, Question, Rights, ToViewer, Turn, TurnLife } from '@clackatoo/caf'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { render } from '@testing-library/svelte'
@@ -76,11 +76,15 @@ export function actions(): { [K in keyof ChatActions]: ReturnType<typeof vi.fn> 
 }
 
 /** The chat view, drawing `chat`, and its agent's status if given. */
-export function draw(drawn: Chat, options: { readOnly?: boolean; actions?: ChatActions; agent?: AgentStatus } = {}) {
+export function draw(
+  drawn: Chat,
+  options: { readOnly?: boolean; actions?: ChatActions; agent?: AgentStatus; may?: Rights } = {},
+) {
   const given = options.actions ?? actions()
   const view = render(ChatView, {
     chat: drawn,
     agent: options.agent,
+    may: options.may,
     actions: given,
     readOnly: options.readOnly ?? false,
   })

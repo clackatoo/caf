@@ -9,6 +9,7 @@
   let {
     turn,
     readOnly,
+    act: acts,
     sendAgain,
     signIn,
     canSignIn,
@@ -16,6 +17,8 @@
   }: {
     turn: DeepReadonly<Turn>
     readOnly: boolean
+    /** Whether the host lets this viewer act: Send again sends. */
+    act: boolean
     sendAgain: (message: DeepReadonly<UserMessage>) => Promise<unknown> | void
     /** The Sign in remedy: start signing in to the chat's agent. */
     signIn: () => Promise<unknown> | void
@@ -109,7 +112,9 @@
       {#if failure.remedy !== null}
         {#if failure.remedy.type === 'SendAgain'}
           {#if message !== null}
-            <button type="button" disabled={readOnly || sending} onclick={() => act(() => sendAgain(message))}>Send again</button>
+            {#if acts}
+              <button type="button" disabled={readOnly || sending} onclick={() => act(() => sendAgain(message))}>Send again</button>
+            {/if}
           {/if}
         {:else if failure.remedy.type === 'SignIn'}
           <!-- Signing in doesn't send it again: once signed in, the user does. -->
@@ -118,7 +123,7 @@
             {#if canSignIn}
               <button type="button" disabled={readOnly || sending} onclick={() => act(signIn)}>Sign in</button>
             {/if}
-            {#if message !== null}
+            {#if message !== null && acts}
               <button type="button" class="quiet" disabled={readOnly || sending} onclick={() => act(() => sendAgain(message))}>
                 Send again
               </button>

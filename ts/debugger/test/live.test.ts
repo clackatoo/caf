@@ -17,7 +17,7 @@ function transport(): Transport & { drop(): void; deliver(message: unknown): voi
       const message = JSON.parse(text) as { type: string }
       sent.push(message)
       if (message.type === 'Hello') {
-        const welcome = { type: 'Welcome', value: { version: 1, agents: ['fake'], chats: [{ id: 1, agent: 'fake', cwd: '/a' }], run: 'r' } }
+        const welcome = { type: 'Welcome', value: { version: 1, agents: ['fake'], chats: [{ id: 1, agent: 'fake', cwd: '/a' }], run: 'r', may: { act: true, agents: false } } }
         const agents = { type: 'Agents', value: [{ name: 'fake', install: { type: 'Host' }, sign_in: { type: 'Unknown' }, can_sign_in: false }] }
         queueMicrotask(() => {
           for (const message of [welcome, agents]) messages.forEach((listener) => listener(JSON.stringify(message)))
@@ -62,6 +62,7 @@ describe('the agents', () => {
     const live = new Live()
     await live.connect(async () => link)
     expect(live.agents.map((agent) => agent.install.type)).toEqual(['Host'])
+    expect(live.may).toEqual({ act: true, agents: false })
     const signedIn = [{ name: 'fake', install: { type: 'Host' }, sign_in: { type: 'SignedIn', value: { type: 'Account' } }, can_sign_in: true }]
     link.deliver({ type: 'Agents', value: signedIn })
     expect(live.agents).toEqual(signedIn)

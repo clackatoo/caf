@@ -21,10 +21,16 @@
     agents,
     actions,
     readOnly = false,
+    may = true,
+    inChat = null,
   }: {
     agents: readonly DeepReadonly<AgentStatus>[]
     actions: AgentActions
     readOnly?: boolean
+    /** Whether the host lets this viewer install agents and sign in and out: without it, it only shows where each stands. */
+    may?: boolean
+    /** The agent of the chat shown beside, whose sign-in, link and paste box and all, the chat already shows. */
+    inChat?: AgentName | null
   } = $props()
 
   /** Agents with something being done to them now, and why something failed. */
@@ -68,31 +74,62 @@
           <div class="detail">It can't be installed: {cannotText(install.value)}</div>
         {/if}
         {#if ready(agent)}<div class="state">{signInLabel(signIn)}</div>{/if}
-        <div class="buttons">
-          {#if install.type === 'Missing' || canRetry(install)}
-            <button type="button" disabled={working} onclick={() => run(agent.name, actions.install)}>
-              {install.type === 'Missing' ? 'Install' : 'Try again'}
-            </button>
-          {:else if install.type === 'Installing'}
-            <button type="button" disabled={working} onclick={() => run(agent.name, actions.stopInstall)}>Stop</button>
+        {#if may}
+          <div class="buttons">
+            {#if install.type === 'Missing'}
+              <button
+                type="button"
+                aria-label="Install {agent.name}"
+                disabled={working}
+                onclick={() => run(agent.name, actions.install)}>Install</button
+              >
+            {:else if canRetry(install)}
+              <button
+                type="button"
+                aria-label="Try installing {agent.name} again"
+                disabled={working}
+                onclick={() => run(agent.name, actions.install)}>Try again</button
+              >
+            {:else if install.type === 'Installing'}
+              <button
+                type="button"
+                aria-label="Stop installing {agent.name}"
+                disabled={working}
+                onclick={() => run(agent.name, actions.stopInstall)}>Stop installing</button
+              >
+            {/if}
+            <!-- Only where CAF can sign in now, as the agent's status says; again
+                 while signed in, to switch accounts. -->
+            {#if agent.can_sign_in && signIn.type !== 'SigningIn'}
+              <button
+                type="button"
+                aria-label="Sign in to {agent.name}"
+                disabled={working}
+                onclick={() => run(agent.name, actions.signIn)}>Sign in</button
+              >
+            {/if}
+            {#if ready(agent) && signIn.type === 'SignedIn'}
+              <button
+                type="button"
+                aria-label="Sign out of {agent.name}"
+                disabled={working}
+                onclick={() => run(agent.name, actions.signOut)}>Sign out</button
+              >
+            {/if}
+          </div>
+          {#if signIn.type === 'SigningIn'}
+            {#if agent.name === inChat}
+              <div class="detail">Signing in: see the chat.</div>
+            {:else}
+              <SignIn
+                name={agent.name}
+                link={signIn.value}
+                {readOnly}
+                paste={(text) => actions.paste(agent.name, text)}
+                stop={() => actions.stopSignIn(agent.name)}
+              />
+            {/if}
           {/if}
-          <!-- Only where CAF can sign in now, as the agent's status says; again
-               while signed in, to switch accounts. -->
-          {#if agent.can_sign_in && signIn.type !== 'SigningIn'}
-            <button type="button" disabled={working} onclick={() => run(agent.name, actions.signIn)}>Sign in</button>
-          {/if}
-          {#if ready(agent) && signIn.type === 'SignedIn'}
-            <button type="button" disabled={working} onclick={() => run(agent.name, actions.signOut)}>Sign out</button>
-          {/if}
-        </div>
-        {#if signIn.type === 'SigningIn'}
-          <SignIn
-            name={agent.name}
-            link={signIn.value}
-            {readOnly}
-            paste={(text) => actions.paste(agent.name, text)}
-            stop={() => actions.stopSignIn(agent.name)}
-          />
         {/if}
         {#if problems.has(agent.name)}<div class="problem" role="alert">{problems.get(agent.name)}</div>{/if}
       </li>

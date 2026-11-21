@@ -39,7 +39,9 @@ describe('a chat waiting for its agent', () => {
     const { container, actions: given } = draw(chat({ state: waiting }), {
       agent: status({ type: 'Missing', value: { size: 626_797_331 } }),
     })
-    expect(text(container)).toContain("claude isn't installed. Installing it downloads about 627 MB")
+    expect(text(container)).toContain(
+      "claude isn't installed. Installing it downloads about 627 MB. Messages you send wait until it's installed.",
+    )
     await fireEvent.click(button('Install'))
     expect(given.install).toHaveBeenCalledOnce()
     await fireEvent.click(button('Not now'))
@@ -50,7 +52,7 @@ describe('a chat waiting for its agent', () => {
     const { container, actions: given } = draw(chat({ state: waiting }), {
       agent: status({ type: 'Installing', value: { done: 313_398_665, size: 626_797_331 } }),
     })
-    expect(text(container)).toContain('Installing claude: 313 MB of about 627 MB')
+    expect(text(container)).toContain('Installing claude. 313 MB of about 627 MB. Messages you send wait until it\'s done.')
     const progress = screen.getByRole('progressbar', { name: 'Installing claude' }) as HTMLProgressElement
     expect(progress.value).toBeCloseTo(0.5)
     expect(screen.queryByRole('button', { name: 'Install' })).toBeNull()
@@ -71,6 +73,7 @@ describe('a chat waiting for its agent', () => {
     [{ type: 'Cannot', value: { type: 'Node', value: { needs: 22, has: null } } }, 'it needs Node 22 or newer, and this machine has no Node.', false],
     [{ type: 'Cannot', value: { type: 'Npm' } }, 'it needs npm, and this machine has none.', false],
     [{ type: 'Cannot', value: { type: 'Platform' } }, "it isn't made for this machine's system or processor.", false],
+    [{ type: 'Cannot', value: { type: 'NoRecipe' } }, 'CAF has no recipe for installing it: the app starts it itself.', false],
     [{ type: 'Cannot', value: { type: 'Failed', value: { type: 'Offline' } } }, 'the network was out of reach', true],
     [{ type: 'Cannot', value: { type: 'Failed', value: { type: 'Corrupt' } } }, "what was downloaded wasn't what CAF expected", true],
     [{ type: 'Cannot', value: { type: 'Failed', value: { type: 'NoSpace' } } }, 'the disk is full', true],
@@ -111,7 +114,7 @@ describe('a chat waiting for its agent', () => {
       agent: { ...status({ type: 'Missing', value: { size: 1 } }), name: 'codex' },
     })
     expect(screen.queryByRole('button', { name: 'Install' })).toBeNull()
-    expect(text(container)).toContain("Waiting for claude: your message is sent once it's ready.")
+    expect(text(container)).toContain("Waiting for claude. Messages you send wait until it's ready.")
   })
 
   it('shows no install banner unless the chat waits', () => {
@@ -248,7 +251,7 @@ describe('the Sign in remedy', () => {
     given.signIn.mockRejectedValue(new CafError({ type: 'Refused', value: { type: 'CannotSignIn' } }))
     draw(chat({ turns: [turn({ life: failed })] }), { actions: given, agent: can })
     await fireEvent.click(button('Sign in'))
-    await waitFor(() => expect(screen.getByText("CAF can't sign in to this agent now.")).toBeTruthy())
+    await waitFor(() => expect(screen.getByText("CAF can't sign in to or out of this agent now.")).toBeTruthy())
   })
 
   it('does nothing while read-only', async () => {
@@ -271,6 +274,66 @@ describe('the Sign in remedy', () => {
   })
 })
 
+describe('what the host lets this viewer do', () => {
+  const failed = life('Failed', { reason: { type: 'SignInNeeded' }, agent_said: null, remedy: { type: 'SignIn' } })
+  const missing = status({ type: 'Missing', value: { size: 626_797_331 } }, { type: 'SignedOut' }, true)
+
+  it('without agents: says what is happening, but offers no Install, Try again, Stop or Sign in', () => {
+    const may = { act: true, agents: false }
+    const { container } = draw(chat({ state: waiting, turns: [turn({ life: failed })] }), { agent: missing, may })
+    expect(text(container)).toContain("claude isn't installed. The app can install it, which downloads about 627 MB.")
+    expect(screen.queryByRole('button', { name: 'Install' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Not now' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Send again' })).toBeTruthy()
+    cleanup()
+    draw(chat({ state: waiting }), {
+      agent: status({ type: 'Installing', value: { done: 1, size: 2 } }),
+      may,
+    })
+    expect(screen.queryByRole('button', { name: 'Stop installing' })).toBeNull()
+    cleanup()
+    draw(chat({ state: waiting }), {
+      agent: status({ type: 'Cannot', value: { type: 'Failed', value: { type: 'Offline' } } }),
+      may,
+    })
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+  })
+
+  it('without agents: a sign-in under way is said, with no link, code or paste box', () => {
+    const { container } = draw(chat(), {
+      agent: status({ type: 'Host' }, link(null, null, true)),
+      may: { act: true, agents: false },
+    })
+    expect(text(container)).toContain('Signing in to claude, from the app.')
+    expect(screen.queryByRole('textbox', { name: /paste it here/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Stop signing in' })).toBeNull()
+  })
+
+  it('without act: the chat can be watched, not acted in', () => {
+    const { container } = draw(chat({ state: waiting, turns: [turn({ life: failed })] }), {
+      agent: missing,
+      may: { act: false, agents: true },
+    })
+    expect(text(container)).toContain('The app lets this viewer watch this chat, not act in it.')
+    for (const name of ['Not now', 'Close', 'Send again']) expect(screen.queryByRole('button', { name })).toBeNull()
+    // Installing and signing in are the agent's, which it may still do.
+    expect(screen.getByRole('button', { name: 'Install' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy()
+    expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).disabled).toBe(true)
+  })
+
+  it('says only one short line as a live region, not progress or buttons', () => {
+    const { container } = draw(chat({ state: waiting }), {
+      agent: status({ type: 'Installing', value: { done: 1, size: 2 } }),
+    })
+    const live = container.querySelectorAll('[data-agent-state] [role=status], [data-agent-state][role=status]')
+    expect(live).toHaveLength(1)
+    expect(live[0]!.textContent).toBe('Installing claude.')
+    expect(live[0]!.querySelector('button, progress')).toBeNull()
+  })
+})
+
 describe("CAF's notes and refusals", () => {
   it.each([
     ['NotInstalled', "The agent isn't installed, so the message that waited for it was stopped."],
@@ -284,7 +347,7 @@ describe("CAF's notes and refusals", () => {
   it.each([
     ['NotInstallable', "CAF can't install this agent"],
     ['AlreadyInstalled', 'The agent is already installed.'],
-    ['CannotSignIn', "CAF can't sign in to this agent now."],
+    ['CannotSignIn', "CAF can't sign in to or out of this agent now."],
     ['NotSigningIn', "The agent isn't being signed in to."],
   ])('says %s', (reason, says) => {
     expect(refusedText({ type: reason } as never)).toContain(says)
