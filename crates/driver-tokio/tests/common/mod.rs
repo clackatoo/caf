@@ -13,7 +13,7 @@ use caf_core::agent::{AgentSpec, EnvChange, SpawnCommand};
 use caf_core::chat::AppItem;
 use caf_core::chat::{ItemKind, Turn, TurnLife};
 use caf_core::host::Host;
-use caf_core::profiles::ProfileChoice;
+use caf_core::profiles::{Builtin, ProfileChoice};
 use caf_driver_tokio::{Caf, ChatHandle, Running, Step, Steps, Update, Watch};
 use serde_json::{Value, json};
 
@@ -64,7 +64,7 @@ pub fn fake(dir: &Dir, script: &Path) -> AgentSpec {
             dir.path("record.jsonl").into(),
         ),
     ];
-    AgentSpec::command("fake", command, ProfileChoice::Cautious)
+    AgentSpec::command("fake", command, ProfileChoice::Builtin(Builtin::Fake))
 }
 
 /// A host for tests: an adapter that has gone is waited for briefly.
@@ -85,7 +85,7 @@ pub fn handshake(session: &str) -> Vec<Value> {
     vec![
         fallback(),
         json!({"wait": {"method": "initialize"}}),
-        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true}, "agentInfo": {"name": "fake", "version": "1.0.0"}}}}),
+        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true}, "agentInfo": {"name": "caf-fake-agent", "version": "1.0.0"}}}}),
         json!({"wait": {"method": "session/new"}}),
         json!({"respond": {"result": {"sessionId": session}}}),
     ]

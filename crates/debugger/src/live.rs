@@ -295,7 +295,7 @@ fn hidden(directives: &mut serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use caf_core::agent::{AgentSpec, SpawnCommand};
-    use caf_core::profiles::ProfileChoice;
+    use caf_core::profiles::{Builtin, ProfileChoice};
     use caf_core::time::{Mono, Now, Wall};
     use caf_core::viewer::OpenRequest;
     use serde_json::json;
@@ -309,7 +309,7 @@ mod tests {
         vec![AgentSpec::command(
             "fake",
             SpawnCommand::new("/bin/true"),
-            ProfileChoice::Cautious,
+            ProfileChoice::Builtin(Builtin::Fake),
         )]
     }
 

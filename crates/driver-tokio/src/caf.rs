@@ -2116,11 +2116,11 @@ mod tests {
     fn error_output_split_inside_a_character_replays_exactly() {
         use caf_core::agent::SpawnCommand;
         use caf_core::directive::AgentDirective;
-        use caf_core::profiles::ProfileChoice;
+        use caf_core::profiles::{Builtin, ProfileChoice};
         let agents = vec![AgentSpec::command(
             "plain",
             SpawnCommand::new("/opt/plain"),
-            ProfileChoice::Cautious,
+            ProfileChoice::Builtin(Builtin::Fake),
         )];
         let host = Host::new("test", "1.0.0");
         let now = Now {

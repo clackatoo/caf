@@ -120,6 +120,8 @@ export function incompatibleText(what: DeepReadonly<Incompatible>): string {
       return "it can't reach MCP servers over HTTP, and this chat has one."
     case 'BadAnswer':
       return 'its answer made no sense.'
+    case 'OwnTools':
+      return "it isn't the adapter its profile is for, so CAF can't turn off its own tools, and won't run it."
     default:
       return `a reason this viewer doesn't know (${tagOf(what)}).`
   }
@@ -333,6 +335,8 @@ export function refusedText(reason: DeepReadonly<Refused>): string {
       return 'That chat is open already, or being restored.'
     case 'BadShelf':
       return "That shelf's name can't be used."
+    case 'OwnTools':
+      return "CAF can't turn off this agent's own tools, so it won't run it."
     default:
       return `Refused, for a reason this viewer doesn't know (${tagOf(reason)}).`
   }
