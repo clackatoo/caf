@@ -12,8 +12,9 @@ use caf_core::event::Event;
 use caf_core::host::Host;
 use caf_core::ids::{ChatId, Shelf};
 use caf_core::save::{CannotRestore, Header, RestoreChat, SavedChat, SavedState};
+use caf_core::settings::{SettingKind, SettingValue};
 use caf_core::viewer::{FromViewer, Outcome, RequestNo, ToViewer};
-use caf_core::{Core, Now, OpenChat, Refused};
+use caf_core::{Core, Now, OpenChat, Refused, SettingChoice};
 use caf_driver_tokio::viewer::{ViewerRules, serve};
 use caf_driver_tokio::{Caf, Config, Error, Running, SavedWatch};
 use caf_save::{FileStore, Store, StoreError, Stored};
@@ -1129,6 +1130,110 @@ async fn a_recorded_restore_replays_to_the_same_chat_and_data() {
     let replayed = core.chat(id).expect("restored in the replay too");
     assert_eq!(replayed.turns, live.turns);
     assert_eq!(replayed.agent, live.agent);
+}
+
+/// CAF with the fake running `script`, keeping chats in a `FileStore`
+/// in `dir`, with `defaults` as the host's settings for it.
+fn start_choosing(
+    dir: &Dir,
+    script: &Path,
+    defaults: Vec<SettingChoice>,
+) -> (Caf<NoAppItems, NoAppData>, Running) {
+    let mut agent = fake(dir, script);
+    agent.settings = defaults;
+    let mut config = Config::new(host(), vec![agent]);
+    config.store = Some(Box::new(FileStore::new(root(dir))));
+    Caf::start(config)
+}
+
+/// What was chosen for `kind` in `chat`.
+fn chosen(chat: &caf_core::Chat, kind: SettingKind) -> Option<&SettingValue> {
+    (chat.settings.chosen.iter())
+        .find(|choice| choice.kind == kind)
+        .map(|choice| &choice.value)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_chats_own_settings_are_saved_and_its_restore_takes_todays_defaults_for_the_rest() {
+    let dir = Dir::new();
+    let mut first = handshake_offering("s1");
+    first.extend(set_to(
+        "model",
+        json!("large"),
+        &options("large", "low", false),
+    ));
+    first.extend(set_to(
+        "effort",
+        json!("high"),
+        &options("large", "high", false),
+    ));
+    first.extend([prompt(), say("s1", "Hello there"), end_turn()]);
+    let first = dir.script("first.jsonl", &first);
+    let (caf, running) = start_choosing(&dir, &first, vec![SettingChoice::effort("high")]);
+    let mut open = saved_open(&dir, SHELF);
+    open.settings = vec![SettingChoice::model("large")];
+    let chat = caf.open_chat(open).await.unwrap();
+    let mut watch = chat.watch();
+    chat.send(UserMessage::text("Hi")).await.unwrap();
+    until(&chat, &mut watch, "the answer", finished).await;
+    let id = chat.id;
+    stop(&caf, running).await;
+
+    // Resumed, the agent goes back to its own model, as Claude's does: the
+    // chat's choices are sent again, and the host's defaults are today's.
+    let mut second = vec![
+        json!({"on": {"fallback": true, "do": [{"respond": {"error": {"code": -32601, "message": "Method not found"}}}]}}),
+        json!({"wait": {"method": "initialize"}}),
+        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"sessionCapabilities": {"resume": {}}}, "agentInfo": {"name": "caf-fake-agent", "version": "1.0.0"}}}}),
+        json!({"wait": {"method": "session/resume", "expect": {"params": {"sessionId": "s1"}}}}),
+        json!({"respond": {"result": {"configOptions": options("small", "low", false)}}}),
+    ];
+    second.extend(set_to(
+        "model",
+        json!("large"),
+        &options("large", "low", false),
+    ));
+    second.extend(set_to("fast", json!(true), &options("large", "low", true)));
+    second.extend([prompt(), say("s1", "Again"), end_turn()]);
+    let second = dir.script("second.jsonl", &second);
+    let (caf, running) = start_choosing(&dir, &second, vec![SettingChoice::fast(true)]);
+    let chat = restore_once_written(&caf, id).await;
+    let restored = picture(&chat).await;
+    assert_eq!(restored.settings.own, [SettingKind::Model]);
+    assert_eq!(
+        chosen(&restored, SettingKind::Model),
+        Some(&SettingValue::Choice("large".into()))
+    );
+    assert_eq!(
+        chosen(&restored, SettingKind::Effort),
+        None,
+        "yesterday's default is gone"
+    );
+    assert_eq!(
+        chosen(&restored, SettingKind::Fast),
+        Some(&SettingValue::Switch(true)),
+        "today's default"
+    );
+    assert_eq!(
+        restored.turns[0]
+            .model
+            .as_ref()
+            .map(|model| model.id.as_str()),
+        Some("large")
+    );
+
+    let mut watch = chat.watch();
+    chat.send(UserMessage::text("Again")).await.unwrap();
+    let done = until(&chat, &mut watch, "the second answer", |chat| {
+        chat.turns.len() == 2 && finished(chat)
+    })
+    .await;
+    assert_eq!(
+        done.turns[1].model.as_ref().map(|model| model.id.as_str()),
+        Some("large")
+    );
+    stop(&caf, running).await;
+    assert!(!any_failed(&dir), "the fakes got what they expected");
 }
 
 /// One viewer of `caf`, said hello to: what it's sent, from the welcome on.

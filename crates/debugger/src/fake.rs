@@ -22,6 +22,12 @@
 //!   command, and once that's answered, the turn ends. While the question
 //!   waits, Stop ends the turn as a real adapter does, with
 //!   `cancelled`.
+//! - **Its settings**, so the debugger's picker can be tried: two models,
+//!   three effort levels and fast mode, offered as Claude offers its own,
+//!   as ACP's session config options, whenever its session opens, new or
+//!   resumed. They change nothing it says. A change is answered at once,
+//!   without the list, which CAF takes as done as asked: the fake has no
+//!   memory to list what else was chosen from.
 //!
 //! A Stop while the question waits must end the turn `cancelled`, never
 //! `end_turn`: the round makes sure of it with a request CAF refuses,
@@ -90,13 +96,19 @@ pub fn script() -> String {
         line(&json!({"on": {"fallback": true, "do": [
             {"respond": {"error": {"code": -32601, "message": "Method not found"}}},
         ]}})),
-        // A chat's session, new or carried on from a saved chat's.
+        // A chat's session, new or carried on from a saved chat's, and
+        // a change to its settings.
         line(&json!({"on": {"method": "session/new", "do": [
-            {"respond": {"result": {"sessionId": SESSION}}},
+            {"respond": {"result": {"sessionId": SESSION, "configOptions": options()}}},
         ]}})),
         line(&json!({"on": {"method": "session/resume", "do": [
-            {"respond": {"result": {}}},
+            {"respond": {"result": {"configOptions": options()}}},
         ]}})),
+        line(
+            &json!({"on": {"method": "session/set_config_option", "do": [
+                {"respond": {"result": {}}},
+            ]}}),
+        ),
         line(&json!({"wait": {"method": "initialize", "as": "prompt"}})),
         line(&json!({"respond": {"result": {
             "protocolVersion": 1,
@@ -129,6 +141,23 @@ pub fn write(dir: &Path) -> std::io::Result<PathBuf> {
 /// One step as a line.
 fn line(step: &Value) -> String {
     step.to_string()
+}
+
+/// The settings it offers as a session opens, as ACP's config options,
+/// the first of each current.
+fn options() -> Value {
+    json!([
+        {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "small", "options": [
+            {"value": "small", "name": "Small", "description": "The fake's own: it says the same whichever model"},
+            {"value": "large", "name": "Large", "description": "The fake's own, as large: it says the same"},
+        ]},
+        {"id": "effort", "name": "Effort", "category": "thought_level", "type": "select", "currentValue": "low", "options": [
+            {"value": "low", "name": "Low"},
+            {"value": "medium", "name": "Medium"},
+            {"value": "high", "name": "High"},
+        ]},
+        {"id": "fast", "name": "Fast mode", "category": "model_config", "type": "boolean", "currentValue": false},
+    ])
 }
 
 /// The answer to any message.

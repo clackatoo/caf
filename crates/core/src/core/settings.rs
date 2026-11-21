@@ -757,8 +757,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Asks `proc`, which has said what it can do, for a session to learn
-    /// `conn`'s agent's settings from: in CAF's installs' folder, if known,
-    /// and otherwise `/`, with none of the agent's own tools.
+    /// `conn`'s agent's settings from: in CAF's installs' folder, if a
+    /// survey found installs there, so it's there, and otherwise `/`,
+    /// with none of the agent's own tools. An agent the host starts
+    /// itself may run where CAF has installed nothing, and Claude's
+    /// refuses a folder that isn't there.
     pub(super) fn ask_learn(
         &mut self,
         now: Now,
@@ -774,6 +777,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return self.learn_failed(conn, "CAF can't turn off its own tools");
         }
         let cwd = (self.setup.machine.as_ref())
+            .filter(|machine| !machine.installed.is_empty())
             .and_then(|machine| machine.root.to_str())
             .filter(|root| std::path::Path::new(root).is_absolute())
             .unwrap_or("/");

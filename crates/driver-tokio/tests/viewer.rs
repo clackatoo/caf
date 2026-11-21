@@ -10,10 +10,11 @@ use caf_core::change::{Change, Numbered};
 use caf_core::chat::{ChatState, ItemKind, Lost, TurnLife, UserMessage};
 use caf_core::ids::{AgentName, ChangeNo, ChatId, QuestionId};
 use caf_core::question::{Answer, OptionId};
+use caf_core::settings::{KnownSettings, SettingKind, SettingValue};
 use caf_core::viewer::{
-    ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
+    AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
 };
-use caf_core::{Chat, OpenChat, Refused};
+use caf_core::{Chat, OpenChat, Refused, SettingChoice};
 use caf_driver_tokio::viewer::{ViewerRules, serve};
 use caf_driver_tokio::{Caf, Config, Running};
 use serde_json::{Value, json};
@@ -620,6 +621,11 @@ async fn a_viewer_that_may_not_act_only_watches() {
             request: RequestNo(4),
             chat: chat.id,
         },
+        FromViewer::Set {
+            request: RequestNo(5),
+            chat: chat.id,
+            choice: SettingChoice::model("large"),
+        },
     ];
     for (request, ask) in (1..).zip(asks) {
         viewer.send(ask).await;
@@ -628,14 +634,15 @@ async fn a_viewer_that_may_not_act_only_watches() {
     let now = picture(&chat).await;
     assert!(now.turns.is_empty());
     assert_ne!(now.state, ChatState::Closed);
+    assert!(now.settings.chosen.is_empty(), "nothing chosen");
     // Opening is the host's rule's to decide, not `act`'s.
     viewer
         .send(FromViewer::Open {
-            request: RequestNo(5),
+            request: RequestNo(6),
             open: OpenRequest::new("fake", &dir.0),
         })
         .await;
-    assert!(matches!(viewer.done(5).await, Outcome::Opened(_)));
+    assert!(matches!(viewer.done(6).await, Outcome::Opened(_)));
     shut_down(&caf, running).await;
     viewer.ends().await;
 }
@@ -1416,4 +1423,121 @@ async fn asking_for_an_idle_chat_whole_gets_it_whatever_was_asked_before() {
     }
     shut_down(&caf, running).await;
     viewer.ends().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_viewer_chooses_a_setting_and_learns_an_agents_as_the_host_allows() {
+    let dir = Dir::new();
+    let mut script = handshake_offering("s1");
+    script.extend(set_to(
+        "model",
+        json!("large"),
+        &options("large", "low", false),
+    ));
+    // Learning, on the chat's adapter, in a session of its own.
+    script.extend([
+        json!({"wait": {"method": "session/new", "expect": {"params": {"cwd": "/"}}}}),
+        json!({"respond": {"result": {"sessionId": "learn", "configOptions": options("small", "high", true)}}}),
+    ]);
+    let script = dir.script("script.jsonl", &script);
+    let (caf, running) = Caf::start(Config::new(host(), vec![fake(&dir, &script)]));
+    let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
+    let mut watch = chat.watch();
+    until(&chat, &mut watch, "the session", |chat| {
+        matches!(chat.state, ChatState::Open { .. })
+    })
+    .await;
+
+    // Choosing is acting on a chat: allowed by default. Learning is
+    // acting on an agent: not.
+    let (mut viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
+    viewer
+        .send(FromViewer::Set {
+            request: RequestNo(1),
+            chat: chat.id,
+            choice: SettingChoice::model("large"),
+        })
+        .await;
+    assert_eq!(viewer.done(1).await, Outcome::Done);
+    viewer
+        .send(FromViewer::Set {
+            request: RequestNo(2),
+            chat: chat.id,
+            choice: SettingChoice::model("huge"),
+        })
+        .await;
+    assert_eq!(
+        viewer.done(2).await,
+        Outcome::Refused(Refused::NoSuchSetting),
+        "the core's own refusal"
+    );
+    until(&chat, &mut watch, "the model to change", |chat| {
+        (chat.settings.offered.iter()).any(|setting| {
+            setting.kind == SettingKind::Model
+                && setting.current == Some(SettingValue::Choice("large".into()))
+        })
+    })
+    .await;
+    let fake = AgentName("fake".into());
+    viewer
+        .send(FromViewer::Agent {
+            request: RequestNo(3),
+            agent: fake.clone(),
+            action: AgentAction::LearnSettings,
+        })
+        .await;
+    assert_eq!(viewer.done(3).await, Outcome::NotAllowed);
+
+    let mut rules = ViewerRules::default();
+    rules.agents = true;
+    let (mut learner, ..) = Viewer::welcomed(&caf, rules, 8).await;
+    learner
+        .send(FromViewer::Agent {
+            request: RequestNo(1),
+            agent: fake,
+            action: AgentAction::LearnSettings,
+        })
+        .await;
+    assert_eq!(learner.done(1).await, Outcome::Done);
+    // What the learning session offered, as it said it is there.
+    let learned = tokio::time::timeout(PATIENCE, async {
+        loop {
+            let statuses = match learner.statuses.pop_front() {
+                Some(statuses) => statuses,
+                None => match learner.received().await {
+                    Some(ToViewer::Agents(statuses)) => statuses,
+                    Some(_) => continue,
+                    None => panic!("the link ended"),
+                },
+            };
+            if let KnownSettings::Known(known) = &statuses[0].settings
+                && known
+                    .iter()
+                    .any(|setting| setting.current == Some(SettingValue::Choice("high".into())))
+            {
+                return known.clone();
+            }
+        }
+    })
+    .await
+    .expect("learned in good time");
+    assert_eq!(learned.len(), 3);
+    let now = picture(&chat).await;
+    assert_eq!(
+        now.settings
+            .offered
+            .iter()
+            .find(|setting| setting.kind == SettingKind::Effort)
+            .and_then(|setting| setting.current.clone()),
+        Some(SettingValue::Choice("low".into())),
+        "the chat's own settings are its session's"
+    );
+    shut_down(&caf, running).await;
+    viewer.ends().await;
+    learner.ends().await;
+    assert!(
+        !dir.record().iter().any(|line| line.get("failed").is_some()),
+        "{:#?}",
+        dir.record()
+    );
 }

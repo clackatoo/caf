@@ -46,6 +46,14 @@ impl Dir {
         std::fs::write(&path, text).unwrap();
         path
     }
+
+    /// The fake's record, one JSON value a line.
+    pub fn record(&self) -> Vec<Value> {
+        let text = std::fs::read_to_string(self.path("record.jsonl")).unwrap_or_default();
+        text.lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
 }
 
 impl Drop for Dir {
@@ -88,6 +96,44 @@ pub fn handshake(session: &str) -> Vec<Value> {
         json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true}, "agentInfo": {"name": "caf-fake-agent", "version": "1.0.0"}}}}),
         json!({"wait": {"method": "session/new"}}),
         json!({"respond": {"result": {"sessionId": session}}}),
+    ]
+}
+
+/// The settings the fake offers in these tests, as ACP's config options,
+/// with `model`, `effort` and fast mode current: two models, two effort
+/// levels, and fast mode, as Claude lists its own.
+pub fn options(model: &str, effort: &str, fast: bool) -> Value {
+    json!([
+        {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": model, "options": [
+            {"value": "small", "name": "Small", "description": "Quick and cheap"},
+            {"value": "large", "name": "Large", "description": "Slow and thorough"}
+        ]},
+        {"id": "effort", "name": "Effort", "category": "thought_level", "type": "select", "currentValue": effort, "options": [
+            {"value": "low", "name": "Low"},
+            {"value": "high", "name": "High"}
+        ]},
+        {"id": "fast", "name": "Fast mode", "category": "model_config", "type": "boolean", "currentValue": fast}
+    ])
+}
+
+/// Starts as an adapter does, and opens one session, `session`, offering
+/// [`options`] with `small`, `low` and fast mode off current.
+pub fn handshake_offering(session: &str) -> Vec<Value> {
+    vec![
+        fallback(),
+        json!({"wait": {"method": "initialize"}}),
+        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true}, "agentInfo": {"name": "caf-fake-agent", "version": "1.0.0"}}}}),
+        json!({"wait": {"method": "session/new"}}),
+        json!({"respond": {"result": {"sessionId": session, "configOptions": options("small", "low", false)}}}),
+    ]
+}
+
+/// Waits for CAF to set config option `id` to `value` in session `s1`,
+/// and answers with the options as they are then, `now`.
+pub fn set_to(id: &str, value: Value, now: &Value) -> [Value; 2] {
+    [
+        json!({"wait": {"method": "session/set_config_option", "expect": {"params": {"sessionId": "s1", "configId": id, "value": value}}}}),
+        json!({"respond": {"result": {"configOptions": now}}}),
     ]
 }
 
