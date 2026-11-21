@@ -10,12 +10,15 @@
 //! name = "my-claude"
 //! program = "/home/me/.local/bin/claude-agent-acp"
 //! args = []
-//! profile = "claude-agent-acp"   # or "cautious"
+//! profile = "claude-agent-acp"   # or "cautious", or "fake"
 //! ```
 //!
 //! An agent is either `installed`, which only one of CAF's own profiles
 //! can be, or started by its `program`: an absolute path, or a bare name
 //! looked up on `PATH` as the debugger starts. `args` may be left out.
+//! `fake` is the profile for CAF's fake agent, `caf-fake-agent`, whose
+//! install always fails, as offline, and which signs in through its
+//! `auth` commands: for trying installs and sign-ins with no real agent.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -51,6 +54,8 @@ enum Profile {
     ClaudeAgentAcp,
     #[serde(rename = "cautious")]
     Cautious,
+    #[serde(rename = "fake")]
+    Fake,
 }
 
 /// Reads `agents.toml`.
@@ -82,6 +87,7 @@ fn parse(text: &str, path: Option<&std::ffi::OsStr>) -> Result<Vec<AgentSpec>, S
         let profile = match agent.profile {
             Profile::ClaudeAgentAcp => ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
             Profile::Cautious => ProfileChoice::Cautious,
+            Profile::Fake => ProfileChoice::Builtin(Builtin::Fake),
         };
         if agent.installed {
             if agent.program.is_some() || agent.args.is_some() {
@@ -208,6 +214,27 @@ mod tests {
             agents,
             [AgentSpec::installed("claude", Builtin::ClaudeAgentAcp)]
         );
+    }
+
+    #[test]
+    fn agents_toml_may_name_the_fake_profile_installed_or_not() {
+        let agents = parse(
+            r#"
+            [[agent]]
+            name = "offline"
+            installed = true
+            profile = "fake"
+
+            [[agent]]
+            name = "signs-in"
+            program = "/bin/sh"
+            profile = "fake"
+            "#,
+            None,
+        )
+        .expect("it reads");
+        assert_eq!(agents[0], AgentSpec::installed("offline", Builtin::Fake));
+        assert_eq!(agents[1].profile, ProfileChoice::Builtin(Builtin::Fake));
     }
 
     #[test]

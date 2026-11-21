@@ -17,7 +17,7 @@ doc = false
 [dependencies]
 # The HTTP server and its WebSockets, on 127.0.0.1 only.
 axum = { version = "0.8.9", default-features = false, features = ["http1", "query", "tokio", "ws"] }
-caf-core = { workspace = true, features = ["inspect"] }
+caf-core = { workspace = true, features = ["inspect", "fake"] }
 caf-driver-tokio = { path = "../driver-tokio" }
 # The fake agent, offered as `fake` so the debugger works with no real
 # agent.
