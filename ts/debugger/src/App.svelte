@@ -11,6 +11,7 @@
     ChatList,
     ChatView,
     SavedList,
+    restoreOnceFree,
     showsAgent,
     type ChatActions,
     type ListActions,
@@ -128,7 +129,8 @@
     select: (chat: ChatId) => (selected = chat),
     restore: async (chat: ChatId, shelf: Shelf) => {
       if (live === null) throw new Error('Not live.')
-      selected = await live.caf.restore(chat, shelf)
+      const caf = live.caf
+      selected = await restoreOnceFree(() => caf.restore(chat, shelf))
     },
   }
 

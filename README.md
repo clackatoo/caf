@@ -19,10 +19,13 @@ first user.
   I/O at all.
 - `crates/driver-tokio` (`caf-driver-tokio`): CAF on tokio, including
   `viewer::serve` for a browser or other viewer.
+- `crates/save` (`caf-save`): how chats are saved, so they carry on from
+  one run to the next: the format, which stays readable forever, and a
+  store that keeps chats in files.
 - `ts/sdk` (`@clackatoo/caf`): the TypeScript caf-sdk.
 - `crates/debugger` and `ts/debugger` (`caf-debugger`): a reference chat
-  view beside an inspector of every step CAF takes, with recordings and
-  time travel.
+  view beside an inspector of every step CAF takes, with saved chats,
+  recordings and time travel.
 - `crates/fake-agent`: a scriptable fake adapter for tests.
 
 CAF is built a feature at a time, each feature's API designed in full

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use caf_core::Chat;
 use caf_core::agent::{AgentSpec, EnvChange, SpawnCommand};
-use caf_core::chat::AppItem;
+use caf_core::chat::{AppData, AppItem, NoAppItems};
 use caf_core::chat::{ItemKind, Turn, TurnLife};
 use caf_core::host::Host;
 use caf_core::profiles::ProfileChoice;
@@ -123,7 +123,7 @@ pub fn after_handshake(steps: &[Value]) -> Vec<Value> {
 }
 
 /// A fresh picture of the chat.
-pub async fn picture(chat: &ChatHandle) -> Chat {
+pub async fn picture<D: AppData>(chat: &ChatHandle<NoAppItems, D>) -> Chat {
     match tokio::time::timeout(PATIENCE, chat.watch().next()).await {
         Ok(Some(Update::Picture(picture))) => picture,
         other => panic!("a new watch starts with a picture, not {other:?}"),
@@ -131,8 +131,8 @@ pub async fn picture(chat: &ChatHandle) -> Chat {
 }
 
 /// Waits, with `watch`, until `done` is true of the chat, and returns it.
-pub async fn until(
-    chat: &ChatHandle,
+pub async fn until<D: AppData>(
+    chat: &ChatHandle<NoAppItems, D>,
     watch: &mut Watch,
     what: &str,
     done: impl Fn(&Chat) -> bool,

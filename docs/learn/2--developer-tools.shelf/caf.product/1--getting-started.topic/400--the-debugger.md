@@ -1,10 +1,11 @@
 ---
 title: The Debugger
 type: how
-description: Run caf-debugger to chat with an agent beside an inspector of every step CAF takes, install agents and sign in to them, record each run, replay a recording, and move back and forth through it, with what its token is for, what a recording holds, and what "replay diverged" means.
+description: Run caf-debugger to chat with an agent beside an inspector of every step CAF takes, install agents and sign in to them, save chats and restore them in a later run, record each run, replay a recording, and move back and forth through it, with what its token is for, what a recording holds, and what "replay diverged" means.
 related:
   - caf/getting-started/a-chat-in-the-browser
   - caf/getting-started/installing-and-signing-in
+  - caf/getting-started/saving-and-restoring-chats
   - caf/concepts/the-core
   - caf/concepts/viewers
 ---
@@ -44,11 +45,13 @@ Build it with `--release`: a debug build replays steps about ten times
 slower, which a long run makes noticeable when moving through time (see
 [Moving through time](#moving-through-time)).
 
-It prints where it records the run, and a URL to open:
+It prints where it records the run, where it keeps chats, and a URL to
+open:
 
 ```text
 Running CAF with claude, fake.
 Recording to /home/me/.local/state/caf/debugger/2026-11-20T14-03-22Z-4182.jsonl.
+Keeping chats in /home/me/.local/share/caf-debugger/chats.
 Open http://127.0.0.1:7320/#token=5f0c…
 ```
 
@@ -169,6 +172,31 @@ in, says so; send the message again then.
 Nothing is shown in the panel while looking back or replaying: a recording
 holds what CAF was told, not each agent's status.
 
+## Saved chats
+
+Every chat the debugger opens is saved, on the shelf `debugger`, in
+`~/.local/share/caf-debugger/chats` (under `$XDG_DATA_HOME` if that's set),
+or in the folder `--store` names:
+
+```sh
+cargo run -p caf-debugger -- --store /tmp/chats
+```
+
+As it starts, it checks it can write there, making the folder, private, if
+it isn't there yet, and stops if it can't, saying why. Then it lists the
+chats saved there, under **Saved**, below the
+list of open chats: each with its title or first message, its agent and
+folder, when it last changed, and how many turns it has. **Restore** brings
+one back, with its record, idle until you send to it; its session then
+carries on, as the fake agent resumes sessions. Closing a chat puts it
+away, closed, and it stays under Saved, to restore again. A chat another
+program has open, or the debugger can't read, says so, and is left as it
+was.
+
+Ctrl-C saves every chat whole before the debugger stops, so the next run
+finds them as you left them. Replaying keeps no chats: nothing is saved or
+listed.
+
 ## The token
 
 The debugger starts agents in your folders, and any web page you visit can
@@ -222,8 +250,8 @@ naming the line, since the replay would be wrong from there on.
 ### What a recording holds
 
 A recording is every event CAF's core was given, in order: what you sent,
-everything each agent said, and its error output. That's enough to rebuild
-every chat exactly, so **a recording holds the whole conversation**, and
+everything each agent said, and its error output, and each chat restored,
+whole, as it was read. That's enough to rebuild every chat exactly, so **a recording holds the whole conversation**, and
 whatever the agent read out of your files along the way. Read one through
 before sharing it.
 

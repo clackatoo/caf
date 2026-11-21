@@ -175,13 +175,18 @@ struct Debugger {
 
 impl Debugger {
     async fn start(name: &str) -> Self {
+        Self::start_with(name, None).await
+    }
+
+    /// The debugger, keeping chats in `store` if given.
+    async fn start_with(name: &str, store: Option<PathBuf>) -> Self {
         let dir = Dir::new(name);
         let script = fake::write(&dir.0).unwrap();
         let mut command = SpawnCommand::new(caf_fake_agent::binary());
         command.args = vec![script.into_os_string()];
         let agents = vec![AgentSpec::command("fake", command, ProfileChoice::Cautious)];
         let recording = dir.0.join("run.jsonl");
-        let live = live::start(agents, Some(recording.clone()));
+        let live = live::start(agents, Some(recording.clone()), store);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let token = server::new_token();
@@ -197,6 +202,23 @@ impl Debugger {
             token,
             recording,
         }
+    }
+
+    /// Shuts CAF down, and checks every step it took never diverged from
+    /// either replay.
+    async fn stop(self) {
+        self.live.caf.shutdown().await;
+        let Debugger {
+            live, dir: _dir, ..
+        } = self;
+        live.running.await;
+        live.book.all_in().await;
+        assert!(
+            live.book.diverged().is_empty(),
+            "{:?}",
+            live.book.diverged()
+        );
+        assert_eq!(live.book.recording_checked(), live.book.end());
     }
 
     /// The viewer wire, with a chat opened and watched.
@@ -614,7 +636,7 @@ async fn the_recording_check_passes_with_secrets_the_recording_hides() {
     command.env = vec![EnvChange::Set("AGENT_SECRET".into(), "s3cret-agent".into())];
     let agents = vec![AgentSpec::command("fake", command, ProfileChoice::Cautious)];
     let recording = dir.0.join("run.jsonl");
-    let live = live::start(agents, Some(recording.clone()));
+    let live = live::start(agents, Some(recording.clone()), None);
     assert_eq!(live.recording.as_ref(), Some(&recording));
 
     let mut open = caf_core::OpenChat::new("fake", &dir.0);
@@ -687,9 +709,94 @@ async fn a_recording_that_couldnt_be_made_is_none() {
     let mut command = SpawnCommand::new(caf_fake_agent::binary());
     command.args = vec![script.into_os_string()];
     let agents = vec![AgentSpec::command("fake", command, ProfileChoice::Cautious)];
-    let live = live::start(agents, Some(dir.0.join("no/such/folder/run.jsonl")));
+    let live = live::start(agents, Some(dir.0.join("no/such/folder/run.jsonl")), None);
     assert!(live.recording.is_none());
     assert!(live.book.file.is_none(), "Hello says there's none");
     live.caf.shutdown().await;
     live.running.await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_chat_saved_live_is_restored_by_the_next_debugger_and_carries_on() {
+    let store = Dir::new("saving-chats");
+    let first = Debugger::start_with("saving-first", Some(store.0.clone())).await;
+    let mut viewer = first.chat().await;
+    let chat = viewer.chat.clone();
+    viewer.say("hello").await;
+    viewer.until(|chat| lives(chat) == ["Finished"]).await;
+    let chats = first.live.caf.watch_chats().next().await.unwrap();
+    assert_eq!(serde_json::to_value(chats[0].id).unwrap(), chat);
+    assert_eq!(
+        chats[0].shelf,
+        Some(live::shelf()),
+        "kept on the debugger's shelf"
+    );
+    first.stop().await;
+
+    // The next debugger lists it, and restores it when asked.
+    let second = Debugger::start_with("saving-second", Some(store.0.clone())).await;
+    let mut socket = open(second.port, "/viewer", &second.token).await;
+    send(
+        &mut socket,
+        json!({"type": "Hello", "value": {"min": 1, "max": 1}}),
+    )
+    .await;
+    let saved = viewer_until(&mut socket, |message| {
+        message["type"] == "Saved"
+            && message["value"]
+                .as_array()
+                .is_some_and(|saved| !saved.is_empty())
+    })
+    .await;
+    let listed = &saved["value"][0];
+    assert_eq!(listed["header"]["chat"], chat);
+    assert_eq!(listed["shelf"], live::SHELF);
+    assert_eq!(listed["state"], json!({"type": "Saved"}));
+    assert_eq!(listed["header"]["first"], "hello");
+    let restore = json!({"request": 1, "chat": chat, "shelf": "elsewhere"});
+    send(&mut socket, json!({"type": "Restore", "value": restore})).await;
+    let done = viewer_until(&mut socket, |message| message["type"] == "Done").await;
+    assert_eq!(
+        done["value"]["outcome"]["type"], "NotAllowed",
+        "only its own shelf"
+    );
+    let restore = json!({"request": 2, "chat": chat, "shelf": live::SHELF});
+    send(&mut socket, json!({"type": "Restore", "value": restore})).await;
+    let done = viewer_until(&mut socket, |message| message["type"] == "Done").await;
+    assert_eq!(
+        done["value"]["outcome"],
+        json!({"type": "Opened", "value": chat}),
+        "{done}"
+    );
+    send(
+        &mut socket,
+        json!({"type": "Watch", "value": {"chat": chat, "since": null}}),
+    )
+    .await;
+    let picture = viewer_until(&mut socket, |message| message["type"] == "Picture").await;
+    let ToViewer::Picture {
+        chat: whole,
+        latest,
+    } = serde_json::from_value(picture).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(lives(&whole), ["Finished"], "its record");
+    let mut viewer = Viewer {
+        socket,
+        chat,
+        copy: ChatCopy::new(whole, latest),
+        requests: 2,
+    };
+    viewer.say("again").await;
+    viewer
+        .until(|chat| lives(chat) == ["Finished", "Finished"])
+        .await;
+    // The fake resumes the session, so the chat carries on with no note.
+    let notes = (viewer.copy.chat().turns.iter())
+        .flat_map(|turn| &turn.items)
+        .filter(|item| matches!(item.kind, caf_core::chat::ItemKind::Note(_)))
+        .count();
+    assert_eq!(notes, 0, "{:#?}", viewer.copy.chat());
+    second.stop().await;
 }

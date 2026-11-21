@@ -6,6 +6,7 @@ related:
   - caf/getting-started/a-chat-on-tokio
   - caf/concepts/chats-turns-and-items
   - caf/concepts/viewers
+  - caf/getting-started/saving-and-restoring-chats
 ---
 
 CAF runs in Rust, but the chat can be drawn anywhere. A **viewer** is
@@ -223,8 +224,9 @@ function refusal(reason: Refused): string {
 
 ### Saved chats
 
-A host that saves its chats keeps them on **shelves**, names of its own
-choosing, and lists the shelves it wants viewers to see. `caf.saved` holds
+A host that [saves its chats](~caf/getting-started/saving-and-restoring-chats)
+keeps them on **shelves**, names of its own choosing, and lists the shelves
+it wants viewers to see. `caf.saved` holds
 the chats saved on them, open or not, in the order they were made:
 
 ```ts

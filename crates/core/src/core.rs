@@ -622,6 +622,26 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.saving.shelves.get(shelf).cloned()
     }
 
+    /// Whether a restore of a chat is under way: asked for, and not yet
+    /// loaded or failed, nor dropped as the chat was deleted. Whatever
+    /// shelf it's on, listed or not: so a host can tell when a restore it
+    /// asked for has ended, as [`Core::chat`] then says whether it's
+    /// loaded.
+    #[must_use]
+    pub fn restoring(&self, chat: ChatId) -> bool {
+        (self.saving.restoring.values()).any(|each| each.chat == chat)
+    }
+
+    /// A chat put away, or closed and so put away, whose last write isn't
+    /// done yet: as it was left, let go from memory and no longer in
+    /// [`Core::chat`]. So a host can show viewers how it was left, as its
+    /// last changes reach none. `None` once it's written, or if it's
+    /// deleted meanwhile.
+    #[must_use]
+    pub fn away(&self, chat: ChatId) -> Option<&Chat<A>> {
+        self.saving.away.get(&chat).map(|away| &away.saved.chat)
+    }
+
     /// Restores a saved chat. Once the store has read it, it's loaded,
     /// as [`Core::saved`] says, and in [`Core::chat`], tidied as the
     /// [`save`](crate::save) module says: [idle](crate::chat::ChatState::Idle),
