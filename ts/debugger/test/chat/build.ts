@@ -35,6 +35,7 @@ export function turn(fields: Partial<Turn> = {}): Turn {
     window: { start: NOON, end: { type: 'At', value: NOON + 4200 } },
     items: [],
     imported: false,
+    model: null,
     ...fields,
   }
 }
@@ -48,6 +49,7 @@ export function chat(fields: Partial<Chat> = {}): Chat {
     turns: [],
     usage: null,
     questions: [],
+    settings: { offered: [], chosen: [], own: [] },
     ...fields,
   }
 }
@@ -77,6 +79,8 @@ export function actions(): { [K in keyof ChatActions]: ReturnType<typeof vi.fn> 
     signIn: vi.fn(async () => {}),
     paste: vi.fn(async () => {}),
     stopSignIn: vi.fn(async () => {}),
+    setSetting: vi.fn(async () => {}),
+    learnSettings: vi.fn(async () => {}),
   }
 }
 
@@ -115,6 +119,7 @@ export function status(
   install: AgentStatus['install'],
   signIn: AgentStatus['sign_in'] = { type: 'Unknown' },
   canSignIn = signIn.type === 'SigningIn',
+  settings: AgentStatus['settings'] = { type: 'Unknown' },
 ): AgentStatus {
-  return { name: 'claude', install, sign_in: signIn, can_sign_in: canSignIn, own_tools_off: true }
+  return { name: 'claude', install, sign_in: signIn, can_sign_in: canSignIn, own_tools_off: true, settings }
 }

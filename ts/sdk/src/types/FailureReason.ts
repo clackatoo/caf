@@ -3,4 +3,4 @@
 /**
  * What went wrong with a turn.
  */
-export type FailureReason = { "type": "TooLong" } | { "type": "TooManySteps" } | { "type": "Refused" } | { "type": "SignInNeeded" } | { "type": "AccessDenied" } | { "type": "BadRequest" } | { "type": "UsageLimit" } | { "type": "ProviderError" } | { "type": "AgentStopped" } | { "type": "DidNotStop" } | { "type": "BadAnswer" } | { "type": "Other" };
+export type FailureReason = { "type": "TooLong" } | { "type": "TooManySteps" } | { "type": "Refused" } | { "type": "SignInNeeded" } | { "type": "AccessDenied" } | { "type": "BadRequest" } | { "type": "UsageLimit" } | { "type": "ProviderError" } | { "type": "AgentStopped" } | { "type": "DidNotStop" } | { "type": "BadAnswer" } | { "type": "SettingNotApplied" } | { "type": "Other" };

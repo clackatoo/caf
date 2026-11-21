@@ -4,4 +4,4 @@
  * Something a viewer may ask CAF to do about an agent. See the core's
  * methods of the same names, such as [`Core::install`](crate::Core::install).
  */
-export type AgentAction = { "type": "Install" } | { "type": "StopInstall" } | { "type": "SignIn" } | { "type": "Paste", "value": string } | { "type": "StopSignIn" } | { "type": "SignOut" };
+export type AgentAction = { "type": "Install" } | { "type": "StopInstall" } | { "type": "SignIn" } | { "type": "Paste", "value": string } | { "type": "StopSignIn" } | { "type": "SignOut" } | { "type": "LearnSettings" };

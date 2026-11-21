@@ -42,8 +42,11 @@ enum Said {
     Usage(Usage),
     /// The user's own message, as the agent tells it.
     User(String),
-    /// Something about the whole chat (plan, commands, mode, settings,
-    /// title), kept by a later feature.
+    /// What the agent offers of its settings, as ACP's session config
+    /// options: the whole list, if it could be read.
+    Options(Option<Vec<Value>>),
+    /// Something about the whole chat (plan, commands, mode, title), kept
+    /// by a later feature.
     Later(String),
     /// Something CAF can't read, or doesn't use yet.
     Unknown(Unknown),
@@ -144,10 +147,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                         }),
                     })
                 }),
+            "config_option_update" => Some(Said::Options(
+                update
+                    .get("configOptions")
+                    .and_then(Value::as_array)
+                    .cloned(),
+            )),
             "plan"
             | "available_commands_update"
             | "current_mode_update"
-            | "config_option_update"
             | "session_info_update" => Some(Said::Later(tag.clone())),
             // Notices, compaction, and anything newer than CAF.
             _ => None,
@@ -215,6 +223,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 Level::Debug,
                 "the agent told the user's message back: not kept twice".to_owned(),
             ),
+            Said::Options(options) => self.options_updated(now, chat, options.as_ref(), out),
             Said::Later(what) => report(
                 out,
                 Level::Debug,
@@ -270,7 +279,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Adds an item to a live turn, ending words or thinking before it.
-    fn add_live_item(
+    pub(super) fn add_live_item(
         &mut self,
         now: Now,
         chat: ChatId,
@@ -406,6 +415,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 return;
             }
             Said::Usage(usage) => return self.set_usage(chat, usage),
+            // What the session offers is in the answer that opens it.
+            Said::Options(_) => {
+                return report(
+                    out,
+                    Level::Debug,
+                    "ignored settings said while the session was replayed".to_owned(),
+                );
+            }
             Said::Later(what) => {
                 return report(
                     out,
@@ -463,6 +480,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 window: Window::unknown(),
                 items: Vec::new(),
                 imported: true,
+                model: None,
             });
         }
     }

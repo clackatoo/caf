@@ -7,6 +7,7 @@ import type { ChatId } from "./ChatId.ts";
 import type { OpenRequest } from "./OpenRequest.ts";
 import type { QuestionId } from "./QuestionId.ts";
 import type { RequestNo } from "./RequestNo.ts";
+import type { SettingChoice } from "./SettingChoice.ts";
 import type { Shelf } from "./Shelf.ts";
 import type { UserMessage } from "./UserMessage.ts";
 
@@ -83,7 +84,19 @@ request: RequestNo,
 /**
  * The chat.
  */
-chat: ChatId, } } | { "type": "Restore", "value": { 
+chat: ChatId, } } | { "type": "Set", "value": { 
+/**
+ * The viewer's number for this request.
+ */
+request: RequestNo, 
+/**
+ * The chat.
+ */
+chat: ChatId, 
+/**
+ * The choice.
+ */
+choice: SettingChoice, } } | { "type": "Restore", "value": { 
 /**
  * The viewer's number for this request.
  */

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::ids::AgentName;
 use crate::install::SignedInAs;
 use crate::profiles::{Builtin, ProfileChoice};
+use crate::settings::{KnownSettings, SettingChoice};
 
 /// An agent the host offers.
 #[non_exhaustive]
@@ -27,6 +28,15 @@ pub struct AgentSpec {
     /// confirm it once it answers `initialize`; a mismatch falls back to
     /// the cautious profile and is reported.
     pub profile: ProfileChoice,
+    /// The host's default choices for it, such as a cheaper model, by the
+    /// agent's own ids: applied to each chat with it that doesn't choose
+    /// otherwise. One the agent doesn't offer is skipped quietly, and its
+    /// own applies. One whose id is empty, longer than 256 bytes or has
+    /// control characters is skipped. Empty (the default) leaves the
+    /// agent's own.
+    /// Recordings made before it was added read as empty.
+    #[serde(default)]
+    pub settings: Vec<SettingChoice>,
 }
 
 impl AgentSpec {
@@ -38,6 +48,7 @@ impl AgentSpec {
             name: AgentName(name.into()),
             launch: Launch::Installed,
             profile: ProfileChoice::Builtin(builtin),
+            settings: Vec::new(),
         }
     }
 
@@ -50,6 +61,7 @@ impl AgentSpec {
             name: AgentName(name.into()),
             launch: Launch::Command(command),
             profile,
+            settings: Vec::new(),
         }
     }
 }
@@ -189,6 +201,11 @@ pub struct AgentStatus {
     /// agents' tools off, read as `false`.
     #[serde(default)]
     pub own_tools_off: bool,
+    /// What CAF knows of the settings it offers, such as its models:
+    /// learned from any chat's session with it, or on request
+    /// ([`Core::learn_settings`](crate::Core::learn_settings)).
+    #[serde(default)]
+    pub settings: KnownSettings,
 }
 
 /// Whether an agent is installed.

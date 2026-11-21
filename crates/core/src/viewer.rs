@@ -21,7 +21,7 @@
 //! 3. The viewer watches chats ([`FromViewer::Watch`]): it gets each one
 //!    whole ([`ToViewer::Picture`]), then its changes
 //!    ([`ToViewer::Changes`]). It may act on them: send, stop, answer,
-//!    close. Each act quotes a [`RequestNo`] the viewer chose, and
+//!    choose their settings, close. Each act quotes a [`RequestNo`] the viewer chose, and
 //!    [`ToViewer::Done`] says how it went.
 //!
 //! # Opening is the host's decision
@@ -78,6 +78,7 @@ use crate::core::{Refused, SessionChoice};
 use crate::ids::{AgentName, ChangeNo, ChatId, QuestionId, Shelf, TurnId};
 use crate::question::Answer;
 use crate::save::{CannotRestore, SavedChat};
+use crate::settings::SettingChoice;
 
 /// The versions of the viewer wire this CAF speaks.
 pub const VERSIONS: RangeInclusive<u32> = 1..=1;
@@ -150,6 +151,17 @@ pub enum FromViewer {
         /// The chat.
         chat: ChatId,
     },
+    /// Choose a setting of a chat's agent, such as its model. See
+    /// [`Core::set_setting`](crate::Core::set_setting). Allowed as the
+    /// rest of acting on chats is ([`Rights::act`]).
+    Set {
+        /// The viewer's number for this request.
+        request: RequestNo,
+        /// The chat.
+        chat: ChatId,
+        /// The choice.
+        choice: SettingChoice,
+    },
     /// Ask to restore a saved chat, as [`ToViewer::Saved`] lists them.
     /// The host decides, as for opening one.
     Restore {
@@ -191,6 +203,9 @@ pub enum AgentAction {
     StopSignIn,
     /// Sign out of it.
     SignOut,
+    /// Learn what settings it offers. See
+    /// [`Core::learn_settings`](crate::Core::learn_settings).
+    LearnSettings,
 }
 
 /// A message from CAF to a viewer.
@@ -306,10 +321,12 @@ pub struct ChatSummary {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Rights {
-    /// Whether it may send, stop, answer and close.
+    /// Whether it may send, stop, answer, choose a chat's settings
+    /// ([`FromViewer::Set`]) and close.
     pub act: bool,
-    /// Whether it may install agents, and sign in and out of them. A
-    /// viewer that may not gets no sign-in's link or code.
+    /// Whether it may install agents, sign in and out of them, and learn
+    /// their settings. A viewer that may not gets no sign-in's link or
+    /// code.
     pub agents: bool,
 }
 

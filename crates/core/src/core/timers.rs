@@ -144,6 +144,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
     }
 
+    /// Whether a chat has a turn running on `proc`.
+    fn busy(&self, proc: Ticket) -> bool {
+        (self.runs.values()).any(|run| {
+            run.running
+                .as_ref()
+                .is_some_and(|running| running.proc == proc)
+        })
+    }
+
     /// `proc` hasn't answered `initialize` in time: each chat waiting on
     /// it is asked whether to keep waiting.
     fn init_slow(&mut self, now: Now, proc: Ticket) {
@@ -213,14 +222,57 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     format!("process {} didn't answer closing a session", proc.0),
                 );
                 // Stuck: restarted, unless that would cut a turn off.
-                let busy = (self.runs.values()).any(|run| {
-                    run.running
-                        .as_ref()
-                        .is_some_and(|running| running.proc == proc)
-                });
-                if !busy {
+                if !self.busy(proc) {
                     self.lose_process(now, proc, Cause::Restarted, out);
                 }
+            }
+            // Stuck, as any request unanswered so long. If its chat still
+            // waits for it, the chat's session is restarted, and the choice
+            // sent again as it opens again, before the messages waiting.
+            // If nobody waits for it any more, as its chat was closed, put
+            // away or restored since, its chat isn't touched: the adapter
+            // is restarted, as for any stuck request, unless that would cut
+            // a turn off or it's being stopped already; other chats on it
+            // lose their sessions, as by any restart.
+            Purpose::Set { chat, .. } => {
+                self.pending.remove(&(proc, id));
+                // Closing or putting its chat away forgets it.
+                let waited = (self.runs.get(&chat))
+                    .and_then(|run| run.choosing.asked.as_ref())
+                    .is_some_and(|asked| asked.proc == proc && asked.id == id);
+                report(
+                    out,
+                    Level::Warn,
+                    format!(
+                        "process {} didn't answer changing a setting of chat {}",
+                        proc.0, chat.0
+                    ),
+                );
+                let stopping = (self.procs.get(&proc))
+                    .is_none_or(|each| each.retired || each.ending.is_some());
+                if waited {
+                    self.restart_stuck(now, chat, proc, out);
+                } else if !self.busy(proc) && !stopping {
+                    self.lose_process(now, proc, Cause::Restarted, out);
+                }
+            }
+            // As an abandoned open: a session it opens even so is closed.
+            Purpose::Learn { conn } => {
+                self.pending.remove(&(proc, id));
+                if let Some(each) = self.procs.get_mut(&proc) {
+                    each.given_up.insert(id, None);
+                }
+                report(
+                    out,
+                    Level::Warn,
+                    format!(
+                        "process {} didn't open a session to learn its settings",
+                        proc.0
+                    ),
+                );
+                self.learn_failed(conn, "the agent didn't open a session in time");
+                self.advance(now, conn, out);
+                self.tidy(conn);
             }
             // These have no watchdog of their own.
             Purpose::Initialize | Purpose::Prompt { .. } => {}

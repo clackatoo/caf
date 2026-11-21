@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use super::clean::Tail;
+use super::settings::Choosing;
 use crate::acp::RequestId;
 use crate::agent::{InstallState, McpServer, SignInState};
 use crate::chat::{AppItem, Note, Turn};
@@ -17,6 +18,7 @@ use crate::ids::{
 use crate::install::Platform;
 use crate::profiles::ProfileReport;
 use crate::question::PermissionOption;
+use crate::settings::{KnownSettings, SettingChoice};
 use crate::time::{Mono, Wall};
 
 /// Gives out ids, in order, from one counter, so no two things of any
@@ -65,6 +67,26 @@ pub(super) struct Conn {
     pub(super) stderr: Tail,
     /// Its error output said the user must sign in.
     pub(super) sign_in: bool,
+    /// Where it is with learning what settings its agent offers
+    /// ([`Core::learn_settings`](crate::Core::learn_settings)), if it is:
+    /// that keeps it going, as a chat does.
+    pub(super) learn: Option<Learn>,
+}
+
+/// Where a connection is with learning its agent's settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", content = "value")]
+pub(super) enum Learn {
+    /// Wanted: waiting for its process to be ready.
+    Wanted,
+    /// A session to learn them from was asked for, as request `id` of
+    /// `proc`.
+    Asked {
+        /// The process.
+        proc: Ticket,
+        /// The request.
+        id: i64,
+    },
 }
 
 /// One adapter process.
@@ -247,6 +269,19 @@ pub(super) enum Purpose {
         /// The session.
         session: AgentSessionId,
     },
+    /// Setting one of a chat's settings.
+    Set {
+        /// The chat.
+        chat: ChatId,
+        /// What was asked for.
+        choice: SettingChoice,
+    },
+    /// Opening a session only to learn what settings a connection's agent
+    /// offers.
+    Learn {
+        /// The connection.
+        conn: ConnectionId,
+    },
 }
 
 /// How a session is opened.
@@ -346,6 +381,8 @@ pub(super) struct Run<A: AppItem> {
     /// It was restored, so it has its record already: what a
     /// `session/load` replays is thrown away, not imported.
     pub(super) restored: bool,
+    /// Where it is with sending what's chosen of its settings.
+    pub(super) choosing: Choosing,
 }
 
 /// Where a chat is with its session.
@@ -420,6 +457,8 @@ pub(super) struct Standing {
     /// answered `initialize` for it in this run, as its profile, checked,
     /// says: `None` until one has.
     pub(super) strips: Option<bool>,
+    /// What's known of the settings it offers, this run.
+    pub(super) settings: KnownSettings,
 }
 
 /// What a survey found: where installs live, what's there, and what the

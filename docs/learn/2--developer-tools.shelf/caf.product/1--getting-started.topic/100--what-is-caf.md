@@ -9,6 +9,7 @@ related:
   - caf/concepts/chats-turns-and-items
   - caf/concepts/agents-and-profiles
   - caf/getting-started/saving-and-restoring-chats
+  - caf/getting-started/choosing-the-model
 ---
 
 **CAF**, the Clackatoo Agent Framework, is a Rust library for putting chats
@@ -100,3 +101,19 @@ that opened it:
   viewer.
 - **Readable forever**: a save from any version of CAF stays readable by
   every later one, and an older CAF never writes over a newer one's.
+
+The fifth, *choosing the model*, lets the user choose how the agent
+answers, whichever agent it is:
+
+- **[Settings](~caf/getting-started/choosing-the-model)**: each chat
+  offers its agent's models, how hard each thinks, and fast mode, as the
+  agent lists them, in one shape for every agent.
+- **Choosing**: for a chat, as it opens or at any time, or as your
+  program's default for an agent. A change made during a reply applies
+  from the next message. A message never goes with a choice made for the
+  chat silently replaced: it fails, saying so, or the chat says what
+  changed. Your program's defaults the agent doesn't offer are dropped
+  quietly. Each turn records the model it was sent on.
+- **Before any chat**: CAF learns what an agent offers without sending a
+  message, so your program can offer its models before a chat opens.
+  Viewers choose and learn too.

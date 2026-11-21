@@ -177,7 +177,7 @@ fn an_agent_caf_cant_strip_is_refused_and_says_so_in_its_status() {
     assert_eq!(script.state()["chats"], json!([]), "no chat is made");
     assert_eq!(
         script.agent_status("unknown"),
-        json!({ "name": "unknown", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": false })
+        json!({ "name": "unknown", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": false, "settings": { "type": "Unknown" } })
     );
     assert_eq!(script.agent_status("claude")["own_tools_off"], true);
     assert_eq!(script.agent_status("plain")["own_tools_off"], true);

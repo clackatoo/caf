@@ -25,6 +25,7 @@ use serde::Serialize;
 
 use super::record::Log;
 use super::sessions::{check_instructions, mcp_server};
+use super::settings::Choosing;
 use super::state::{Open, Run};
 use super::{Core, Refused, report};
 use crate::change::Change;
@@ -1069,6 +1070,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 note: None,
                 resent: None,
                 restored: true,
+                choosing: Choosing::default(),
             },
         );
         // Tidied as changes, so the store gets them as journal entries,
@@ -1076,6 +1078,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         for change in changes {
             self.record(id, change);
         }
+        self.restored_choices(id);
         self.relist_loaded(id);
     }
 
@@ -1562,6 +1565,9 @@ fn saved_session<A: AppItem>(run: &Run<A>) -> Option<AgentSessionId> {
         note: _,
         resent: _,
         restored: _,
+        // Where it is with sending its settings is this run's: what's
+        // chosen is in its record.
+        choosing: _,
     } = run;
     session.clone()
 }

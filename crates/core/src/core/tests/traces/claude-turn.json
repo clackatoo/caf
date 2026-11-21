@@ -15,7 +15,8 @@
             },
             "mcp_servers": [],
             "shelf": null,
-            "instructions": null
+            "instructions": null,
+            "settings": []
           }
         }
       }

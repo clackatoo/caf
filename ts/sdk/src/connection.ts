@@ -16,6 +16,7 @@ import type {
   Refused,
   Rights,
   SavedChat,
+  SettingChoice,
   Shelf,
   TurnId,
   UserMessage,
@@ -363,12 +364,12 @@ export class Connection {
   }
 
   /**
-   * What the host lets this viewer do: `act` on chats (send, stop, answer
-   * and close), and on `agents` (install, and sign in and out). Offer only
-   * what it may: anything else is answered `NotAllowed`. A viewer that may
-   * not act on agents gets no sign-in's link or code. Whether it may open
-   * chats, or restore saved ones, isn't said, as the host decides each
-   * request.
+   * What the host lets this viewer do: `act` on chats (send, stop, answer,
+   * choose their settings and close), and on `agents` (install, sign in
+   * and out, and learn their settings). Offer only what it may: anything
+   * else is answered `NotAllowed`. A viewer that may not act on agents
+   * gets no sign-in's link or code. Whether it may open chats, or restore
+   * saved ones, isn't said, as the host decides each request.
    */
   get may(): Readonly<Rights> {
     return this.#may;
@@ -474,6 +475,19 @@ export class Connection {
     return this.#request("Opened", (no) => ({ type: "Restore", value: { request: no, chat, shelf } }));
   }
 
+  /**
+   * Chooses a setting of a chat's agent, such as its model, by the
+   * agent's own id: the chat's `settings` show it waiting until the agent
+   * answers. A change made while the agent is answering applies from the
+   * next message. It rejects with `Refused` `NoSuchSetting` if the agent
+   * has said what it offers and that isn't among it; before it has, any
+   * choice is taken, and checked as the session opens. The host may
+   * reject it with `NotAllowed`.
+   */
+  setSetting(chat: ChatId, choice: SettingChoice): Promise<void> {
+    return this.#request("Done", (no) => ({ type: "Set", value: { request: no, chat, choice } }));
+  }
+
   /** Sends a message, resolving with its turn once the core has taken it. */
   send(chat: ChatId, message: UserMessage): Promise<TurnId> {
     return this.#request("Sent", (no) => ({ type: "Send", value: { request: no, chat, message } }));
@@ -531,6 +545,15 @@ export class Connection {
   /** Signs out of an agent. */
   signOut(agent: AgentName): Promise<void> {
     return this.#agent(agent, { type: "SignOut" });
+  }
+
+  /**
+   * Learns what settings an agent offers, such as its models, to offer
+   * them before any chat with it: they show in `agents`. It costs nothing:
+   * no message is sent.
+   */
+  learnSettings(agent: AgentName): Promise<void> {
+    return this.#agent(agent, { type: "LearnSettings" });
   }
 
   /** Ends the link. */

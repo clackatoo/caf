@@ -3,6 +3,7 @@ import type { AgentName } from "./AgentName.ts";
 import type { ChatId } from "./ChatId.ts";
 import type { ChatState } from "./ChatState.ts";
 import type { Question } from "./Question.ts";
+import type { Settings } from "./Settings.ts";
 import type { Turn } from "./Turn.ts";
 import type { Usage } from "./Usage.ts";
 
@@ -40,4 +41,9 @@ usage: Usage | null,
  * they come and go. Once one is answered, what was decided is written
  * on the item it was about.
  */
-questions: Array<Question>, };
+questions: Array<Question>, 
+/**
+ * The agent's settings the user may choose, such as its model: what
+ * the agent offers, and what was chosen.
+ */
+settings: Settings, };

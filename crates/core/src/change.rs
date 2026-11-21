@@ -16,6 +16,7 @@ use crate::chat::{
 };
 use crate::ids::{ChangeNo, ItemId, QuestionId, TurnId};
 use crate::question::Question;
+use crate::settings::{ModelUsed, Settings};
 use crate::time::End;
 
 /// A change, with its number.
@@ -41,6 +42,9 @@ pub struct Numbered<A: AppItem = NoAppItems> {
 pub enum Change<A: AppItem = NoAppItems> {
     /// The chat's state changed.
     State(ChatState),
+    /// The chat's settings changed: what the agent offers, or what was
+    /// chosen. The whole of them, each time.
+    Settings(Settings),
     /// A turn was added.
     TurnAdded(Turn<A>),
     /// A turn was added before another, rather than at the end. Turns
@@ -62,6 +66,14 @@ pub enum Change<A: AppItem = NoAppItems> {
         life: TurnLife,
         /// Whether it has ended.
         end: End,
+    },
+    /// A turn was sent, on this model: its
+    /// [`model`](crate::chat::Turn::model), as the agent said then.
+    TurnModel {
+        /// The turn.
+        turn: TurnId,
+        /// The model that answers it.
+        model: ModelUsed,
     },
     /// An item was added to a turn.
     ItemAdded {
@@ -150,6 +162,7 @@ impl<A: AppItem> Chat<A> {
     pub fn apply(&mut self, change: &Change<A>) -> Result<(), Mismatch> {
         match change {
             Change::State(state) => self.state = state.clone(),
+            Change::Settings(settings) => self.settings = settings.clone(),
             Change::TurnAdded(turn) => self.turns.push(turn.clone()),
             Change::TurnInserted { before, turn } => {
                 let at = (self.turns.iter().rposition(|each| each.id == *before))
@@ -161,6 +174,7 @@ impl<A: AppItem> Chat<A> {
                 each.life = life.clone();
                 each.window.end = *end;
             }
+            Change::TurnModel { turn, model } => self.turn_mut(*turn)?.model = Some(model.clone()),
             Change::ItemAdded { turn, item } => self.turn_mut(*turn)?.items.push(item.clone()),
             Change::Appended { item, text } => match &mut self.item_mut(*item)?.kind {
                 ItemKind::Words(words) | ItemKind::Thinking(words) => words.push_str(text),

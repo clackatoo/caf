@@ -1,6 +1,6 @@
 // Small chats to test with. Ids start at 1000, as in caf-core's tests.
 
-import type { Change, Chat, ChatId, Item, Numbered, Question, ToolCall, Turn } from "../src/index.ts";
+import type { Change, Chat, ChatId, Item, Numbered, Question, Setting, ToolCall, Turn } from "../src/index.ts";
 
 /**
  * Chat `number`'s id, as caf-core's tests number chats (`ChatId::from_number`):
@@ -44,6 +44,7 @@ export function turn(id: number, items: Item[] = []): Turn {
     window: { start: 1, end: { type: "Open" } },
     items,
     imported: false,
+    model: null,
   };
 }
 
@@ -58,6 +59,17 @@ export function question(id: number): Question {
   };
 }
 
+/** The agent's choice of model, as Claude offers it, `current` now. */
+export function model(current: string): Setting {
+  const choice = (id: string, name: string) => ({ id, name, description: null, group: null });
+  return {
+    kind: { type: "Model" },
+    name: "Model",
+    form: { type: "Choices", value: [choice("default", "Default"), choice("sonnet", "Sonnet"), choice("haiku", "Haiku")] },
+    current: { type: "Choice", value: current },
+  };
+}
+
 export function chat(turns: Turn[] = [], questions: Question[] = []): Chat {
   return {
     id: CHAT,
@@ -67,6 +79,7 @@ export function chat(turns: Turn[] = [], questions: Question[] = []): Chat {
     turns,
     usage: null,
     questions,
+    settings: { offered: [], chosen: [], own: [] },
   };
 }
 

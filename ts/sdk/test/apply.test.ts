@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
-import { apply, type Change, type Chat, type Mismatch } from "../src/index.ts";
-import { busy, chat, question, tool, toolItem, turn, words } from "./chats.ts";
+import { apply, type Change, type Chat, type Mismatch, type Settings } from "../src/index.ts";
+import { busy, chat, model, question, tool, toolItem, turn, words } from "./chats.ts";
 
 /** Freezes a value all the way down, so any change to it throws. */
 function frozen<T>(value: T): T {
@@ -93,6 +93,21 @@ describe("apply", () => {
   test("TurnLife of a turn the chat doesn't have", () => {
     const change: Change = { type: "TurnLife", value: { turn: 9, life: { type: "Finished" }, end: { type: "Open" } } };
     expect(mismatch(busy(), change)).toStrictEqual({ type: "NoTurn", value: 9 });
+  });
+
+  test("TurnModel sets a turn's model, sharing its items and every other turn", () => {
+    const before = busy();
+    const model = { id: "sonnet", name: "Sonnet 4.6" };
+    const after = applied(before, { type: "TurnModel", value: { turn: 1003, model } });
+    expect(after.turns[1]!.model).toStrictEqual(model);
+    expect(after.turns[1]!.items).toBe(before.turns[1]!.items);
+    expect(after.turns[0]).toBe(before.turns[0]);
+    expect(after.questions).toBe(before.questions);
+  });
+
+  test("TurnModel of a turn the chat doesn't have", () => {
+    const model = { id: "haiku", name: null };
+    expect(mismatch(busy(), { type: "TurnModel", value: { turn: 9, model } })).toStrictEqual({ type: "NoTurn", value: 9 });
   });
 
   test("ItemAdded adds an item to the end of a turn", () => {
@@ -191,6 +206,20 @@ describe("apply", () => {
     const after = applied(before, { type: "Usage", value: usage });
     expect(after.usage).toStrictEqual(usage);
     expect(after.turns).toBe(before.turns);
+  });
+
+  test("Settings replaces the chat's settings whole, sharing everything else", () => {
+    const before: Chat = { ...busy(), settings: { offered: [model("default")], chosen: [], own: [] } };
+    const settings: Settings = {
+      offered: [model("sonnet")],
+      chosen: [{ kind: { type: "Model" }, value: { type: "Choice", value: "haiku" } }],
+      own: [{ type: "Model" }],
+    };
+    const after = applied(before, { type: "Settings", value: settings });
+    expect(after.settings).toStrictEqual(settings);
+    expect(after.state).toBe(before.state);
+    expect(after.turns).toBe(before.turns);
+    expect(after.questions).toBe(before.questions);
   });
 
   test("QuestionAsked adds a question at the end", () => {

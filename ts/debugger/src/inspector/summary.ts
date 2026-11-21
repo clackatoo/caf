@@ -40,6 +40,10 @@ function hostSummary(command: HostCommand): string {
       return `answer question ${command.value.question}: ${tag(command.value.answer)}`
     case 'CloseChat':
       return `close chat ${command.value.chat}`
+    case 'SetSetting':
+      return `set chat ${command.value.chat}'s ${tag(command.value.choice.kind)} to ${String(command.value.choice.value.value)}`
+    case 'LearnSettings':
+      return `learn ${command.value}'s settings`
     case 'Shutdown':
       return 'shut down'
     default:

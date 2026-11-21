@@ -3,8 +3,10 @@ import type { ChatState } from "./ChatState.ts";
 import type { End } from "./End.ts";
 import type { Item } from "./Item.ts";
 import type { ItemId } from "./ItemId.ts";
+import type { ModelUsed } from "./ModelUsed.ts";
 import type { Question } from "./Question.ts";
 import type { QuestionId } from "./QuestionId.ts";
+import type { Settings } from "./Settings.ts";
 import type { ToolCall } from "./ToolCall.ts";
 import type { Turn } from "./Turn.ts";
 import type { TurnId } from "./TurnId.ts";
@@ -14,7 +16,7 @@ import type { Usage } from "./Usage.ts";
 /**
  * One change to a chat.
  */
-export type Change = { "type": "State", "value": ChatState } | { "type": "TurnAdded", "value": Turn } | { "type": "TurnInserted", "value": { 
+export type Change = { "type": "State", "value": ChatState } | { "type": "Settings", "value": Settings } | { "type": "TurnAdded", "value": Turn } | { "type": "TurnInserted", "value": { 
 /**
  * The turn it goes before.
  */
@@ -34,7 +36,15 @@ life: TurnLife,
 /**
  * Whether it has ended.
  */
-end: End, } } | { "type": "ItemAdded", "value": { 
+end: End, } } | { "type": "TurnModel", "value": { 
+/**
+ * The turn.
+ */
+turn: TurnId, 
+/**
+ * The model that answers it.
+ */
+model: ModelUsed, } } | { "type": "ItemAdded", "value": { 
 /**
  * The turn.
  */

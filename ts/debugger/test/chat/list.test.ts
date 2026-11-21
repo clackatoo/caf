@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CafError } from '@clackatoo/caf'
+import { CafError, type AgentStatus } from '@clackatoo/caf'
 import ChatList from '../../src/chat/ChatList.svelte'
 
 afterEach(cleanup)
@@ -51,8 +51,102 @@ describe('the chat list', () => {
     expect((screen.getByRole('button', { name: 'Open' }) as HTMLButtonElement).disabled).toBe(true)
     await fireEvent.input(folder, { target: { value: '/home/me/new' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
-    expect(actions.open).toHaveBeenCalledWith('fake', '/home/me/new')
+    expect(actions.open).toHaveBeenCalledWith('fake', '/home/me/new', [])
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Open' })).toBeNull())
+  })
+
+  describe('with the agents\' models known', () => {
+    const choice = (id: string, name: string, description: string | null = null) => ({ id, name, description, group: null })
+    const statuses: AgentStatus[] = [
+      {
+        name: 'claude',
+        install: { type: 'Host' },
+        sign_in: { type: 'Unknown' },
+        can_sign_in: false,
+        own_tools_off: true,
+        settings: {
+          type: 'Known',
+          value: [
+            {
+              kind: { type: 'Model' },
+              name: 'Model',
+              form: { type: 'Choices', value: [choice('default', 'Default', 'Opus 4.7, for most work'), choice('sonnet', 'Sonnet')] },
+              current: { type: 'Choice', value: 'default' },
+            },
+          ],
+        },
+      },
+      { name: 'fake', install: { type: 'Host' }, sign_in: { type: 'Unknown' }, can_sign_in: false, own_tools_off: true, settings: { type: 'Unknown' } },
+    ]
+
+    async function form() {
+      const actions = { select: vi.fn(), open: vi.fn(async () => {}) }
+      const view = render(ChatList, { chats, agents: ['claude', 'fake'], statuses, selected: null, actions })
+      await fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+      await fireEvent.input(screen.getByRole('textbox'), { target: { value: '/home/me/new' } })
+      return Object.assign(actions, { rerender: view.rerender })
+    }
+
+    /** Claude's status, its models as given, the first its current. */
+    function offering(...ids: string[]): AgentStatus[] {
+      const [claude, fake] = statuses as [AgentStatus, AgentStatus]
+      const setting = {
+        kind: { type: 'Model' as const },
+        name: 'Model',
+        form: { type: 'Choices' as const, value: ids.map((id) => choice(id, id)) },
+        current: { type: 'Choice' as const, value: ids[0]! },
+      }
+      return [{ ...claude, settings: { type: 'Known', value: [setting] } }, fake]
+    }
+
+    it("keeps the model picked as the agents' statuses change, until it's no longer offered", async () => {
+      const actions = await form()
+      const model = () => screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement
+      await fireEvent.change(model(), { target: { value: 'sonnet' } })
+      await actions.rerender({ statuses: offering('opus', 'sonnet', 'haiku') })
+      expect(model().value).toBe('sonnet')
+      await actions.rerender({ statuses: offering('opus', 'haiku') })
+      expect(model().value).toBe('opus')
+      await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
+      expect(actions.open).toHaveBeenCalledWith('claude', '/home/me/new', [])
+    })
+
+    it("follows what the agent would use while nothing's picked", async () => {
+      const actions = await form()
+      await actions.rerender({ statuses: offering('haiku', 'sonnet') })
+      expect((screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement).value).toBe('haiku')
+      await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
+      expect(actions.open).toHaveBeenCalledWith('claude', '/home/me/new', [])
+    })
+
+    it('opens a chat with the model chosen', async () => {
+      const actions = await form()
+      const model = screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement
+      expect([...model.options].map((option) => option.textContent)).toEqual(['Default', 'Sonnet'])
+      expect(model.value).toBe('default')
+      const about = screen.getByText('Opus 4.7, for most work')
+      expect(model.getAttribute('aria-describedby')).toBe(about.id)
+      await fireEvent.change(model, { target: { value: 'sonnet' } })
+      await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
+      expect(actions.open).toHaveBeenCalledWith('claude', '/home/me/new', [
+        { kind: { type: 'Model' }, value: { type: 'Choice', value: 'sonnet' } },
+      ])
+    })
+
+    it("chooses nothing if the model is left as the agent's", async () => {
+      const actions = await form()
+      await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
+      expect(actions.open).toHaveBeenCalledWith('claude', '/home/me/new', [])
+    })
+
+    it("offers no model for an agent whose models aren't known, and forgets one chosen for another", async () => {
+      const actions = await form()
+      await fireEvent.change(screen.getByRole('combobox', { name: 'Model' }), { target: { value: 'sonnet' } })
+      await fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: 'fake' } })
+      expect(screen.queryByRole('combobox', { name: 'Model' })).toBeNull()
+      await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
+      expect(actions.open).toHaveBeenCalledWith('fake', '/home/me/new', [])
+    })
   })
 
   it("says why a chat wasn't opened", async () => {

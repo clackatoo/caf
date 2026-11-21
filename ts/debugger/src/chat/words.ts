@@ -20,6 +20,7 @@ import type {
   Refused,
   Remedy,
   SavedState,
+  SettingChoice,
   SignedInAs,
   SignInState,
   ToolKind,
@@ -152,6 +153,8 @@ export function failureText(reason: DeepReadonly<FailureReason>): string {
       return "The agent didn't stop when asked, so CAF ended the turn and restarted the session."
     case 'BadAnswer':
       return "The agent's answer made no sense."
+    case 'SettingNotApplied':
+      return "A setting chosen for this chat, such as a model, couldn't be applied, so CAF didn't send the message. The app's default, or else the agent's own, applies now: sending it again uses that."
     case 'Other':
       return 'The agent reported an error.'
     default:
@@ -191,8 +194,46 @@ export function noteText(note: DeepReadonly<Note>): string {
       return "The agent's install failed, so the message that waited for it was stopped."
     case 'SignedIn':
       return 'You signed in to the agent: send the message again to try it now.'
+    case 'AgentChanged':
+      return `The agent changed by itself to ${choiceText(note.value)}, and this chat follows it.`
+    case 'NotOffered': {
+      // A switch that's gone is gone on and off alike: it's named alone.
+      const choice = note.value
+      const what = choice.value.type === 'Switch' ? settingText(choice) : choiceText(choice)
+      return `The agent doesn't offer ${what}, so that choice was dropped: the app's default, or else the agent's own, applies.`
+    }
+    case 'NotApplied':
+      return `The agent refused ${choiceText(note.value)}, so that choice was dropped: the app's default, or else the agent's own, applies.`
     default:
       return `A note this viewer doesn't know (${tagOf(note)}).`
+  }
+}
+
+/**
+ * A setting chosen, by the agent's own id, as a note names it: "the model
+ * sonnet", "fast mode on". A note holds only the id, as the agent may no
+ * longer offer it.
+ */
+export function choiceText(choice: DeepReadonly<SettingChoice>): string {
+  const value = choice.value
+  const said =
+    value.type === 'Choice' ? value.value : value.type === 'Switch' ? (value.value ? 'on' : 'off') : `(${tagOf(value)})`
+  return choice.kind.type === 'Model' || choice.kind.type === 'Effort' || choice.kind.type === 'Fast'
+    ? `${settingText(choice)} ${said}`
+    : `${settingText(choice)}, ${said}`
+}
+
+/** The setting a choice is of, as a note names it: "the model", "fast mode". */
+export function settingText(choice: DeepReadonly<SettingChoice>): string {
+  switch (choice.kind.type) {
+    case 'Model':
+      return 'the model'
+    case 'Effort':
+      return 'the effort'
+    case 'Fast':
+      return 'fast mode'
+    default:
+      return `a setting this viewer doesn't know (${tagOf(choice.kind)})`
   }
 }
 
@@ -337,6 +378,8 @@ export function refusedText(reason: DeepReadonly<Refused>): string {
       return "That shelf's name can't be used."
     case 'OwnTools':
       return "CAF can't turn off this agent's own tools, so it won't run it."
+    case 'NoSuchSetting':
+      return "The agent doesn't offer that setting, or that choice of it."
     default:
       return `Refused, for a reason this viewer doesn't know (${tagOf(reason)}).`
   }

@@ -42,6 +42,10 @@ use crate::question::{
     SlowToOpen,
 };
 use crate::save::{CannotRestore, Entry, Header, RestoreChat, Saved, SavedChat, SavedState};
+use crate::settings::{
+    Choice, KnownSettings, ModelUsed, Setting, SettingChoice, SettingForm, SettingKind,
+    SettingValue, Settings,
+};
 use crate::time::{End, Mono, Now, Wall, Window};
 use crate::viewer::{
     AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
@@ -206,6 +210,10 @@ pub(crate) fn turn() -> Turn {
         window: Window::open(now()),
         items: vec![item()],
         imported: false,
+        model: Some(ModelUsed {
+            id: "sonnet".into(),
+            name: Some("Sonnet 4.6".into()),
+        }),
     }
 }
 
@@ -247,7 +255,62 @@ pub(crate) fn chat() -> Chat {
         turns: vec![turn()],
         usage: Some(usage()),
         questions: vec![question()],
+        settings: settings(),
     }
+}
+
+/// A chat's settings: the host's model, waiting, and effort and fast mode
+/// chosen for the chat itself.
+pub(crate) fn settings() -> Settings {
+    Settings {
+        offered: offered(),
+        chosen: vec![
+            SettingChoice::model("sonnet"),
+            SettingChoice::effort("high"),
+            SettingChoice::fast(true),
+        ],
+        own: vec![SettingKind::Effort, SettingKind::Fast],
+    }
+}
+
+/// What Claude offers, as CAF shows it.
+fn offered() -> Vec<Setting> {
+    let choice = |id: &str, name: &str| Choice {
+        id: id.into(),
+        name: name.into(),
+        description: None,
+        group: None,
+    };
+    vec![
+        Setting {
+            kind: SettingKind::Model,
+            name: "Model".into(),
+            form: SettingForm::Choices(vec![
+                Choice {
+                    description: Some("Opus 4.7, for most work".into()),
+                    ..choice("default", "Default")
+                },
+                choice("sonnet", "Sonnet"),
+                Choice {
+                    group: Some("Older".into()),
+                    ..choice("haiku", "Haiku")
+                },
+            ]),
+            current: Some(SettingValue::Choice("default".into())),
+        },
+        Setting {
+            kind: SettingKind::Effort,
+            name: "Effort".into(),
+            form: SettingForm::Choices(vec![choice("low", "Low"), choice("high", "High")]),
+            current: Some(SettingValue::Choice("high".into())),
+        },
+        Setting {
+            kind: SettingKind::Fast,
+            name: "Fast mode".into(),
+            form: SettingForm::Switch,
+            current: Some(SettingValue::Switch(false)),
+        },
+    ]
 }
 
 fn command() -> SpawnCommand {
@@ -313,6 +376,7 @@ fn recipe() -> Recipe {
 /// An agent's status: installed, and signing in.
 fn agent_status() -> AgentStatus {
     AgentStatus {
+        settings: KnownSettings::Known(offered()),
         name: AgentName("claude".into()),
         install: InstallState::Installed {
             version: "0.98.0".into(),
@@ -585,6 +649,26 @@ pub(crate) fn every_type(s: &mut Samples) {
         profile: Some(profile()),
         chats: vec![ChatId::from_number(1)],
         stderr: vec!["warming up".into()],
+    });
+    // settings
+    s.both(&settings());
+    for setting in offered() {
+        s.both(&setting.kind);
+        s.both(&setting.form);
+        s.both(&setting);
+    }
+    s.both(&Choice {
+        id: "opus[1m]".into(),
+        name: "Opus (1M context)".into(),
+        description: Some("For long sessions".into()),
+        group: Some("Opus".into()),
+    });
+    s.both(&SettingValue::Switch(true));
+    s.both(&SettingChoice::model("sonnet"));
+    s.both(&KnownSettings::Learning);
+    s.both(&ModelUsed {
+        id: "haiku".into(),
+        name: None,
     });
     // save
     s.both(&Shelf("work".into()));
@@ -908,7 +992,8 @@ fn enums_are_type_then_value() {
                 "parent": null,
                 "kind": { "type": "Words", "value": "On it." }
             }],
-            "imported": false
+            "imported": false,
+            "model": { "id": "sonnet", "name": "Sonnet 4.6" }
         } })
     );
     assert_eq!(
@@ -1126,8 +1211,9 @@ fn what_the_traces_hold_reads_back() {
 }
 
 /// What recordings made before chats had UUIDs hold still reads: a chat id
-/// as a number, an `OpenChat` with no shelf or instructions, and a host
-/// with no seed.
+/// as a number, an `OpenChat` with no shelf, instructions or settings, an
+/// agent with no default settings, a status with nothing of settings, and
+/// a host with no seed.
 #[test]
 fn recordings_from_before_saving_still_read() {
     let line = r#"{"type":"Host","value":{"type":"OpenChat","value":{"chat":1,"open":{"agent":"claude","cwd":"/work","session":{"type":"New"},"mcp_servers":[]}}}}"#;
@@ -1138,6 +1224,11 @@ fn recordings_from_before_saving_still_read() {
     assert_eq!(chat, ChatId::from_number(1));
     assert_eq!(open.shelf, None);
     assert_eq!(open.instructions, None);
+    assert!(open.settings.is_empty());
+    // An agent from before the host could choose its settings.
+    let line = r#"{"name":"claude","launch":{"type":"Installed"},"profile":{"type":"Builtin","value":{"type":"ClaudeAgentAcp"}}}"#;
+    let agent: AgentSpec = serde_json::from_str(line).expect("an old agent reads");
+    assert!(agent.settings.is_empty());
     // A status from a CAF that didn't turn agents' tools off.
     let status = serde_json::to_value(agent_status()).expect("a status");
     let mut old = status.clone();
@@ -1146,6 +1237,11 @@ fn recordings_from_before_saving_still_read() {
         .remove("own_tools_off");
     let old: AgentStatus = serde_json::from_value(old).expect("an old status reads");
     assert!(!old.own_tools_off);
+    // And one from before CAF knew agents' settings.
+    let mut old = status;
+    old.as_object_mut().expect("an object").remove("settings");
+    let old: AgentStatus = serde_json::from_value(old).expect("an old status reads");
+    assert_eq!(old.settings, KnownSettings::Unknown);
     let mut host = serde_json::to_value(Host::new("caf", "0.0.0")).expect("a host");
     host.as_object_mut().expect("an object").remove("seed");
     let host: Host = serde_json::from_value(host).expect("a host with no seed reads");

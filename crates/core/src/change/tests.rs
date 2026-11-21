@@ -5,7 +5,8 @@ use crate::change::{Change, Mismatch, Numbered};
 use crate::chat::{Chat, ChatState, Item, ItemKind, Lost, ToolStatus, TurnLife, Usage};
 use crate::fixtures::{self, After};
 use crate::ids::{ChangeNo, ItemId, QuestionId, TurnId};
-use crate::shape::{chat, item, question, tool, turn, usage};
+use crate::settings::{ModelUsed, SettingChoice};
+use crate::shape::{chat, item, question, settings, tool, turn, usage};
 use crate::time::{End, Wall};
 
 /// The sample chat (turn 2, holding words 3; question 4), with a second
@@ -143,6 +144,28 @@ fn a_turn_moves_on_and_ends() {
 }
 
 #[test]
+fn the_settings_are_replaced_whole() {
+    let mut settings = settings();
+    settings.chosen = vec![SettingChoice::effort("low")];
+    let chat = applied(Change::Settings(settings.clone()));
+    assert_eq!(chat.settings, settings);
+}
+
+#[test]
+fn a_turn_sent_says_its_model() {
+    let model = ModelUsed {
+        id: "haiku".into(),
+        name: Some("Haiku".into()),
+    };
+    let chat = applied(Change::TurnModel {
+        turn: TurnId(5),
+        model: model.clone(),
+    });
+    assert_eq!(chat.turns[1].model, Some(model));
+    assert_eq!(chat.turns[0], two_turns().turns[0]);
+}
+
+#[test]
 fn an_item_is_added_to_its_turn() {
     let new = Item {
         id: ItemId(9),
@@ -229,6 +252,17 @@ fn a_change_naming_what_the_chat_lacks_changes_nothing() {
             turn: TurnId(99),
             life: TurnLife::Finished,
             end,
+        },
+        Mismatch::NoTurn(TurnId(99)),
+    );
+    misfits(
+        "model-of-no-turn",
+        Change::TurnModel {
+            turn: TurnId(99),
+            model: ModelUsed {
+                id: "sonnet".into(),
+                name: None,
+            },
         },
         Mismatch::NoTurn(TurnId(99)),
     );

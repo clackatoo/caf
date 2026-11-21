@@ -1,11 +1,12 @@
 ---
 title: The Debugger
 type: how
-description: Run caf-debugger to chat with an agent beside an inspector of every step CAF takes, install agents and sign in to them, save chats and restore them in a later run, record each run, replay a recording, and move back and forth through it, with what its token is for, what a recording holds, and what "replay diverged" means.
+description: Run caf-debugger to chat with an agent beside an inspector of every step CAF takes, install agents and sign in to them, choose the agent's model, save chats and restore them in a later run, record each run, replay a recording, and move back and forth through it, with what its token is for, what a recording holds, and what "replay diverged" means.
 related:
   - caf/getting-started/a-chat-in-the-browser
   - caf/getting-started/installing-and-signing-in
   - caf/getting-started/saving-and-restoring-chats
+  - caf/getting-started/choosing-the-model
   - caf/concepts/the-core
   - caf/concepts/viewers
 ---
@@ -77,7 +78,10 @@ With no `--agents`, the debugger offers:
   to run a command: answer it, or try Stop while it waits. Send it exactly
   `fail`, and the turn fails, the first time in each chat, so sending it
   again shows Send again working. Send it exactly `sign in`, and the turn
-  fails for want of signing in, the first time in each chat.
+  fails for want of signing in, the first time in each chat. It offers two
+  models, three effort levels and fast mode, so the
+  [model picker](#choosing-the-model) can be tried, though they change
+  nothing it says.
 
 The fake agent is built by Cargo as the debugger starts, so start the
 debugger with `cargo run`. Started any other way, it offers the fake agent
@@ -138,6 +142,24 @@ In the chat view, "New chat" opens a chat with any of these agents in any
 folder, given as an absolute path. The debugger gives chats no MCP servers,
 asks you about every permission request, and starts an adapter of its own for
 each chat.
+
+## Choosing the model
+
+Above the message box of each chat, the debugger shows the settings
+its agent offers: its models and effort levels as menus, as the agent
+lists and names them, and fast mode as a switch. A change made while the
+agent is replying, or before its session opens, says so ("Large, from your
+next message") and is sent once it can be; one made while it's idle is
+sent at once. If the agent refuses a choice, the chat says so, and the
+message that waited on it fails, with Send again. Each turn shows the
+model it was sent on.
+
+Before a chat's session first opens, it shows what CAF knows the agent
+offers, if it knows, or offers to learn it: **Learn it now** asks the agent
+without sending any message. Once CAF knows an agent's models, "New chat"
+offers them too, to open a chat on one. See
+[Choosing the model](~caf/getting-started/choosing-the-model) for how CAF
+does it.
 
 ## Installing and signing in
 

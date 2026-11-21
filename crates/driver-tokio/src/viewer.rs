@@ -66,17 +66,18 @@ pub struct ViewerRules {
     ///
     /// [`Outcome::NotAllowed`]: caf_core::viewer::Outcome::NotAllowed
     pub restore: Box<Restorer>,
-    /// Whether viewers may send, stop, answer and close. `true` by
-    /// default; `false` makes them watch only.
+    /// Whether viewers may send, stop, answer, choose a chat's settings
+    /// and close. `true` by default; `false` makes them watch only.
     pub act: bool,
     /// How many chats one viewer may watch at once: 256 by default. A
     /// `Watch` for one more is answered with [`ToViewer::Ended`] at once.
     /// Watching a chat over again doesn't count, and a chat that has
     /// ended, or was unwatched, makes room for another.
     pub max_watches: usize,
-    /// Whether viewers may install agents, and sign in and out of them.
-    /// `false` by default: an install is hundreds of megabytes, and a
-    /// sign-in decides whose account the agent uses, so a host opts in.
+    /// Whether viewers may install agents, sign in and out of them, and
+    /// learn their settings. `false` by default: an install is hundreds
+    /// of megabytes, and a sign-in decides whose account the agent uses,
+    /// so a host opts in.
     /// Refused requests get [`Outcome::NotAllowed`].
     ///
     /// [`Outcome::NotAllowed`]: caf_core::viewer::Outcome::NotAllowed
@@ -350,6 +351,17 @@ impl<A: AppItem, D: AppData> Link<A, D> {
                 .await;
                 (request, outcome)
             }
+            FromViewer::Set {
+                request,
+                chat,
+                choice,
+            } => {
+                let outcome = act(caf, rules, |caf| async move {
+                    (caf.chat(chat).set_setting(choice).await).map(|()| Outcome::Done)
+                })
+                .await;
+                (request, outcome)
+            }
             FromViewer::Close { request, chat } => {
                 let outcome = act(caf, rules, |caf| async move {
                     caf.chat(chat).close().await.map(|()| Outcome::Done)
@@ -475,6 +487,7 @@ async fn about<A: AppItem, D: AppData>(
         AgentAction::Paste(text) => caf.paste(agent, text).await,
         AgentAction::StopSignIn => caf.stop_sign_in(agent).await,
         AgentAction::SignOut => caf.sign_out(agent).await,
+        AgentAction::LearnSettings => caf.learn_settings(agent).await,
         // One added in a later version of the wire, which this CAF can't
         // do.
         _ => return Outcome::NotAllowed,

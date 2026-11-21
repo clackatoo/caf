@@ -90,6 +90,10 @@ mod tests {
         SlowChoice, SlowToOpen,
     };
     use crate::save::{CannotRestore, Entry, Header, RestoreChat, Saved, SavedChat, SavedState};
+    use crate::settings::{
+        Choice, KnownSettings, ModelUsed, Setting, SettingChoice, SettingForm, SettingKind,
+        SettingValue, Settings,
+    };
     use crate::shape::{Samples, every_type, traces};
     use crate::time::{End, Mono, Now, Wall, Window};
     use crate::viewer::{
@@ -167,6 +171,16 @@ mod tests {
             Unknown,
             Usage,
             UserMessage,
+            // settings
+            Choice,
+            KnownSettings,
+            ModelUsed,
+            Setting,
+            SettingChoice,
+            SettingForm,
+            SettingKind,
+            SettingValue,
+            Settings,
             // save
             CannotRestore,
             Entry,

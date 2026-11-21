@@ -8,11 +8,13 @@
  */
 export type Rights = { 
 /**
- * Whether it may send, stop, answer and close.
+ * Whether it may send, stop, answer, choose a chat's settings
+ * ([`FromViewer::Set`]) and close.
  */
 act: boolean, 
 /**
- * Whether it may install agents, and sign in and out of them. A
- * viewer that may not gets no sign-in's link or code.
+ * Whether it may install agents, sign in and out of them, and learn
+ * their settings. A viewer that may not gets no sign-in's link or
+ * code.
  */
 agents: boolean, };

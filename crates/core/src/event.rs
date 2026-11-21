@@ -15,6 +15,7 @@ use crate::ids::{AgentName, ChatId, QuestionId, Shelf, Ticket, TurnId};
 use crate::install::{Platform, SignedInAs};
 use crate::question::Answer;
 use crate::save::{CannotRestore, Header, RestoreChat, Saved};
+use crate::settings::SettingChoice;
 use crate::time::Wall;
 
 /// Something that happened. `A` and `D` are the app's item and data
@@ -135,6 +136,15 @@ pub enum HostCommand<A: AppItem = NoAppItems, D: AppData = NoAppData> {
         /// Where they go.
         to: Shelf,
     },
+    /// Choose a setting of a chat's agent.
+    SetSetting {
+        /// The chat.
+        chat: ChatId,
+        /// The choice.
+        choice: SettingChoice,
+    },
+    /// Learn what settings an agent offers.
+    LearnSettings(AgentName),
     /// Set a chat's data slot. A recording holds it whole.
     SetData {
         /// The chat.

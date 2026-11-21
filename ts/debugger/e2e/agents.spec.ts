@@ -12,7 +12,7 @@ const row = (page: Page, name: string) => page.locator(`.agents [data-agent="${n
 
 async function openChat(page: Page, agent: string) {
   await page.getByRole('button', { name: 'New chat' }).click()
-  await page.getByRole('combobox').selectOption(agent)
+  await page.getByRole('combobox', { name: /^Agent/ }).selectOption(agent)
   await page.getByRole('textbox', { name: /Folder/ }).fill(process.cwd())
   await page.getByRole('button', { name: 'Open' }).click()
   await expect(page.locator('.caf-chat .agent')).toHaveText(agent)

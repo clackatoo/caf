@@ -93,12 +93,16 @@ export function isChange(value: unknown): boolean {
   switch (value.type) {
     case "State":
       return isTagged(held);
+    case "Settings":
+      return isRecord(held);
     case "TurnAdded":
       return isTurn(held);
     case "TurnInserted":
       return isNumber(fields.before) && isTurn(fields.turn);
     case "TurnLife":
       return isNumber(fields.turn) && isTagged(fields.life) && isTagged(fields.end);
+    case "TurnModel":
+      return isNumber(fields.turn) && isRecord(fields.model);
     case "ItemAdded":
       return isNumber(fields.turn) && isItem(fields.item);
     case "Appended":

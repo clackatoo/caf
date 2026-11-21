@@ -5,12 +5,13 @@
   // Live and following, the chat view shows `/viewer`'s chats, as any
   // host's does. Looking back, or replaying, it shows the chats as they
   // were, from the inspector channel's `Past` messages, read-only.
-  import type { AgentName, Answer, Chat, ChatId, DeepReadonly, QuestionId, Shelf, UserMessage } from '@clackatoo/caf'
+  import type { AgentName, Answer, Chat, ChatId, DeepReadonly, QuestionId, SettingChoice, Shelf, UserMessage } from '@clackatoo/caf'
   import AgentsPanel, { type AgentActions } from './AgentsPanel.svelte'
   import {
     ChatList,
     ChatView,
     SavedList,
+    openThenChoose,
     restoreOnceFree,
     showsAgent,
     type ChatActions,
@@ -25,6 +26,7 @@
   import { hasToken, httpUrl, socketUrl, type LinkState } from './link.ts'
   import { Live } from './live.svelte.ts'
   import { canAct } from './view.ts'
+  import { errorText } from './chat/words.ts'
 
   let inspector = $state.raw(connectInspector())
   let live = $state.raw<Live | null>(null)
@@ -101,6 +103,15 @@
     signIn: () => live?.caf.signIn(agentOf(chat)),
     paste: (text: string) => live?.caf.paste(agentOf(chat), text),
     stopSignIn: () => live?.caf.stopSignIn(agentOf(chat)),
+    setSetting: async (choice: SettingChoice) => {
+      const chat = need(selected)
+      await live?.caf.setSetting(chat, choice)
+      // Chosen again, as the notice asked: once each that failed is, it's done.
+      if (notice?.chat !== chat) return
+      const kinds = notice.kinds.filter((kind) => kind !== choice.kind.type)
+      notice = kinds.length === 0 ? null : { ...notice, kinds }
+    },
+    learnSettings: () => live?.caf.learnSettings(agentOf(chat)),
   }
 
   const agentActions: AgentActions = {
@@ -119,10 +130,42 @@
 
   const listActions: ListActions = {
     select: (chat: ChatId) => (selected = chat),
-    open: async (agent: AgentName, cwd: string) => {
+    open: async (agent: AgentName, cwd: string, settings: readonly SettingChoice[] = []) => {
       if (live === null) throw new Error('Not live.')
-      selected = await live.caf.open({ agent, cwd, session: { type: 'New' } })
+      const caf = live.caf
+      // Opening can't carry settings: they're chosen once it's open, and
+      // applied as its session opens.
+      const { chat, failed } = await openThenChoose(
+        () => caf.open({ agent, cwd, session: { type: 'New' } }),
+        (chat, choice) => caf.setSetting(chat, choice),
+        settings,
+      )
+      selected = chat
+      const [first] = failed
+      notice =
+        first === undefined
+          ? null
+          : {
+              chat,
+              kinds: failed.map((each) => each.choice.kind.type),
+              text: `The chat is open, but its settings couldn't be chosen: ${clause(errorText(first.problem))}. Choose them below.`,
+            }
     },
+  }
+
+  /**
+   * What went wrong choosing a chat's settings as it opened, shown in
+   * that chat until each kind that failed is chosen, or it closes.
+   */
+  let notice = $state<{ chat: ChatId; kinds: string[]; text: string } | null>(null)
+  // A closed chat can't be chosen for: what it said is done with.
+  $effect(() => {
+    if (notice !== null && chat?.id === notice.chat && !lookingBack && chat.state.type === 'Closed') notice = null
+  })
+
+  /** A sentence as it reads after a colon: "The agent …." as "the agent …". */
+  function clause(sentence: string): string {
+    return sentence.charAt(0).toLowerCase() + sentence.slice(1).replace(/\.$/, '')
   }
 
   const savedActions: SavedActions = {
@@ -229,7 +272,14 @@
     <div class="left">
       <div class="list">
         <div class="chats">
-          <ChatList chats={summaries} agents={agents.map((agent) => agent.name)} {selected} actions={listActions} readOnly={!actable} />
+          <ChatList
+            chats={summaries}
+            agents={agents.map((agent) => agent.name)}
+            statuses={agents}
+            {selected}
+            actions={listActions}
+            readOnly={!actable}
+          />
         </div>
         {#if saved.length > 0}
           <div class="saved">
@@ -256,6 +306,7 @@
             actions={chatActions}
             readOnly={!actable}
             {readOnlyWhy}
+            notice={!lookingBack && notice?.chat === chat.id && chat.state.type !== 'Closed' ? notice.text : null}
           />
         {:else}
           <p class="empty">
