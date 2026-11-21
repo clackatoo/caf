@@ -27,9 +27,27 @@ use crate::time::Window;
 /// saves them with the chat, and never looks inside.
 ///
 /// Its serialized form must use text keys and no raw bytes, as derived
-/// structs and enums do, so one CAF can't read is kept, unchanged, as an
-/// [`Unknown`] item. Read old items leniently, with `#[serde(default)]`
+/// structs and enums do, its floats must be finite, and its integers fit
+/// in 64 bits: what JSON holds. So one CAF can't read is kept, unchanged,
+/// as an [`Unknown`] item. Read old items leniently, with `#[serde(default)]`
 /// on fields added later.
+///
+/// One the type reads but wouldn't write back as it was saved, as an
+/// older version of the app reading what a newer one added, is kept
+/// unchanged as an [`Unknown`] item too. An item is the app's again only
+/// if what the type writes back holds all of what was saved: every key of
+/// every map, with what it held; every list, as long, with what it held;
+/// and everything else equal. Keys the type adds are fine; nothing else
+/// may differ. So never drop, shorten, narrow or replace what the type
+/// read, as `skip_serializing_if`, `#[serde(other)]` or a lossy
+/// `deserialize_with` would; and keep sets in a stable order, as a
+/// `BTreeSet` or `Vec` does, not a `HashSet`, whose order changes from
+/// one run to the next. Change a field's type with care: what the old
+/// type wrote must be held in what the new one writes of it. A whole
+/// number read as a float of the same value is; a float read as a whole
+/// number isn't, nor is anything read as a struct that writes it
+/// differently, such as a field that was `NoAppData`'s `null` read as a
+/// struct.
 pub trait AppItem:
     Clone + Debug + PartialEq + Serialize + DeserializeOwned + Send + 'static
 {
@@ -66,7 +84,9 @@ impl AppItem for NoAppItems {
 /// `#[serde(default)]` on fields added later: a chat whose data can't be
 /// read isn't restored, and its save is left as it was
 /// ([`CannotRestore::AppData`](crate::save::CannotRestore::AppData)), for
-/// a version of the app that can.
+/// a version of the app that can. Nor is one the type reads but wouldn't
+/// write back as it was saved, as an older version of the app reading
+/// what a newer one added: the same rule as [`AppItem`]'s.
 pub trait AppData:
     Clone + Debug + Default + PartialEq + Serialize + DeserializeOwned + Send + 'static
 {
