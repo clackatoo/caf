@@ -60,10 +60,15 @@
 //!   an older version, writes it at once as a snapshot and header in its
 //!   own, its journal folded in, before it answers
 //!   [`StorageEvent::Loaded`], so the core never needs to know a save's
-//!   version. [`FileStore`] refuses an append to a snapshot of another
-//!   version: if that write fails, the chat is loaded all the same, its
-//!   save left in its own version, and the core's first write to it fails
-//!   and is tried again whole, as any failed write is.
+//!   version. A save written again so reads the same as before, but for
+//!   its header, which is the newest the store lists. It isn't written
+//!   again if what was read holds another chat than the one asked for, or
+//!   if that header can't be listed and read, so a stale header never
+//!   goes over a newer one; nor if the write fails. The chat is loaded all
+//!   the same then, its save left in its own version: a store refuses an
+//!   append to a snapshot of another version ([`Store::append`]), so the
+//!   core's first write to it fails, and is tried again whole, as any
+//!   failed write is.
 //!
 //! **App items are kept even when the app can't read them.** One is saved
 //! in an [`Unknown`](caf_core::chat::Unknown) item's shape, its envelope:
@@ -318,11 +323,18 @@ pub trait Store: Send + 'static {
 
     /// Adds a record to a locked chat's journal, and replaces its header.
     ///
+    /// A store must refuse an append to a chat whose snapshot is of another
+    /// version than this CAF's [`VERSION`] (the snapshot's bytes 3 to 6, a
+    /// little-endian `u32`), as [`FileStore`] does: a record is in the
+    /// version of the snapshot before it, so a journal never mixes
+    /// versions.
+    ///
     /// # Errors
     ///
     /// [`StoreError::NotFound`] if it has no snapshot, [`StoreError::InUse`]
-    /// if it isn't locked and another has it, [`StoreError::Damaged`] or
-    /// [`StoreError::Newer`] if what it keeps can't take the record, or
+    /// if it isn't locked and another has it, [`StoreError::Damaged`] if
+    /// its snapshot is of an older version, or what it keeps can't take the
+    /// record, [`StoreError::Newer`] if its snapshot is of a newer one, or
     /// [`StoreError::Io`]. A failed append adds nothing.
     fn append(
         &mut self,
@@ -364,13 +376,16 @@ pub trait Store: Send + 'static {
     fn move_shelf(&mut self, from: &Shelf, to: &Shelf) -> Result<(), StoreError>;
 }
 
-/// Writes `saved`, loaded from `stored`, again as a snapshot and header in
-/// this version, if `stored` is of an older one, so nothing of this
-/// version is ever added to a journal of another. Its header is the
-/// newest the store lists, as the snapshot's may be behind its journal.
+/// Writes `saved`, chat `chat` loaded from `stored`, again as a snapshot
+/// and header in this version, if `stored` is of an older one, so nothing
+/// of this version is ever added to a journal of another. Its header is
+/// the newest the store lists, as the snapshot's may be behind its
+/// journal. Nothing is written if what was read holds another chat, or
+/// if that header can't be listed and read: a stale header is never
+/// written over a newer one.
 fn upgrade<A: AppItem, D: AppData>(
     store: &mut dyn Store,
-    shelf: &Shelf,
+    (shelf, chat): (&Shelf, ChatId),
     stored: &Stored,
     saved: &mut Saved<A, D>,
 ) -> Result<(), String> {
@@ -378,21 +393,23 @@ fn upgrade<A: AppItem, D: AppData>(
         Ok(version) if version < VERSION => {}
         _ => return Ok(()),
     }
-    let chat = saved.header.chat;
-    let listed = (store.list(shelf).ok().into_iter().flatten())
+    if saved.header.chat != chat || saved.chat.id != chat {
+        return Err(format!("it holds chat {} instead", saved.chat.id));
+    }
+    let listed = store.list(shelf).map_err(|error| error.describe())?;
+    let newest = (listed.into_iter())
         .find(|(each, _)| *each == chat)
         .and_then(|(_, header)| decode_header(&header).ok())
-        .filter(|header| header.chat == chat);
+        .filter(|header| header.chat == chat)
+        .ok_or("its newest header can't be read")?;
     // Written with the newest header, and handed on with the snapshot's,
     // as a load always is.
-    let own = listed.map(|newest| std::mem::replace(&mut saved.header, newest));
+    let own = std::mem::replace(&mut saved.header, newest);
     let written = format::header(&saved.header).and_then(|header| {
         let snapshot = format::snapshot(Cow::Borrowed(&*saved), Squeeze::Fast)?;
         (store.snapshot(shelf, chat, &header, &snapshot)).map_err(|error| error.describe())
     });
-    if let Some(own) = own {
-        saved.header = own;
-    }
+    saved.header = own;
     written
 }
 
@@ -428,7 +445,7 @@ pub fn carry_out<A: AppItem, D: AppData>(
                     Ok(mut saved) => {
                         // If this fails, the chat is loaded all the same:
                         // its first write fails, and is tried again whole.
-                        let _ = upgrade(store, &shelf, &stored, &mut saved);
+                        let _ = upgrade(store, (&shelf, chat), &stored, &mut saved);
                         StorageEvent::Loaded(Box::new(saved))
                     }
                     Err(why) => {

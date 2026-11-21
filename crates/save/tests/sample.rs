@@ -841,12 +841,35 @@ fn an_older_versions_save_is_written_in_this_one_as_its_loaded() {
     }
 }
 
-/// A file store that can't write a snapshot, as on a disk that's full.
-struct Full(FileStore);
+/// A file store that may fail to list a shelf, or to write a snapshot, as
+/// on a disk that's failing or full.
+struct Broken {
+    store: FileStore,
+    lists: bool,
+    snapshots: bool,
+}
 
-impl Store for Full {
+impl Broken {
+    fn new(folder: &Path, lists: bool, snapshots: bool) -> Self {
+        Self {
+            store: FileStore::new(folder),
+            lists,
+            snapshots,
+        }
+    }
+}
+
+/// What a broken store says.
+fn broken() -> caf_save::StoreError {
+    caf_save::StoreError::Io(std::io::Error::other("the disk is failing"))
+}
+
+impl Store for Broken {
     fn list(&mut self, shelf: &Shelf) -> Result<Vec<(ChatId, Vec<u8>)>, caf_save::StoreError> {
-        self.0.list(shelf)
+        if !self.lists {
+            return Err(broken());
+        }
+        self.store.list(shelf)
     }
 
     fn load(
@@ -854,19 +877,20 @@ impl Store for Full {
         shelf: &Shelf,
         chat: ChatId,
     ) -> Result<caf_save::Stored, caf_save::StoreError> {
-        self.0.load(shelf, chat)
+        self.store.load(shelf, chat)
     }
 
     fn snapshot(
         &mut self,
-        _: &Shelf,
-        _: ChatId,
-        _: &[u8],
-        _: &[u8],
+        shelf: &Shelf,
+        chat: ChatId,
+        header: &[u8],
+        snapshot: &[u8],
     ) -> Result<(), caf_save::StoreError> {
-        Err(caf_save::StoreError::Io(std::io::Error::other(
-            "the disk is full",
-        )))
+        if !self.snapshots {
+            return Err(broken());
+        }
+        self.store.snapshot(shelf, chat, header, snapshot)
     }
 
     fn append(
@@ -876,23 +900,23 @@ impl Store for Full {
         header: &[u8],
         record: &[u8],
     ) -> Result<(), caf_save::StoreError> {
-        self.0.append(shelf, chat, header, record)
+        self.store.append(shelf, chat, header, record)
     }
 
     fn release(&mut self, shelf: &Shelf, chat: ChatId) {
-        self.0.release(shelf, chat);
+        self.store.release(shelf, chat);
     }
 
     fn holds(&self, shelf: &Shelf, chat: ChatId) -> bool {
-        self.0.holds(shelf, chat)
+        self.store.holds(shelf, chat)
     }
 
     fn delete(&mut self, shelf: &Shelf, chat: ChatId) -> Result<(), caf_save::StoreError> {
-        self.0.delete(shelf, chat)
+        self.store.delete(shelf, chat)
     }
 
     fn move_shelf(&mut self, from: &Shelf, to: &Shelf) -> Result<(), caf_save::StoreError> {
-        self.0.move_shelf(from, to)
+        self.store.move_shelf(from, to)
     }
 }
 
@@ -916,18 +940,73 @@ fn files_in(folder: &Path) -> Vec<(String, Vec<u8>)> {
 
 #[test]
 fn an_older_versions_save_that_cant_be_written_again_still_loads_as_it_was() {
-    for version in 1..VERSION {
-        let copy = copy_files(version, &format!("upgrade-full-v{version}"));
-        let before = files_in(&copy.0.join("work"));
-        let mut store = Full(FileStore::new(&copy.0));
-        match carry_load(&mut store) {
-            Some((_, StorageEvent::Loaded(saved))) => {
-                assert_eq!(*saved, sample(version).after, "v{version}");
+    // A store that can't write it, can't list its header, or lists one it
+    // can't read: nothing is written, so a stale header never goes over a
+    // newer one.
+    for (case, lists, snapshots, garbled) in [
+        ("full", true, false, false),
+        ("unlisted", false, true, false),
+        ("garbled", true, true, true),
+    ] {
+        for version in 1..VERSION {
+            let copy = copy_files(version, &format!("upgrade-{case}-v{version}"));
+            let work = copy.0.join("work");
+            if garbled {
+                fs::write(work.join(format!("{}.head", id())), b"CAF garbled").expect("written");
             }
-            other => panic!("v{version}: loaded, not {other:?}"),
+            let before = files_in(&work);
+            let mut store = Broken::new(&copy.0, lists, snapshots);
+            match carry_load(&mut store) {
+                Some((_, StorageEvent::Loaded(saved))) => {
+                    assert_eq!(*saved, sample(version).after, "{case} v{version}");
+                }
+                other => panic!("{case} v{version}: loaded, not {other:?}"),
+            }
+            store.release(&shelf(), id());
+            assert_eq!(
+                files_in(&work),
+                before,
+                "{case} v{version}: its save is left as it was"
+            );
         }
-        store.release(&shelf(), id());
-        let after = files_in(&copy.0.join("work"));
-        assert_eq!(after, before, "v{version}: its save is left as it was");
+    }
+}
+
+#[test]
+fn an_older_save_holding_another_chat_is_never_written_again() {
+    for version in 1..VERSION {
+        let copy = copy_files(version, &format!("upgrade-other-v{version}"));
+        let work = copy.0.join("work");
+        // Chat 1's files, kept as chat 3's too.
+        let other = ChatId::from_number(3);
+        for kind in ["caf", "head", "journal"] {
+            fs::copy(
+                work.join(format!("{}.{kind}", id())),
+                work.join(format!("{other}.{kind}")),
+            )
+            .expect("copied");
+        }
+        let before = files_in(&work);
+        let mut store = FileStore::new(&copy.0);
+        let load = StorageDirective::Load {
+            ticket: Ticket(1),
+            shelf: shelf(),
+            chat: other,
+        };
+        let loaded = caf_save::carry_out::<Pin, Notes>(&mut store, load);
+        assert!(
+            matches!(&loaded, Some((_, StorageEvent::Loaded(saved))) if saved.chat.id == id()),
+            "v{version}: read as it is, for the core to refuse: {loaded:?}"
+        );
+        assert!(
+            !store.holds(&shelf(), id()),
+            "v{version}: chat 1 isn't taken"
+        );
+        assert!(
+            !work.join(format!("{}.lock", id())).exists(),
+            "v{version}: nor locked"
+        );
+        store.release(&shelf(), other);
+        assert_eq!(files_in(&work), before, "v{version}: both are as they were");
     }
 }
