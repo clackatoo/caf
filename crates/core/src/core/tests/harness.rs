@@ -98,6 +98,13 @@ pub(crate) fn agents() -> Vec<AgentSpec> {
             SpawnCommand::new("/opt/npm-host/test-npm-acp"),
             ProfileChoice::Builtin(Builtin::TestNpm),
         ),
+        // The downloaded agent, started by a host's own command: its adapter
+        // doesn't say by itself whether it's signed in.
+        AgentSpec::command(
+            "dl-host",
+            SpawnCommand::new("/opt/dl-host/test-download"),
+            ProfileChoice::Builtin(Builtin::TestDownload),
+        ),
         // Claude, run by a host as `npx -y <the adapter>`.
         AgentSpec::command(
             "claude-npx",
