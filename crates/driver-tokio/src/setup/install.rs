@@ -253,13 +253,34 @@ async fn removing(root: &Path, folder: &str, unused_since: Wall) -> io::Result<b
 
 /// Renames a built install into place, once all it holds is on the disk:
 /// a power cut must never leave an install that looks whole and isn't.
-/// Its folder is synced, the whole filesystem it's on with it, then
-/// renamed, and the folder it's renamed in synced so the rename lasts too.
+/// Each of its files and folders is synced, then it's renamed, and the
+/// folder it's renamed in synced so the rename lasts too. Only its own
+/// are synced, not the whole disk, so it never waits on what others write.
 fn into_place(build: &Path, place: &Path) -> io::Result<()> {
-    rustix::fs::syncfs(File::open(build)?)?;
+    sync_all_in(build)?;
     fs::rename(build, place)?;
     if let Some(root) = place.parent() {
         File::open(root)?.sync_all()?;
+    }
+    Ok(())
+}
+
+/// Syncs every file and folder under `folder`, and `folder` itself, to
+/// the disk. Links are left as they are: what they lead to is synced
+/// where it is, if it's inside.
+fn sync_all_in(folder: &Path) -> io::Result<()> {
+    let mut folders = vec![folder.to_owned()];
+    while let Some(folder) = folders.pop() {
+        for entry in fs::read_dir(&folder)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                folders.push(entry.path());
+            } else if kind.is_file() {
+                File::open(entry.path())?.sync_all()?;
+            }
+        }
+        File::open(&folder)?.sync_all()?;
     }
     Ok(())
 }
@@ -1473,6 +1494,17 @@ mod tests {
         .unwrap();
         let _ = fs::remove_file(&temp);
         assert_eq!(fetched, Err(InstallFailure::Offline));
+    }
+
+    #[test]
+    fn an_install_is_synced_whatever_it_holds() {
+        let folder = std::env::temp_dir().join(format!("caf-sync-{}", std::process::id()));
+        fs::create_dir_all(folder.join("bin/deep")).unwrap();
+        fs::write(folder.join("bin/deep/agent"), "x").unwrap();
+        std::os::unix::fs::symlink("missing", folder.join("link")).unwrap();
+        let synced = sync_all_in(&folder);
+        fs::remove_dir_all(&folder).unwrap();
+        synced.expect("folders, files and links, even one leading nowhere");
     }
 
     #[test]
