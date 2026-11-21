@@ -169,6 +169,9 @@ async fn installing(
     if !prepared.map_err(failure)? {
         return Ok(());
     }
+    // What npm wrote is synced file by file before the rename; what a
+    // download put there was synced as it was written.
+    let files = matches!(install, Install::Npm(_));
     let built = match install {
         Install::Npm(package) => npm(&build, &package, options, reporter, stop).await,
         Install::Download(artifacts) => {
@@ -178,12 +181,7 @@ async fn installing(
         _ => Err(other("CAF doesn't know this kind of install".into())),
     };
     let done = match built {
-        Ok(()) => {
-            let (build, place) = (build.clone(), place.clone());
-            blocking(move || into_place(&build, &place))
-                .await
-                .map_err(failure)
-        }
+        Ok(()) => placed(&build, &place, files, options, stop).await,
         Err(failure) => Err(failure),
     };
     if done.is_err() {
@@ -251,38 +249,102 @@ async fn removing(root: &Path, folder: &str, unused_since: Wall) -> io::Result<b
     }
 }
 
+/// Puts a built install into place, as [`into_place`] does, while still
+/// hearing Stop: the sync can take a while, and a stop then is a stop
+/// like any other.
+async fn placed(
+    build: &Path,
+    place: &Path,
+    files: bool,
+    options: &Options,
+    stop: &mut oneshot::Receiver<()>,
+) -> Result<(), InstallFailure> {
+    let stopped = Arc::new(AtomicBool::new(false));
+    let placing = {
+        let (build, place, stopped) = (build.to_owned(), place.to_owned(), Arc::clone(&stopped));
+        let pause = sync_pause(options);
+        tokio::task::spawn_blocking(move || into_place(&build, &place, files, pause, &stopped))
+    };
+    tokio::pin!(placing);
+    let placed = tokio::select! {
+        placed = &mut placing => placed,
+        _ = &mut *stop => {
+            // It sees that between files, and ends without the rename.
+            stopped.store(true, Ordering::Relaxed);
+            placing.await
+        }
+    };
+    match placed {
+        Ok(Ok(true)) => Ok(()),
+        Ok(Ok(false)) => Err(InstallFailure::Stopped),
+        Ok(Err(error)) => Err(failure(error)),
+        Err(_) => Err(other("putting the install in place panicked".into())),
+    }
+}
+
+/// How long syncing each file takes, as well: only tests make it longer.
+fn sync_pause(options: &Options) -> Duration {
+    #[cfg(test)]
+    if let Some(pause) = options.sync_pause {
+        return pause;
+    }
+    let _ = options;
+    Duration::ZERO
+}
+
 /// Renames a built install into place, once all it holds is on the disk:
 /// a power cut must never leave an install that looks whole and isn't.
-/// Each of its files and folders is synced, then it's renamed, and the
-/// folder it's renamed in synced so the rename lasts too. Only its own
-/// are synced, not the whole disk, so it never waits on what others write.
-fn into_place(build: &Path, place: &Path) -> io::Result<()> {
-    sync_all_in(build)?;
+/// It's synced (its files too if `files`, as when npm wrote them; others
+/// were synced as they were written), then renamed, and the folder it's
+/// renamed in synced so the rename lasts too. Only its own are synced, not
+/// the whole disk, so it never waits on what others write. Returns `false`
+/// if `stopped` before the rename, which then isn't done.
+fn into_place(
+    build: &Path,
+    place: &Path,
+    files: bool,
+    pause: Duration,
+    stopped: &AtomicBool,
+) -> io::Result<bool> {
+    if !sync_all_in(build, files, pause, stopped)? {
+        return Ok(false);
+    }
     fs::rename(build, place)?;
     if let Some(root) = place.parent() {
         File::open(root)?.sync_all()?;
     }
-    Ok(())
+    Ok(true)
 }
 
-/// Syncs every file and folder under `folder`, and `folder` itself, to
-/// the disk. Links are left as they are: what they lead to is synced
-/// where it is, if it's inside.
-fn sync_all_in(folder: &Path) -> io::Result<()> {
+/// Syncs every folder under `folder`, and `folder` itself, to the disk,
+/// and every file too if `files`, until `stopped`: then it returns `false`.
+/// Links are left as they are: what they lead to is synced where it is.
+fn sync_all_in(
+    folder: &Path,
+    files: bool,
+    pause: Duration,
+    stopped: &AtomicBool,
+) -> io::Result<bool> {
     let mut folders = vec![folder.to_owned()];
     while let Some(folder) = folders.pop() {
         for entry in fs::read_dir(&folder)? {
+            if stopped.load(Ordering::Relaxed) {
+                return Ok(false);
+            }
             let entry = entry?;
             let kind = entry.file_type()?;
             if kind.is_dir() {
                 folders.push(entry.path());
-            } else if kind.is_file() {
+            } else if files && kind.is_file() {
                 File::open(entry.path())?.sync_all()?;
+                if !pause.is_zero() {
+                    std::thread::sleep(pause);
+                }
             }
         }
         File::open(&folder)?.sync_all()?;
     }
-    Ok(())
+    Ok(!stopped.load(Ordering::Relaxed))
 }
 
 /// Whether `name` can be an install's folder: one plain name, not hidden,
@@ -1066,6 +1128,8 @@ impl Placing {
             .open(&path)
             .map_err(|error| io_failure(&error, false))?;
         io::copy(&mut from, &mut out).map_err(|error| io_failure(&error, false))?;
+        // Synced while it's open: its mode may not let it be opened again.
+        out.sync_all().map_err(|error| io_failure(&error, false))?;
         // The mode given when making it is cut by the umask.
         fs::set_permissions(&path, fs::Permissions::from_mode(mode))
             .map_err(|error| io_failure(&error, false))
@@ -1512,9 +1576,14 @@ mod tests {
         fs::create_dir_all(folder.join("bin/deep")).unwrap();
         fs::write(folder.join("bin/deep/agent"), "x").unwrap();
         std::os::unix::fs::symlink("missing", folder.join("link")).unwrap();
-        let synced = sync_all_in(&folder);
+        let synced = sync_all_in(&folder, true, Duration::ZERO, &AtomicBool::new(false));
+        let stopped = sync_all_in(&folder, true, Duration::ZERO, &AtomicBool::new(true));
         fs::remove_dir_all(&folder).unwrap();
-        synced.expect("folders, files and links, even one leading nowhere");
+        assert!(
+            synced.expect("folders, files and links, even one leading nowhere"),
+            "all synced"
+        );
+        assert!(!stopped.unwrap(), "stopped, it says so");
     }
 
     #[test]

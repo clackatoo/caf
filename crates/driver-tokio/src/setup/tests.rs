@@ -72,6 +72,7 @@ fn driver(dir: &Dir) -> SetupDriver {
             idle: None,
             per_read: None,
             npm: None,
+            sync_pause: None,
         },
     )
 }
@@ -738,6 +739,109 @@ async fn a_download_far_bigger_than_its_agent_is_cut_off() {
     assert!(
         matches!(events.last(), Some(Ev(SetupEvent::InstallFailed(InstallFailure::Other(why)))) if why.contains("bigger")),
         "{events:?}"
+    );
+    assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
+}
+
+#[tokio::test]
+async fn a_download_holding_a_file_its_owner_cant_read_installs() {
+    use std::io::Write as _;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = |mode| zip::write::SimpleFileOptions::default().unix_permissions(mode);
+    zip.start_file("bin/agent", options(0o755)).unwrap();
+    zip.write_all(b"#!/bin/sh\necho agent\n").unwrap();
+    zip.start_file("write-only", options(0o200)).unwrap();
+    zip.write_all(b"x").unwrap();
+    let zip = zip.finish().unwrap().into_inner();
+    let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+        Vec::new(),
+        flate2::Compression::default(),
+    ));
+    let mut header = tar::Header::new_gnu();
+    header.set_size(1);
+    header.set_mode(0o200);
+    header.set_cksum();
+    tar.append_data(&mut header, "write-only", &b"x"[..])
+        .unwrap();
+    let tar = tar.into_inner().unwrap().finish().unwrap();
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    for (n, (body, unpack)) in [(zip, Unpack::Zip), (tar, Unpack::TarGz)]
+        .into_iter()
+        .enumerate()
+    {
+        let server = serve(body.clone(), false).await;
+        let ticket = Ticket(1000 + n as u64);
+        driver.apply(SetupDirective::Install {
+            ticket,
+            folder: format!("fake-{n}"),
+            install: download(&server.url, &body, unpack),
+            private: None,
+            size: 1 << 30,
+        });
+        let events = done(&mut driver, ticket).await;
+        assert_eq!(
+            events.last().expect("a last report"),
+            &SetupEvent::Installed,
+            "{unpack:?}"
+        );
+        let mode = std::fs::metadata(dir.root().join(format!("fake-{n}/write-only")))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o200, "{unpack:?}: kept as it came");
+    }
+}
+
+#[tokio::test]
+async fn stopping_an_install_while_it_is_synced_stops_it() {
+    let dir = Dir::new();
+    // An npm that makes many files, then says it's done.
+    let done_file = dir.path("npm-done");
+    let npm = dir.path("npm");
+    std::fs::write(
+        &npm,
+        format!(
+            "#!/bin/sh\nmkdir -p node_modules/many\ni=0; while [ $i -lt 200 ]; do echo $i > node_modules/many/$i; i=$((i+1)); done\ntouch {}\n",
+            done_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&npm, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut driver = SetupDriver::with_options(
+        dir.root(),
+        Options {
+            npm: Some(npm),
+            // Each file takes a while to sync, so there's time to stop it.
+            sync_pause: Some(Duration::from_millis(20)),
+            env: Some(std::collections::HashMap::new()),
+            ..Options::default()
+        },
+    );
+    driver.apply(SetupDirective::Install {
+        ticket: Ticket(1000),
+        folder: "fake-1.0.0".into(),
+        install: Install::Npm(NpmPackage::new("{}", "{}")),
+        private: None,
+        size: 1 << 30,
+    });
+    tokio::time::timeout(PATIENCE, async {
+        while !done_file.exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("npm ran");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    driver.apply(SetupDirective::Stop {
+        ticket: Ticket(1000),
+    });
+    let events = tokio::time::timeout(Duration::from_secs(2), done(&mut driver, Ticket(1000)))
+        .await
+        .expect("stopped within a second or so, not once it's all synced");
+    assert_eq!(
+        events.last().expect("a last report"),
+        &SetupEvent::InstallFailed(InstallFailure::Stopped)
     );
     assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
 }

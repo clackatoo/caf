@@ -218,6 +218,10 @@ pub(crate) struct Options {
     /// The npm to run, instead of the one on `PATH`.
     #[cfg(test)]
     pub(crate) npm: Option<PathBuf>,
+    /// How long syncing each of an install's files takes, as well, so a
+    /// test can stop it meanwhile.
+    #[cfg(test)]
+    pub(crate) sync_pause: Option<std::time::Duration>,
 }
 
 impl Options {
