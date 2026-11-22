@@ -225,7 +225,9 @@ listed.
 
 Each turn's usage goes into the ledger every CAF program shares,
 `~/.local/share/caf/usage/` (under `$XDG_DATA_HOME` if that's set), as the
-app `caf-debugger`, or into the folder `--usage` names. Its page may read
+app `caf-debugger`, or into the folder `--usage` names: real usage, as a
+chat with Claude here is a real chat. The fake agent's turns say nothing
+of what they spent, so they aren't recorded. Its page may read
 summaries of every app's usage and set prices of your own. Prices are
 fetched from LiteLLM once a day; `--no-fetch-prices` never fetches them:
 

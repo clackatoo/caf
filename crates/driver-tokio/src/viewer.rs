@@ -32,7 +32,7 @@ use caf_core::usage::Summary;
 use caf_core::viewer::{
     AgentAction, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer, VERSIONS,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
 
 use crate::caf::{AgentsWatch, Caf, ChatsWatch, Error, SavedWatch, Update, Watch, WeakCaf};
 
@@ -214,6 +214,7 @@ pub async fn serve<A: AppItem, D: AppData>(
         gone: false,
         watches: Watches::default(),
         asked: Asked::default(),
+        summaries: Arc::new(Semaphore::new(SUMMARIES)),
     };
     link.run(from, &to).await;
 }
@@ -258,6 +259,8 @@ struct Link<A: AppItem, D: AppData> {
     watches: Watches<A>,
     /// Restores, summaries and prices under way.
     asked: Asked,
+    /// Turns for reading summaries: [`SUMMARIES`] at once.
+    summaries: Arc<Semaphore>,
 }
 
 impl<A: AppItem, D: AppData> Link<A, D> {
@@ -412,14 +415,15 @@ impl<A: AppItem, D: AppData> Link<A, D> {
             },
             // Read while the link goes on: a summary reads files, and
             // mustn't hold up the viewer's other requests.
+            // At most SUMMARIES at once: the rest wait their turn.
             FromViewer::Usage { request, query } if rules.usage => {
                 let reading = caf.usage(query);
-                let summary = async move {
+                let summary = in_turn(Arc::clone(&self.summaries), async move {
                     match reading.await {
                         Ok(summary) => Answer::Usage(Box::new(summary)),
                         Err(error) => Answer::Done(outcome(Err(error))),
                     }
-                };
+                });
                 self.asked.add(request, Box::pin(summary));
                 return;
             }
@@ -570,6 +574,17 @@ fn next_of<A: AppItem>(mut watch: Watch<A>) -> Next<A> {
         let update = watch.next().await;
         (watch, update)
     })
+}
+
+/// How many summaries one viewer's link reads at once.
+const SUMMARIES: usize = 4;
+
+/// Does `work` once it has one of `turns`, in the order asked, so no more
+/// than there are turns are done at once.
+async fn in_turn<T>(turns: Arc<Semaphore>, work: impl Future<Output = T>) -> T {
+    // Never closed.
+    let _turn = turns.acquire_owned().await;
+    work.await
 }
 
 /// How a request answered while the link went on turned out.
@@ -752,6 +767,38 @@ mod tests {
             "can_sign_in": true,
         }]))
         .expect("a status")
+    }
+
+    #[tokio::test]
+    async fn at_most_four_summaries_are_read_at_once_and_the_rest_wait_their_turn() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let turns = Arc::new(Semaphore::new(SUMMARIES));
+        let started = Arc::new(AtomicUsize::new(0));
+        let (go, _) = tokio::sync::broadcast::channel::<()>(1);
+        let mut reading = Vec::new();
+        for _ in 0..6 {
+            let started = Arc::clone(&started);
+            let mut going = go.subscribe();
+            reading.push(tokio::spawn(in_turn(Arc::clone(&turns), async move {
+                started.fetch_add(1, Ordering::SeqCst);
+                let _ = going.recv().await;
+            })));
+        }
+        // Every one has asked for its turn once all the tasks have run
+        // as far as they can.
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(started.load(Ordering::SeqCst), SUMMARIES);
+        go.send(()).unwrap();
+        for read in reading {
+            read.await.unwrap();
+        }
+        assert_eq!(
+            started.load(Ordering::SeqCst),
+            6,
+            "the rest in turn, none refused"
+        );
     }
 
     #[test]

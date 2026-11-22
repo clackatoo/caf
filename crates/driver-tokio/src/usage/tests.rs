@@ -329,9 +329,14 @@ async fn a_table_that_doesnt_read_is_not_kept() {
 #[tokio::test]
 async fn finishing_doesnt_wait_for_a_fetch_under_way_and_it_keeps_nothing() {
     let dir = Dir::new("slow-fetch");
+    let (started, fetching) = std::sync::mpsc::channel::<()>();
     let (go, wait) = std::sync::mpsc::channel::<()>();
+    // Dropped with the fetcher, once the looking thread has ended.
+    let (alive, ended) = std::sync::mpsc::channel::<()>();
     let fetcher: Fetcher = Box::new(move || {
-        let _ = wait.recv_timeout(PATIENCE);
+        let _alive = &alive;
+        let _ = started.send(());
+        let _ = wait.recv();
         Ok(litellm("claude-fetched-1"))
     });
     let mut driver = UsageDriver::start(
@@ -341,10 +346,99 @@ async fn finishing_doesnt_wait_for_a_fetch_under_way_and_it_keeps_nothing() {
         CHECK_EVERY,
     );
     prices(&mut driver).await;
+    fetching.recv_timeout(PATIENCE).expect("fetching");
     (tokio::time::timeout(PATIENCE, driver.finish()).await).expect("finished");
     go.send(()).unwrap();
-    std::thread::sleep(Duration::from_millis(100));
-    assert_eq!(prices::fetched_at(&dir.0), None);
+    assert!(
+        matches!(
+            ended.recv_timeout(PATIENCE),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+        ),
+        "the looking thread ends"
+    );
+    assert_eq!(prices::fetched_at(&dir.0), None, "nothing kept");
+}
+
+/// A driver whose ledger thread is stuck until the sender it gives is
+/// dropped, going on without it after `within`.
+fn stuck(dir: &Dir, within: Duration) -> (UsageDriver, std::sync::mpsc::Sender<()>) {
+    let (unstick, stuck) = std::sync::mpsc::channel();
+    let options = Options {
+        prices_within: within,
+        finish_within: within,
+        stuck: Some(stuck),
+        ..Options::default()
+    };
+    let driver = UsageDriver::launch(Some(dir.0.clone()), "caf-test".into(), None, options);
+    (driver, unstick)
+}
+
+#[tokio::test]
+async fn with_the_thread_stuck_the_bundled_prices_are_given_and_the_rest_when_it_isnt() {
+    let dir = Dir::new("stuck-prices");
+    prices::set_own(&dir.0, "claude-test-1", Some(ModelPrice::new(3.0, 4.0))).unwrap();
+    let (mut driver, unstick) = stuck(&dir, Duration::from_millis(50));
+    assert_eq!(
+        prices(&mut driver).await,
+        prices::bundled(),
+        "after a while"
+    );
+    // A reading for a summary isn't waited for for ever either.
+    driver.reload();
+    assert!(matches!(next(&mut driver).await, Report::Reloaded));
+    drop(unstick);
+    let read = prices(&mut driver).await;
+    assert!(read.find("claude-test-1").is_some(), "the prices read");
+    // The reading given up on is let be, once it comes.
+    let more = tokio::time::timeout(Duration::from_millis(200), driver.next()).await;
+    assert!(more.is_err(), "{:?}", more.map(|_| ()));
+    driver.finish().await;
+}
+
+#[tokio::test]
+async fn finishing_waits_for_a_stuck_thread_only_so_long() {
+    let dir = Dir::new("stuck-finish");
+    let (mut driver, unstick) = stuck(&dir, Duration::from_millis(50));
+    driver.record(line(1, 5));
+    let finished = tokio::time::timeout(PATIENCE, driver.finish()).await;
+    assert!(finished.is_ok(), "it isn't waited for for ever");
+    drop(unstick);
+}
+
+#[tokio::test]
+async fn a_line_kept_is_written_at_the_next_look_with_no_line_after_it() {
+    let dir = Dir::new("hourly");
+    let folder = dir.path("ledger");
+    std::fs::write(&folder, "in the way").unwrap();
+    let mut driver = UsageDriver::start(
+        Some(folder.clone()),
+        "caf-test".into(),
+        None,
+        Duration::from_millis(5),
+    );
+    prices(&mut driver).await;
+    driver.record(line(1, 5));
+    // Through the same thread, so the line has been tried by the time
+    // it's answered.
+    let (reply, answer) = oneshot::channel();
+    driver.set_price("claude-test-1".into(), None, reply);
+    let Report::PriceSet { reply, result } = next(&mut driver).await else {
+        panic!("the price set")
+    };
+    let _ = reply.send(result.map_err(Error::Price));
+    let _ = answer.await;
+    std::fs::remove_file(&folder).unwrap();
+    let written = tokio::time::timeout(PATIENCE, async {
+        loop {
+            // The driver hands each look to the thread as it's polled.
+            let _ = tokio::time::timeout(Duration::from_millis(5), driver.next()).await;
+            if folder.is_dir() && turns_in(&folder) == 1 {
+                return;
+            }
+        }
+    });
+    written.await.expect("written at a look");
+    driver.finish().await;
 }
 
 #[test]
@@ -436,17 +530,15 @@ async fn prices_read_again_for_a_summary_are_sent_first_if_they_changed() {
     let dir = Dir::new("reload");
     let mut driver = UsageDriver::start(Some(dir.0.clone()), "caf-test".into(), None, CHECK_EVERY);
     prices(&mut driver).await;
-    let (reply, _answer) = oneshot::channel();
-    driver.reload(reply);
+    driver.reload();
     assert!(
-        matches!(next(&mut driver).await, Report::Reloaded(_)),
+        matches!(next(&mut driver).await, Report::Reloaded),
         "unchanged, so no prices first"
     );
     prices::set_own(&dir.0, "claude-test-1", Some(ModelPrice::new(9.0, 9.0))).unwrap();
-    let (reply, _answer) = oneshot::channel();
-    driver.reload(reply);
+    driver.reload();
     let table = prices(&mut driver).await;
     assert!(table.find("claude-test-1").is_some());
-    assert!(matches!(next(&mut driver).await, Report::Reloaded(_)));
+    assert!(matches!(next(&mut driver).await, Report::Reloaded));
     driver.finish().await;
 }
