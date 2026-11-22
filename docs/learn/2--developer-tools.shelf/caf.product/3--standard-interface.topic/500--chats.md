@@ -283,26 +283,26 @@ it's muted, with an *Archived* badge, and the full identity shows on its
 right when it was archived, in place of when it last changed. A chat saved
 archived before CAF kept when shows when it last changed instead.
 
-![An archived chat, opened](chats-archived.webp "Opened, it's still archived: the composer offers Unarchive")
+![An archived chat, opened](chats-archived.webp "Opened, it's still archived: the tray says so, and sending brings it back")
 
 **Opening an archived chat** restores it, as any saved chat, and it's
 still archived: archiving sticks. The chat shows it as anywhere else, with
 its title and the *Archived* badge in the app's header for it, and its
-composer is locked: *This chat is archived. Unarchive it to carry it on.*,
-with **Unarchive**, as
+composer's tray says *This chat is archived. Sending a message brings it
+back.*, with **Unarchive**, as
 [The composer](~caf/standard-interface/composer#what-the-chat-allows)
-shows. It can be read, and its settings can't be changed.
+shows. It can be read, and written in; only its settings can't be changed
+meanwhile.
 
-**Unarchive** makes it an ordinary chat again, at once: the badge goes, the
-composer unlocks, and nothing else happens until the user sends, which
-starts its agent. **Sending to an archived chat unarchives it** too: CAF
-takes a message to it as the user carrying it on. Only an app that sends
-without the composer meets this, as the composer stays locked until the
-user unarchives. Either way, the chat goes back to how it's shown when
-it's idle.
+**Bringing it back.** A message sent to an archived chat brings it back:
+CAF unarchives it, then sends the message as to any other. **Unarchive**
+brings it back without sending. Either way it's an ordinary chat again at
+once: the badge and the tray's note go, and its agent starts when a
+message is sent, as for a restored chat. Wherever it's listed, it goes
+back to how its state shows it.
 
-A chat that isn't saved, once archived, stays in memory until the app
-stops, archived, and is unarchived the same way.
+A chat that isn't saved, once archived, stays in memory, archived, until
+the app stops, and is brought back the same way.
 
 ## An agent that's gone
 

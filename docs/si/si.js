@@ -21,6 +21,7 @@
     tick: svg('<path d="M5 12l5 5 9-11"/>', '', 'width:15px;height:15px'),
     warn: svg('<path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17.5v.5"/>', '', 'width:15px;height:15px'),
     lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>', '', 'width:15px;height:15px'),
+    archive: svg('<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 001 1h12a1 1 0 001-1V9M10 13h4"/>', '', 'width:15px;height:15px'),
     unplug: svg('<path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 01-10 0zM12 16v5M3 3l18 18"/>', '', 'width:15px;height:15px'),
     search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>', '', 'width:15px;height:15px'),
     star: svg('<path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8 6.6 19.7l1.1-6.1L3.2 9.4l6.1-.8z"/>', '', 'width:15px;height:15px'),
@@ -68,9 +69,11 @@
   const DEFAULTS = {
     agent: 'claude',
     text: '', running: false, stopping: false, waiting: 0, waitingFor: 'this turn', waitingNote: null, problem: null, gate: false,
-    // A string, or { text, icon: 'lock' | 'unplug', bold, action }: nothing can be sent.
-    // An action, such as Unarchive, is the one thing to do, as a button.
+    // A string, or { text, icon: 'lock' | 'unplug', bold }: nothing can be sent.
     blocked: null,
+    // Archived: the tray says so and offers Unarchive; the box is as usual,
+    // but the settings can't be chosen.
+    archived: false,
     // known | unknown | learning | failed | none
     settings: 'known',
     // Why CAF couldn't learn the settings, as the composer page words it, and
@@ -102,6 +105,8 @@
     if (s.settings === 'learning') return `<span class="si-control si-quiet">${m}<span class="si-label">Learning ${name}'s settings…</span>${icon.spin}</span>`
     if (s.settings === 'unknown') return `<span class="si-control si-quiet${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${s.narrow ? 'Settings' : s.newChat ? name : 'Settings not known yet'}</span>${icon.chev}</span>`
     if (s.settings === 'failed') return `<span class="si-control si-quiet${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${s.narrow ? 'Settings' : `Couldn't learn ${name}'s settings`}</span>${icon.chev}</span>`
+    // Archived, the settings can't be chosen: shown, as when nothing can be sent, with nothing to open.
+    if (s.archived) return `<span class="si-control si-quiet">${m}<span class="si-label">${s.model} · ${s.effort}</span></span>`
     const part = (now, later) => later ? `<span class="si-part si-held" title="${s.running ? 'From the next turn' : 'Not applied yet'}">${icon.clock}${later}</span>` : `<span class="si-part">${now}</span>`
     const fast = OFFERS[s.model] && OFFERS[s.model].fast && s.fast
     return `<span class="si-control${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${part(s.model, s.held.model)}<span class="si-sep">·</span>${part(s.effort, s.held.effort)}${fast ? icon.bolt : ''}</span>${icon.chev}</span>`
@@ -163,12 +168,13 @@
         waiting.map(t => `<div class="si-item">${icon.clock}<span class="si-text">${t}</span></div>`).join('') + '</div>'
     }
     if (s.problem) h += `<div class="si-tray si-problem">${icon.warn}${s.problem}</div>`
+    if (s.archived) h += `<div class="si-tray si-note">${icon.archive}<span>This chat is archived. Sending a message brings it back.</span><span class="si-spacer"></span><span class="si-btn">Unarchive</span></div>`
     h += s.attached
     const joined = s.attached ? ` si-joined${s.joined ? ' si-' + s.joined : ''}` : ''
     h += `<div class="si-box${joined}">`
     if (s.blocked) {
       const b = typeof s.blocked === 'string' ? { text: s.blocked } : s.blocked
-      h += `<div class="si-locked">${icon[b.icon || 'lock']}<span>${b.bold ? `<b>${b.bold}</b> ` : ''}${b.text}</span>${b.action ? `<span class="si-spacer"></span><span class="si-btn si-primary">${b.action}</span>` : ''}</div>`
+      h += `<div class="si-locked">${icon[b.icon || 'lock']}<span>${b.bold ? `<b>${b.bold}</b> ` : ''}${b.text}</span></div>`
       if (b.controls !== false) h += `<div class="si-controls"><span class="si-control si-quiet">${mark(s.agent)}<span class="si-label">${s.settings === 'known' ? s.model + ' · ' + s.effort : name}</span></span><span class="si-spacer"></span>${ring(s)}</div>`
       return h + `</div>${s.after}</div></div>`
     }

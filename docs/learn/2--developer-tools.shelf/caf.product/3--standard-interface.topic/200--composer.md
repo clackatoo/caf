@@ -34,7 +34,7 @@ bottom. Nothing sits above the text inside the box.
 | The settings control | Bottom left | The agent's mark and one control for all its settings: *Opus 5.5 · High*, with a bolt when fast mode is on. It opens the settings menu. |
 | The context ring | Bottom right | How full the agent's context is, as a ring and a percent. It opens the usage popover. |
 | The round button | Bottom right, after the ring | **Send**, or **Stop** while a turn runs or the chat opens, and the box is empty. |
-| The tray | Above the box | Messages waiting to be sent, or why a message couldn't be sent. |
+| The tray | Above the box | Messages waiting to be sent, why a message couldn't be sent, or that the chat is archived. |
 | What's attached | Between the tray and the box, joined to the box | A question waiting on the user, or the agent banner. Only one at a time. |
 
 From the top, then: the tray, then what's attached, then the box.
@@ -78,10 +78,11 @@ words are never lost. The words, by what happened:
 | The agent can't take the message (`Refused::Unsupported`) | *Couldn't send: Claude can't take this message.* |
 | The chat isn't open any more (`Refused::NoSuchChat`) | *Couldn't send: this chat isn't open any more.* |
 
-A chat that's archived (`Chat.archived`), or whose agent is gone or can't
-be run (`Refused::NoSuchAgent`, `Refused::OwnTools`), shows
-[Can't write](#what-the-chat-allows) instead, so the user isn't invited to
-send at all.
+A chat whose agent is gone or can't be run (`Refused::NoSuchAgent`,
+`Refused::OwnTools`) shows [Can't write](#what-the-chat-allows) instead, so
+the user isn't invited to send at all. An archived chat isn't one: a
+message to it is sent, and brings it back, as
+[Archived](#what-the-chat-allows) says.
 
 ## Messages that wait
 
@@ -338,6 +339,25 @@ before the agent has said, has no ring. Clicking the ring opens the usage
 popover, and a dot on the ring warns of an account limit running low: see
 [Usage](~caf/standard-interface/usage).
 
+![An archived chat's composer](composer-archived.webp "Archived: the tray says so, and the box is as usual")
+
+**Archived.** A chat stays archived (`Chat.archived`), restored or not,
+until it's brought back. Sending a message brings it back: CAF unarchives
+it and sends the message as to any other (`Core::send`). So the box stays
+as usual, and the user can write and send. The tray says, calm, with an
+archive box, *This chat is archived. Sending a message brings it back.*,
+and offers **Unarchive**, plain, at its other end, which brings it back
+without sending (`Core::unarchive`; a viewer's `Unarchive`, with the `act`
+right). Either way the note goes at once, and the chat is an ordinary one,
+its agent started when a message is sent, as for a restored chat.
+
+While it's archived, only its settings can't be chosen, as CAF refuses to
+change them (`Refused::Closed`): the control shows the model and effort,
+without the bolt or the chevron, and can't be opened, as when the user
+can't write. They can be chosen again once it's back. A viewer without the
+`act` right sees the note without Unarchive, and the box as
+[Can't write](#what-the-chat-allows) says.
+
 ![A composer the user can't write in](composer-blocked.webp "Watch-only: the box stays and says why")
 
 **Can't write.** The box stays where it is, with a lock, and says why, by
@@ -346,23 +366,8 @@ the first of these that holds:
 | Why | The box says |
 | --- | --- |
 | The viewer has no `act` right | *You can follow this chat, but not write in it.* |
-| The chat is archived (`Chat.archived`) | ***This chat is archived.*** *Unarchive it to carry it on.*, with **Unarchive** |
 | Its agent is gone, or CAF won't run it | As [A chat's identity and lifecycle](~caf/standard-interface/chats) says |
 | Its agent can never be installed on this machine | As [Agents](~caf/standard-interface/agents) says |
-
-![An archived chat's composer](composer-archived.webp "Archived: the box is locked, and offers Unarchive")
-
-**Archived.** A chat stays archived, restored or not, until it's
-unarchived. **Unarchive**, the primary button at the end of the line, makes
-it an ordinary chat again, and the box unlocks: nothing more happens until
-the user sends, which starts the agent, as for a restored chat
-(`Core::unarchive`; a viewer's `Unarchive`, with the `act` right). Sending
-to an archived chat unarchives it too: CAF takes a message to it as the
-user carrying it on (`Core::send`). The box stays locked all the same, so
-the user takes it out of the archive knowingly, with one press; an app
-that sends without the composer, such as for a shortcut or a script,
-needn't unarchive first. The settings stay locked while it's archived, as
-CAF refuses to change them (`Refused::Closed`).
 
 It has no Send, Stop or settings menu. The control shows the model and
 effort, without the bolt or the chevron, and can't be opened; the ring stays.
@@ -398,8 +403,9 @@ half a word.
 | A change not applied yet | `settings.chosen` differing from `current`, when `offered` holds the setting and its `current` is known. |
 | The model divider | `Turn.model` differing from the turn before. |
 | The context ring | `Usage.used` and `Usage.size`. |
-| Whether the user may write | The viewer's `act` right, `Chat.archived`, and the chat's state. |
-| **Unarchive** | `Core::unarchive`, or a viewer's `Unarchive`, with the `act` right: `Chat.archived` goes back to none, by `Change::Archived`. `Core::send` unarchives a chat too. |
+| Whether the user may write | The viewer's `act` right, and the chat's state. |
+| Archived | `Chat.archived`, by `Change::Archived`; `Refused::Closed` for a setting chosen meanwhile. |
+| **Unarchive** | `Core::unarchive`, or a viewer's `Unarchive`, with the `act` right: `Chat.archived` goes back to none. `Core::send` unarchives a chat too, then sends. |
 | Why the settings couldn't be learned | `AgentStatus.settings`'s `Failed`, a `LearnFailure`; the system's words in `CouldNotStart.error`, the agent's in `Refused.message`. |
 | **Learn them now** | The viewer's `agents` right; `Core::learn_settings`. |
 | The agent banner | The agent's status, as [Agents](~caf/standard-interface/agents) describes. |

@@ -535,11 +535,13 @@ care where the chat came from:
 
 It offers only what `may` lets it: without `act`, the chat can be watched,
 not acted in; without `agents`, it says what's happening to the agent but
-offers no Install, sign-in or Check again. An archived chat's composer is
-locked, saying so, and offers Unarchive, if `unarchive` is given. A saved
-chat is put away as it's archived, so CAF refuses to unarchive it until
-it's restored: `unarchiveOrRestore`, from the same folder, restores it
-first, archived still, then unarchives it, as the debugger does.
+offers no Install, sign-in or Check again. An archived chat says so above
+its composer, which stays usable, as sending brings it back, and offers
+Unarchive, if `unarchive` is given; only its settings can't be chosen. A
+saved chat is put away as it's archived, so CAF refuses to send to it or
+unarchive it until it's restored: `orRestored`, from the same folder,
+restores it first, archived still, then tries again, as the debugger
+does.
 
 Given its agent's status, the view also shows what the agent needs before
 the chat can go on. While the chat waits for an agent that isn't

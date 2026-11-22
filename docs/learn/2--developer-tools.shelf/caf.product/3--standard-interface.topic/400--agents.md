@@ -240,8 +240,10 @@ or *…and this machine has no Node.* when it has none. Then
 **Check again** has CAF look again (`Core::check_agents`, or a viewer's
 `CheckAgain`); if the machine now has what's needed, the banner turns to
 Install. It looks at what's installed and what the machine has for every
-agent, not only this one. CAF never installs Node itself. The app may also
-look again by itself, such as when its window comes to the front.
+agent, not only this one. CAF never installs Node itself. Check again
+needs the `agents` right: a viewer without it has none, and the app looks
+again itself, such as when its window comes to the front, which any app
+may do too.
 
 ![Can't: npm](agents-npm.webp "The machine has no npm")
 

@@ -146,7 +146,7 @@
     { id: 'gate', label: 'Agent not ready', what: "<b>The chat is waiting for Claude to be installed.</b> The agent banner attaches to the box, as questions do (see the agents page), and the box says messages will wait.", s: { gate: true } },
     { id: 'filling', label: 'Context filling', what: '<b>The context is 86% full,</b> so the ring turns amber (red past 95%).', s: { context: 86 } },
     { id: 'blocked', label: "Can't write", what: "<b>A viewer without the <code>act</code> right.</b> The box stays in place, says why, and has no controls.", s: { blocked: 'You can follow this chat, but not write in it.' } },
-    { id: 'archived', label: 'Archived', what: "<b>An archived chat,</b> restored or not: it stays archived until it's unarchived. The box is locked, says so, and offers Unarchive, which makes it an ordinary chat again.", s: { blocked: { bold: 'This chat is archived.', text: 'Unarchive it to carry it on.', action: 'Unarchive' } } },
+    { id: 'archived', label: 'Archived', what: "<b>An archived chat,</b> restored or not: it stays archived until it's brought back. Sending a message brings it back, so the box is as usual; the tray says so, and offers Unarchive. Only the settings can't be chosen meanwhile.", s: { archived: true } },
   ]
 
   // The agent banner, as agents.html draws it, attached to the box.

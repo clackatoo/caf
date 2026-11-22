@@ -109,6 +109,7 @@
 .si-tray .si-item { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--raised-edge); }
 .si-tray .si-item:first-of-type { border-top: 0; }
 .si-tray .si-item .si-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.si-tray.si-note { display: flex; gap: 8px; align-items: center; padding: 6px 7px 6px 12px; color: var(--muted); }
 .si-tray.si-problem { background: var(--warning-bg); border-color: var(--warning-edge); color: var(--warning); display: flex; gap: 8px; align-items: center; padding: 8px 12px; }
 
 /* What attaches on top of the box: questions, the agent banner, refusals.
@@ -412,6 +413,7 @@
     tick: svg('<path d="M5 12l5 5 9-11"/>', '', 'width:15px;height:15px'),
     warn: svg('<path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17.5v.5"/>', '', 'width:15px;height:15px'),
     lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>', '', 'width:15px;height:15px'),
+    archive: svg('<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 001 1h12a1 1 0 001-1V9M10 13h4"/>', '', 'width:15px;height:15px'),
     unplug: svg('<path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 01-10 0zM12 16v5M3 3l18 18"/>', '', 'width:15px;height:15px'),
     search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>', '', 'width:15px;height:15px'),
     star: svg('<path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8 6.6 19.7l1.1-6.1L3.2 9.4l6.1-.8z"/>', '', 'width:15px;height:15px'),
@@ -459,9 +461,11 @@
   const DEFAULTS = {
     agent: 'claude',
     text: '', running: false, stopping: false, waiting: 0, waitingFor: 'this turn', waitingNote: null, problem: null, gate: false,
-    // A string, or { text, icon: 'lock' | 'unplug', bold, action }: nothing can be sent.
-    // An action, such as Unarchive, is the one thing to do, as a button.
+    // A string, or { text, icon: 'lock' | 'unplug', bold }: nothing can be sent.
     blocked: null,
+    // Archived: the tray says so and offers Unarchive; the box is as usual,
+    // but the settings can't be chosen.
+    archived: false,
     // known | unknown | learning | failed | none
     settings: 'known',
     // Why CAF couldn't learn the settings, as the composer page words it, and
@@ -493,6 +497,8 @@
     if (s.settings === 'learning') return `<span class="si-control si-quiet">${m}<span class="si-label">Learning ${name}'s settings…</span>${icon.spin}</span>`
     if (s.settings === 'unknown') return `<span class="si-control si-quiet${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${s.narrow ? 'Settings' : s.newChat ? name : 'Settings not known yet'}</span>${icon.chev}</span>`
     if (s.settings === 'failed') return `<span class="si-control si-quiet${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${s.narrow ? 'Settings' : `Couldn't learn ${name}'s settings`}</span>${icon.chev}</span>`
+    // Archived, the settings can't be chosen: shown, as when nothing can be sent, with nothing to open.
+    if (s.archived) return `<span class="si-control si-quiet">${m}<span class="si-label">${s.model} · ${s.effort}</span></span>`
     const part = (now, later) => later ? `<span class="si-part si-held" title="${s.running ? 'From the next turn' : 'Not applied yet'}">${icon.clock}${later}</span>` : `<span class="si-part">${now}</span>`
     const fast = OFFERS[s.model] && OFFERS[s.model].fast && s.fast
     return `<span class="si-control${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${part(s.model, s.held.model)}<span class="si-sep">·</span>${part(s.effort, s.held.effort)}${fast ? icon.bolt : ''}</span>${icon.chev}</span>`
@@ -554,12 +560,13 @@
         waiting.map(t => `<div class="si-item">${icon.clock}<span class="si-text">${t}</span></div>`).join('') + '</div>'
     }
     if (s.problem) h += `<div class="si-tray si-problem">${icon.warn}${s.problem}</div>`
+    if (s.archived) h += `<div class="si-tray si-note">${icon.archive}<span>This chat is archived. Sending a message brings it back.</span><span class="si-spacer"></span><span class="si-btn">Unarchive</span></div>`
     h += s.attached
     const joined = s.attached ? ` si-joined${s.joined ? ' si-' + s.joined : ''}` : ''
     h += `<div class="si-box${joined}">`
     if (s.blocked) {
       const b = typeof s.blocked === 'string' ? { text: s.blocked } : s.blocked
-      h += `<div class="si-locked">${icon[b.icon || 'lock']}<span>${b.bold ? `<b>${b.bold}</b> ` : ''}${b.text}</span>${b.action ? `<span class="si-spacer"></span><span class="si-btn si-primary">${b.action}</span>` : ''}</div>`
+      h += `<div class="si-locked">${icon[b.icon || 'lock']}<span>${b.bold ? `<b>${b.bold}</b> ` : ''}${b.text}</span></div>`
       if (b.controls !== false) h += `<div class="si-controls"><span class="si-control si-quiet">${mark(s.agent)}<span class="si-label">${s.settings === 'known' ? s.model + ' · ' + s.effort : name}</span></span><span class="si-spacer"></span>${ring(s)}</div>`
       return h + `</div>${s.after}</div></div>`
     }
@@ -692,7 +699,7 @@
     { id: 'cant-appdata', label: "Can't restore: app's data", note: "The app can't read the data it saved with the chat. Nothing helps but a version of the app that can, so there are no actions.", render: () => failure('appdata') },
     { id: 'cant-store', label: "Can't restore: couldn't read", note: 'The store failed, such as a disk error. What the system said is shown. Trying again may help.', render: () => failure('store') },
     { id: 'cant-gone', label: "Can't restore: gone", note: "Its save has gone. Remove from list lists the chats again, and it drops out. A viewer, which can't list them, offers nothing.", render: () => failure('gone') },
-    { id: 'archived', label: 'An archived chat, opened', note: "Opening an archived chat restores it, as any saved chat, and it's still archived: the header says so, and the composer is locked, offering Unarchive. Unarchiving it, or a message sent to it, makes it an ordinary chat again.", render: () => head('Fix the restore race', { badge: '<span class="badge">Archived</span>' }) + `<div class="body"><div class="column">${convo}</div></div>` + composer({ blocked: { bold: 'This chat is archived.', text: 'Unarchive it to carry it on.', action: 'Unarchive' } }) },
+    { id: 'archived', label: 'An archived chat, opened', note: "Opening an archived chat restores it, as any saved chat, and it's still archived: the header says so, and the composer's tray says so, offering Unarchive. A message sent to it, or Unarchive, makes it an ordinary chat again.", render: () => head('Fix the restore race', { badge: '<span class="badge">Archived</span>' }) + `<div class="body"><div class="column">${convo}</div></div>` + composer({ archived: true }) },
     { id: 'agent-gone', label: 'Agent gone', note: "Its agent isn't offered by this app any more, so it can be read but not carried on. The box says why instead of offering to send.", render: () => head('Parser fuzzing notes', { mark: MARK.gemini }) + `<div class="body"><div class="column">${FUZZ}</div></div>` + composer({ agent: 'gemini', settings: 'none', context: 31, blocked: { icon: 'unplug', bold: "Gemini isn't available in this app any more.", text: 'You can read this chat, but not carry it on.' } }) + `` },
     { id: 'own-tools', label: 'Own tools on', note: "Its agent is offered, but CAF won't run it, as it can't turn off the agent's own tools: the app chose the cautious profile, or the agent isn't the one its profile is for. Like an agent gone, it can be read but not carried on.", render: () => head('Fix the empty-file panic') + `<div class="body"><div class="column">${convo}</div></div>` + composer({ settings: 'none', context: 18, blocked: { icon: 'lock', bold: "Claude can't be used: its own tools can't be turned off.", text: 'You can read this chat, but not carry it on.' } }) },
     { id: 'new', label: 'New chat', note: "An empty chat with the usual composer: the settings control picks the agent and its model (the menu's rail lists every agent in a new chat). There's no context yet, so no ring. This app fixes the folder, so there's no folder control.", render: () => head('New chat') + `<div class="body"><div class="centre">${rays('var(--claude)', 30)}<h3>New chat</h3>Send a message to start.</div></div>` + composer({ newChat: true, context: null }) },
