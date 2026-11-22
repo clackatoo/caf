@@ -13,9 +13,22 @@ use rustix::io::Errno;
 pub(crate) const LOCK: &str = ".lock";
 
 /// Makes a folder and those it's in, if they aren't there, private to the
-/// user.
+/// user, each synced into the folder it's in.
 pub(crate) fn make_folder(path: &Path) -> io::Result<()> {
-    DirBuilder::new().recursive(true).mode(0o700).create(path)
+    if path.is_dir() {
+        return Ok(());
+    }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    make_folder(parent)?;
+    match DirBuilder::new().mode(0o700).create(path) {
+        Ok(()) => sync_folder(parent),
+        // Made meanwhile, by another that syncs it.
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 /// Takes the folder's lock, waiting while another holds it: held until

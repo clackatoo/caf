@@ -130,7 +130,20 @@ fn a_table_that_isnt_one_is_refused() {
 #[test]
 fn the_bundled_snapshot_reads_and_prices_claude_fast() {
     let table = bundled();
-    assert!(table.models.len() > 50, "{} models", table.models.len());
+    // 270 when it was last refreshed: Anthropic's, OpenAI's, Gemini's and
+    // xAI's models, and no one else's.
+    assert!(
+        (200..1000).contains(&table.models.len()),
+        "{} models",
+        table.models.len()
+    );
+    assert!(
+        table
+            .models
+            .iter()
+            .all(|priced| !priced.model.starts_with("bedrock/")
+                && !priced.model.starts_with("azure/"))
+    );
     assert!(
         table
             .models

@@ -2,6 +2,7 @@
 //! summaries read from it, and the prices cost is estimated with. No async
 //! runtime, so any runtime's usage driver uses it: `caf-driver-tokio` runs
 //! it on a blocking thread, and a host on plain threads on one of its own.
+//! Unix only, macOS included, as caf-save is: it locks with `flock`.
 //!
 //! The core says what to write ([`UsageDirective`]); [`Ledger::record`]
 //! writes it. A summary ([`summarise`]) reads the ledger without the core,
@@ -28,17 +29,20 @@
 //! in UTC. An app writes only in its own folder, under that folder's lock
 //! (`.lock`). A turn that ends in a month already compressed, as one
 //! recorded just after midnight may, goes in that month's `.jsonl` all the
-//! same: a reader reads both files, and the next compression joins them. What it never holds: what was said, and the folder a
-//! chat works in, so the ledger can't tell which projects you work on.
+//! same: a reader reads both files, and the next compression joins them.
+//!
+//! What it never holds: what was said, and the folder a chat works in, so
+//! the ledger can't tell which projects you work on.
 //!
 //! # Guarantees
 //!
 //! Each of these has a test.
 //!
 //! 1. **Every line is whole.** One is added under the app's lock, in one
-//!    write, so two copies of an app never mix theirs; a line cut off by a
-//!    crash is the file's last, is skipped as it's read, and is written
-//!    over by the next line added.
+//!    write, so two copies of an app never mix theirs. Only a line with
+//!    its line end counts: one without may be cut off by a crash, or still
+//!    being written, so it's never counted, and the next line added is
+//!    written over it. A line that doesn't read names its file.
 //! 2. **Lines are only ever added**, and every line ever written is read by
 //!    every later CAF: fields are only added, and readers ignore those they
 //!    don't know.
@@ -46,9 +50,13 @@
 //!    first line for each `(chat, turn)` counts.
 //! 4. **A summary is never quietly short:** every file in its period it
 //!    couldn't read is named in it ([`Summary::unreadable`]).
-//! 5. **A month is compressed only once it has ended**, by whichever app
-//!    first writes in a later one, and the file is replaced in one step, so
-//!    a reader sees one or the other whole.
+//! 5. **A month is compressed only once it has ended**: each app
+//!    compresses its own folder's, when it first writes in a later month,
+//!    and the file is replaced in one step, so a reader sees one or the
+//!    other whole.
+//! 6. **Every count is below 2^53**, as everything CAF writes is: a line
+//!    with one that isn't is refused, or read as unreadable, and a sum
+//!    stops at 2^53 - 1.
 //!
 //! [`UsageDirective`]: caf_core::directive::UsageDirective
 //! [`LedgerLine`]: caf_core::usage::LedgerLine
@@ -60,12 +68,14 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use caf_core::ChatId;
 use caf_core::ids::TurnId;
 use caf_core::time::Wall;
 use caf_core::usage::{
-    BadQuery, Bucket, LedgerLine, PriceTable, PricedModel, Resolution, Summary, UsageQuery,
+    BadQuery, Bucket, LedgerLine, PriceTable, PricedModel, Resolution, Summary, Tokens, TurnUsage,
+    UsageQuery,
 };
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -85,27 +95,21 @@ const LONGEST: i64 = 400 * 24 * 60 * 60 * 1000;
 /// How hard a finished month is compressed: well, and still quickly, as
 /// it's done under the app's lock.
 const LEVEL: i32 = 12;
+/// The most any count may be: 2^53 - 1, the most JSON's numbers hold
+/// exactly everywhere.
+const MOST: u64 = (1 << 53) - 1;
 
 /// The ledger's folder every CAF program shares, by default:
 /// `$XDG_DATA_HOME/caf/usage`, or `~/.local/share/caf/usage` without it,
-/// on every Unix, macOS included, beside the agents CAF installs; and
-/// `%APPDATA%\caf\usage` on Windows. Each is taken only if it's an
-/// absolute path, as the XDG rules say. `None` if there's no home folder
-/// to find it from.
+/// on every Unix, macOS included, beside the agents CAF installs. Each is
+/// taken only if it's an absolute path, as the XDG rules say. `None` if
+/// there's no home folder to find it from.
 #[must_use]
 pub fn default_folder() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        absolute(std::env::var_os("APPDATA")).map(|data| data.join("caf").join("usage"))
-    }
-    #[cfg(not(windows))]
-    {
-        folder_from(std::env::var_os("XDG_DATA_HOME"), std::env::var_os("HOME"))
-    }
+    folder_from(std::env::var_os("XDG_DATA_HOME"), std::env::var_os("HOME"))
 }
 
-/// The default folder on Unix, from `$XDG_DATA_HOME` and `$HOME`.
-#[cfg_attr(windows, allow(dead_code))]
+/// The default folder, from `$XDG_DATA_HOME` and `$HOME`.
 fn folder_from(data: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
     let data = absolute(data).or_else(|| absolute(home).map(|home| home.join(".local/share")))?;
     Some(data.join("caf/usage"))
@@ -121,6 +125,10 @@ fn absolute(path: Option<OsString>) -> Option<PathBuf> {
 pub struct Ledger {
     folder: PathBuf,
     app: String,
+    /// The months whose compression failed: not tried again by this
+    /// ledger, so a month that can't be compressed isn't read again with
+    /// every line. The next ledger, as after a restart, tries again.
+    failed: Mutex<HashSet<String>>,
 }
 
 impl Ledger {
@@ -132,6 +140,7 @@ impl Ledger {
         Self {
             folder,
             app: app.into(),
+            failed: Mutex::new(HashSet::new()),
         }
     }
 
@@ -150,8 +159,9 @@ impl Ledger {
     /// Adds a line to the app's file for the month it ended in, in UTC,
     /// making the folders if need be. If that's a later month than a file
     /// left uncompressed, that file is compressed first; if that fails,
-    /// it's left as it is, to be tried again with the next line, and the
-    /// line is added all the same.
+    /// it's left as it is, and the line is added all the same. A month
+    /// that failed is tried again by the next ledger made, as after a
+    /// restart.
     ///
     /// # Errors
     ///
@@ -160,14 +170,30 @@ impl Ledger {
     /// [`InvalidInput`](io::ErrorKind::InvalidInput) if the app's name
     /// can't be a folder's (empty, `prices`, starting with a dot, or with
     /// a slash, backslash or nothing character in it; `prices` in any
-    /// case), or the turn ended
-    /// outside the years 0 to 9999.
+    /// case); if the line is another app's, has a count of 2^53 or more or
+    /// a cost that isn't a number; or if the turn ended outside the years
+    /// 0 to 9999.
     pub fn record(&self, line: &LedgerLine) -> io::Result<()> {
         if !is_app(&self.app) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("{:?} can't name an app's folder", self.app),
             ));
+        }
+        let invalid = |why: &str| io::Error::new(io::ErrorKind::InvalidInput, why.to_owned());
+        if line.app != self.app {
+            return Err(invalid("the line is another app's"));
+        }
+        if !within(&line.usage) {
+            return Err(invalid("the line has a count of 2^53 or more"));
+        }
+        if line
+            .usage
+            .cost
+            .as_ref()
+            .is_some_and(|cost| !cost.amount.is_finite())
+        {
+            return Err(invalid("the line's cost isn't a number"));
         }
         let month = month_of(line.at).ok_or_else(|| {
             io::Error::new(
@@ -181,14 +207,32 @@ impl Ledger {
         let folder = self.folder.join(&self.app);
         files::make_folder(&folder)?;
         let _lock = files::lock(&folder)?;
+        let mut failed = self.failed.lock().unwrap_or_else(PoisonError::into_inner);
         for earlier in uncompressed(&folder)? {
-            if earlier < month {
-                // Tried again with the next line, if it fails.
-                let _ = compress(&folder, &earlier);
+            if earlier < month && !failed.contains(&earlier) && compress(&folder, &earlier).is_err()
+            {
+                failed.insert(earlier);
             }
         }
+        drop(failed);
         append(&folder.join(format!("{month}.jsonl")), &bytes)
     }
+}
+
+/// Whether every count in a turn's usage is below 2^53.
+fn within(usage: &TurnUsage) -> bool {
+    usage.models.iter().all(|row| {
+        let tokens = &row.tokens;
+        [
+            tokens.input,
+            tokens.cache_read,
+            tokens.cache_write,
+            tokens.output,
+            tokens.thinking.unwrap_or(0),
+        ]
+        .into_iter()
+        .all(|count| count <= MOST)
+    })
 }
 
 /// Whether `app` can name an app's folder in the ledger's.
@@ -255,12 +299,16 @@ fn append(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .mode(0o600)
         .open(path)?;
     let size = file.metadata()?.len();
-    if size > 0 {
-        let mut last = [0];
-        file.read_exact_at(&mut last, size - 1)?;
-        if last[0] != b'\n' {
-            file.set_len(whole_end(&file, size)?)?;
-        }
+    if size == 0 {
+        file.write_all(bytes)?;
+        file.sync_data()?;
+        // Made just now, perhaps: its name is synced too.
+        return files::sync_folder(path.parent().unwrap_or(Path::new(".")));
+    }
+    let mut last = [0];
+    file.read_exact_at(&mut last, size - 1)?;
+    if last[0] != b'\n' {
+        file.set_len(whole_end(&file, size)?)?;
     }
     file.write_all(bytes)?;
     file.sync_data()
@@ -295,20 +343,48 @@ fn compress(folder: &Path, month: &str) -> io::Result<()> {
     };
     lines.truncate(whole(&lines));
     if let Some(packed) = files::read(&folder.join(&name))? {
+        // The `.jsonl` holds turns that ended in the month after it was
+        // compressed, or, after a crash between the last compression's
+        // rename and removal, what it compressed: only lines it doesn't
+        // hold already, by their text or their turn, are added.
         let mut before = zstd::decode_all(packed.as_slice())?;
-        // A crash after the last compression's rename left its `.jsonl`,
-        // which is what it holds, or that and more; otherwise the `.jsonl`
-        // holds turns that ended in the month after it was compressed.
-        if !lines.starts_with(&before) {
-            before.truncate(whole(&before));
-            before.extend_from_slice(&lines);
-            lines = before;
-        }
+        before.truncate(whole(&before));
+        let added = {
+            let held: HashSet<&[u8]> = before.split(|byte| *byte == b'\n').collect();
+            let turns: HashSet<(ChatId, TurnId)> =
+                held.iter().filter_map(|text| turn(text)).collect();
+            let mut added = Vec::new();
+            for text in lines.split(|byte| *byte == b'\n') {
+                if text.iter().all(u8::is_ascii_whitespace)
+                    || held.contains(text)
+                    || turn(text).is_some_and(|turn| turns.contains(&turn))
+                {
+                    continue;
+                }
+                added.extend_from_slice(text);
+                added.push(b'\n');
+            }
+            added
+        };
+        before.extend_from_slice(&added);
+        lines = before;
     }
     let packed = zstd::encode_all(lines.as_slice(), LEVEL)?;
     files::replace(folder, &name, &packed)?;
     std::fs::remove_file(&plain)?;
     files::sync_folder(folder)
+}
+
+/// The turn a line is of, if it reads as one.
+fn turn(text: &[u8]) -> Option<(ChatId, TurnId)> {
+    /// Only what tells a turn: the rest is skipped.
+    #[derive(serde::Deserialize)]
+    struct Turn {
+        chat: ChatId,
+        turn: TurnId,
+    }
+    let line: Turn = serde_json::from_slice(text).ok()?;
+    Some((line.chat, line.turn))
 }
 
 /// Usage over a period, from every app's lines in `folder`, with cost
@@ -336,7 +412,11 @@ pub fn summarise(
     let mut summary = Summary::new(query.clone());
     summary.fetched = prices.fetched;
     let mut read = Lines::default();
-    for app in apps(folder, &mut summary.unreadable) {
+    let asked = |app: &String| query.apps.is_empty() || query.apps.contains(app);
+    for app in apps(folder, &mut summary.unreadable)
+        .into_iter()
+        .filter(asked)
+    {
         for month in &months {
             read.month(folder, &app, month, &mut summary.unreadable);
         }
@@ -446,29 +526,29 @@ impl Lines {
         }
     }
 
-    /// Reads a file's lines, keeping each turn's first. Whether every line
-    /// read but the last, which a crash may have cut off.
+    /// Reads a file's lines, keeping each turn's first. Only lines with
+    /// their line end count: what's after the last may be a line a crash
+    /// cut off, or one still being written. Whether every line that counts
+    /// read.
     fn lines(&mut self, bytes: &[u8]) -> bool {
-        let mut whole = true;
-        let mut failed = false;
-        for text in bytes.split(|byte| *byte == b'\n') {
+        let mut readable = true;
+        for text in bytes[..whole(bytes)].split(|byte| *byte == b'\n') {
             if text.iter().all(u8::is_ascii_whitespace) {
                 continue;
             }
-            if failed {
-                whole = false;
-            }
-            match serde_json::from_slice::<LedgerLine>(text) {
-                Ok(line) => {
-                    failed = false;
+            let line = serde_json::from_slice::<LedgerLine>(text)
+                .ok()
+                .filter(|line| within(&line.usage));
+            match line {
+                Some(line) => {
                     if self.seen.insert((line.chat, line.turn)) {
                         self.lines.push(line);
                     }
                 }
-                Err(_) => failed = true,
+                None => readable = false,
             }
         }
-        whole
+        readable
     }
 }
 
@@ -588,6 +668,9 @@ impl<'a> Sum<'a> {
             if counted.insert(key) {
                 bucket.turns += 1;
             }
+            clamp(&mut bucket.tokens);
+            bucket.unpriced = bucket.unpriced.min(MOST);
+            bucket.turns = bucket.turns.min(MOST);
         }
     }
 
@@ -623,9 +706,22 @@ impl<'a> Sum<'a> {
     }
 }
 
+/// Stops every count at 2^53 - 1.
+fn clamp(tokens: &mut Tokens) {
+    for count in [
+        &mut tokens.input,
+        &mut tokens.cache_read,
+        &mut tokens.cache_write,
+        &mut tokens.output,
+    ] {
+        *count = (*count).min(MOST);
+    }
+    tokens.thinking = tokens.thinking.map(|thinking| thinking.min(MOST));
+}
+
 /// A reported cost shared between a turn's models: by their estimates, or
 /// by their tokens if none has a price, or evenly if they have none.
-fn shares(amount: f64, usage: &caf_core::usage::TurnUsage, estimates: &[Option<f64>]) -> Vec<f64> {
+fn shares(amount: f64, usage: &TurnUsage, estimates: &[Option<f64>]) -> Vec<f64> {
     let estimated: Vec<f64> = estimates
         .iter()
         .map(|estimate| estimate.unwrap_or(0.0))
