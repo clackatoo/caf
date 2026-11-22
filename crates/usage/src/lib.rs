@@ -82,6 +82,7 @@ use std::sync::{Mutex, PoisonError};
 
 use caf_core::ChatId;
 use caf_core::ids::TurnId;
+use caf_core::profiles::Builtin;
 use caf_core::time::Wall;
 use caf_core::usage::{
     BadQuery, Bucket, LedgerLine, PriceTable, PricedModel, Resolution, Summary, Tokens, TurnUsage,
@@ -627,6 +628,12 @@ struct Sum<'a> {
     chats: HashSet<ChatId>,
     by_app: BTreeMap<String, HashSet<ChatId>>,
     by_agent: BTreeMap<String, HashSet<ChatId>>,
+    /// Each model's name as its lines were recorded with, and when the
+    /// line that named it so ended: the latest line's counts.
+    recorded: HashMap<String, (Wall, String)>,
+    /// Each model's name as its agent's profile gives it now, for lines
+    /// recorded without one.
+    derived: HashMap<String, String>,
 }
 
 impl<'a> Sum<'a> {
@@ -638,6 +645,8 @@ impl<'a> Sum<'a> {
             chats: HashSet::new(),
             by_app: BTreeMap::new(),
             by_agent: BTreeMap::new(),
+            recorded: HashMap::new(),
+            derived: HashMap::new(),
         }
     }
 
@@ -651,8 +660,37 @@ impl<'a> Sum<'a> {
         found
     }
 
+    /// Notes the names a turn's line gives its models: the names it was
+    /// recorded with, or, for a line recorded before CAF named models, the
+    /// ones its agent's profile gives now.
+    fn name(&mut self, line: &LedgerLine) {
+        let profile = line.profile.as_deref().and_then(Builtin::from_slug);
+        for row in &line.usage.models {
+            match &row.name {
+                // A model renamed since is shown by its latest name. Lines
+                // aren't read in time order, so the latest is chosen by
+                // when each ended.
+                Some(name) => {
+                    let latest =
+                        (self.recorded.get(&row.model)).is_none_or(|(at, _)| line.at > *at);
+                    if latest {
+                        (self.recorded).insert(row.model.clone(), (line.at, name.clone()));
+                    }
+                }
+                None if !self.derived.contains_key(&row.model) => {
+                    let name = profile.and_then(|profile| profile.model_name(&row.model));
+                    if let Some(name) = name {
+                        self.derived.insert(row.model.clone(), name);
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+
     /// Adds a turn's line to the buckets for `start` and `agent`.
     fn add(&mut self, line: &LedgerLine, start: Wall, agent: String) {
+        self.name(line);
         let usage = &line.usage;
         self.chats.insert(line.chat);
         self.by_app
@@ -720,6 +758,12 @@ impl<'a> Sum<'a> {
             .map(|bucket| bucket.model.clone())
             .collect();
         for model in models {
+            // A name recorded beats one the profile gives now.
+            let name = (self.recorded.remove(&model).map(|(_, name)| name))
+                .or_else(|| self.derived.remove(&model));
+            if let Some(name) = name {
+                summary.names.push((model.clone(), name));
+            }
             if let Some(priced) = self.price(&model) {
                 summary.matched.push((model, priced.model.clone()));
                 prices
