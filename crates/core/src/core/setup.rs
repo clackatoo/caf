@@ -1207,7 +1207,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// its limits are cleared. Not when the adapter says so by itself
     /// (Claude's `_auth/status_update`): it may, as a token fails to
     /// refresh offline, and its limits, which come seldom, would go from
-    /// every app.
+    /// every app. So for Claude, which says so by itself first, a
+    /// `claude /logout` outside CAF mostly clears nothing: by the time a
+    /// status command runs, it's no longer known signed in.
     fn found_signed_in(
         &mut self,
         now: Now,

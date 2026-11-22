@@ -59,7 +59,10 @@
 //!   the one kept, and every app forgets it. News heard, or cleared, after
 //!   now, by a clock ahead, is taken as of now. A profile keeps every
 //!   window of the kinds CAF knows, and at most 16 models' weeks and 13
-//!   others, the latest heard.
+//!   others, the latest heard. As that's before windows already reset
+//!   are forgotten, one in a crowded report may push out an older one
+//!   that hasn't, for a while: the file still has it, and gives it back
+//!   ([`Event::Limits`](crate::Event::Limits)) once the report is saved.
 //! - **A window is forgotten once its reset has passed**: the core wakes
 //!   for the earliest, drops those passed, and the agents' statuses change
 //!   ([`AccountLimits::forget_passed`]). One with no reset stays until
@@ -77,7 +80,10 @@
 //!   seldom, for no change of account. So an account changed outside CAF
 //!   with no sign-out it sees, such as `claude /login` to another account,
 //!   isn't noticed: its limits show the old account's until the agent
-//!   next says, window by window.
+//!   next says, window by window. Nor, mostly, is a `claude /logout`
+//!   outside CAF: Claude says by itself that it's signed out, which CAF
+//!   takes as it comes, so a status command run later finds it no longer
+//!   known signed in, and has nothing to clear.
 //! - **A limit reset early** by the provider, or raised by a new plan,
 //!   shows as it was until the agent next says, with the next turn: CAF
 //!   can't ask. [`LimitWindow::heard`] lets a viewer say how old it is.

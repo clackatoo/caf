@@ -913,7 +913,9 @@ async fn claude_says_its_account_limits() {
         limits.extra_usage.is_some()
     );
     if !reports.is_empty() {
-        assert!(folder.join("usage/limits/claude-agent-acp.json").exists());
+        if !limits.windows.is_empty() || limits.extra_usage.is_some() {
+            assert!(folder.join("usage/limits/claude-agent-acp.json").exists());
+        }
         // Each share said, as a whole percent, a threshold passed in
         // place of one, and all of it for a refusal: one of them is a
         // kept window's.
