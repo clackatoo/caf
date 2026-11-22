@@ -39,9 +39,13 @@ fn row(model: &str, input: u64, read: u64, written: u64, output: u64, thinking: 
     } })
 }
 
-/// A row of a turn's record, as it reads.
-fn tokens(model: &str, input: u64, read: u64, written: u64, output: u64, thinking: Value) -> Value {
-    json!({ "model": model, "tokens": {
+/// A row of a turn's record, as it reads: of `model`, named `name`.
+fn tokens(
+    (model, name): (&str, Option<&str>),
+    [input, read, written, output]: [u64; 4],
+    thinking: Value,
+) -> Value {
+    json!({ "model": model, "name": name, "tokens": {
         "input": input, "cache_read": read, "cache_write": written, "output": output, "thinking": thinking,
     } })
 }
@@ -80,7 +84,7 @@ impl Script {
     }
 
     /// The kinds of change `chat` has had, in order.
-    fn change_kinds(&self, chat: ChatId) -> Vec<String> {
+    pub(super) fn change_kinds(&self, chat: ChatId) -> Vec<String> {
         let Some(Read::Changes(changes)) = self.core.read(chat, Some(ChangeNo(999))) else {
             panic!("changes")
         };
@@ -126,8 +130,8 @@ fn a_turns_usage_is_recorded_once_as_it_ends_on_the_turn_its_chats_spend_and_the
     );
     let spent = json!({
         "models": [
-            tokens("claude-sonnet-5-5", 10, 2000, 300, 40, json!(12)),
-            tokens("claude-haiku-5-5", 5, 0, 0, 7, json!(0)),
+            tokens(("claude-sonnet-5-5", Some("Sonnet 5.5")), [10, 2000, 300, 40], json!(12)),
+            tokens(("claude-haiku-5-5", Some("Haiku 5.5")), [5, 0, 0, 7], json!(0)),
         ],
         "cost": { "amount": 0.25, "currency": "USD" },
         "fast": false,
@@ -203,7 +207,7 @@ fn a_stopped_turn_records_what_it_spent_too_and_with_no_split_its_one_row_is_the
     assert_has(
         &script.chat(CHAT),
         &json!({ "turns": [{ "life": { "type": "Stopped" }, "spent": {
-            "models": [tokens("haiku", 2, 15847, 11185, 0, Value::Null)], "cost": null, "fast": false,
+            "models": [tokens(("haiku", None), [2, 15847, 11185, 0], Value::Null)], "cost": null, "fast": false,
         } }] }),
     );
     assert_eq!(ledger(&out).len(), 1);
@@ -222,7 +226,7 @@ fn a_turn_whose_model_nobody_said_is_put_against_unknown() {
     );
     assert_eq!(
         script.chat(CHAT)["turns"][0]["spent"]["models"],
-        json!([tokens("unknown", 3, 0, 0, 9, json!(4))])
+        json!([tokens(("unknown", None), [3, 0, 0, 9], json!(4))])
     );
 }
 
@@ -260,10 +264,14 @@ fn a_plain_agents_split_by_model_isnt_read_its_usage_is() {
         sent(&out, "initialize")["id"].as_u64().expect("an id"),
         &plain_init(false),
     );
+    // On a model with an id like Claude's, which only Claude's profile
+    // names.
+    let options = json!([{ "id": "model", "name": "Model", "category": "model", "type": "select",
+        "currentValue": "claude-opus-5-5", "options": [{ "value": "claude-opus-5-5", "name": "Opus" }] }]);
     script.answers(
         proc,
         sent(&out, "session/new")["id"].as_u64().expect("an id"),
-        &json!({ "sessionId": "p1" }),
+        &json!({ "sessionId": "p1", "configOptions": options }),
     );
     let (_, out) = script.send(chat, "Hello");
     let prompt = sent(&out, "session/prompt")["id"].as_u64().expect("an id");
@@ -271,7 +279,7 @@ fn a_plain_agents_split_by_model_isnt_read_its_usage_is() {
     script.answers(proc, prompt, &answer("end_turn", usage(1, 2, 3, 4), split));
     assert_eq!(
         script.chat(chat)["turns"][0]["spent"],
-        json!({ "models": [tokens("unknown", 1, 2, 3, 4, Value::Null)], "cost": null, "fast": false })
+        json!({ "models": [tokens(("claude-opus-5-5", None), [1, 2, 3, 4], Value::Null)], "cost": null, "fast": false })
     );
 }
 
@@ -542,7 +550,7 @@ fn a_restored_chats_spend_is_worked_out_again_from_its_turns() {
     script.event(Event::Prices(prices()));
     let (done, out) = script.restore(RestoreChat::new(CHAT, Shelf("work".to_owned())));
     done.expect("restoring");
-    let spent = json!({ "models": [tokens("claude-haiku-5-5", 2_000_000, 0, 0, 0, Value::Null)], "cost": null, "fast": false });
+    let spent = json!({ "models": [tokens(("claude-haiku-5-5", Some("Haiku 5.5")), [2_000_000, 0, 0, 0], Value::Null)], "cost": null, "fast": false });
     let chat: Chat = serde_json::from_value(json!({
         "id": CHAT, "agent": "claude", "cwd": "/work", "state": { "type": "Idle" },
         "turns": [{
@@ -670,6 +678,12 @@ fn with_no_split_the_row_is_the_model_claude_said_during_the_turn_else_the_turns
             json!("claude-opus-5-5")
         ]
     );
+    // Each named as Claude's profile names its ids: an alias isn't.
+    let name = |at: usize| chat["turns"][at]["spent"]["models"][0]["name"].clone();
+    assert_eq!(
+        [name(0), name(1), name(2)],
+        [json!("Haiku 5.5"), Value::Null, json!("Opus 5.5")]
+    );
 }
 
 #[test]
@@ -786,7 +800,7 @@ fn a_split_that_cant_be_read_gives_way_to_the_usage_and_says_so() {
     );
     assert_eq!(
         script.chat(CHAT)["turns"][0]["spent"]["models"],
-        json!([tokens("unknown", 1, 2, 3, 4, Value::Null)])
+        json!([tokens(("unknown", None), [1, 2, 3, 4], Value::Null)])
     );
 }
 

@@ -1,7 +1,7 @@
 //! What a chat holds as the agent works, what the host may send it, and
 //! what viewers read of it.
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::harness::{FIRST, Script, agents, assert_has, host, includes, render, sent, with};
 use super::{CHAT, PROC, SESSION, claude_init};
@@ -9,8 +9,9 @@ use crate::agent::{EnvChange, McpServer, SpawnCommand};
 use crate::change::{Change, Read};
 use crate::chat::{Part, UserMessage};
 use crate::core::{Core, OpenChat, Refused};
-use crate::event::Event;
+use crate::event::{AgentEvent, Event, Exit};
 use crate::ids::{ChangeNo, ChatId, ItemId};
+use crate::settings::SettingChoice;
 
 fn words(text: &str) -> serde_json::Value {
     json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": text } })
@@ -224,7 +225,85 @@ fn the_host_is_refused_what_cant_be_done() {
     );
     script.answers(PROC, 1002, &json!({ "stopReason": "end_turn" }));
     script.close(CHAT).0.expect("closed");
-    assert_eq!(script.send(CHAT, "hi").0, Err(Refused::Closed));
+    assert_eq!(
+        script.set_setting(CHAT, SettingChoice::model("sonnet")).0,
+        Err(Refused::Closed)
+    );
+}
+
+#[test]
+fn closing_an_unsaved_chat_archives_it_until_its_unarchived_or_sent_to() {
+    let mut script = Script::with_claude();
+    script.at(500);
+    let out = script.close(CHAT).1;
+    // Its adapter, which nothing else uses, is stopped.
+    assert_eq!(with(&out, "close_input"), [json!({ "close_input": PROC })]);
+    let archived = json!(super::harness::EPOCH + 500);
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "state": { "type": "Closed" }, "archived": archived }),
+    );
+    let kinds = script.change_kinds(CHAT);
+    assert_eq!(
+        kinds[kinds.len() - 2..],
+        ["State", "Archived"],
+        "the state changes, then whether it's archived"
+    );
+    // Closing it again changes nothing, not even when.
+    script.at(600);
+    let (done_, out) = script.close(CHAT);
+    done_.expect("closed");
+    assert!(out.is_empty(), "{out:#?}");
+    assert_eq!(script.chat(CHAT)["archived"], archived);
+
+    // A message that can't go leaves it archived.
+    assert_eq!(
+        script.send_message(CHAT, UserMessage { parts: vec![] }).0,
+        Err(Refused::Unsupported)
+    );
+    assert_eq!(script.chat(CHAT)["archived"], archived);
+
+    // Unarchived, it's idle, and its agent starts when a message is sent,
+    // continuing its session.
+    script.at(1000);
+    let (done_, out) = script.unarchive(CHAT);
+    done_.expect("unarchived");
+    assert!(with(&out, "start").is_empty(), "no agent started");
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "state": { "type": "Idle" }, "archived": null }),
+    );
+    let (turn, out) = script.send(CHAT, "Again");
+    turn.expect("sent");
+    // Once its old adapter, let go, is gone.
+    assert!(with(&out, "start").is_empty(), "{out:#?}");
+    script.agent(PROC, AgentEvent::Exited(Exit::Code(0)));
+    script.agent(PROC, AgentEvent::OutputClosed);
+    let out = script.agent(PROC, AgentEvent::Group { empty: true });
+    let proc = with(&out, "start")[0]["start"].as_u64().expect("a process");
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let out = script.answers(proc, init, &claude_init());
+    assert_eq!(sent(&out, "session/resume")["params"]["sessionId"], SESSION);
+
+    // Closed again, a message sent to it unarchives it at once.
+    script.at(2000);
+    script.close(CHAT).0.expect("closed");
+    assert_eq!(
+        script.chat(CHAT)["archived"],
+        json!(super::harness::EPOCH + 2000)
+    );
+    for event in [
+        AgentEvent::Exited(Exit::Code(0)),
+        AgentEvent::OutputClosed,
+        AgentEvent::Group { empty: true },
+    ] {
+        script.agent(proc, event);
+    }
+    let (turn, out) = script.send(CHAT, "Once more");
+    turn.expect("sent");
+    assert_eq!(with(&out, "start").len(), 1, "its agent starts");
+    assert_eq!(script.chat(CHAT)["archived"], Value::Null);
+    assert_ne!(script.chat(CHAT)["state"], json!({ "type": "Closed" }));
 }
 
 #[test]

@@ -564,6 +564,6 @@ fn learning_while_an_install_waits_for_the_survey_says_caf_hasnt_looked() {
     assert!(with(&out, "start").is_empty());
     assert_eq!(
         script.agent_status("npm-agent")["settings"],
-        json!({ "type": "Failed", "value": "CAF hasn't looked whether the agent is installed yet" })
+        json!({ "type": "Failed", "value": { "type": "NotLookedYet" } })
     );
 }
