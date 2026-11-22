@@ -401,3 +401,62 @@ fn refresh_bundled() {
     let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("prices/bundled.json");
     std::fs::write(out, file).expect("it's written");
 }
+
+#[test]
+fn a_pipe_where_a_prices_file_should_be_never_hangs() {
+    let folder = Folder::new("prices-pipe");
+    let prices = folder.path().join("prices");
+    std::fs::create_dir_all(&prices).expect("it's made");
+    crate::testing::pipe(&prices.join("own.json"));
+    crate::testing::pipe(&prices.join("litellm.json"));
+    let path = folder.path().to_owned();
+    let limit = std::time::Duration::from_secs(10);
+
+    let (table, at, set) = crate::testing::within(limit, move || {
+        (
+            load(&path),
+            fetched_at(&path),
+            set_own(&path, "mine", Some(price(1.0, 1.0))),
+        )
+    });
+    // Read as absent; never written over.
+    assert_eq!(table, bundled());
+    assert_eq!(at, None);
+    assert!(set.is_err());
+}
+
+#[test]
+fn a_prices_lock_held_elsewhere_is_given_up_on() {
+    let folder = Folder::new("prices-held");
+    let prices = folder.path().join("prices");
+    std::fs::create_dir_all(&prices).expect("it's made");
+    let _held = crate::testing::hold(&prices.join(".lock"));
+    let path = folder.path().to_owned();
+    let limit = std::time::Duration::from_secs(15);
+
+    let started = std::time::Instant::now();
+    let (own, fetched) = crate::testing::within(limit, move || {
+        std::thread::scope(|scope| {
+            let own = scope.spawn(|| set_own(&path, "mine", Some(price(1.0, 1.0))));
+            let fetched = scope.spawn(|| {
+                let table =
+                    json!({"m": {"input_cost_per_token": 1e-06, "output_cost_per_token": 1e-06}});
+                take_fetched(&path, &bytes(&table), Wall(1))
+            });
+            (
+                own.join().expect("it ends"),
+                fetched.join().expect("it ends"),
+            )
+        })
+    });
+    let took = started.elapsed();
+    assert_eq!(
+        own.expect_err("it gives up").kind(),
+        std::io::ErrorKind::TimedOut
+    );
+    assert!(
+        matches!(fetched, Err(PriceError::Io(error)) if error.kind() == std::io::ErrorKind::TimedOut)
+    );
+    assert!(took >= crate::files::LOCK_WAIT, "{took:?}");
+    assert!(!prices.join("own.json").exists());
+}

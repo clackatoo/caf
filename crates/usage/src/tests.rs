@@ -1456,3 +1456,88 @@ fn the_period_fixture_holds_the_clock_changes() {
         assert!(changes > 40, "{zone} has its clock changes: {changes}");
     }
 }
+
+#[test]
+fn a_pipe_where_a_month_should_be_never_hangs() {
+    let folder = Folder::new("month-pipe");
+    record(
+        folder.path(),
+        "eyespy",
+        [{
+            let mut line = line("2026-11-22T10:00:00Z", 1, 1);
+            line["app"] = json!("eyespy");
+            line
+        }],
+    );
+    let app = folder.path().join(APP);
+    std::fs::create_dir_all(&app).expect("it's made");
+    crate::testing::pipe(&app.join("2026-11.jsonl"));
+    crate::testing::pipe(&app.join("2026-11.jsonl.zst"));
+    let path = folder.path().to_owned();
+    let limit = std::time::Duration::from_secs(10);
+
+    let (summary, recorded) = crate::testing::within(limit, move || {
+        let summary = november(&path);
+        let recorded = Ledger::new(path, APP).record(&read(line("2026-11-22T11:00:00Z", 2, 1)));
+        (summary, recorded)
+    });
+    assert_eq!(turns(&summary), 1);
+    assert_eq!(
+        summary.unreadable,
+        ["clackatoo/2026-11.jsonl.zst", "clackatoo/2026-11.jsonl"]
+    );
+    assert!(recorded.is_err(), "a pipe isn't written to as a month");
+}
+
+/// Holds an app's lock in a program of its own, until it's killed: set by
+/// `CAF_USAGE_HOLD` as the lock's path. Says it holds it by making the
+/// file `<path>.held`.
+#[test]
+#[ignore = "a child of a_lock_held_by_another_program_is_given_up_on"]
+fn holder() {
+    let Some(path) = std::env::var_os("CAF_USAGE_HOLD") else {
+        return;
+    };
+    let path = PathBuf::from(path);
+    let _held = crate::testing::hold(&path);
+    std::fs::write(path.with_extension("held"), b"").expect("it's said");
+    std::thread::sleep(std::time::Duration::from_secs(60));
+}
+
+#[test]
+fn a_lock_held_by_another_program_is_given_up_on() {
+    let folder = Folder::new("held");
+    let app = folder.path().join(APP);
+    std::fs::create_dir_all(&app).expect("it's made");
+    let lock = app.join(".lock");
+    let me = std::env::current_exe().expect("the test's program");
+    let mut child = std::process::Command::new(me)
+        .args(["--exact", "tests::holder", "--ignored", "--quiet"])
+        .env("CAF_USAGE_HOLD", &lock)
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("it starts");
+    let held = lock.with_extension("held");
+    let waiting = std::time::Instant::now();
+    while !held.exists() {
+        assert!(waiting.elapsed() < std::time::Duration::from_secs(10));
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let path = folder.path().to_owned();
+    let started = std::time::Instant::now();
+    let recorded = crate::testing::within(std::time::Duration::from_secs(15), move || {
+        Ledger::new(path, APP).record(&read(line("2026-11-22T10:00:00Z", 1, 1)))
+    });
+    let took = started.elapsed();
+    let _ = child.kill();
+    let _ = child.wait();
+    let error = recorded.expect_err("it gives up");
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert!(took >= crate::files::LOCK_WAIT, "{took:?}");
+    assert!(!file(folder.path(), APP, "2026-11").exists());
+
+    // Once it's let go, lines are written again.
+    record(folder.path(), APP, [line("2026-11-22T10:00:00Z", 1, 1)]);
+    assert_eq!(turns(&november(folder.path())), 1);
+}

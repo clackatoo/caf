@@ -59,6 +59,12 @@
 //! 6. **Every count is below 2^53**, as everything CAF writes is: a line
 //!    with one that isn't is refused, or read as unreadable, and a sum
 //!    stops at 2^53 - 1.
+//! 7. **Nothing waits for ever.** Every file is opened without waiting,
+//!    and used only if it's a plain file: a pipe or anything else where
+//!    one should be is unreadable, or an error, never a read or write that
+//!    waits. A lock another program holds, perhaps one stopped while it
+//!    held it, is tried again for five seconds, then given up on with
+//!    [`TimedOut`](std::io::ErrorKind::TimedOut).
 //!
 //! [`UsageDirective`]: caf_core::directive::UsageDirective
 //! [`LedgerLine`]: caf_core::usage::LedgerLine
@@ -172,6 +178,10 @@ impl Ledger {
     ///
     /// What the system said, if it couldn't: the line isn't written. The
     /// usage driver keeps it and tries again with the next.
+    /// [`TimedOut`](io::ErrorKind::TimedOut) if another program held the
+    /// app's lock for five seconds, and
+    /// [`Unsupported`](io::ErrorKind::Unsupported) if the month's file
+    /// isn't a plain file.
     /// [`InvalidInput`](io::ErrorKind::InvalidInput) if the app's name
     /// can't be a folder's (empty, `prices`, starting with a dot, or with
     /// a slash, backslash or nothing character in it; `prices` in any
@@ -305,12 +315,14 @@ fn whole(bytes: &[u8]) -> usize {
 /// so it never runs into the new one: it was never whole, so never
 /// counted.
 fn append(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
-        .mode(0o600)
-        .open(path)?;
+    let mut file = files::open(
+        path,
+        OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .mode(0o600),
+    )?;
     let size = file.metadata()?.len();
     if size == 0 {
         file.write_all(bytes)?;
@@ -528,8 +540,8 @@ impl Lines {
     fn month(&mut self, folder: &Path, app: &str, month: &str, unreadable: &mut Vec<String>) {
         let plain_name = format!("{app}/{month}.jsonl");
         let packed_name = format!("{plain_name}.zst");
-        let plain = open(&folder.join(&plain_name));
-        let packed = open(&folder.join(&packed_name));
+        let plain = files::open_to_read(&folder.join(&plain_name));
+        let packed = files::open_to_read(&folder.join(&packed_name));
         let packed = packed.and_then(|file| file.map(zstd::decode_all).transpose());
         let plain = plain.and_then(|file| {
             file.map(|mut file| {
@@ -578,15 +590,6 @@ impl Lines {
             }
         }
         readable
-    }
-}
-
-/// A file, opened to read: `None` if it isn't there.
-fn open(path: &Path) -> io::Result<Option<File>> {
-    match File::open(path) {
-        Ok(file) => Ok(Some(file)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
     }
 }
 

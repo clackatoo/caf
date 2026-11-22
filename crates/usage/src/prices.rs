@@ -344,7 +344,8 @@ pub fn read_litellm(json: &[u8]) -> Result<Vec<(String, ModelPrice)>, PriceError
 /// # Errors
 ///
 /// Why it isn't kept: it doesn't read ([`read_litellm`]), or writing it
-/// failed. The last table fetched stays.
+/// failed, [`TimedOut`](io::ErrorKind::TimedOut) if another program held
+/// the prices' lock for five seconds. The last table fetched stays.
 pub fn take_fetched(folder: &Path, json: &[u8], at: Wall) -> Result<(), PriceError> {
     let table = entries(json)?;
     let bytes = serde_json::to_vec(&Kept { fetched: at, table })
@@ -372,6 +373,8 @@ pub fn fetched_at(folder: &Path) -> Option<Wall> {
 /// # Errors
 ///
 /// What the system said, if it couldn't: the prices are as they were.
+/// [`TimedOut`](io::ErrorKind::TimedOut) if another program held the
+/// prices' lock for five seconds.
 /// [`InvalidInput`](io::ErrorKind::InvalidInput) for a model with no name,
 /// a rate that's negative or not a number, or a fast multiplier that isn't
 /// above nothing; and
