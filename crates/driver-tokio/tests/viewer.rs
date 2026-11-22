@@ -648,14 +648,26 @@ async fn a_viewer_that_may_not_act_only_watches() {
     assert_ne!(now.state, ChatState::Closed);
     assert!(now.settings.chosen.is_empty(), "nothing chosen");
     assert_eq!(now.archived, None, "nor archived");
+    // Archived by the host, it stays so.
+    caf.chat(chat.id).close().await.unwrap();
+    let archived = picture(&chat).await.archived;
+    assert!(archived.is_some());
+    viewer
+        .send(FromViewer::Unarchive {
+            request: RequestNo(7),
+            chat: chat.id,
+        })
+        .await;
+    assert_eq!(viewer.done(7).await, Outcome::NotAllowed);
+    assert_eq!(picture(&chat).await.archived, archived, "still archived");
     // Opening is the host's rule's to decide, not `act`'s.
     viewer
         .send(FromViewer::Open {
-            request: RequestNo(7),
+            request: RequestNo(8),
             open: OpenRequest::new("fake", &dir.0),
         })
         .await;
-    assert!(matches!(viewer.done(7).await, Outcome::Opened(_)));
+    assert!(matches!(viewer.done(8).await, Outcome::Opened(_)));
     shut_down(&caf, running).await;
     viewer.ends().await;
 }
