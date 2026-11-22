@@ -280,7 +280,13 @@ fn prices_kept_that_dont_read_are_left_alone() {
 fn a_price_that_isnt_one_is_refused() {
     let folder = Folder::new("own-bad");
     let negative = rates(1.0, -1.0, 1.0, 1.0, None);
-    for price in [negative, price(f64::NAN, 1.0), price(1.0, f64::INFINITY)] {
+    let no_fast = rates(1.0, 1.0, 1.0, 1.0, Some(0.0));
+    for price in [
+        negative,
+        no_fast,
+        price(f64::NAN, 1.0),
+        price(1.0, f64::INFINITY),
+    ] {
         let error = set_own(folder.path(), "mine", Some(price)).expect_err("it refuses");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
