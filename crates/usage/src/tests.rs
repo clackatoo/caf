@@ -690,6 +690,17 @@ fn buckets_are_by_app_agent_model_and_fast_mode_sorted() {
         .map(|priced| priced.model.as_str())
         .collect();
     assert_eq!(priced, ["anthropic/claude-haiku-5-5", "claude-opus-5-5"]);
+    // Each model of the agent's, by the entry that priced it.
+    assert_eq!(
+        summary.matched,
+        [
+            (
+                "claude-haiku-5-5".to_owned(),
+                "anthropic/claude-haiku-5-5".to_owned()
+            ),
+            ("claude-opus-5-5".to_owned(), "claude-opus-5-5".to_owned()),
+        ]
+    );
 }
 
 #[test]
@@ -844,6 +855,13 @@ fn tokens_no_price_covers_are_unpriced() {
     near(mystery.estimated, 0.0);
     // Only models with a price are listed.
     assert_eq!(summary.prices.len(), 1);
+    assert_eq!(
+        summary.matched,
+        [(
+            "claude-haiku-5-5".to_owned(),
+            "anthropic/claude-haiku-5-5".to_owned()
+        )]
+    );
 }
 
 #[test]
@@ -1335,4 +1353,106 @@ fn a_line_with_no_models_is_refused_and_unreadable() {
     let summary = november(folder.path());
     assert_eq!(turns(&summary), 1);
     assert_eq!(summary.unreadable, ["clackatoo/2026-11.jsonl"]);
+}
+
+/// The zones the period fixture covers: one with no offset, two whose
+/// clocks change by an hour (one each side of the equator, Santiago's at
+/// midnight), one half an hour off UTC, and one whose clocks change by
+/// half an hour.
+const PERIOD_ZONES: [&str; 5] = [
+    "UTC",
+    "Europe/London",
+    "America/Santiago",
+    "Asia/Kolkata",
+    "Australia/Lord_Howe",
+];
+
+/// Instants nothing special happens at, in every zone.
+const ORDINARY: [&str; 5] = [
+    "1970-01-01T00:00:00Z",
+    "2026-01-01T00:00:00Z",
+    "2026-06-15T13:47:12.345Z",
+    "2026-11-22T10:10:10.123Z",
+    "2026-12-31T23:59:59.999Z",
+];
+
+/// `fixtures/periods.json`: when the hour and the day each of many
+/// instants is in start, in each of [`PERIOD_ZONES`], as summaries cut
+/// them: what the SDKs check their own period maths against. Around each
+/// of 2026's clock changes, every quarter of an hour for three hours
+/// either side, and the last millisecond before it.
+fn periods() -> String {
+    let mut entries = Vec::new();
+    for name in PERIOD_ZONES {
+        let zone = jiff::tz::TimeZone::get(name).expect("the zone is known");
+        let mut instants: Vec<i64> = ORDINARY.iter().map(|at| wall(at).0).collect();
+        let year = wall("2026-01-01T00:00:00Z").0;
+        let changes = zone
+            .following(Timestamp::from_millisecond(year).expect("in range"))
+            .take_while(|change| {
+                change.timestamp().as_millisecond() < wall("2027-01-01T00:00:00Z").0
+            })
+            .map(|change| change.timestamp().as_millisecond());
+        for change in changes {
+            instants.push(change - 1);
+            let quarter = 15 * 60 * 1000;
+            instants.extend((-12..=12).map(|step| change + step * quarter));
+        }
+        instants.sort_unstable();
+        instants.dedup();
+        for at in instants {
+            let hour = crate::start(Wall(at), &zone, Resolution::Hour).expect("in range");
+            let day = crate::start(Wall(at), &zone, Resolution::Day).expect("in range");
+            entries.push(format!(
+                "  {{\"zone\": \"{name}\", \"at\": {at}, \"hour\": {}, \"day\": {}}}",
+                hour.0, day.0
+            ));
+        }
+    }
+    format!("[\n{}\n]\n", entries.join(",\n"))
+}
+
+#[test]
+fn the_period_fixture_is_current() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/periods.json");
+    let text = periods();
+    let old = std::fs::read_to_string(&path).ok();
+    if old.as_deref() == Some(text.as_str()) {
+        return;
+    }
+    let bless = "CAF_BLESS=1 cargo test -p caf-usage the_period_fixture";
+    assert!(
+        std::env::var_os("CAF_BLESS").is_some(),
+        "fixtures/periods.json is {}: run `{bless}`",
+        if old.is_some() { "stale" } else { "missing" }
+    );
+    let new = path.with_extension("json.new");
+    std::fs::write(&new, &text).expect("it's written");
+    std::fs::rename(&new, &path).expect("it's moved into place");
+}
+
+#[test]
+fn the_period_fixture_holds_the_clock_changes() {
+    let text = periods();
+    let entries: Vec<Value> = serde_json::from_str(&text).expect("it's JSON");
+    let find = |zone: &str, at: &str| {
+        entries
+            .iter()
+            .find(|entry| entry["zone"] == zone && entry["at"] == wall(at).0)
+            .unwrap_or_else(|| panic!("{zone} at {at} is in it"))
+    };
+    // London's repeated hour: 01:30 BST, then 01:30 GMT.
+    let first = find("Europe/London", "2026-10-25T00:30:00Z");
+    let second = find("Europe/London", "2026-10-25T01:30:00Z");
+    assert_eq!(first["hour"], wall("2026-10-25T00:00:00Z").0);
+    assert_eq!(second["hour"], wall("2026-10-25T01:00:00Z").0);
+    assert_eq!(first["day"], second["day"]);
+    assert_eq!(first["day"], wall("2026-10-24T23:00:00Z").0);
+    // Kolkata's hours start on the half hour, UTC.
+    let kolkata = find("Asia/Kolkata", "2026-11-22T10:10:10.123Z");
+    assert_eq!(kolkata["hour"], wall("2026-11-22T09:30:00Z").0);
+    for zone in ["Europe/London", "America/Santiago", "Australia/Lord_Howe"] {
+        let changes = entries.iter().filter(|entry| entry["zone"] == zone).count();
+        assert!(changes > 40, "{zone} has its clock changes: {changes}");
+    }
 }
