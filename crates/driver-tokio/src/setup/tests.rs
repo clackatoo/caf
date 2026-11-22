@@ -13,7 +13,9 @@ use caf_core::agent::{EnvChange, InstallFailure, SpawnCommand};
 use caf_core::directive::{AgentDirective, SetupDirective, Signal};
 use caf_core::event::{AgentEvent, SetupEvent};
 use caf_core::ids::Ticket;
-use caf_core::install::{Artifact, Install, LinkFrom, NpmPackage, Platform, SignedInAs, Unpack};
+use caf_core::install::{
+    Artifact, Edit, FilePatch, Install, LinkFrom, NpmPackage, Patch, Platform, SignedInAs, Unpack,
+};
 use caf_fake_agent::{AUTH_EMAIL, AUTH_SECRET, AUTH_VAR, Auth};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2224,4 +2226,304 @@ fn the_default_root_is_the_users_data_folder() {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
         .map(|data| data.join("caf/agents"));
     assert_eq!(root, expected);
+}
+
+/// A patch at `level` making these files, by path, of what they were,
+/// each by one edit, `(find, replace)`.
+fn patch_of(level: u32, files: &[(&str, &[u8], (&str, &str))]) -> Patch {
+    Patch::new(
+        level,
+        (files.iter())
+            .map(|&(path, original, (find, replace))| {
+                let text = String::from_utf8(original.to_vec()).unwrap();
+                let patched = text.replacen(find, replace, 1);
+                FilePatch::new(
+                    path,
+                    sha256(original),
+                    sha256(patched.as_bytes()),
+                    vec![Edit::new(find, replace)],
+                )
+            })
+            .collect(),
+    )
+}
+
+/// The agent [`tar_gz`] holds.
+const AGENT: &[u8] = b"#!/bin/sh\necho agent\n";
+
+/// Installs [`tar_gz`] as `root/folder`, patched with `patch`, and
+/// returns what the driver reported.
+async fn install_patched(
+    driver: &mut SetupDriver,
+    server: &Server,
+    ticket: u64,
+    folder: &str,
+    patch: Patch,
+) -> Vec<Ev> {
+    driver.apply(SetupDirective::Install {
+        ticket: Ticket(ticket),
+        folder: folder.into(),
+        install: download(&server.url, &tar_gz(), Unpack::TarGz),
+        patch: Some(patch),
+        private: None,
+        size: 1 << 30,
+    });
+    done(driver, Ticket(ticket)).await
+}
+
+/// Everything in `folder`, by path: each file's SHA-256 and permissions,
+/// each link's target, and each one's last change, so any change to any
+/// of it shows.
+fn snapshot(folder: &Path) -> Vec<(String, String, u32, std::time::SystemTime)> {
+    let mut found = Vec::new();
+    let mut folders = vec![folder.to_owned()];
+    while let Some(at) = folders.pop() {
+        for entry in std::fs::read_dir(&at).unwrap() {
+            let path = entry.unwrap().path();
+            let about = std::fs::symlink_metadata(&path).unwrap();
+            let what = if about.file_type().is_symlink() {
+                format!("-> {}", std::fs::read_link(&path).unwrap().display())
+            } else if about.is_dir() {
+                folders.push(path.clone());
+                "folder".to_owned()
+            } else {
+                sha256(&std::fs::read(&path).unwrap())
+            };
+            let name = path.strip_prefix(folder).unwrap().display().to_string();
+            found.push((
+                name,
+                what,
+                about.permissions().mode(),
+                about.modified().unwrap(),
+            ));
+        }
+    }
+    found.sort();
+    found
+}
+
+#[tokio::test]
+async fn an_install_is_patched_as_its_last_step_keeping_the_original() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    let server = serve(tar_gz(), false).await;
+    let patch = patch_of(1, &[("bin/agent", AGENT, ("echo agent", "echo patched"))]);
+    let events = install_patched(&mut driver, &server, 1000, "fake-1.0.0+caf.1", patch).await;
+    assert!(
+        matches!(events.last(), Some(Ev(SetupEvent::Installed))),
+        "{events:?}"
+    );
+    let install = dir.root().join("fake-1.0.0+caf.1");
+    assert_eq!(names(&install.join("bin")), ["agent", "agent.caf-original"]);
+    assert_eq!(
+        std::fs::read(install.join("bin/agent.caf-original")).unwrap(),
+        AGENT
+    );
+    // Still runnable, as it was.
+    assert_eq!(run(&install.join("bin/agent")).stdout, b"patched\n");
+    assert_eq!(installs(&dir), ["fake-1.0.0+caf.1"]);
+}
+
+#[tokio::test]
+async fn an_install_that_cant_be_patched_exactly_as_tested_leaves_nothing() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    let server = serve(tar_gz(), false).await;
+    let readme: &[u8] = b"read me";
+    let good = ("bin/agent", AGENT, ("echo agent", "echo patched"));
+    let mut unpinned = patch_of(1, &[good]);
+    unpinned.files[0].before = sha256(b"another upstream");
+    let mut untested = patch_of(1, &[good]);
+    untested.files[0].after = sha256(b"something else");
+    let mut twice = patch_of(1, &[good]);
+    twice.files[0].edits = vec![Edit::new("e", "E")];
+    let cases = [
+        (
+            unpinned,
+            "bin/agent isn't the file this patch was written for",
+        ),
+        (
+            patch_of(1, &[("bin/agent", AGENT, ("nowhere", "x"))]),
+            "bin/agent doesn't hold the text of edit 0",
+        ),
+        (
+            twice,
+            "bin/agent holds the text of edit 0 2 times, not once",
+        ),
+        (
+            untested,
+            "bin/agent patched isn't the file this patch was tested to make",
+        ),
+        // The first file is patched, the second fails: none of it is kept.
+        (
+            patch_of(1, &[good, ("README", readme, ("nowhere", "x"))]),
+            "README doesn't hold the text of edit 0",
+        ),
+        (
+            patch_of(1, &[("../agents/x", AGENT, ("echo", "x"))]),
+            "../agents/x isn't a path inside the install",
+        ),
+        (
+            patch_of(1, &[("bin/missing", AGENT, ("echo", "x"))]),
+            "bin/missing isn't in the install",
+        ),
+    ];
+    for (n, (patch, why)) in cases.into_iter().enumerate() {
+        let ticket = 1000 + n as u64;
+        let events = install_patched(&mut driver, &server, ticket, "fake-1.0.0+caf.1", patch).await;
+        assert_eq!(
+            events.last().expect("a last report"),
+            &SetupEvent::InstallFailed(InstallFailure::Patch(why.into())),
+            "{why}"
+        );
+        assert!(installs(&dir).is_empty(), "{why}: {:?}", installs(&dir));
+    }
+}
+
+#[tokio::test]
+async fn a_new_patch_level_is_prepared_from_an_earlier_one_with_nothing_downloaded() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    let server = serve(tar_gz(), false).await;
+    let first = patch_of(1, &[("bin/agent", AGENT, ("echo agent", "echo first"))]);
+    let events = install_patched(&mut driver, &server, 1000, "fake-1.0.0+caf.1", first).await;
+    assert!(matches!(events.last(), Some(Ev(SetupEvent::Installed))));
+    let earlier = dir.root().join("fake-1.0.0+caf.1");
+    // A process started from it.
+    std::fs::write(earlier.join(".used"), "").unwrap();
+    let before = snapshot(&earlier);
+    let downloads = server.requests.load(Ordering::Relaxed);
+    // Level 2 patches the agent from the original again, and the README
+    // too.
+    let second = patch_of(
+        2,
+        &[
+            ("bin/agent", AGENT, ("echo agent", "echo second")),
+            ("README", b"read me", ("read", "do read")),
+        ],
+    );
+    driver.apply(SetupDirective::Prepare {
+        ticket: Ticket(1001),
+        folder: "fake-1.0.0+caf.2".into(),
+        from: "fake-1.0.0+caf.1".into(),
+        patch: second,
+    });
+    let events = done(&mut driver, Ticket(1001)).await;
+    assert!(
+        matches!(events.last(), Some(Ev(SetupEvent::Installed))),
+        "{events:?}"
+    );
+    assert_eq!(server.requests.load(Ordering::Relaxed), downloads);
+    let prepared = dir.root().join("fake-1.0.0+caf.2");
+    assert_eq!(run(&prepared.join("bin/agent")).stdout, b"second\n");
+    assert_eq!(
+        std::fs::read(prepared.join("bin/agent.caf-original")).unwrap(),
+        AGENT
+    );
+    assert_eq!(
+        std::fs::read(prepared.join("README")).unwrap(),
+        b"do read me"
+    );
+    assert_eq!(
+        std::fs::read(prepared.join("README.caf-original")).unwrap(),
+        b"read me"
+    );
+    // Its own: never marked used by the earlier one's processes.
+    assert!(!prepared.join(".used").exists());
+    // The earlier install, byte for byte and to the second, is as it was,
+    // and still runs as it did.
+    assert_eq!(snapshot(&earlier), before);
+    assert_eq!(run(&earlier.join("bin/agent")).stdout, b"first\n");
+    assert_eq!(installs(&dir), ["fake-1.0.0+caf.1", "fake-1.0.0+caf.2"]);
+    // Asked again, it's there already.
+    driver.apply(SetupDirective::Prepare {
+        ticket: Ticket(1002),
+        folder: "fake-1.0.0+caf.2".into(),
+        from: "fake-1.0.0+caf.1".into(),
+        patch: patch_of(2, &[]),
+    });
+    let events = done(&mut driver, Ticket(1002)).await;
+    assert_eq!(events, [SetupEvent::Installed]);
+    assert_eq!(run(&prepared.join("bin/agent")).stdout, b"second\n");
+}
+
+#[tokio::test]
+async fn a_patch_level_that_cant_be_prepared_leaves_nothing_and_the_earlier_one_as_it_was() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    let server = serve(tar_gz(), false).await;
+    let first = patch_of(1, &[("bin/agent", AGENT, ("echo agent", "echo first"))]);
+    install_patched(&mut driver, &server, 1000, "fake-1.0.0+caf.1", first).await;
+    let earlier = dir.root().join("fake-1.0.0+caf.1");
+    let before = snapshot(&earlier);
+    let prepare = |ticket, from: &str, patch| SetupDirective::Prepare {
+        ticket: Ticket(ticket),
+        folder: "fake-1.0.0+caf.2".into(),
+        from: from.into(),
+        patch,
+    };
+    // The README's patch is written for another file: the agent, patched
+    // first, goes with the rest.
+    let wrong = patch_of(
+        2,
+        &[
+            ("bin/agent", AGENT, ("echo agent", "echo second")),
+            ("README", b"another readme", ("read", "do read")),
+        ],
+    );
+    driver.apply(prepare(1001, "fake-1.0.0+caf.1", wrong));
+    let events = done(&mut driver, Ticket(1001)).await;
+    assert_eq!(
+        events,
+        [SetupEvent::InstallFailed(InstallFailure::Patch(
+            "README isn't the file this patch was written for".into()
+        ))]
+    );
+    // From an install that isn't there, or itself, or outside the root.
+    for (ticket, from) in [
+        (1002, "fake-0.9.0+caf.1"),
+        (1003, "fake-1.0.0+caf.2"),
+        (1004, "../fake-1.0.0+caf.1"),
+    ] {
+        driver.apply(prepare(ticket, from, patch_of(2, &[])));
+        let events = done(&mut driver, Ticket(ticket)).await;
+        assert!(
+            matches!(
+                events.as_slice(),
+                [Ev(SetupEvent::InstallFailed(InstallFailure::Other(_)))]
+            ),
+            "{from}: {events:?}"
+        );
+    }
+    assert_eq!(installs(&dir), ["fake-1.0.0+caf.1"]);
+    assert_eq!(snapshot(&earlier), before);
+}
+
+#[tokio::test]
+async fn preparing_waits_for_the_installs_lock_and_can_be_stopped() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    let server = serve(tar_gz(), false).await;
+    let first = patch_of(1, &[("bin/agent", AGENT, ("echo agent", "echo first"))]);
+    install_patched(&mut driver, &server, 1000, "fake-1.0.0+caf.1", first).await;
+    let held = std::fs::File::open(dir.root().join(".lock")).unwrap();
+    rustix::fs::flock(&held, rustix::fs::FlockOperation::LockExclusive).unwrap();
+    driver.apply(SetupDirective::Prepare {
+        ticket: Ticket(1001),
+        folder: "fake-1.0.0+caf.2".into(),
+        from: "fake-1.0.0+caf.1".into(),
+        patch: patch_of(2, &[("bin/agent", AGENT, ("echo agent", "echo second"))]),
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        installs(&dir),
+        ["fake-1.0.0+caf.1"],
+        "nothing, while it waits"
+    );
+    driver.apply(SetupDirective::Stop {
+        ticket: Ticket(1001),
+    });
+    let events = done(&mut driver, Ticket(1001)).await;
+    assert_eq!(events, [SetupEvent::InstallFailed(InstallFailure::Stopped)]);
+    assert_eq!(installs(&dir), ["fake-1.0.0+caf.1"]);
 }

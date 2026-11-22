@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use caf_core::agent::InstallFailure;
 use caf_core::event::SetupEvent;
-use caf_core::install::{Artifact, Install, NpmPackage, Platform, Unpack};
+use caf_core::install::{Artifact, Install, NpmPackage, Patch, Platform, Unpack};
 use caf_core::time::Wall;
 use rustix::fs::FlockOperation;
 use sha2::{Digest, Sha256};
@@ -99,6 +99,8 @@ pub(super) struct Folders {
     pub(super) private: Option<String>,
     /// About how many bytes the agent takes once installed.
     pub(super) size: u64,
+    /// How it's patched once installed, if it is.
+    pub(super) patch: Option<Patch>,
 }
 
 /// Installs `install` as `root/folder`, making the agent's private folder
@@ -180,8 +182,121 @@ async fn installing(
         // No other kind is given yet.
         _ => Err(other("CAF doesn't know this kind of install".into())),
     };
+    // Patched last, so an install is never complete unpatched.
+    let built = match (built, folders.patch.clone()) {
+        (Ok(()), Some(patch)) => {
+            let build = build.clone();
+            blocking_patch(move || super::patch::patch_install(&build, &patch)).await
+        }
+        (built, _) => built,
+    };
     let done = match built {
         Ok(()) => placed(&build, &place, files, options, stop).await,
+        Err(failure) => Err(failure),
+    };
+    if done.is_err() {
+        blocking(move || remove_all(&build)).await.ok();
+    }
+    drop(lock);
+    done
+}
+
+/// Makes `root/folder` from the complete install `root/from`, an earlier
+/// patch level of the same upstream version, with nothing downloaded: its
+/// files linked into a new folder, those it patched put back, and that
+/// patched with `patch`.
+pub(super) async fn prepare(
+    root: PathBuf,
+    folders: (String, String),
+    patch: Patch,
+    options: Options,
+    reporter: Reporter,
+    mut stop: oneshot::Receiver<()>,
+) {
+    let (folder, from) = folders;
+    let outcome = preparing(&root, &folder, &from, patch, &options, &mut stop).await;
+    reporter.last(match outcome {
+        Ok(()) => SetupEvent::Installed,
+        Err(failure) => SetupEvent::InstallFailed(failure),
+    });
+}
+
+/// Prepares, holding `.lock` throughout as an install does, and removes
+/// what it built if it fails. `from` is only ever read.
+async fn preparing(
+    root: &Path,
+    folder: &str,
+    from: &str,
+    patch: Patch,
+    options: &Options,
+    stop: &mut oneshot::Receiver<()>,
+) -> Result<(), InstallFailure> {
+    for name in [folder, from] {
+        if !is_install_name(name) {
+            return Err(other(format!("{name:?} can't be an install's name")));
+        }
+    }
+    if folder == from {
+        return Err(other(format!("{folder} can't be prepared from itself")));
+    }
+    let lock = wait_for_lock(root, stop).await?;
+    let place = root.join(folder);
+    let earlier = root.join(from);
+    let build = root.join(hidden_name(BUILD, folder));
+    let made = {
+        let (place, earlier, build, root) = (
+            place.clone(),
+            earlier.clone(),
+            build.clone(),
+            root.to_owned(),
+        );
+        blocking(move || {
+            // Under the lock, so it's complete if it's there.
+            if place.is_dir() {
+                return Ok(None);
+            }
+            let complete = fs::symlink_metadata(&earlier).is_ok_and(|found| found.is_dir());
+            if !complete {
+                return Ok(Some(false));
+            }
+            clean(&root);
+            fs::DirBuilder::new().mode(0o755).create(&build)?;
+            Ok(Some(true))
+        })
+        .await
+        .map_err(failure)?
+    };
+    match made {
+        None => return Ok(()),
+        Some(false) => return Err(other(format!("{from} isn't installed"))),
+        Some(true) => {}
+    }
+    let stopped = Arc::new(AtomicBool::new(false));
+    let making = {
+        let (earlier, build, stopped) = (earlier, build.clone(), Arc::clone(&stopped));
+        tokio::task::spawn_blocking(move || {
+            match super::patch::link_earlier(&earlier, &build, &stopped) {
+                Ok(true) => super::patch::patch_install(&build, &patch),
+                Ok(false) => Err(InstallFailure::Stopped),
+                Err(error) => Err(failure(error)),
+            }
+        })
+    };
+    tokio::pin!(making);
+    let made = tokio::select! {
+        made = &mut making => made,
+        _ = &mut *stop => {
+            // It sees that between files, and ends.
+            stopped.store(true, Ordering::Relaxed);
+            let _ = making.await;
+            Ok(Err(InstallFailure::Stopped))
+        }
+    };
+    let made = made.unwrap_or_else(|_| Err(other("preparing it panicked".into())));
+    // What was linked is on the disk already: only folders, copies and
+    // the patched files are new, and those were synced as written.
+    let done = match made {
+        Ok(()) => placed(&build, &place, false, options, stop).await,
         Err(failure) => Err(failure),
     };
     if done.is_err() {
@@ -1410,6 +1525,15 @@ async fn blocking<T: Send + 'static>(
     tokio::task::spawn_blocking(work)
         .await
         .unwrap_or_else(|_| Err(io::Error::other("the work panicked")))
+}
+
+/// Runs patching work on a blocking thread.
+async fn blocking_patch(
+    work: impl FnOnce() -> Result<(), InstallFailure> + Send + 'static,
+) -> Result<(), InstallFailure> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|_| Err(other("patching panicked".into())))
 }
 
 /// Bytes as lower-case hex.

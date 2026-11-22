@@ -82,6 +82,7 @@
 
 mod command;
 mod install;
+mod patch;
 #[cfg(test)]
 mod tests;
 
@@ -313,8 +314,6 @@ impl SetupDriver {
                 private,
                 size,
             } => {
-                // Drafted: the builder patches the install as its last step.
-                let _ = patch;
                 let (reporter, stop) = self.stoppable(ticket);
                 tokio::spawn(install::install(
                     self.root.clone(),
@@ -322,6 +321,7 @@ impl SetupDriver {
                         folder,
                         private,
                         size,
+                        patch,
                     },
                     install,
                     self.options.clone(),
@@ -335,8 +335,15 @@ impl SetupDriver {
                 from,
                 patch,
             } => {
-                let _ = (ticket, folder, from, patch);
-                todo!("prepare a patch level from an earlier install")
+                let (reporter, stop) = self.stoppable(ticket);
+                tokio::spawn(install::prepare(
+                    self.root.clone(),
+                    (folder, from),
+                    patch,
+                    self.options.clone(),
+                    reporter,
+                    stop,
+                ));
             }
             SetupDirective::Remove {
                 ticket,
