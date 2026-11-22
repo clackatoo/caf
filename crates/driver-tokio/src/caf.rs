@@ -281,7 +281,7 @@ struct Common<A: AppItem> {
     /// The agents' names, in order.
     agents: Arc<[AgentName]>,
     /// The chats loaded, archived ones included, in the order they were
-    /// opened or restored.
+    /// made.
     chats: watch::Receiver<Vec<ChatSummary>>,
     /// Where every agent stands, in the order they were offered.
     statuses: watch::Receiver<Vec<AgentStatus>>,
@@ -1250,8 +1250,8 @@ impl ChatsWatch {
         self.list.mark_changed();
     }
 
-    /// The chats loaded, in the order they were opened or restored, each
-    /// marked if it's archived: at once the first
+    /// The chats loaded, in the order they were made (a chat's id says
+    /// when), each marked if it's archived: at once the first
     /// time, then each time the list changes. `None` once CAF has shut
     /// down.
     ///

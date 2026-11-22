@@ -258,13 +258,16 @@ bytes.
 A viewer, such as a page using the
 [TypeScript caf-sdk](~caf/getting-started/a-chat-in-the-browser#saved-chats),
 gets the saved chats on every shelf you've listed, right after the agents,
-and again whenever they change. Each chat in its list of chats loaded says
-its label and shelf, and when it was archived if it is: an archived chat
-restored, or closed and not saved, is listed, marked. A viewer may close and unarchive chats (`FromViewer::Close`,
-`FromViewer::Unarchive`) as it may act on them (`ViewerRules::act`). Its
-request to restore a chat goes to
-`ViewerRules::restore`, which gives it its tools, or refuses it; by default
-it refuses every one:
+and again whenever they change. Each chat in its list of chats loaded, in
+the order they were made, says its label and shelf, and when it was
+archived if it is: an archived chat restored, or closed and not saved, is
+listed, marked. A viewer may close and unarchive chats
+(`FromViewer::Close`, `FromViewer::Unarchive`) as it may act on them
+(`ViewerRules::act`). Closing a chat that isn't saved ends no watch of it,
+as it may be unarchived, so a viewer should unwatch an archived chat it
+stops showing: each watch counts against `ViewerRules::max_watches`. Its
+request to restore a chat goes to `ViewerRules::restore`, which gives it
+its tools, or refuses it; by default it refuses every one:
 
 ```rust
 let mut rules = ViewerRules::default();

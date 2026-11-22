@@ -30,7 +30,9 @@ MessagePack with field names; TypeScript sends them as JSON.
    installed or not, signed in or not. It says so again, the whole list,
    each time any of it changes.
 3. The viewer **watches** chats. For each, it gets the chat whole, then its
-   changes as they happen.
+   changes as they happen, until the chat is put away or deleted, or CAF
+   shuts down. Closing a chat that isn't saved only archives it, and its
+   watch goes on, so a viewer unwatches an archived chat it stops showing.
 4. It may act on them: send a message, stop a turn, answer a question, close
    a chat, which archives it, unarchive one, or ask to open one. It may ask
    to install an agent, sign in to or out of one, or have CAF check every

@@ -78,8 +78,9 @@
 //! let chat = caf.restore(RestoreChat::new(id, Shelf("project-x".into()))).await?;
 //! ```
 //!
-//! - [`Caf::restore`] returns once the chat is loaded, idle: its agent
-//!   starts, carrying on its session, when a message is sent.
+//! - [`Caf::restore`] returns once the chat is loaded, idle, or archived
+//!   if it was closed: its agent starts, carrying on its session, when a
+//!   message is sent.
 //! - [`ChatHandle::put_away`] saves a chat whole and lets it go from
 //!   memory; closing a saved chat does too. [`Caf::delete`] deletes one
 //!   for good, and [`Caf::move_shelf`] moves a shelf's chats.

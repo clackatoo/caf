@@ -263,8 +263,8 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
         version: u32,
         /// The agents a viewer may ask to open a chat with.
         agents: Vec<AgentName>,
-        /// The chats CAF has loaded, in the order they were opened or
-        /// restored, archived ones included and marked.
+        /// The chats CAF has loaded, in the order they were made (a chat's
+        /// id says when), archived ones included and marked.
         chats: Vec<ChatSummary>,
         /// Different every time CAF starts, so a viewer can tell a
         /// restarted CAF from the one it was watching. A `since` holds
@@ -306,7 +306,8 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
     /// down, or the viewer already watches as many chats as the host
     /// allows: nothing more comes for it. A chat archived but still loaded,
     /// such as one closed that isn't saved, goes on being watched, as it
-    /// may be unarchived.
+    /// may be unarchived: closing it ends no watch, so a viewer should
+    /// [unwatch](FromViewer::Unwatch) an archived chat it stops showing.
     Ended {
         /// The chat.
         chat: ChatId,
@@ -382,11 +383,12 @@ pub struct ChatSummary {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Rights {
     /// Whether it may send, stop, answer, choose a chat's settings
-    /// ([`FromViewer::Set`]) and close.
+    /// ([`FromViewer::Set`]), close and unarchive.
     pub act: bool,
-    /// Whether it may install agents, sign in and out of them, and learn
-    /// their settings. A viewer that may not gets no sign-in's link or
-    /// code.
+    /// Whether it may install agents, sign in and out of them, learn
+    /// their settings, and have CAF look at the machine again
+    /// ([`AgentAction::CheckAgain`]). A viewer that may not gets no
+    /// sign-in's link or code.
     pub agents: bool,
     /// Whether it may read usage summaries and set prices. A summary
     /// covers every CAF app on the machine, not just this one, so it's a
