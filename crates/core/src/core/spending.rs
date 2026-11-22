@@ -18,7 +18,7 @@ use crate::change::Change;
 use crate::chat::{AppData, AppItem, Chat, Cost, Usage};
 use crate::directive::{Directive, Level, UsageDirective};
 use crate::ids::{ChatId, TurnId};
-use crate::profiles::Reported;
+use crate::profiles::{ProfileChoice, Reported};
 use crate::settings::{SettingKind, SettingValue, Settings};
 use crate::time::Now;
 use crate::usage::{LedgerLine, ModelTokens, PriceTable, Spend, Tokens, TurnUsage};
@@ -98,7 +98,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             let message = format!("chat {}: turn {}: {what}", chat.0, turn.0);
             report(out, Level::Warn, message);
         };
-        let (reported, split_unreadable) = self.profile_of_chat(chat).spent(result);
+        let profile = self.profile_of_chat(chat);
+        let (reported, split_unreadable) = profile.spent(result);
         let rows = match reported {
             Reported::Nothing | Reported::Unreadable if split_unreadable => {
                 return warn(
@@ -155,10 +156,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     .filter(|model| !model.is_empty())
                     .or_else(|| turn_model.clone())
                     .unwrap_or_else(|| UNKNOWN_MODEL.to_owned());
-                // Drafted: the builder names it, from the agent's profile.
+                // Named as its agent's profile names its ids.
+                let name = match &profile {
+                    ProfileChoice::Builtin(builtin) => builtin.model_name(&model),
+                    ProfileChoice::Cautious => None,
+                };
                 ModelTokens {
                     model,
-                    name: None,
+                    name,
                     tokens: row.tokens,
                 }
             })

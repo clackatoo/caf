@@ -18,6 +18,7 @@ use super::settings::{Choosing, sendable};
 use super::state::{Conn, How, Open, Purpose, Run};
 use super::{Core, OpenChat, Refused, SessionChoice, report};
 use crate::agent::{EnvChange, McpServer};
+use crate::change::Change;
 use crate::chat::AppData;
 use crate::chat::{
     AppItem, Chat, ChatState, Failure, FailureReason, ItemKind, Lost, Note, Remedy, Starter, Turn,
@@ -779,10 +780,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         let whole = self.chats.get(&chat).ok_or(Refused::NoSuchChat)?;
-        if whole.state == ChatState::Closed {
-            return Ok(());
+        // One archived already, as a restored one may be, keeps when it
+        // was archived, and is put away all the same.
+        if whole.state != ChatState::Closed {
+            self.close_session(now, chat, out);
+            self.record(chat, Change::Archived(Some(now.wall)));
         }
-        self.close_session(now, chat, out);
         if self.saving.kept.contains_key(&chat) {
             self.put_away_now(now, chat, out);
         }
@@ -1000,11 +1003,27 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// Unarchives `chat`, as [`Core::unarchive`] says.
     pub(super) fn unarchive_chat(
         &mut self,
-        now: Now,
+        _now: Now,
         chat: ChatId,
-        out: &mut Vec<Directive<A, D>>,
+        _out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
-        let _ = (now, chat, out);
-        todo!("unarchive a chat")
+        let whole = self.chats.get(&chat).ok_or(Refused::NoSuchChat)?;
+        if whole.state != ChatState::Closed {
+            return Ok(());
+        }
+        let agent = whole.agent.clone();
+        // It's on no connection while archived: back on one, idle, as a
+        // restored chat is, its agent started when a message is sent.
+        let conn = self.conn_for(chat, &agent);
+        let old = self
+            .runs
+            .get_mut(&chat)
+            .map(|run| std::mem::replace(&mut run.conn, conn));
+        if let Some(old) = old.filter(|old| *old != conn) {
+            self.tidy(old);
+        }
+        self.set_state(chat, ChatState::Idle);
+        self.record(chat, Change::Archived(None));
+        Ok(())
     }
 }

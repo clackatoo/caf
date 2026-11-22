@@ -443,6 +443,31 @@ fn an_install_before_any_survey_surveys_too_and_starts_once_it_answers() {
 }
 
 #[test]
+fn learning_doesnt_wait_for_an_agent_not_installed_or_being_signed_in_to() {
+    let mut script = Script::new(host());
+    script.surveyed(&[]);
+    let (done, out) = script.learn_settings("npm-agent");
+    done.expect("taken");
+    assert!(with(&out, "start").is_empty());
+    assert_eq!(
+        script.agent_status("npm-agent")["settings"],
+        json!({ "type": "Failed", "value": { "type": "NotInstalled" } })
+    );
+
+    // Signed out, as its status command says, and being signed in to.
+    let out = script.surveyed(&["test-download-1.4.0"]);
+    script.setup(ticket_of(&out, "status"), SetupEvent::Status(None));
+    script.sign_in("dl-agent").0.expect("signing in");
+    let (done, out) = script.learn_settings("dl-agent");
+    done.expect("taken");
+    assert!(with(&out, "start").is_empty());
+    assert_eq!(
+        script.agent_status("dl-agent")["settings"],
+        json!({ "type": "Failed", "value": { "type": "SigningIn" } })
+    );
+}
+
+#[test]
 fn signing_in_hands_on_a_link_to_one_of_the_recipes_sites() {
     let mut script = Script::new(host());
     script.surveyed(&["test-npm-2.0.0"]);

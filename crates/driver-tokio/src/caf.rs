@@ -1037,6 +1037,19 @@ impl<A: AppItem, D: AppData> ChatHandle<A, D> {
         self.caf.ask(|reply| Command::Close { chat, reply }).await
     }
 
+    /// Unarchives the chat: it's no longer archived, and its agent starts
+    /// when a message is sent. See [`caf_core::Core::unarchive`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    pub async fn unarchive(&self) -> Result<(), Error> {
+        let chat = self.id;
+        self.caf
+            .ask(|reply| Command::Unarchive { chat, reply })
+            .await
+    }
+
     /// Chooses a setting of the chat's agent, such as its model. See
     /// [`caf_core::Core::set_setting`]; the chat's settings show it
     /// waiting until the agent answers.
@@ -1397,6 +1410,10 @@ enum Command<D: AppData> {
         reply: oneshot::Sender<Result<(), Refused>>,
     },
     Close {
+        chat: ChatId,
+        reply: oneshot::Sender<Result<(), Refused>>,
+    },
+    Unarchive {
         chat: ChatId,
         reply: oneshot::Sender<Result<(), Refused>>,
     },
@@ -1902,6 +1919,13 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 let result = self.host(
                     |core, now, out| core.close_chat(now, chat, out),
                     |()| Some(HostCommand::CloseChat { chat }),
+                );
+                let _ = reply.send(result);
+            }
+            Command::Unarchive { chat, reply } => {
+                let result = self.host(
+                    |core, now, out| core.unarchive(now, chat, out),
+                    |()| Some(HostCommand::Unarchive { chat }),
                 );
                 let _ = reply.send(result);
             }

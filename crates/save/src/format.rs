@@ -76,10 +76,13 @@ pub(crate) fn read<A: AppItem, D: AppData>(
     snapshot: &[u8],
     journal: &[u8],
 ) -> Result<Saved<A, D>, CannotRestore> {
-    // Records are written in the version of the snapshot before them: only
-    // one so far.
-    let (_, frame) = open(snapshot)?;
+    // Records are written in the version of the snapshot before them, so
+    // they're read in its version too: one older than this CAF's is
+    // migrated, as it's read, to this version's shape.
+    let (version, frame) = open(snapshot)?;
     let inside = unpack(frame).map_err(|why| damaged("its snapshot", &why))?;
+    let inside =
+        migrate(version, inside, Root::Snapshot).map_err(|why| damaged("its snapshot", &why))?;
     let mut saved: Saved<A, D> =
         parse_app::<_, Saved<Anything, Anything>>(&inside, "its snapshot")?;
     // The data as it was saved, last set, and the app's items in tool
@@ -92,6 +95,7 @@ pub(crate) fn read<A: AppItem, D: AppData>(
     let (records, _) = records(journal)?;
     for (no, inside) in records.into_iter().enumerate() {
         let what = format!("its journal's record {}", no + 1);
+        let inside = migrate(version, inside, Root::Record).map_err(|why| damaged(&what, &why))?;
         let entries: Vec<Entry<A, D>> =
             parse_app::<_, Vec<Entry<Anything, Anything>>>(&inside, &what)?;
         let raw: Vec<RawEntry> = parse(&inside).map_err(|why| damaged(&what, &why))?;
@@ -358,6 +362,119 @@ fn damaged(what: &str, why: &str) -> CannotRestore {
     CannotRestore::Damaged(format!("{what} is damaged: {why}"))
 }
 
+/// What a save's MessagePack holds at its root.
+#[derive(Clone, Copy)]
+enum Root {
+    /// A snapshot: [`Saved`].
+    Snapshot,
+    /// A journal record: [`Entry`]s.
+    Record,
+}
+
+/// `inside`, a snapshot or record of a save of `version`, in this
+/// version's shape. What each version changed the shape of, rather than
+/// only added to:
+/// 5. the notes about settings
+///    ([`Note::AgentChanged`](caf_core::chat::Note::AgentChanged),
+///    [`Note::NotOffered`](caf_core::chat::Note::NotOffered),
+///    [`Note::NotApplied`](caf_core::chat::Note::NotApplied)) hold the
+///    choice with the agent's name for it, which older versions didn't
+///    keep, rather than the choice alone.
+///
+/// Only where a saved type has them is looked at: never inside what an
+/// agent, a tool or the app wrote.
+fn migrate(version: u32, inside: Vec<u8>, root: Root) -> Result<Vec<u8>, String> {
+    if version >= 5 {
+        return Ok(inside);
+    }
+    let mut tree: Tree = parse(&inside)?;
+    let mut changed = false;
+    let mut note = |item: &mut Tree| changed |= name_note(item);
+    match root {
+        Root::Snapshot => {
+            if let Some(Tree::List(turns)) =
+                tree.get_mut("chat").and_then(|chat| chat.get_mut("turns"))
+            {
+                turns.iter_mut().for_each(|turn| items(turn, &mut note));
+            }
+        }
+        Root::Record => {
+            if let Tree::List(entries) = &mut tree {
+                for entry in entries {
+                    if entry.get("type") != Some(&Tree::Str("Change".into())) {
+                        continue;
+                    }
+                    let Some(change) = entry.get_mut("value") else {
+                        continue;
+                    };
+                    let kind = match change.get("type") {
+                        Some(Tree::Str(kind)) => kind.clone(),
+                        _ => continue,
+                    };
+                    let Some(value) = change.get_mut("value") else {
+                        continue;
+                    };
+                    match kind.as_str() {
+                        "TurnAdded" => items(value, &mut note),
+                        "TurnInserted" => {
+                            if let Some(turn) = value.get_mut("turn") {
+                                items(turn, &mut note);
+                            }
+                        }
+                        "ItemAdded" => {
+                            if let Some(item) = value.get_mut("item") {
+                                note(item);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    if !changed {
+        return Ok(inside);
+    }
+    named(&tree)
+}
+
+/// Does `each` to every item of `turn`.
+fn items(turn: &mut Tree, each: &mut impl FnMut(&mut Tree)) {
+    if let Some(Tree::List(items)) = turn.get_mut("items") {
+        items.iter_mut().for_each(each);
+    }
+}
+
+/// Makes `item`, if it's a note about a setting holding the choice
+/// alone, as before version 5, hold it with no name: whether it did.
+fn name_note(item: &mut Tree) -> bool {
+    let Some(kind) = item.get_mut("kind") else {
+        return false;
+    };
+    if kind.get("type") != Some(&Tree::Str("Note".into())) {
+        return false;
+    }
+    let Some(note) = kind.get_mut("value") else {
+        return false;
+    };
+    let about = matches!(
+        note.get("type"),
+        Some(Tree::Str(kind)) if ["AgentChanged", "NotOffered", "NotApplied"].contains(&kind.as_str())
+    );
+    let Some(choice) = note
+        .get_mut("value")
+        .filter(|choice| about && choice.get("choice").is_none())
+    else {
+        return false;
+    };
+    let alone = std::mem::take(choice);
+    *choice = Tree::Map(vec![
+        (Tree::Str("choice".into()), alone),
+        (Tree::Str("name".into()), Tree::Nil),
+    ]);
+    true
+}
+
 /// An app's type that reads anything: what tells a save the app can't
 /// read from one that's damaged.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -574,6 +691,16 @@ impl Tree {
         }
     }
 
+    /// A map's value, by a key that's text, to change.
+    fn get_mut(&mut self, key: &str) -> Option<&mut Tree> {
+        match self {
+            Tree::Map(map) => (map.iter_mut())
+                .find(|(each, _)| matches!(each, Tree::Str(each) if each == key))
+                .map(|(_, value)| value),
+            _ => None,
+        }
+    }
+
     /// Whether `back` holds all of this: every key of a map, with what it
     /// holds; every list as long, with each of what it holds; and every
     /// thing else equal, a whole number held as a float of just the same
@@ -618,6 +745,39 @@ impl Tree {
                     })
             }
             (one, other) => one == other,
+        }
+    }
+}
+
+/// Written as it was read: what a migration leaves alone is written back
+/// as MessagePack holding just what it held. A float is written as 64
+/// bits, as it's read; a 32-bit one, which CAF's types never write, reads
+/// back as the same value.
+impl Serialize for Tree {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{Error, SerializeMap, SerializeSeq};
+        match self {
+            Tree::Nil => serializer.serialize_unit(),
+            Tree::Bool(value) => serializer.serialize_bool(*value),
+            Tree::Int(value) => match (i64::try_from(*value), u64::try_from(*value)) {
+                (Ok(value), _) => serializer.serialize_i64(value),
+                (_, Ok(value)) => serializer.serialize_u64(value),
+                _ => Err(S::Error::custom("a number past 64 bits")),
+            },
+            Tree::Float(value) => serializer.serialize_f64(*value),
+            Tree::Str(value) => serializer.serialize_str(value),
+            Tree::Bytes(value) => serializer.serialize_bytes(value),
+            Tree::List(list) => {
+                let mut seq = serializer.serialize_seq(Some(list.len()))?;
+                list.iter()
+                    .try_for_each(|each| seq.serialize_element(each))?;
+                seq.end()
+            }
+            Tree::Map(entries) => {
+                let mut map = serializer.serialize_map(Some(entries.len()))?;
+                (entries.iter()).try_for_each(|(key, value)| map.serialize_entry(key, value))?;
+                map.end()
+            }
         }
     }
 }
@@ -708,6 +868,7 @@ impl<'de> Visitor<'de> for TreeVisitor {
 #[cfg(test)]
 mod tests {
     use super::Tree::{self, Bool, Float, Int, List, Map, Nil, Str};
+    use crate::Squeeze;
 
     #[test]
     fn what_holds_what() {
@@ -759,5 +920,109 @@ mod tests {
         for (saved, back, holds) in cases {
             assert_eq!(saved.within(&back), holds, "{saved:?} in {back:?}");
         }
+    }
+
+    #[test]
+    fn a_note_about_a_setting_saved_before_version_5_reads_with_no_name() {
+        use caf_core::chat::{ItemKind, Note};
+        use caf_core::save::Saved;
+        use caf_core::settings::SettingChoice;
+        use serde_json::{Value, json};
+
+        let model =
+            json!({ "kind": { "type": "Model" }, "value": { "type": "Choice", "value": "opus" } });
+        let note = |id: u64, kind: &str| {
+            json!({
+                "id": id, "window": { "start": null, "end": { "type": "Unknown" } }, "parent": null,
+                "kind": { "type": "Note", "value": { "type": kind, "value": model } },
+            })
+        };
+        let signed_in = json!({
+            "id": 3, "window": { "start": null, "end": { "type": "Unknown" } }, "parent": null,
+            "kind": { "type": "Note", "value": { "type": "SignedIn" } },
+        });
+        // What an agent sent, kept as it came, shaped like one: left alone.
+        let raw = json!({ "type": "Note", "value": { "type": "NotOffered", "value": model } });
+        let unknown = json!({
+            "id": 4, "window": { "start": null, "end": { "type": "Unknown" } }, "parent": null,
+            "kind": { "type": "Unknown", "value": { "what": "kind", "raw": { "kind": raw }, "summary": null } },
+        });
+        let turn = |id: u64, items: Vec<Value>| {
+            json!({
+                "id": id, "starter": { "type": "Caf" }, "life": { "type": "Finished" },
+                "window": { "start": null, "end": { "type": "Unknown" } }, "items": items, "imported": false,
+            })
+        };
+        let saved = json!({
+            "header": {
+                "chat": caf_core::ChatId::from_number(1), "agent": "claude", "profile": null, "cwd": "/work",
+                "made": 0, "changed": 0, "label": null, "first": null, "turns": 1, "closed": false,
+            },
+            "chat": {
+                "id": caf_core::ChatId::from_number(1), "agent": "claude", "cwd": "/work", "state": { "type": "Idle" },
+                "turns": [turn(1, vec![note(2, "AgentChanged"), signed_in, unknown])],
+                "usage": null, "questions": [],
+            },
+            "session": null,
+            // As MessagePack writes no data.
+            "data": [],
+        });
+        let change = |change: Value| json!({ "type": "Change", "value": change });
+        let record = json!([
+            change(
+                json!({ "type": "ItemAdded", "value": { "turn": 1, "item": note(5, "NotOffered") } })
+            ),
+            change(json!({ "type": "TurnAdded", "value": turn(6, vec![note(7, "NotApplied")]) })),
+            change(
+                json!({ "type": "TurnInserted", "value": { "before": 6, "turn": turn(8, vec![note(9, "AgentChanged")]) } })
+            ),
+        ]);
+        let snapshot = super::seal(4, &super::named(&saved).expect("written"), Squeeze::Fast);
+        let frame = super::pack(&super::named(&record).expect("written"), Squeeze::Fast);
+        let mut journal = u32::try_from(frame.len())
+            .expect("small")
+            .to_le_bytes()
+            .to_vec();
+        journal.extend_from_slice(&frame);
+
+        let read: Saved = super::read(&snapshot, &journal).expect("it reads");
+        let items: Vec<&ItemKind> = (read.chat.turns.iter())
+            .flat_map(|turn| &turn.items)
+            .map(|item| &item.kind)
+            .collect();
+        let choice = SettingChoice::model("opus");
+        let named = |note: Note| ItemKind::Note(note);
+        assert_eq!(
+            items
+                .iter()
+                .filter(|kind| matches!(kind, ItemKind::Note(_)))
+                .copied()
+                .cloned()
+                .collect::<Vec<_>>(),
+            [
+                named(Note::AgentChanged {
+                    choice: choice.clone(),
+                    name: None
+                }),
+                named(Note::SignedIn),
+                named(Note::NotOffered {
+                    choice: choice.clone(),
+                    name: None
+                }),
+                named(Note::AgentChanged {
+                    choice: choice.clone(),
+                    name: None
+                }),
+                named(Note::NotApplied { choice, name: None }),
+            ]
+        );
+        let Some(ItemKind::Unknown(unknown)) = items.get(2) else {
+            panic!("an unknown item: {items:?}");
+        };
+        assert_eq!(unknown.raw, json!({ "kind": raw }));
+
+        // A version 5 save is read as it is.
+        let snapshot = super::seal(5, &super::named(&saved).expect("written"), Squeeze::Fast);
+        assert!(super::read::<caf_core::NoAppItems, caf_core::NoAppData>(&snapshot, &[]).is_err());
     }
 }

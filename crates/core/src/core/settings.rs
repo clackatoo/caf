@@ -70,6 +70,10 @@ pub(super) struct Choosing {
     /// gone is refused, so a broken agent can't have it opened over and
     /// over.
     pub(super) reopened: bool,
+    /// What the agent offered before its session last opened: the chat's
+    /// last word of it, else what CAF knew of the agent. A choice the
+    /// session doesn't offer is named as it was there.
+    pub(super) before: Vec<Setting>,
 }
 
 /// A setting being set.
@@ -247,11 +251,20 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .iter()
             .map(|choice| choice.kind)
             .collect();
+        let before = if whole.settings.offered.is_empty() {
+            match (self.setup.agents.get(&agent)).map(|standing| &standing.settings) {
+                Some(KnownSettings::Known(offered)) => offered.clone(),
+                _ => Vec::new(),
+            }
+        } else {
+            whole.settings.offered.clone()
+        };
         if let Some(run) = self.runs.get_mut(&chat) {
             run.choosing.via = offer.via;
             run.choosing.told = true;
             run.choosing.asked = None;
             run.choosing.unsent = kinds;
+            run.choosing.before = before;
         }
         if let Some(standing) = self.setup.agents.get_mut(&agent) {
             standing.settings = KnownSettings::Known(offer.settings.clone());
@@ -347,19 +360,20 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return;
         };
         let own = whole.settings.own.contains(&choice.kind);
+        let name = self.choice_name(chat, &[], choice);
         self.drop_or_fall_back(chat, choice);
         let (note, refused) = match why {
             Unapplied::NotOffered => (
                 Note::NotOffered {
                     choice: choice.clone(),
-                    name: None,
+                    name,
                 },
                 None,
             ),
             Unapplied::Refused(words) => (
                 Note::NotApplied {
                     choice: choice.clone(),
-                    name: None,
+                    name,
                 },
                 words,
             ),
@@ -630,9 +644,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             };
             if !offers(&whole.settings.offered, &choice) {
                 let own = whole.settings.own.contains(&choice.kind);
+                // It was offered until now: named as it was then.
+                let name = self.choice_name(chat, before, &choice);
                 self.drop_or_fall_back(chat, &choice);
                 if own {
-                    self.tell(now, chat, Note::NotOffered { choice, name: None });
+                    self.tell(now, chat, Note::NotOffered { choice, name });
                 }
             } else if let Some(value) = current(&whole.settings, choice.kind)
                 .filter(|value| **value != choice.value)
@@ -657,7 +673,32 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             settings.own.retain(|kind| *kind != choice.kind);
             choose(settings, choice.clone());
         });
-        self.tell(now, chat, Note::AgentChanged { choice, name: None });
+        let name = self.choice_name(chat, &[], &choice);
+        self.tell(now, chat, Note::AgentChanged { choice, name });
+    }
+
+    /// The agent's name for `choice` of `chat`'s, as CAF last knew it:
+    /// from what the chat's agent offers it, else from `before`, what it
+    /// offered it until now, else from what it offered before its session
+    /// last opened ([`Choosing::before`]), else from what CAF knows the
+    /// agent offers ([`AgentStatus::settings`](crate::agent::AgentStatus::settings)).
+    /// `None` for a switch, which has no name of its own, and for a
+    /// choice never offered.
+    fn choice_name(
+        &self,
+        chat: ChatId,
+        before: &[Setting],
+        choice: &SettingChoice,
+    ) -> Option<String> {
+        let whole = self.chats.get(&chat)?;
+        let opened = (self.runs.get(&chat)).map_or(&[][..], |run| &run.choosing.before[..]);
+        let known = match (self.setup.agents.get(&whole.agent)).map(|standing| &standing.settings) {
+            Some(KnownSettings::Known(offered)) => offered.as_slice(),
+            _ => &[],
+        };
+        [whole.settings.offered.as_slice(), before, opened, known]
+            .into_iter()
+            .find_map(|offered| named(offered, choice))
     }
 
     /// Says `note` in `chat`: in the turn open, the agent's or one it
@@ -1137,6 +1178,20 @@ fn offers(offered: &[Setting], choice: &SettingChoice) -> bool {
             (SettingForm::Switch, SettingValue::Switch(_)) => true,
             _ => false,
         })
+}
+
+/// The agent's name for `choice`, if `offered` has it as a choice.
+fn named(offered: &[Setting], choice: &SettingChoice) -> Option<String> {
+    let SettingValue::Choice(id) = &choice.value else {
+        return None;
+    };
+    let setting = (offered.iter()).find(|setting| setting.kind == choice.kind)?;
+    let SettingForm::Choices(choices) = &setting.form else {
+        return None;
+    };
+    (choices.iter())
+        .find(|each| each.id == *id)
+        .map(|each| each.name.clone())
 }
 
 /// What's chosen of `kind`, if anything.

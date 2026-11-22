@@ -634,6 +634,10 @@ async fn a_viewer_that_may_not_act_only_watches() {
             chat: chat.id,
             choice: SettingChoice::model("large"),
         },
+        FromViewer::Unarchive {
+            request: RequestNo(6),
+            chat: chat.id,
+        },
     ];
     for (request, ask) in (1..).zip(asks) {
         viewer.send(ask).await;
@@ -643,14 +647,15 @@ async fn a_viewer_that_may_not_act_only_watches() {
     assert!(now.turns.is_empty());
     assert_ne!(now.state, ChatState::Closed);
     assert!(now.settings.chosen.is_empty(), "nothing chosen");
+    assert_eq!(now.archived, None, "nor archived");
     // Opening is the host's rule's to decide, not `act`'s.
     viewer
         .send(FromViewer::Open {
-            request: RequestNo(6),
+            request: RequestNo(7),
             open: OpenRequest::new("fake", &dir.0),
         })
         .await;
-    assert!(matches!(viewer.done(6).await, Outcome::Opened(_)));
+    assert!(matches!(viewer.done(7).await, Outcome::Opened(_)));
     shut_down(&caf, running).await;
     viewer.ends().await;
 }
@@ -1574,6 +1579,84 @@ async fn a_viewer_chooses_a_setting_and_learns_an_agents_as_the_host_allows() {
         "{:#?}",
         dir.record()
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_viewer_unarchives_a_chat_it_closed() {
+    let dir = Dir::new();
+    let (caf, running, chat) = started(&dir, &[]).await;
+    let (mut viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
+    viewer
+        .send(FromViewer::Close {
+            request: RequestNo(1),
+            chat: chat.id,
+        })
+        .await;
+    assert_eq!(viewer.done(1).await, Outcome::Done);
+    let closed = picture(&chat).await;
+    assert!(closed.archived.is_some(), "closing archives it");
+
+    viewer
+        .send(FromViewer::Unarchive {
+            request: RequestNo(2),
+            chat: chat.id,
+        })
+        .await;
+    assert_eq!(viewer.done(2).await, Outcome::Done);
+    let now = picture(&chat).await;
+    assert_eq!(now.archived, None);
+    assert_eq!(now.state, ChatState::Idle, "its agent starts when sent to");
+    // Once more, it's left as it is.
+    viewer
+        .send(FromViewer::Unarchive {
+            request: RequestNo(3),
+            chat: chat.id,
+        })
+        .await;
+    assert_eq!(viewer.done(3).await, Outcome::Done);
+    assert_eq!(picture(&chat).await, now);
+    viewer
+        .send(FromViewer::Unarchive {
+            request: RequestNo(4),
+            chat: ChatId::from_number(999_999),
+        })
+        .await;
+    assert_eq!(viewer.done(4).await, Outcome::Refused(Refused::NoSuchChat));
+    shut_down(&caf, running).await;
+    viewer.ends().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_viewer_has_caf_check_its_agents_again_as_the_host_allows() {
+    let dir = Dir::new();
+    let script = dir.script("script.jsonl", &handshake("s1"));
+    let recording = dir.path("run.jsonl");
+    let mut config = config_for(host(), vec![fake(&dir, &script)]);
+    config.record = Some(recording.clone());
+    let (caf, running) = Caf::start(config);
+    let check_again = |request| FromViewer::Agent {
+        request: RequestNo(request),
+        agent: AgentName("fake".into()),
+        action: AgentAction::CheckAgain,
+    };
+    let (mut viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
+    viewer.send(check_again(1)).await;
+    assert_eq!(viewer.done(1).await, Outcome::NotAllowed);
+    let mut rules = ViewerRules::default();
+    rules.agents = true;
+    let (mut checker, ..) = Viewer::welcomed(&caf, rules, 8).await;
+    checker.send(check_again(1)).await;
+    assert_eq!(checker.done(1).await, Outcome::Done);
+    shut_down(&caf, running).await;
+    viewer.ends().await;
+    checker.ends().await;
+
+    let text = std::fs::read_to_string(&recording).unwrap();
+    let checks = (text.lines().skip(1))
+        .map(|line| serde_json::from_str::<Value>(line).unwrap()["event"].clone())
+        .filter(|event| *event == json!({"type": "Host", "value": {"type": "CheckAgents"}}))
+        .count();
+    assert_eq!(checks, 2, "once as CAF starts, and once more when asked");
 }
 
 /// Rules that let viewers read usage and set prices.

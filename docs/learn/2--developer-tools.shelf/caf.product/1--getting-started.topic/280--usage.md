@@ -152,6 +152,14 @@ is a sum of buckets. An agent is named by its built-in profile, such as
 model in it, and `unreadable` any file that couldn't be read: a summary is
 never quietly short.
 
+A bucket names its model by the agent's id for it, such as
+`claude-opus-5-5`. `names` gives each model a name to show, such as
+*Opus 5.5*, sorted by id: the name its turns were recorded with
+(`ModelTokens::name`), or, for turns recorded before CAF named models, the
+name the agent's built-in profile gives it now
+(`Builtin::model_name`). A model with neither, such as one of an agent with
+no profile, isn't in it: show its id.
+
 It's read on a thread of its own, so it never holds a chat up. A turn
 that ended a moment ago may not be in it yet. A time zone CAF doesn't know,
 or a period that's empty or longer than 400 days, is `Error::BadQuery`.
