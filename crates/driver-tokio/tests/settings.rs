@@ -380,7 +380,7 @@ async fn a_choice_the_agent_refuses_fails_the_waiting_message_with_send_again() 
         notes(&failed),
         [&Note::NotApplied {
             choice: SettingChoice::model("large"),
-            name: None
+            name: Some("Large".into())
         }]
     );
     assert_eq!(
@@ -608,7 +608,7 @@ async fn a_recorded_run_with_settings_replays_to_the_same_state() {
         [
             &Note::AgentChanged {
                 choice: SettingChoice::model("small"),
-                name: None
+                name: Some("Small".into())
             },
             &Note::AgentChanged {
                 choice: SettingChoice::fast(false),
