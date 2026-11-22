@@ -156,9 +156,9 @@ never quietly short.
 
 A bucket names its model by the agent's id for it, such as
 `claude-opus-5-5`. `names` gives each model a name to show, such as
-*Opus 5.5*, sorted by id: the name its turns were recorded with
-(`ModelTokens::name`), or, for turns recorded before CAF named models, the
-name the agent's built-in profile gives it now
+*Opus 5.5*, sorted by id: the name its latest turn was recorded with
+(`ModelTokens::name`), or, for turns recorded before CAF named models, or
+with an empty name, the name the agent's built-in profile gives it now
 (`Builtin::model_name`). A model with neither, such as one of an agent with
 no profile, isn't in it: show its id.
 

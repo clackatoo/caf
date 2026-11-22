@@ -661,18 +661,22 @@ impl<'a> Sum<'a> {
     }
 
     /// Notes the names a turn's line gives its models: the names it was
-    /// recorded with, or, for a line recorded before CAF named models, the
-    /// ones its agent's profile gives now.
+    /// recorded with, or, for a line recorded before CAF named models, or
+    /// with an empty name, the ones its agent's profile gives now.
     fn name(&mut self, line: &LedgerLine) {
         let profile = line.profile.as_deref().and_then(Builtin::from_slug);
         for row in &line.usage.models {
-            match &row.name {
+            let recorded = row.name.as_ref().filter(|name| !name.trim().is_empty());
+            match recorded {
                 // A model renamed since is shown by its latest name. Lines
                 // aren't read in time order, so the latest is chosen by
-                // when each ended.
+                // when each ended. Of lines that ended at once, the one
+                // read last: in one app's file, the one written last, and
+                // across apps, the app last by name, as they're read in
+                // that order.
                 Some(name) => {
                     let latest =
-                        (self.recorded.get(&row.model)).is_none_or(|(at, _)| line.at > *at);
+                        (self.recorded.get(&row.model)).is_none_or(|(at, _)| line.at >= *at);
                     if latest {
                         (self.recorded).insert(row.model.clone(), (line.at, name.clone()));
                     }

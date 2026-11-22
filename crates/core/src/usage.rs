@@ -493,9 +493,9 @@ pub struct Summary {
     pub matched: Vec<(String, String)>,
     /// Each model in it that has a name to show, by the agent's id for it,
     /// with that name, sorted by the agent's id: the name its lines were
-    /// recorded with, or, for lines recorded before CAF named models, the
-    /// one its agent's profile gives now. A model with none is shown by its
-    /// id.
+    /// recorded with, the latest line's, or, for lines recorded before CAF
+    /// named models or with an empty name, the one its agent's profile
+    /// gives now. A model with none is shown by its id.
     #[serde(default)]
     pub names: Vec<(String, String)>,
     /// When LiteLLM's table was last fetched, if ever.

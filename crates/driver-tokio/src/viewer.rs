@@ -74,7 +74,10 @@ pub struct ViewerRules {
     /// How many chats one viewer may watch at once: 256 by default. A
     /// `Watch` for one more is answered with [`ToViewer::Ended`] at once.
     /// Watching a chat over again doesn't count, and a chat that has
-    /// ended, or was unwatched, makes room for another.
+    /// ended, or was unwatched, makes room for another. Closing a chat
+    /// that isn't saved archives it and ends no watch, as it may be
+    /// unarchived: a viewer should unwatch an archived chat it stops
+    /// showing.
     pub max_watches: usize,
     /// Whether viewers may install agents, sign in and out of them, learn
     /// their settings, and have CAF look at the machine again. `false` by

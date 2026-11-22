@@ -213,6 +213,10 @@ pub(crate) struct UsageDriver {
     reloading: Option<(u64, Instant)>,
     /// The last reading's number.
     reloads: u64,
+    /// How many looks at the prices were handed to the thread: so a test
+    /// knows the first, as the driver starts, is behind it.
+    #[cfg(test)]
+    pub(crate) looks: u64,
     /// Those waiting for the reading under way.
     reading: Vec<oneshot::Sender<crate::caf::Priced>>,
     /// Those who asked while it was under way: they wait for the next.
@@ -314,6 +318,8 @@ impl UsageDriver {
             first: Some(Box::pin(tokio::time::sleep(options.prices_within))),
             reloading: None,
             reloads: 0,
+            #[cfg(test)]
+            looks: 0,
             reading: Vec::new(),
             after: Vec::new(),
             setting: VecDeque::new(),
@@ -448,7 +454,13 @@ impl UsageDriver {
                         }
                     }
                 },
-                Some(()) = looked.recv() => self.send(Work::Reload(None)),
+                Some(()) = looked.recv() => {
+                    #[cfg(test)]
+                    {
+                        self.looks += 1;
+                    }
+                    self.send(Work::Reload(None));
+                }
                 () = first_late => {
                     self.first = None;
                     log::warn!(
