@@ -102,15 +102,41 @@ fn patch_file(build: &Path, file: &FilePatch) -> Result<(), InstallFailure> {
 
 /// Renames `place` to `aside`, never over anything there: if something
 /// is, it fails with [`io::ErrorKind::AlreadyExists`], and `place` stays.
+/// Only in CAF's hidden build folder, under the installs' lock, where
+/// nothing else writes.
 fn set_aside(place: &Path, aside: &Path) -> io::Result<()> {
     use rustix::fs::{CWD, RenameFlags, renameat_with};
+    use rustix::io::Errno;
     match renameat_with(CWD, place, CWD, aside, RenameFlags::NOREPLACE) {
         Ok(()) => Ok(()),
-        // A file system that can't rename so: a hard link is made only
-        // where nothing is, either, and the patched file is renamed over
-        // `place` next.
-        Err(rustix::io::Errno::INVAL | rustix::io::Errno::NOSYS) => fs::hard_link(place, aside),
+        // A file system that can't rename so.
+        Err(error)
+            if [Errno::INVAL, Errno::NOSYS, Errno::NOTSUP, Errno::OPNOTSUPP].contains(&error) =>
+        {
+            link_aside(place, aside)
+        }
         Err(error) => Err(error.into()),
+    }
+}
+
+/// As [`set_aside`], with a hard link, which is made only where nothing
+/// is: `place` keeps its name too, until the patched file is renamed over
+/// it. On a file system that can't make one either, as
+/// [`rename_if_free`].
+fn link_aside(place: &Path, aside: &Path) -> io::Result<()> {
+    match fs::hard_link(place, aside) {
+        Err(error) if error.kind() != io::ErrorKind::AlreadyExists => rename_if_free(place, aside),
+        linked => linked,
+    }
+}
+
+/// As [`set_aside`], by looking that nothing is at `aside`, then renaming:
+/// the last resort, safe only as nothing else writes in the build folder.
+fn rename_if_free(place: &Path, aside: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(aside) {
+        Ok(_) => Err(io::ErrorKind::AlreadyExists.into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => fs::rename(place, aside),
+        Err(error) => Err(error),
     }
 }
 
@@ -297,5 +323,33 @@ mod tests {
             assert_eq!(file_in(&build, path), Err(why), "{path:?}");
         }
         fs::remove_dir_all(&build).unwrap();
+    }
+
+    #[test]
+    fn an_original_is_set_aside_only_where_nothing_is() {
+        let folder = std::env::temp_dir().join(format!("caf-patch-aside-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(&folder).unwrap();
+        let (place, aside) = (folder.join("a.js"), folder.join("a.js.caf-original"));
+        // Each way: the rename that never replaces, then, on a file
+        // system that can't do that, a hard link, then, on one that can't
+        // do that either, a rename of what's looked free.
+        let ways: [fn(&Path, &Path) -> io::Result<()>; 3] = [set_aside, link_aside, rename_if_free];
+        for (n, way) in ways.into_iter().enumerate() {
+            fs::write(&place, "original").unwrap();
+            let _ = fs::remove_file(&aside);
+            way(&place, &aside).unwrap_or_else(|error| panic!("way {n}: {error}"));
+            assert_eq!(fs::read(&aside).unwrap(), b"original", "way {n}");
+            // With something there already, it's left as it was. (Both
+            // made afresh: a hard link left them one file.)
+            let _ = (fs::remove_file(&place), fs::remove_file(&aside));
+            fs::write(&place, "original").unwrap();
+            fs::write(&aside, "upstream's own").unwrap();
+            let refused = way(&place, &aside).expect_err("something's there");
+            assert_eq!(refused.kind(), io::ErrorKind::AlreadyExists, "way {n}");
+            assert_eq!(fs::read(&aside).unwrap(), b"upstream's own", "way {n}");
+            assert_eq!(fs::read(&place).unwrap(), b"original", "way {n}");
+        }
+        fs::remove_dir_all(&folder).unwrap();
     }
 }

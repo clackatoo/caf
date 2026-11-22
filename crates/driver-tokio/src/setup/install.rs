@@ -606,8 +606,28 @@ fn clean(root: &Path) {
     }
 }
 
-/// Removes a folder and all in it, if it's there.
+/// Removes a folder and all in it, if it's there: an install's, built or
+/// whole, whose folders may be any permissions, so each is first made the
+/// user's to change.
 fn remove_all(path: &Path) -> io::Result<()> {
+    let mut folders = vec![path.to_owned()];
+    while let Some(folder) = folders.pop() {
+        match fs::symlink_metadata(&folder) {
+            Ok(found) if found.is_dir() => {
+                let mode = found.permissions().mode() | 0o700;
+                fs::set_permissions(&folder, fs::Permissions::from_mode(mode))?;
+            }
+            Ok(_) => continue,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        }
+        for entry in fs::read_dir(&folder)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                folders.push(entry.path());
+            }
+        }
+    }
     match fs::remove_dir_all(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         removed => removed,

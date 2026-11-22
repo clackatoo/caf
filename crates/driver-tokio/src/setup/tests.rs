@@ -2815,3 +2815,34 @@ async fn a_prepare_stopped_while_it_links_leaves_nothing() {
     assert_eq!(installs(&dir), ["fake-1.0.0+caf.1"]);
     assert_eq!(snapshot(&earlier), before);
 }
+
+#[tokio::test]
+async fn a_folder_nobody_may_write_in_never_keeps_an_install_from_going() {
+    let dir = Dir::new();
+    let mut driver = driver(&dir);
+    // An old install whose folder, as upstream shipped it, nobody may
+    // write in: removing it removes all of it.
+    let old = dir.root().join("fake-0.9.0");
+    std::fs::create_dir_all(old.join("bin")).unwrap();
+    std::fs::write(old.join("bin/agent"), AGENT).unwrap();
+    let read_only = std::fs::Permissions::from_mode(0o555);
+    std::fs::set_permissions(old.join("bin"), read_only.clone()).unwrap();
+    driver.apply(SetupDirective::Remove {
+        ticket: Ticket(1000),
+        folder: "fake-0.9.0".into(),
+        unused_since: ANY_TIME,
+    });
+    let events = done(&mut driver, Ticket(1000)).await;
+    assert_eq!(events, [SetupEvent::Removed { removed: true }]);
+    // And a build cut off with such a folder in it goes at the next
+    // survey.
+    let cut_off = dir.root().join(".build-fake-1.0.0-1-1");
+    std::fs::create_dir_all(cut_off.join("bin")).unwrap();
+    std::fs::write(cut_off.join("bin/agent"), AGENT).unwrap();
+    std::fs::set_permissions(cut_off.join("bin"), read_only).unwrap();
+    driver.apply(SetupDirective::Survey {
+        ticket: Ticket(1001),
+    });
+    done(&mut driver, Ticket(1001)).await;
+    assert!(installs(&dir).is_empty(), "{:?}", installs(&dir));
+}
