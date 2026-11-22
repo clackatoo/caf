@@ -7,7 +7,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/sv
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CafError, type SavedChat, type ToViewer } from '@clackatoo/caf'
 import SavedList from '../../src/chat/SavedList.svelte'
-import { orRestored, restoreOnceFree } from '../../src/chat/actions.ts'
+import { oneAtATime, orRestored, restoreOnceFree } from '../../src/chat/actions.ts'
 import { errorText, refusedText } from '../../src/chat/words.ts'
 import { chatId, NOON } from './build.ts'
 
@@ -305,6 +305,13 @@ describe('acting on a chat put away as it was archived', () => {
     expect(order).toEqual(['unarchive', 'restore', 'unarchive'])
   })
 
+  it('acts again if another restored it meanwhile, so CAF refuses to restore it as loaded', async () => {
+    const loaded = new CafError({ type: 'Refused', value: { type: 'Loaded' } })
+    const send = vi.fn().mockRejectedValueOnce(gone()).mockResolvedValue(1200)
+    await expect(orRestored(send, vi.fn().mockRejectedValue(loaded))).resolves.toBe(1200)
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+
   it("leaves the refusal to the caller with nothing to restore, or for any other failure, or if restoring fails", async () => {
     await expect(orRestored(vi.fn().mockRejectedValue(gone()))).rejects.toEqual(gone())
     const notAllowed = new CafError({ type: 'NotAllowed' })
@@ -313,6 +320,34 @@ describe('acting on a chat put away as it was archived', () => {
     expect(restore).not.toHaveBeenCalled()
     const inUse = new CafError({ type: 'CannotRestore', value: { type: 'InUse' } })
     await expect(orRestored(vi.fn().mockRejectedValue(gone()), vi.fn().mockRejectedValue(inUse))).rejects.toBe(inUse)
+  })
+})
+
+describe('one restore at a time', () => {
+  it('shares one under way for the same chat, and starts another once it has ended', async () => {
+    const once = oneAtATime<string>()
+    let finish = () => {}
+    const start = vi.fn(() => new Promise<void>((done) => (finish = done)))
+    const first = once('a', start)
+    const second = once('a', start)
+    const other = once('b', async () => 'b')
+    expect(start).toHaveBeenCalledOnce()
+    expect(second).toBe(first)
+    await expect(other).resolves.toBe('b')
+    finish()
+    await first
+    void once('a', start)
+    expect(start).toHaveBeenCalledTimes(2)
+    finish()
+  })
+
+  it('shares a failure too, and tries afresh after it', async () => {
+    const once = oneAtATime<string>()
+    const failing = vi.fn().mockRejectedValueOnce(new Error('no')).mockResolvedValue('yes')
+    const [a, b] = [once('a', failing), once('a', failing)]
+    await expect(a).rejects.toThrow('no')
+    await expect(b).rejects.toThrow('no')
+    await expect(once('a', failing)).resolves.toBe('yes')
   })
 })
 

@@ -207,11 +207,11 @@
         {now
           ? 'Learning what the agent offers, such as its models…'
           : known.type === 'Failed'
-            ? `CAF couldn't learn which models and settings ${agent} offers. ${learnFailureText(known.value, agent)}`
+            ? `CAF couldn't learn which models and settings ${agent} offers. ${learnFailureText(known.value, agent)}${mayLearnAgain(known.value) ? ' It tries again when the chat opens, or now.' : ''}`
             : 'What the agent offers, such as its models, shows once its session opens.'}
       </span>
       {#if canLearn && (known.type !== 'Failed' || mayLearnAgain(known.value))}
-        <button type="button" aria-disabled={now} onclick={learnNow}>{known.type === 'Failed' ? 'Try again' : 'Learn it now'}</button>
+        <button type="button" aria-disabled={now} onclick={learnNow}>Learn them now</button>
       {/if}
     </div>
     <!-- What the system or the agent said, as theirs, never CAF's. -->

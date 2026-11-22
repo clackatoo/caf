@@ -209,12 +209,12 @@ describe("the agent's settings", () => {
     expect((screen.getByRole('checkbox', { name: 'Fast mode' }) as HTMLInputElement).disabled).toBe(true)
   })
 
-  it('chooses nothing in an archived chat, restored or not, as CAF refuses it', () => {
-    draw(chat({ state: { type: 'Closed' }, archived: NOON, settings: { offered: offered(), chosen: [], own: [] } }))
+  it('chooses nothing in an archived chat, as CAF refuses it, and again once it is unarchived', async () => {
+    const settings = { offered: offered(), chosen: [], own: [] }
+    const { rerender } = draw(chat({ state: { type: 'Closed' }, archived: NOON, settings }))
     expect(select('Model').disabled).toBe(true)
-    cleanup()
-    draw(chat({ state: { type: 'Idle' }, archived: NOON, settings: { offered: offered(), chosen: [], own: [] } }))
-    expect(select('Model').disabled).toBe(true)
+    await rerender({ chat: chat({ state: { type: 'Idle' }, archived: null, settings }) })
+    expect(select('Model').disabled).toBe(false)
   })
 
   it("draws a setting of a kind it doesn't know by its form, and names a form it doesn't know", () => {
@@ -253,7 +253,7 @@ describe('before the session opens', () => {
   it("learns what the agent offers, if it isn't known", async () => {
     const { actions, container } = draw(opening, { agent: status({ type: 'Host' }) })
     expect(container.querySelector('.caf-settings')?.textContent).toContain('shows once its session opens')
-    await fireEvent.click(screen.getByRole('button', { name: 'Learn it now' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Learn them now' }))
     expect(actions.learnSettings).toHaveBeenCalledOnce()
   })
 
@@ -269,7 +269,7 @@ describe('before the session opens', () => {
     const at = (settings: AgentStatus['settings']) => status({ type: 'Host' }, undefined, false, settings)
     const { container, rerender, actions } = draw(opening, { agent: at({ type: 'Unknown' }) })
     const said = container.querySelector('.caf-settings [role=status]')!
-    const learn = screen.getByRole('button', { name: 'Learn it now' })
+    const learn = screen.getByRole('button', { name: 'Learn them now' })
     learn.focus()
     await fireEvent.click(learn)
     expect(actions.learnSettings).toHaveBeenCalledOnce()
@@ -277,13 +277,15 @@ describe('before the session opens', () => {
     // The same status and button, the one's text changed and the other off.
     expect(container.querySelector('.caf-settings [role=status]')).toBe(said)
     expect(said.textContent).toContain('Learning what the agent offers')
-    expect(screen.getByRole('button', { name: 'Learn it now' })).toBe(learn)
+    expect(screen.getByRole('button', { name: 'Learn them now' })).toBe(learn)
     expect(learn.getAttribute('aria-disabled')).toBe('true')
     await fireEvent.click(learn)
     expect(actions.learnSettings).toHaveBeenCalledOnce()
     await rerender({ agent: at({ type: 'Failed', value: { type: 'StartTimedOut' } }) })
     expect(container.querySelector('.caf-settings [role=status]')).toBe(said)
-    expect(said.textContent).toBe("CAF couldn't learn which models and settings claude offers. claude didn't start in time.")
+    expect(said.textContent).toBe(
+      "CAF couldn't learn which models and settings claude offers. claude didn't start in time. It tries again when the chat opens, or now.",
+    )
     await rerender({ agent: at({ type: 'Known', value: offered() }) })
     await waitFor(() => expect(document.activeElement).toBe(select('Model')))
   })
@@ -294,11 +296,11 @@ describe('before the session opens', () => {
     cleanup()
     const failed = draw(opening, { agent: status({ type: 'Host' }, undefined, false, { type: 'Failed', value: { type: 'CouldNotStart', value: { error: 'No such file or directory (os error 2)' } } }) })
     expect(failed.container.querySelector('.caf-settings [role=status]')?.textContent).toBe(
-      "CAF couldn't learn which models and settings claude offers. claude couldn't be started.",
+      "CAF couldn't learn which models and settings claude offers. claude couldn't be started. It tries again when the chat opens, or now.",
     )
     // What the system said, apart, as its own.
     expect(failed.container.querySelector('.caf-settings .said.system code')?.textContent).toBe('No such file or directory (os error 2)')
-    await fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Learn them now' }))
     expect(failed.actions.learnSettings).toHaveBeenCalledOnce()
   })
 
@@ -327,17 +329,17 @@ describe('before the session opens', () => {
   ])("says why it couldn't learn them, %j, and offers to try again only where that could help", (why, says, again) => {
     const { container } = draw(opening, { agent: status({ type: 'Host' }, undefined, false, { type: 'Failed', value: why as never }) })
     expect(container.querySelector('.caf-settings [role=status]')?.textContent).toBe(
-      `CAF couldn't learn which models and settings claude offers. ${says}`,
+      `CAF couldn't learn which models and settings claude offers. ${says}${again ? ' It tries again when the chat opens, or now.' : ''}`,
     )
     expect(container.querySelector('.caf-settings .said')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Try again' }) !== null).toBe(again)
+    expect(screen.queryByRole('button', { name: 'Learn them now' }) !== null).toBe(again)
   })
 
   it('says why learning failed to start', async () => {
     const given = actions()
     given.learnSettings.mockRejectedValue(new CafError({ type: 'NotAllowed' }))
     draw(opening, { agent: status({ type: 'Host' }), actions: given })
-    await fireEvent.click(screen.getByRole('button', { name: 'Learn it now' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Learn them now' }))
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe("The host doesn't let this viewer do that."))
   })
 })
@@ -425,6 +427,15 @@ describe('the words for settings', () => {
     const { container } = draw(chat({ turns: [turn({ items: [item({ type: 'Note', value: note as never })] })] }))
     expect(container.querySelector('.note')?.textContent).toContain(says)
     expect(noteText(note as never)).toBe(says)
+  })
+
+  it('shows an id the agent never named in a monospace font, and a name as it is', () => {
+    const named = { type: 'NotApplied', value: { choice: sonnet, name: 'Sonnet 4.6' } }
+    const unnamed = { type: 'NotOffered', value: { choice: { kind: { type: 'Model' }, value: { type: 'Choice', value: 'claude-opus-4-8' } }, name: null } }
+    const { container } = draw(chat({ turns: [turn({ items: [item({ type: 'Note', value: named as never }), item({ type: 'Note', value: unnamed as never })] })] }))
+    const [first, second] = [...container.querySelectorAll('.note')]
+    expect(first!.querySelector('code')).toBeNull()
+    expect([...second!.querySelectorAll('code')].map((code) => code.textContent)).toEqual(['claude-opus-4-8'])
   })
 
   it('names a choice of every kind, and one it doesn\'t know by its tag', () => {

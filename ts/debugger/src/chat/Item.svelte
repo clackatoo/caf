@@ -4,7 +4,7 @@
   import Markdown from './Markdown.svelte'
   import Tool from './Tool.svelte'
   import { rawJson, unhidden } from './unhidden.ts'
-  import { noteText, tagOf } from './words.ts'
+  import { notePieces, tagOf } from './words.ts'
 
   let {
     item,
@@ -30,7 +30,10 @@
 {:else if kind.type === 'Tool'}
   <Tool tool={kind.value} window={item.window} />
 {:else if kind.type === 'Note'}
-  <div class="note" role="note"><span class="who">CAF</span>{noteText(kind.value)}</div>
+  <div class="note" role="note">
+    <span class="who">CAF</span>{#each notePieces(kind.value) as piece, n (n)}{#if piece.id}<code>{piece.text}</code
+        >{:else}{piece.text}{/if}{/each}
+  </div>
 {:else if kind.type === 'Compacted'}
   <div class="note" role="note"><span class="who">CAF</span>The agent compacted its memory here.</div>
 {:else if kind.type === 'App'}
@@ -71,6 +74,10 @@
     border-left: 2px solid var(--caf-border);
     color: var(--caf-muted);
     font-style: italic;
+  }
+  .note code {
+    font-family: var(--caf-mono);
+    font-size: 0.95em;
   }
   .note {
     background: var(--caf-caf-bg);

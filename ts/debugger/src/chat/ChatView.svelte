@@ -104,10 +104,15 @@
     if (error !== null) problem = errorText(error)
   }
 
+  /** Unarchive is under way: it's off until it's done. */
+  let unarchiving = $state(false)
+
   async function unarchive() {
-    if (!acting || actions.unarchive === undefined) return
+    if (!acting || unarchiving || actions.unarchive === undefined) return
+    unarchiving = true
     problem = null
     const error = await attempt(actions.unarchive)
+    unarchiving = false
     if (error !== null) problem = errorText(error)
   }
 </script>
@@ -180,7 +185,7 @@
     <div class="archived" role="status">
       <span>This chat is archived. Sending a message brings it back.</span>
       {#if acting && actions.unarchive !== undefined}
-        <button type="button" class="unarchive" onclick={unarchive}>Unarchive</button>
+        <button type="button" class="unarchive" disabled={unarchiving} onclick={unarchive}>Unarchive</button>
       {/if}
     </div>
   {/if}
@@ -289,7 +294,8 @@
   .archived span {
     flex: 1;
   }
-  .close:disabled {
+  .close:disabled,
+  .unarchive:disabled {
     opacity: 0.5;
     cursor: default;
   }

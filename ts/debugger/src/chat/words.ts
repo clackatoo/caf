@@ -197,18 +197,51 @@ export function noteText(note: DeepReadonly<Note>): string {
     case 'SignedIn':
       return 'You signed in to the agent: send the message again to try it now.'
     case 'AgentChanged':
-      return `The agent changed by itself to ${choiceText(note.value.choice, note.value.name)}, and this chat follows it.`
-    case 'NotOffered': {
-      // A switch that's gone is gone on and off alike: it's named alone.
-      const { choice, name } = note.value
-      const what = choice.value.type === 'Switch' ? settingText(choice) : choiceText(choice, name)
-      return `The agent doesn't offer ${what}, so that choice was dropped: the app's default, or else the agent's own, applies.`
-    }
+    case 'NotOffered':
     case 'NotApplied':
-      return `The agent refused ${choiceText(note.value.choice, note.value.name)}, so that choice was dropped: the app's default, or else the agent's own, applies.`
+      return notePieces(note)
+        .map((piece) => piece.text)
+        .join('')
     default:
       return `A note this viewer doesn't know (${tagOf(note)}).`
   }
+}
+
+/** A run of a note's text: the agent's own id for a choice is shown in a monospace font. */
+export interface Piece {
+  text: string
+  id?: boolean
+}
+
+/** Something CAF says in a turn, in pieces, its ids apart. */
+export function notePieces(note: DeepReadonly<Note>): Piece[] {
+  const dropped = ", so that choice was dropped: the app's default, or else the agent's own, applies."
+  switch (note.type) {
+    case 'AgentChanged':
+      return [
+        { text: 'The agent changed by itself to ' },
+        ...choicePieces(note.value.choice, note.value.name),
+        { text: ', and this chat follows it.' },
+      ]
+    case 'NotOffered': {
+      // A switch that's gone is gone on and off alike: it's named alone.
+      const { choice, name } = note.value
+      const what = choice.value.type === 'Switch' ? [{ text: settingText(choice) }] : choicePieces(choice, name)
+      return [{ text: "The agent doesn't offer " }, ...what, { text: dropped }]
+    }
+    case 'NotApplied':
+      return [{ text: 'The agent refused ' }, ...choicePieces(note.value.choice, note.value.name), { text: dropped }]
+    default:
+      return [{ text: noteText(note) }]
+  }
+}
+
+/** A setting chosen, as `choiceText` names it, in pieces: an id the agent never named apart. */
+function choicePieces(choice: DeepReadonly<SettingChoice>, name: string | null): Piece[] {
+  const text = choiceText(choice, name)
+  if (choice.value.type !== 'Choice' || name !== null) return [{ text }]
+  const id = choice.value.value
+  return [{ text: text.slice(0, text.length - id.length) }, { text: id, id: true }]
 }
 
 /**

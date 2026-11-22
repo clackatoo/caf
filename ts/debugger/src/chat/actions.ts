@@ -12,6 +12,7 @@ import {
   type ChatId,
   type DeepReadonly,
   type QuestionId,
+  type Refused,
   type SettingChoice,
   type Shelf,
   type UserMessage,
@@ -104,8 +105,7 @@ export async function restoreOnceFree<T>(
     try {
       return await restore()
     } catch (error) {
-      const loaded = error instanceof CafError && error.why.type === 'Refused' && error.why.value.type === 'Loaded'
-      if (!loaded || tried >= tries) throw error
+      if (!refused(error, 'Loaded') || tried >= tries) throw error
       await new Promise((done) => setTimeout(done, wait))
     }
   }
@@ -116,8 +116,10 @@ export async function restoreOnceFree<T>(
  * it, as a host's `ChatActions` does, restoring it first if it must. A
  * saved chat is put away as it's archived, so CAF no longer has it and
  * refuses with `NoSuchChat`: then, given `restore`, it's restored,
- * archived still, and `act` tried again. Without `restore`, or for any
- * other failure, the refusal is the caller's.
+ * archived still, and `act` tried again. If CAF refuses to restore it as
+ * loaded, another restored it meanwhile, so `act` is tried again all the
+ * same. Without `restore`, or for any other failure, the refusal is the
+ * caller's.
  */
 export async function orRestored<T>(
   act: () => Promise<T>,
@@ -126,11 +128,35 @@ export async function orRestored<T>(
   try {
     return await act()
   } catch (error) {
-    const gone = error instanceof CafError && error.why.type === 'Refused' && error.why.value.type === 'NoSuchChat'
-    if (!gone || restore === undefined) throw error
-    await restore()
+    if (!refused(error, 'NoSuchChat') || restore === undefined) throw error
+    try {
+      await restore()
+    } catch (problem) {
+      if (!refused(problem, 'Loaded')) throw problem
+    }
     return await act()
   }
+}
+
+/**
+ * Runs one at a time, by key: while one started for a key is under way,
+ * starting another for it gives back the same, so two actions on one
+ * chat, such as sending and unarchiving it, restore it once.
+ */
+export function oneAtATime<K>(): <T>(key: K, start: () => Promise<T>) => Promise<T> {
+  const running = new Map<K, Promise<unknown>>()
+  return <T>(key: K, start: () => Promise<T>): Promise<T> => {
+    const under = running.get(key)
+    if (under !== undefined) return under as Promise<T>
+    const started = start().finally(() => running.delete(key))
+    running.set(key, started)
+    return started
+  }
+}
+
+/** Whether `error` is CAF refusing, for this reason. */
+function refused(error: unknown, why: Refused['type']): boolean {
+  return error instanceof CafError && error.why.type === 'Refused' && error.why.value.type === why
 }
 
 /**

@@ -71,6 +71,14 @@ describe('live', () => {
     expect(live.chat?.archived).toBe(1)
     live.watch(one)
     expect(link.sent.map((message) => message.type)).toEqual(['Hello', 'Watch', 'Watch'])
+    // Shown as it was until it comes again: a view drawing it, and what's
+    // being written in it, stay.
+    expect(live.chat?.archived).toBe(1)
+    link.deliver({ type: 'Picture', value: { chat: { ...chat, archived: null }, latest: 1 } })
+    expect(live.chat?.archived).toBeNull()
+    // Another chat shows nothing of this one.
+    live.watch(two)
+    expect(live.chat).toBeNull()
   })
 
   it('watches the chat chosen again once connected again', async () => {

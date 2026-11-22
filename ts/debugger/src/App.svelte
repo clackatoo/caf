@@ -15,6 +15,7 @@
     openThenChoose,
     restoreOnceFree,
     showsAgent,
+    oneAtATime,
     orRestored,
     type ChatActions,
     type ListActions,
@@ -56,8 +57,16 @@
 
   const lookingBack = $derived(mode === 'Replay' || !inspector.position.live)
   const summaries = $derived(lookingBack ? inspector.past.summaries : (live?.chats ?? []))
+  // Live, only the chat chosen: never one watched before it, nor one
+  // watched again late.
   const chat = $derived(
-    selected === null ? null : lookingBack ? (inspector.past.chats.get(selected) ?? null) : (live?.chat ?? null),
+    selected === null
+      ? null
+      : lookingBack
+        ? (inspector.past.chats.get(selected) ?? null)
+        : live?.chat?.id === selected
+          ? live.chat
+          : null,
   )
   /** The app's line for the chat shown, from the list of chats. */
   const label = $derived(summaries.find((summary) => summary.id === selected)?.label ?? null)
@@ -97,17 +106,29 @@
     inspector = connectInspector()
   }
 
+  /** The restores under way for actions, one per chat. */
+  const restoring = oneAtATime<ChatId>()
+
   /**
    * Does something to the chat shown, restoring it first if it's saved and
    * CAF no longer has it, as when it was put away as it was archived:
-   * sending to it, or unarchiving it, then finds it, archived still.
+   * sending to it, or unarchiving it, then finds it, archived still. Two
+   * actions at once restore it once. Restored, it's watched again, as its
+   * watch ended as it was put away, unless another chat is chosen by then.
    */
   async function toChat<T>(act: (caf: Connection, chat: ChatId) => Promise<T>): Promise<T> {
     if (live === null) throw new Error('Not live.')
     const caf = live.caf
     const chat = need(selected)
     const at = saved.find((each) => each.header.chat === chat)
-    const restore = at === undefined ? undefined : () => restoreOnceFree(() => caf.restore(chat, at.shelf)).then(() => live?.watch(chat))
+    const restore =
+      at === undefined
+        ? undefined
+        : () =>
+            restoring(chat, async () => {
+              await restoreOnceFree(() => caf.restore(chat, at.shelf))
+              if (selected === chat) live?.watch(chat)
+            })
     return orRestored(() => act(caf, chat), restore)
   }
 
@@ -195,10 +216,12 @@
     restore: async (chat: ChatId, shelf: Shelf) => {
       if (live === null) throw new Error('Not live.')
       const caf = live.caf
-      selected = await restoreOnceFree(() => caf.restore(chat, shelf))
+      // The same restore as an action's on it, if one is under way.
+      await restoring(chat, () => restoreOnceFree(() => caf.restore(chat, shelf)))
+      selected = chat
       // Under the same id as when it was put away, whose watch has ended:
       // choosing it again doesn't watch it again by itself.
-      live.watch(selected)
+      live.watch(chat)
     },
   }
 

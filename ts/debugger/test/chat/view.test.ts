@@ -539,8 +539,9 @@ describe('the composer', () => {
 })
 
 describe('an archived chat', () => {
-  // Restored, it's idle, and archived still: archiving sticks.
-  const archived = () => chat({ state: { type: 'Idle' }, archived: NOON })
+  // Closed, as CAF keeps an archived chat, restored or not, until it's
+  // unarchived: archiving sticks.
+  const archived = () => chat({ state: { type: 'Closed' }, archived: NOON })
 
   it('says so, and that sending brings it back, offering Unarchive in place of Close', async () => {
     const { container, actions } = draw(archived())
@@ -565,7 +566,8 @@ describe('an archived chat', () => {
 
   it('is an ordinary chat once unarchived, here or by a message sent to it', async () => {
     const { container, rerender } = draw(archived())
-    await rerender({ chat: { ...archived(), archived: null } })
+    // Unarchived, it's idle.
+    await rerender({ chat: { ...archived(), state: { type: 'Idle' }, archived: null } })
     expect(container.querySelector('.archived')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Unarchive' })).toBeNull()
     expect(button('Close').disabled).toBe(false)
@@ -576,6 +578,19 @@ describe('an archived chat', () => {
       agent: { name: 'claude', install: { type: 'Host' }, sign_in: { type: 'Unknown' }, can_sign_in: false, own_tools_off: true, limits: { windows: [], extra_usage: null, cleared: null }, settings: { type: 'Unknown' } },
     })
     expect(container.querySelector('.caf-settings')).toBeNull()
+  })
+
+  it('unarchives once at a time: Unarchive is off while it goes', async () => {
+    const given = actions()
+    let finish = () => {}
+    given.unarchive.mockImplementation(() => new Promise<void>((done) => (finish = done)))
+    draw(archived(), { actions: given })
+    await fireEvent.click(button('Unarchive'))
+    expect(button('Unarchive').disabled).toBe(true)
+    await fireEvent.click(button('Unarchive'))
+    expect(given.unarchive).toHaveBeenCalledOnce()
+    finish()
+    await waitFor(() => expect(button('Unarchive').disabled).toBe(false))
   })
 
   it('says why unarchiving failed', async () => {

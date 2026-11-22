@@ -2,6 +2,9 @@
 // next run, started on the same folder, lists it, restores it with its
 // record, and carries it on.
 
+import { readdirSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+
 import { expect, start, stop, test, type Page } from './server.ts'
 
 test.use({ serve: [] })
@@ -97,4 +100,48 @@ test('an archived chat, unarchived, is an ordinary chat again, and carries on', 
   await send(page, 'again')
   await expect(turns).toHaveCount(2)
   await expect(turns.last().locator('.life')).toHaveText('Finished')
+})
+
+/** Archives the chat shown, and waits until CAF has put it away. */
+async function archive(page: Page) {
+  await page.locator('.caf-chat > header').getByRole('button', { name: 'Close' }).click()
+  await expect(page.locator('.caf-chat > header .state')).toHaveText('Archived')
+  await expect(page.getByRole('region', { name: 'Saved chats' }).locator('li', { hasText: 'hello' })).toHaveAttribute('data-state', 'Saved')
+}
+
+// Sending to it brings it back: put away as it was archived, it's restored
+// first, archived still, without the view going.
+test('an archived chat, sent to at once, is brought back and carries on', async ({ page, server }) => {
+  await page.goto(server.url)
+  await expect(page.locator('.link')).toHaveText('Connected')
+  await openChat(page, process.cwd())
+  await send(page, 'hello')
+  const turns = page.locator('.caf-chat .turn')
+  await expect(turns.last().locator('.life')).toHaveText('Finished')
+  await archive(page)
+  const box = await page.getByRole('textbox', { name: 'Message' }).elementHandle()
+  await send(page, 'and again')
+  await expect(turns).toHaveCount(2)
+  await expect(turns.last().locator('.message')).toHaveText('and again')
+  // The view never went meanwhile: the box written in is the same one.
+  expect(await box!.evaluate((element) => element.isConnected)).toBe(true)
+  await expect(turns.last().locator('.life')).toHaveText('Finished')
+  await expect(page.locator('.caf-chat > header .state')).not.toHaveText('Archived')
+  await expect(page.getByText('This chat is archived.')).toHaveCount(0)
+})
+
+test("a message to an archived chat that can't be brought back stays, and says why", async ({ page, server }) => {
+  await page.goto(server.url)
+  await expect(page.locator('.link')).toHaveText('Connected')
+  await openChat(page, process.cwd())
+  await send(page, 'hello')
+  await expect(page.locator('.caf-chat .turn .life').last()).toHaveText('Finished')
+  await archive(page)
+  // Its save gone from under it, it can't be restored.
+  const chats = join(server.state, 'caf-debugger', 'chats')
+  for (const shelf of readdirSync(chats)) rmSync(join(chats, shelf), { recursive: true })
+  await send(page, 'and again')
+  await expect(page.locator('.composer [role=alert]')).toContainText("isn't on its shelf any more")
+  await expect(page.getByRole('textbox', { name: 'Message' })).toHaveValue('and again')
+  await expect(page.locator('.caf-chat > header .state')).toHaveText('Archived')
 })
