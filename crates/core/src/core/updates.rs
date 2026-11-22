@@ -83,8 +83,19 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return;
         };
         let update = params.get("update").cloned().unwrap_or(Value::Null);
-        let said = self.read_update(&self.profile_of_chat(chat), update);
-        if self.runs.get(&chat).is_some_and(|run| run.replaying) {
+        let profile = self.profile_of_chat(chat);
+        let replaying = self.runs.get(&chat).is_some_and(|run| run.replaying);
+        // The account's limits, heard from what it says now, never from
+        // history: read from the update itself, so they're heard even if
+        // the rest of it isn't.
+        if let ProfileChoice::Builtin(builtin) = profile
+            && !replaying
+            && update.get("sessionUpdate").and_then(Value::as_str) == Some("usage_update")
+        {
+            self.limits_heard(now, builtin, &update, out);
+        }
+        let said = self.read_update(&profile, update);
+        if replaying {
             self.replayed(now, chat, said, out);
         } else {
             self.live(now, chat, said, out);
