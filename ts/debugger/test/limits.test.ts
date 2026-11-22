@@ -173,7 +173,7 @@ describe('the Agents panel’s limits', () => {
   it('shows each agent’s own, and none for those that have none', () => {
     vi.useFakeTimers({ now: HEARD, toFake: ['Date', 'setInterval', 'clearInterval'] })
     const agents = statuses()
-    render(AgentsPanel, { agents, actions: { install() {}, stopInstall() {}, signIn() {}, paste() {}, stopSignIn() {}, signOut() {} } })
+    render(AgentsPanel, { agents, actions: { install() {}, stopInstall() {}, signIn() {}, paste() {}, stopSignIn() {}, signOut() {}, checkAgain() {} } })
     const withLimits = agents.filter((agent) => agent.limits.windows.length > 0).map((agent) => agent.name)
     expect(withLimits.length).toBeGreaterThan(0)
     for (const agent of agents) {
@@ -185,7 +185,7 @@ describe('the Agents panel’s limits', () => {
   it('counts down to each reset as time passes', async () => {
     vi.useFakeTimers({ now: HEARD, toFake: ['Date', 'setInterval', 'clearInterval'] })
     const agent: AgentStatus = { ...status({ type: 'Host' }), limits: { windows: [window({ resets: HEARD + HOUR })], extra_usage: null, cleared: null } }
-    render(AgentsPanel, { agents: [agent], actions: { install() {}, stopInstall() {}, signIn() {}, paste() {}, stopSignIn() {}, signOut() {} } })
+    render(AgentsPanel, { agents: [agent], actions: { install() {}, stopInstall() {}, signIn() {}, paste() {}, stopSignIn() {}, signOut() {}, checkAgain() {} } })
     expect(text(shown('5-hour'))).toContain('resets in 1 h,')
     await vi.advanceTimersByTimeAsync(20 * MINUTE)
     expect(text(shown('5-hour'))).toContain('resets in 40 min')

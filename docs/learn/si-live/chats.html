@@ -109,6 +109,7 @@
 .si-tray .si-item { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--raised-edge); }
 .si-tray .si-item:first-of-type { border-top: 0; }
 .si-tray .si-item .si-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.si-tray.si-note { display: flex; gap: 8px; align-items: center; padding: 6px 7px 6px 12px; color: var(--muted); }
 .si-tray.si-problem { background: var(--warning-bg); border-color: var(--warning-edge); color: var(--warning); display: flex; gap: 8px; align-items: center; padding: 8px 12px; }
 
 /* What attaches on top of the box: questions, the agent banner, refusals.
@@ -175,6 +176,9 @@
 .si-menu .si-note { padding: 6px 6px 4px; color: var(--muted); font-size: 13.5px; }
 .si-menu .si-note b { color: var(--text); }
 .si-menu .si-note .si-act { display: inline-flex; margin-top: 10px; }
+.si-menu .si-note .si-sys { margin: 8px 0 0; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 12.5px; white-space: pre-wrap; }
+.si-menu .si-note .si-quote { margin: 8px 0 0; padding-left: 10px; border-left: 2px solid var(--raised-edge); font-size: 13px; }
+.si-menu .si-note .si-quote b { color: var(--muted); font-weight: 600; }
 .si-learn { color: var(--link); }
 .si-effort { border-top: 1px solid var(--palette-edge); margin-top: 10px; padding-top: 8px; }
 .si-heading { display: flex; justify-content: space-between; padding: 0 8px; font-size: 13px; color: var(--muted); }
@@ -356,7 +360,7 @@
             <li><b>No CAF words in the app's UI.</b> Users never see <i>shelf</i>, <i>loaded</i>, <i>put away</i>, <i>session</i> or <i>adapter</i>. A shelf takes the app's own word (project, workspace) or none.</li>
             <li><b>Opening a chat just opens it.</b> If it was saved, CAF restores it; that shows only as a brief <i>Restoring</i>. Users never manage what's in memory, so there's no "open" against "saved".</li>
             <li><b>Closing a tab or pane never archives a chat.</b> A saved chat is put away: saved as it is, and back as it was when opened again. While a turn runs, it's put away once the turn, and any messages queued behind it, are done; a question keeps it until it's answered. A chat waiting for its agent is put away at once, and its waiting messages stop. A chat that isn't saved stays open, out of sight, until the app stops.</li>
-            <li><b>Archive</b> is CAF's <i>close</i>: "I'm done with this one". It's a deliberate action, never a side effect of closing a tab. An archived chat is marked <i>Archived</i> where it's listed. Opening it brings it back: it's an ordinary chat again.</li>
+            <li><b>Archive</b> is CAF's <i>close</i>: "I'm done with this one". It's a deliberate action, never a side effect of closing a tab. An archived chat is marked <i>Archived</i> where it's listed, and stays so, opened or not, until it's unarchived.</li>
             <li><b>Delete can't be undone,</b> so it always asks first, naming the chat. Only a saved chat can be deleted.</li>
             <li><b>A new chat is an empty chat.</b> There's no form. The agent is chosen in the composer's own settings menu, whose rail lists every agent in a new chat. The folder is a control beside it only if the app lets users choose it. Sending opens the chat.</li>
             <li><b>When it can't be restored,</b> say which of the six reasons it is, in the words below, with only the actions that can help.</li>
@@ -409,6 +413,7 @@
     tick: svg('<path d="M5 12l5 5 9-11"/>', '', 'width:15px;height:15px'),
     warn: svg('<path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17.5v.5"/>', '', 'width:15px;height:15px'),
     lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>', '', 'width:15px;height:15px'),
+    archive: svg('<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 001 1h12a1 1 0 001-1V9M10 13h4"/>', '', 'width:15px;height:15px'),
     unplug: svg('<path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 01-10 0zM12 16v5M3 3l18 18"/>', '', 'width:15px;height:15px'),
     search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>', '', 'width:15px;height:15px'),
     star: svg('<path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8 6.6 19.7l1.1-6.1L3.2 9.4l6.1-.8z"/>', '', 'width:15px;height:15px'),
@@ -458,8 +463,15 @@
     text: '', running: false, stopping: false, waiting: 0, waitingFor: 'this turn', waitingNote: null, problem: null, gate: false,
     // A string, or { text, icon: 'lock' | 'unplug', bold }: nothing can be sent.
     blocked: null,
-    // known | unknown | learning | none
-    settings: 'known', model: 'Opus 5.5', effort: 'High', fast: true, held: {},
+    // Archived: the tray says so and offers Unarchive; the box is as usual,
+    // but the settings can't be chosen.
+    archived: false,
+    // known | unknown | learning | failed | none
+    settings: 'known',
+    // Why CAF couldn't learn the settings, as the composer page words it, and
+    // what the system or the agent said ({ by: 'system' | 'agent', text }),
+    // and whether trying again could help.
+    learnWhy: "Claude couldn't be started.", learnSaid: null, learnAgain: true, model: 'Opus 5.5', effort: 'High', fast: true, held: {},
     menu: false, filter: 'agent', menuAgent: null,
     // Percent of the context used, or null before there's any (a new chat).
     // The ring's dot for an account limit: false, or the lowest window's lowness, 'low' or 'out'.
@@ -485,6 +497,8 @@
     if (s.settings === 'learning') return `<span class="si-control si-quiet">${m}<span class="si-label">Learning ${name}'s settings…</span>${icon.spin}</span>`
     if (s.settings === 'unknown') return `<span class="si-control si-quiet${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${s.narrow ? 'Settings' : s.newChat ? name : 'Settings not known yet'}</span>${icon.chev}</span>`
     if (s.settings === 'failed') return `<span class="si-control si-quiet${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${s.narrow ? 'Settings' : `Couldn't learn ${name}'s settings`}</span>${icon.chev}</span>`
+    // Archived, the settings can't be chosen: shown, as when nothing can be sent, with nothing to open.
+    if (s.archived) return `<span class="si-control si-quiet">${m}<span class="si-label">${s.model} · ${s.effort}</span></span>`
     const part = (now, later) => later ? `<span class="si-part si-held" title="${s.running ? 'From the next turn' : 'Not applied yet'}">${icon.clock}${later}</span>` : `<span class="si-part">${now}</span>`
     const fast = OFFERS[s.model] && OFFERS[s.model].fast && s.fast
     return `<span class="si-control${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${part(s.model, s.held.model)}<span class="si-sep">·</span>${part(s.effort, s.held.effort)}${fast ? icon.bolt : ''}</span>${icon.chev}</span>`
@@ -511,7 +525,11 @@
       return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note"><b>${what}</b><br>Choose it, and this chat will offer to ${a.needs === 'Not installed' ? 'install it' : 'sign you in'} once you send. Its models show here once it's ready.<br><span class="si-btn si-primary si-act">Use ${AGENT_NAME[a.id]}</span></div></div></div>`
     }
     if (s.settings === 'failed') {
-      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF couldn't learn which models and settings ${name} offers. It tries again when the chat opens, or now.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
+      const said = !s.learnSaid ? '' : s.learnSaid.by === 'agent'
+        ? `<div class="si-quote"><b>${name} said:</b> “${s.learnSaid.text}”</div>`
+        : `<div class="si-sys">${s.learnSaid.text}</div>`
+      const again = s.learnAgain ? ` It tries again when the chat opens, or now.${said || '<br>'}<span class="si-btn" style="margin-top:8px">Learn them now</span>` : said
+      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF couldn't learn which models and settings ${name} offers. <b>${s.learnWhy}</b>${again}</div></div></div>`
     }
     if (s.settings === 'unknown') {
       return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF doesn't know yet which models and settings ${name} offers. It finds out when the chat opens, or now, without sending a message.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
@@ -542,6 +560,7 @@
         waiting.map(t => `<div class="si-item">${icon.clock}<span class="si-text">${t}</span></div>`).join('') + '</div>'
     }
     if (s.problem) h += `<div class="si-tray si-problem">${icon.warn}${s.problem}</div>`
+    if (s.archived) h += `<div class="si-tray si-note">${icon.archive}<span>This chat is archived. Sending a message brings it back.</span><span class="si-spacer"></span><span class="si-btn">Unarchive</span></div>`
     h += s.attached
     const joined = s.attached ? ` si-joined${s.joined ? ' si-' + s.joined : ''}` : ''
     h += `<div class="si-box${joined}">`
@@ -680,7 +699,7 @@
     { id: 'cant-appdata', label: "Can't restore: app's data", note: "The app can't read the data it saved with the chat. Nothing helps but a version of the app that can, so there are no actions.", render: () => failure('appdata') },
     { id: 'cant-store', label: "Can't restore: couldn't read", note: 'The store failed, such as a disk error. What the system said is shown. Trying again may help.', render: () => failure('store') },
     { id: 'cant-gone', label: "Can't restore: gone", note: "Its save has gone. Remove from list lists the chats again, and it drops out. A viewer, which can't list them, offers nothing.", render: () => failure('gone') },
-    { id: 'archived', label: 'An archived chat, opened', note: "Opening an archived chat restores it, as any saved chat, and it's an ordinary chat again: no longer archived, and the next message carries it on.", render: () => head('Fix the restore race') + `<div class="body"><div class="column">${convo}</div></div>` + composer() },
+    { id: 'archived', label: 'An archived chat, opened', note: "Opening an archived chat restores it, as any saved chat, and it's still archived: the header says so, and the composer's tray says so, offering Unarchive. A message sent to it, or Unarchive, makes it an ordinary chat again.", render: () => head('Fix the restore race', { badge: '<span class="badge">Archived</span>' }) + `<div class="body"><div class="column">${convo}</div></div>` + composer({ archived: true }) },
     { id: 'agent-gone', label: 'Agent gone', note: "Its agent isn't offered by this app any more, so it can be read but not carried on. The box says why instead of offering to send.", render: () => head('Parser fuzzing notes', { mark: MARK.gemini }) + `<div class="body"><div class="column">${FUZZ}</div></div>` + composer({ agent: 'gemini', settings: 'none', context: 31, blocked: { icon: 'unplug', bold: "Gemini isn't available in this app any more.", text: 'You can read this chat, but not carry it on.' } }) + `` },
     { id: 'own-tools', label: 'Own tools on', note: "Its agent is offered, but CAF won't run it, as it can't turn off the agent's own tools: the app chose the cautious profile, or the agent isn't the one its profile is for. Like an agent gone, it can be read but not carried on.", render: () => head('Fix the empty-file panic') + `<div class="body"><div class="column">${convo}</div></div>` + composer({ settings: 'none', context: 18, blocked: { icon: 'lock', bold: "Claude can't be used: its own tools can't be turned off.", text: 'You can read this chat, but not carry it on.' } }) },
     { id: 'new', label: 'New chat', note: "An empty chat with the usual composer: the settings control picks the agent and its model (the menu's rail lists every agent in a new chat). There's no context yet, so no ring. This app fixes the folder, so there's no folder control.", render: () => head('New chat') + `<div class="body"><div class="centre">${rays('var(--claude)', 30)}<h3>New chat</h3>Send a message to start.</div></div>` + composer({ newChat: true, context: null }) },

@@ -272,14 +272,17 @@ agent's name in place of *Claude*:
 | `SignedIn` | Calm | You signed in to Claude: send the message again to try it now. |
 | `AgentChanged` | Calm | Claude changed by itself to the model Sonnet 5.5, and this chat follows it. |
 | `NotOffered` | Calm | Claude doesn't offer the model `claude-opus-4-8`, so that choice was dropped: the app's default, or else Claude's own, applies. |
-| `NotApplied` | Calm | Claude refused the model `claude-opus-4-8`, so that choice was dropped: the app's default, or else Claude's own, applies. |
+| `NotApplied` | Calm | Claude refused the model Opus 4.8, so that choice was dropped: the app's default, or else Claude's own, applies. |
 
-A note about a setting names the choice by the agent's own id, as CAF keeps
-it, since the agent may no longer offer it. Where the agent still offers it,
-the app may show its name instead, as `AgentChanged` does here. A switch
-that's on or off is named *fast mode on* or *fast mode off*; one the agent
-doesn't offer is named *fast mode* alone: *Claude doesn't offer fast mode,
-so that choice was dropped…*
+A note about a setting names the choice by the agent's name for it, as the
+agent last said it, which CAF keeps with the note (its `name`): *the model
+Sonnet 5.5*. A choice the agent never named, such as a model it never
+offered, has none, and is named by the agent's own id, in a monospace font,
+as CAF keeps it: *the model `claude-opus-4-8`*. The name is kept with the
+note, so it reads the same when the agent no longer offers the choice, and
+in a restored chat. A switch that's on or off is named *fast mode on* or
+*fast mode off*; one the agent doesn't offer is named *fast mode* alone:
+*Claude doesn't offer fast mode, so that choice was dropped…*
 
 When the agent changes a setting by itself, the composer follows it: after
 the note here, it shows *Sonnet 5.5*. The turn's line still shows the model
@@ -410,7 +413,7 @@ Everything else is calm.
 | Send again | Sending the turn's message again: `Core::send`, or `FromViewer::Send`. |
 | Sign in | `Core::sign_in`, or a viewer's `FromViewer::Agent` with `AgentAction::SignIn`. |
 | Who may act | The viewer's `Rights`: `act` to send, stop and answer; `agents` to sign in. |
-| A note | `ItemKind::Note`, a `Note`. |
+| A note | `ItemKind::Note`, a `Note`. A setting's (`AgentChanged`, `NotOffered`, `NotApplied`) holds the `choice`, and the agent's `name` for it, if it said one. |
 | A lost chat | `ChatState::Lost`, with its `Lost` reason, and `Incompatible`'s. |
 | History | `Turn.imported`, from a chat opened with `SessionChoice::Continue`. |
 | The model divider | `Turn.model` differing from the turn before's. |

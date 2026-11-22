@@ -7,8 +7,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/sv
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CafError, type SavedChat, type ToViewer } from '@clackatoo/caf'
 import SavedList from '../../src/chat/SavedList.svelte'
-import { restoreOnceFree } from '../../src/chat/actions.ts'
-import { errorText, refusedText } from '../../src/chat/words.ts'
+import { oneAtATime, orRestored, restoreOnceFree } from '../../src/chat/actions.ts'
+import { couldNotText, errorText, refusedText } from '../../src/chat/words.ts'
 import { chatId, NOON } from './build.ts'
 
 afterEach(cleanup)
@@ -58,6 +58,11 @@ const pair = (one: SavedChat['state'] = { type: 'Saved' }, two: SavedChat['state
 ]
 
 describe('the saved chats', () => {
+  it('marks a chat archived as of when it was', () => {
+    const { container } = draw([saved(1, { closed: true, archived: NOON - 1000 })])
+    expect(text(rows(container)[0]!)).toContain('3 turns · archived')
+  })
+
   it("names each by its label, or else its first line, with its agent, folder, when it changed and its turns", () => {
     const { container } = draw([
       saved(1, { label: 'Release notes' }),
@@ -70,9 +75,10 @@ describe('the saved chats', () => {
     expect(empty!.querySelector('.name')?.textContent?.trim()).toBe('Untitled')
     expect(text(first!)).toContain('claude · project')
     expect(text(first!)).toContain('3 turns')
-    expect(text(first!)).not.toContain('closed')
+    expect(text(first!)).not.toContain('archived')
     expect(text(empty!)).toContain('claude · site')
-    expect(text(empty!)).toContain('1 turn · closed')
+    // Saved before CAF kept when it was archived: closed is archived.
+    expect(text(empty!)).toContain('1 turn · archived')
     const when = first!.querySelector('time')!
     expect(when.getAttribute('datetime')).toBe(new Date(NOON).toISOString())
     expect(when.textContent?.trim()).toBe(new Date(NOON).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }))
@@ -272,9 +278,102 @@ describe('the words for restoring', () => {
     expect(errorText(new CafError({ type: 'Refused', value: { type: reason } as never }))).toBe(says)
   })
 
+  it.each([
+    ['NotFound', 'this chat is gone.'],
+    ['InUse', 'this chat is open somewhere else.'],
+    ['Newer', 'it was saved by a newer version.'],
+    ['Damaged', "this chat's save is damaged."],
+    ['AppData', "this app can't read its own data on this chat."],
+    ['Store', "this chat couldn't be read."],
+    ['Lost', "it couldn't be restored, for a reason this viewer doesn't know (Lost)."],
+  ])("words a restore under another action that failed, %s, as CAF SI's tray does", (type, clause) => {
+    const error = new CafError({ type: 'CannotRestore', value: { type, value: 'x' } as never })
+    expect(couldNotText('send', error)).toBe(`Couldn't send: ${clause}`)
+    expect(couldNotText('unarchive', error)).toBe(`Couldn't unarchive: ${clause}`)
+  })
+
+  it('words any other failure as errorText does', () => {
+    const error = new CafError({ type: 'NotAllowed' })
+    expect(couldNotText('send', error)).toBe(errorText(error))
+  })
+
   it('says why a chat could not be restored', () => {
     const error = new CafError({ type: 'CannotRestore', value: { type: 'NotFound' } })
     expect(errorText(error)).toBe("It can't be restored: it isn't on its shelf any more.")
+  })
+})
+
+describe('acting on a chat put away as it was archived', () => {
+  const gone = () => new CafError({ type: 'Refused', value: { type: 'NoSuchChat' } })
+
+  it('acts on one CAF has, restoring nothing, and gives back what it did', async () => {
+    const unarchive = vi.fn().mockResolvedValue(1200)
+    const restore = vi.fn()
+    await expect(orRestored(unarchive, restore)).resolves.toBe(1200)
+    expect(unarchive).toHaveBeenCalledOnce()
+    expect(restore).not.toHaveBeenCalled()
+  })
+
+  it('restores one CAF no longer has, then acts on it again', async () => {
+    const order: string[] = []
+    const unarchive = vi.fn(async () => {
+      order.push('unarchive')
+      if (order.length === 1) throw gone()
+    })
+    await orRestored(unarchive, async () => void order.push('restore'))
+    expect(order).toEqual(['unarchive', 'restore', 'unarchive'])
+  })
+
+  it('acts again if another restored it meanwhile, so CAF refuses to restore it as loaded', async () => {
+    const loaded = new CafError({ type: 'Refused', value: { type: 'Loaded' } })
+    const send = vi.fn().mockRejectedValueOnce(gone()).mockResolvedValue(1200)
+    await expect(orRestored(send, vi.fn().mockRejectedValue(loaded))).resolves.toBe(1200)
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+
+  it("says why restoring failed if another hadn't restored it after all", async () => {
+    const loaded = new CafError({ type: 'Refused', value: { type: 'Loaded' } })
+    const send = vi.fn().mockRejectedValue(gone())
+    await expect(orRestored(send, vi.fn().mockRejectedValue(loaded))).rejects.toBe(loaded)
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+
+  it("leaves the refusal to the caller with nothing to restore, or for any other failure, or if restoring fails", async () => {
+    await expect(orRestored(vi.fn().mockRejectedValue(gone()))).rejects.toEqual(gone())
+    const notAllowed = new CafError({ type: 'NotAllowed' })
+    const restore = vi.fn()
+    await expect(orRestored(vi.fn().mockRejectedValue(notAllowed), restore)).rejects.toBe(notAllowed)
+    expect(restore).not.toHaveBeenCalled()
+    const inUse = new CafError({ type: 'CannotRestore', value: { type: 'InUse' } })
+    await expect(orRestored(vi.fn().mockRejectedValue(gone()), vi.fn().mockRejectedValue(inUse))).rejects.toBe(inUse)
+  })
+})
+
+describe('one restore at a time', () => {
+  it('shares one under way for the same chat, and starts another once it has ended', async () => {
+    const once = oneAtATime<string>()
+    let finish = () => {}
+    const start = vi.fn(() => new Promise<void>((done) => (finish = done)))
+    const first = once('a', start)
+    const second = once('a', start)
+    const other = once('b', async () => 'b')
+    expect(start).toHaveBeenCalledOnce()
+    expect(second).toBe(first)
+    await expect(other).resolves.toBe('b')
+    finish()
+    await first
+    void once('a', start)
+    expect(start).toHaveBeenCalledTimes(2)
+    finish()
+  })
+
+  it('shares a failure too, and tries afresh after it', async () => {
+    const once = oneAtATime<string>()
+    const failing = vi.fn().mockRejectedValueOnce(new Error('no')).mockResolvedValue('yes')
+    const [a, b] = [once('a', failing), once('a', failing)]
+    await expect(a).rejects.toThrow('no')
+    await expect(b).rejects.toThrow('no')
+    await expect(once('a', failing)).resolves.toBe('yes')
   })
 })
 

@@ -5,7 +5,7 @@
   // app may put something of the chat's: the context ring.
   import type { Snippet } from 'svelte'
   import { attempt } from './actions.ts'
-  import { errorText } from './words.ts'
+  import { couldNotText, errorText } from './words.ts'
 
   let {
     running,
@@ -19,7 +19,7 @@
     running: boolean
     /** The running turn has been asked to stop. */
     stopping: boolean
-    /** Nothing can be sent: looking back, or the chat is closed. */
+    /** Nothing can be sent: looking back, or the host doesn't let this viewer act. */
     disabled: boolean
     send: (text: string) => Promise<unknown> | void
     stop: () => Promise<unknown> | void
@@ -40,7 +40,7 @@
     const error = await attempt(() => send(message))
     sending = false
     if (error !== null) {
-      problem = errorText(error)
+      problem = couldNotText('send', error)
       // Give it back, unless the user has started another.
       if (text === '') text = message
     }

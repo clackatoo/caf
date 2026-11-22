@@ -1,6 +1,6 @@
 <script lang="ts">
   // Where the chat stands with its agent, when that's worth saying: while
-  // it opens, once its session is lost, once it's closed, and while no
+  // it opens, once its session is lost, once it's closed (archived), and while no
   // session is open, as in a chat just restored. While it waits for its
   // agent, AgentBanner says why.
   import type { ChatState, DeepReadonly } from '@clackatoo/caf'
@@ -33,7 +33,7 @@
     {/if}
   </div>
 {:else if state.type === 'Closed'}
-  <div class="banner closed" role="status">This chat is closed.</div>
+  <div class="banner closed" role="status">This chat is archived.</div>
 {:else if state.type === 'Idle'}
   <div class="banner idle" role="status">Not running: the next message starts it again, continuing where the agent can.</div>
 {:else if state.type !== 'Open' && state.type !== 'WaitingForAgent'}

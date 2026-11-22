@@ -18,7 +18,7 @@
   import StateBanner from './StateBanner.svelte'
   import Ring from './Ring.svelte'
   import Turn from './Turn.svelte'
-  import { errorText, shortId, stateLabel } from './words.ts'
+  import { couldNotText, errorText, shortId, stateLabel } from './words.ts'
   import './theme.css'
 
   let {
@@ -69,7 +69,8 @@
   /** The status of the chat's agent, if the host gave it, and it's this chat's agent's. */
   const status = $derived(agent?.name === chat.agent ? agent : undefined)
   const running = $derived(chat.turns.find((turn) => turn.life.type === 'Running' || turn.life.type === 'Stopping'))
-  const closed = $derived(chat.state.type === 'Closed')
+  /** Archived, as it stays, restored or not, until it's unarchived or sent to. */
+  const archived = $derived(chat.archived !== null)
   /** Whether anything can be done in the chat: it isn't read-only, and the host lets this viewer act. */
   const acting = $derived(!readOnly && may.act)
   let problem = $state<string | null>(null)
@@ -102,6 +103,18 @@
     const error = await attempt(actions.close)
     if (error !== null) problem = errorText(error)
   }
+
+  /** Unarchive is under way: it's off until it's done. */
+  let unarchiving = $state(false)
+
+  async function unarchive() {
+    if (!acting || unarchiving || actions.unarchive === undefined) return
+    unarchiving = true
+    problem = null
+    const error = await attempt(actions.unarchive)
+    unarchiving = false
+    if (error !== null) problem = couldNotText('unarchive', error)
+  }
 </script>
 
 <!-- Drawn afresh for another chat, so nothing typed or shown for one (a
@@ -115,8 +128,10 @@
       <!-- Cut from the left, so the end of the path shows. -->
       <span class="cwd" title={chat.cwd}><bdi>{chat.cwd}</bdi></span>
     </div>
-    <span class="state" data-state={chat.state.type}>{stateLabel(chat.state)}</span>
-    {#if !closed && may.act}
+    <span class="state" data-state={chat.state.type} data-archived={archived}>
+      {archived ? 'Archived' : stateLabel(chat.state)}
+    </span>
+    {#if !archived && chat.state.type !== 'Closed' && may.act}
       <button type="button" class="close" disabled={readOnly} onclick={close}>Close</button>
     {/if}
   </header>
@@ -127,7 +142,9 @@
   {:else if !may.act}
     <div class="looking-back" role="status">The app lets this viewer watch this chat, not act in it.</div>
   {/if}
-  <StateBanner state={chat.state} />
+  <!-- An archived chat's composer says so, and nothing else about its
+       state matters until it's unarchived. -->
+  {#if !archived}<StateBanner state={chat.state} />{/if}
   {#if showsAgent(chat)}
     <AgentBanner
       name={chat.agent}
@@ -141,6 +158,7 @@
       notNow={actions.stop}
       paste={actions.paste}
       stopSignIn={actions.stopSignIn}
+      checkAgain={actions.checkAgain}
     />
   {/if}
 
@@ -161,11 +179,22 @@
   </div>
 
   <Questions questions={chat.questions} readOnly={!acting} answer={actions.answer} />
+  {#if archived}
+    <!-- Sending brings it back, so the composer stays: only its settings
+         wait, as CAF won't change them while it's archived. -->
+    <div class="archived" role="status">
+      <span>This chat is archived. Sending a message brings it back.</span>
+      {#if acting && actions.unarchive !== undefined}
+        <button type="button" class="unarchive" disabled={unarchiving} onclick={unarchive}>Unarchive</button>
+      {/if}
+    </div>
+  {/if}
   <SettingsBar
     settings={chat.settings}
-    known={closed ? undefined : status?.settings}
+    agent={chat.agent}
+    known={archived ? undefined : status?.settings}
     held={running !== undefined || chat.state.type !== 'Open'}
-    disabled={!acting || closed}
+    disabled={!acting || archived}
     canLearn={acting && may.agents}
     set={actions.setSetting}
     learn={actions.learnSettings}
@@ -173,7 +202,7 @@
   <Composer
     running={running !== undefined}
     stopping={running?.life.type === 'Stopping'}
-    disabled={!acting || closed}
+    disabled={!acting}
     send={(text) => actions.send({ parts: [{ type: 'Text', value: text }] })}
     stop={actions.stop}
   >
@@ -242,7 +271,8 @@
   .state[data-state='Lost'] {
     color: var(--caf-warn);
   }
-  .close {
+  .close,
+  .unarchive {
     font: inherit;
     font-size: 0.85em;
     padding: 0.2em 0.7em;
@@ -252,7 +282,20 @@
     color: var(--caf-text);
     cursor: pointer;
   }
-  .close:disabled {
+  .archived {
+    display: flex;
+    align-items: center;
+    gap: 0.8em;
+    padding: 0.4em 0.9em;
+    border-top: 1px solid var(--caf-border);
+    font-size: 0.85em;
+    color: var(--caf-muted);
+  }
+  .archived span {
+    flex: 1;
+  }
+  .close:disabled,
+  .unarchive:disabled {
     opacity: 0.5;
     cursor: default;
   }

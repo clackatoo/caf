@@ -109,7 +109,7 @@
           <time datetime={isoTime(header.changed)} title="Last changed {fullTime(header.changed)}">
             {dayAndTime(header.changed)}
           </time>
-          · {turnCount(header.turns)}{#if header.closed}{' '}· closed{/if}
+          · {turnCount(header.turns)}{#if header.archived !== null || header.closed}{' '}· archived{/if}
         </span>
         <div class="state">
           {#if state.type === 'Loaded'}

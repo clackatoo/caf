@@ -75,6 +75,14 @@ export function price(summary: Summary, model: string): PricedModel | null {
   return entry === undefined ? null : (summary.prices.find((each) => each.model === entry) ?? null);
 }
 
+/**
+ * A model's name to show, by the agent's id for it as a bucket names it:
+ * the one `names` pairs with it, such as "Opus 5.5", or else the id itself.
+ */
+export function modelName(summary: Summary, model: string): string {
+  return summary.names.find(([id]) => id === model)?.[1] ?? model;
+}
+
 /** A kind of token a price has a rate for. */
 export type TokenKind = "input" | "cache_read" | "cache_write" | "output";
 

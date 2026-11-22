@@ -34,7 +34,7 @@ bottom. Nothing sits above the text inside the box.
 | The settings control | Bottom left | The agent's mark and one control for all its settings: *Opus 5.5 · High*, with a bolt when fast mode is on. It opens the settings menu. |
 | The context ring | Bottom right | How full the agent's context is, as a ring and a percent. It opens the usage popover. |
 | The round button | Bottom right, after the ring | **Send**, or **Stop** while a turn runs or the chat opens, and the box is empty. |
-| The tray | Above the box | Messages waiting to be sent, or why a message couldn't be sent. |
+| The tray | Above the box | Messages waiting to be sent, why a message couldn't be sent, or that the chat is archived. |
 | What's attached | Between the tray and the box, joined to the box | A question waiting on the user, or the agent banner. Only one at a time. |
 
 From the top, then: the tray, then what's attached, then the box.
@@ -78,10 +78,11 @@ words are never lost. The words, by what happened:
 | The agent can't take the message (`Refused::Unsupported`) | *Couldn't send: Claude can't take this message.* |
 | The chat isn't open any more (`Refused::NoSuchChat`) | *Couldn't send: this chat isn't open any more.* |
 
-A chat that's archived (`Refused::Closed`), or whose agent is gone or can't
-be run (`Refused::NoSuchAgent`, `Refused::OwnTools`), shows
-[Can't write](#what-the-chat-allows) instead, so the user isn't invited to
-send at all.
+A chat whose agent is gone or can't be run (`Refused::NoSuchAgent`,
+`Refused::OwnTools`) shows [Can't write](#what-the-chat-allows) instead, so
+the user isn't invited to send at all. An archived chat isn't one: a
+message to it is sent, and brings it back, as
+[Archived](#what-the-chat-allows) says.
 
 ## Messages that wait
 
@@ -262,11 +263,61 @@ with a spinner, and can't be opened.
 
 ![The menu when the settings couldn't be learnt](composer-learn-failed-menu.webp "The menu says why, and offers to try again")
 
-Its menu says *CAF couldn't learn which models and settings Claude offers.
-It tries again when the chat opens, or now.*, with the same
-**Learn them now** button, and the same rule for a viewer without the
-`agents` right. It doesn't show the reason CAF gives (`Failed`'s text): that
-is written for the app's logs, and may use CAF's own words.
+Its menu says *CAF couldn't learn which models and settings Claude offers.*,
+then why, in bold, then *It tries again when the chat opens, or now.*, with
+the same **Learn them now** button, and the same rule for a viewer without
+the `agents` right. CAF says why as a `LearnFailure`, and the words are the
+app's, with the agent's name in place of *Claude*:
+
+| Why (`LearnFailure`) | The menu says | Learn them now |
+| --- | --- | --- |
+| `NotInstalled` | *Claude isn't installed.* | Yes |
+| `NotLookedYet` | *CAF hadn't checked yet whether Claude is installed.* | Yes |
+| `SigningIn` | *Claude was being signed in to.* | Yes |
+| `SignInNeeded` | *Claude wants you to sign in first.* | Yes |
+| `CouldNotStart` | *Claude couldn't be started.*, then what the system said | Yes |
+| `Refused` | *Claude refused to open a chat.*, then what Claude said | Yes |
+| `StartTimedOut` | *Claude didn't start in time.* | Yes |
+| `OpenTimedOut` | *Claude didn't open a chat in time.* | Yes |
+| `Unreadable` | *Claude's answer made no sense.* | Yes |
+| `Restarted` | *Claude was restarted.* | Yes |
+| `Stopped` | *Claude stopped.* | Yes |
+| `ShutDown` | *The app was closing.* | No |
+| `Incompatible` | *This version of Claude can't talk to this app.* | No |
+| `OwnTools` | *Claude can't be used: its own tools can't be turned off.* | No |
+
+Where [the transcript](~caf/standard-interface/transcript) words a chat
+losing its agent for the same cause, the menu uses its sentence, so the
+user meets one sentence for one cause: `CouldNotStart`, `SignInNeeded`,
+`Restarted`, `Stopped` (its `AgentStopped`), `Unreadable` (its
+`BadAnswer`) and `Incompatible` (its `Protocol`). Three are adapted, as
+learning them opens no chat of the user's: `Refused` says *a chat*, not
+*this chat*; `ShutDown` says the app *was closing*, not that it closed
+while this chat was open; and `OwnTools` is the sentence for an agent CAF
+won't run, as [A chat's identity and lifecycle](~caf/standard-interface/chats)
+has it. The others, which no chat meets, are the menu's own. A reason
+newer than the app knows has no sentence: the menu says its first and
+last sentences, with the button.
+
+**Where trying again can't help**, the menu ends with why, and has no
+button and no *It tries again…*: the app is closing (`ShutDown`), or CAF
+can't use the agent at all (`Incompatible`, `OwnTools`), which nothing
+the user does from the menu changes.
+
+![What the agent said, quoted](composer-learn-failed-agent.webp "Claude refused, and said why: its words, quoted apart")
+
+**What the system or the agent said.** CAF keeps their words apart from
+why: what the system said when the agent couldn't be started
+(`CouldNotStart.error`), and what the agent said refusing
+(`Refused.message`), each cleaned and capped. The menu shows them under
+why, as theirs, and never as CAF's: the system's in a monospace font,
+muted, as a chat that can't be restored shows the store's; the agent's
+introduced as *Claude said:*, in quotation marks, muted, with a rule down
+its left, as a failed turn quotes it. They often say what to do, such as
+that a file is missing, which no sentence of the app's could. Either may be
+empty, and is then left out.
+
+![Couldn't learn them, for good](composer-learn-failed-never.webp "CAF can't use the agent: why, and nothing to press")
 
 ![An agent that offers no settings](composer-none.webp "An agent with no settings: its mark and name")
 
@@ -297,14 +348,52 @@ before the agent has said, has no ring. Clicking the ring opens the usage
 popover, and a dot on the ring warns of an account limit running low: see
 [Usage](~caf/standard-interface/usage).
 
-![A composer the user can't write in](composer-blocked.webp "Watch-only, or an archived chat: the box stays and says why")
+![An archived chat's composer](composer-archived.webp "Archived: the tray says so, and the box is as usual")
 
-**Can't write.** The box stays where it is, with a lock, and says why:
+**Archived.** A chat stays archived (`Chat.archived`), restored or not,
+until it's brought back. Sending a message brings it back: CAF unarchives
+it and sends the message as to any other (`Core::send`). So the box stays
+as usual, and the user can write and send. The tray says, calm, with an
+archive box, *This chat is archived. Sending a message brings it back.*,
+and offers **Unarchive**, plain, at its other end, which brings it back
+without sending (`Core::unarchive`; a viewer's `Unarchive`, with the `act`
+right). Either way the note goes at once, and the chat is an ordinary one,
+its agent started when a message is sent, as for a restored chat.
+
+A saved chat is put away as it's archived, so CAF no longer has it, and
+refuses to send to it or unarchive it (`Refused::NoSuchChat`). An app that
+still shows it restores it first (`Core::restore`), archived still, then
+sends or unarchives: the user sees nothing of this, and never *Couldn't
+send: this chat isn't open any more.* Right after it's archived, CAF may
+still be writing it, and refuses to restore it (`Refused::Loaded`) until
+it's done, which takes moments: the app tries again for a moment while it
+does, as
+[Closing a tab](~caf/standard-interface/chats#closing-a-tab) says for any
+chat just put away.
+
+If restoring it fails, the message stays in the box, and the tray says
+*Couldn't send:* and why, in the words
+[A chat's identity and lifecycle](~caf/standard-interface/chats#when-it-can-t-be-restored)
+gives each reason a chat can't be restored, its heading made a clause,
+such as *Couldn't send: this chat is open somewhere else.* or *Couldn't
+send: this chat's save is damaged.* If Unarchive's restore fails, the tray
+says the same, with *Couldn't unarchive:*.
+
+While it's archived, only its settings can't be chosen, as CAF refuses to
+change them (`Refused::Closed`): the control shows the model and effort,
+without the bolt or the chevron, and can't be opened, as when the user
+can't write. They can be chosen again once it's back. A viewer without the
+`act` right sees the note without Unarchive, and the box as
+[Can't write](#what-the-chat-allows) says.
+
+![A composer the user can't write in](composer-blocked.webp "Watch-only: the box stays and says why")
+
+**Can't write.** The box stays where it is, with a lock, and says why, by
+the first of these that holds:
 
 | Why | The box says |
 | --- | --- |
 | The viewer has no `act` right | *You can follow this chat, but not write in it.* |
-| The chat is archived (`ChatState::Closed`) | *This chat is archived.* |
 | Its agent is gone, or CAF won't run it | As [A chat's identity and lifecycle](~caf/standard-interface/chats) says |
 | Its agent can never be installed on this machine | As [Agents](~caf/standard-interface/agents) says |
 
@@ -343,5 +432,8 @@ half a word.
 | The model divider | `Turn.model` differing from the turn before. |
 | The context ring | `Usage.used` and `Usage.size`. |
 | Whether the user may write | The viewer's `act` right, and the chat's state. |
+| Archived | `Chat.archived`, by `Change::Archived`; `Refused::Closed` for a setting chosen meanwhile. |
+| **Unarchive** | `Core::unarchive`, or a viewer's `Unarchive`, with the `act` right: `Chat.archived` goes back to none. `Core::send` unarchives a chat too, then sends. |
+| Why the settings couldn't be learned | `AgentStatus.settings`'s `Failed`, a `LearnFailure`; the system's words in `CouldNotStart.error`, the agent's in `Refused.message`. |
 | **Learn them now** | The viewer's `agents` right; `Core::learn_settings`. |
 | The agent banner | The agent's status, as [Agents](~caf/standard-interface/agents) describes. |

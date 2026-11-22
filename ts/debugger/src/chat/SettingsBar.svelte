@@ -16,10 +16,11 @@
   import type { DeepReadonly, KnownSettings, Setting, SettingChoice, Settings, SettingValue } from '@clackatoo/caf'
   import { attempt } from './actions.ts'
   import { offered, runs, standing, valueName } from './settings.ts'
-  import { errorText, learnFailureText, tagOf } from './words.ts'
+  import { errorText, learnFailureSaid, learnFailureText, mayLearnAgain, tagOf } from './words.ts'
 
   let {
     settings,
+    agent,
     known,
     held,
     disabled,
@@ -29,6 +30,8 @@
   }: {
     /** The chat's settings: what its agent offers, and what was chosen. */
     settings: DeepReadonly<Settings>
+    /** The chat's agent, by name, as what CAF couldn't learn of it says. */
+    agent: string
     /** What CAF knows of the settings the chat's agent offers, from its status, if the host gave it. */
     known: DeepReadonly<KnownSettings> | undefined
     /** A change made now waits for the next message: a turn runs, or the session isn't open. */
@@ -197,19 +200,26 @@
   <!-- One status throughout, its text changing as learning goes, and Learn
        kept in its place, so neither is lost to a screen reader or focus. -->
   {@const now = known.type === 'Learning' || learning}
+  {@const said = known.type === 'Failed' && !now ? learnFailureSaid(known.value) : null}
   <div class="caf-settings">
     <div class="row">
       <span role="status">
         {now
           ? 'Learning what the agent offers, such as its models…'
           : known.type === 'Failed'
-            ? `What the agent offers couldn't be learned: ${learnFailureText(known.value)}`
+            ? `CAF couldn't learn which models and settings ${agent} offers. ${learnFailureText(known.value, agent)}${mayLearnAgain(known.value) ? ' It tries again when the chat opens, or now.' : ''}`
             : 'What the agent offers, such as its models, shows once its session opens.'}
       </span>
-      {#if canLearn}
-        <button type="button" aria-disabled={now} onclick={learnNow}>{known.type === 'Failed' ? 'Try again' : 'Learn it now'}</button>
+      {#if canLearn && (known.type !== 'Failed' || mayLearnAgain(known.value))}
+        <button type="button" aria-disabled={now} onclick={learnNow}>Learn them now</button>
       {/if}
     </div>
+    <!-- What the system or the agent said, as theirs, never CAF's. -->
+    {#if said?.by === 'system'}
+      <div class="said system"><code>{said.text}</code></div>
+    {:else if said?.by === 'agent'}
+      <blockquote class="said agent">{agent} said: “{said.text}”</blockquote>
+    {/if}
     {#if problem !== null}<div class="problem" role="alert">{problem}</div>{/if}
   </div>
 {/if}
@@ -276,5 +286,16 @@
   .problem {
     color: var(--caf-error);
     margin-top: 0.3em;
+  }
+  .said {
+    margin: 0.3em 0 0;
+  }
+  .said.system code {
+    font-family: var(--caf-mono);
+    white-space: pre-wrap;
+  }
+  .said.agent {
+    padding-left: 0.6em;
+    border-left: 2px solid var(--caf-border);
   }
 </style>

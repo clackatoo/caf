@@ -180,8 +180,10 @@ chat.unarchive().await?; // or send to it: that unarchives it first
 Unarchived, it's `Idle`, and its agent starts when a message is sent, as a
 restored chat's does. Unarchiving a chat that isn't archived does nothing.
 A message sent to an archived chat goes as to any other; one refused, such
-as an empty message, leaves it archived. A chat saved closed by a CAF from
-before archiving is restored archived, as of when it's restored.
+as an empty message, leaves it archived. While it's archived, its settings
+can't be chosen (`Refused::Closed`). Putting an archived chat away, or
+closing it again, keeps when it was archived. A chat saved closed by a CAF
+from before archiving is restored archived, as of when it's restored.
 
 **Delete** a chat for good, loaded or not: one that's loaded is closed and
 let go first.

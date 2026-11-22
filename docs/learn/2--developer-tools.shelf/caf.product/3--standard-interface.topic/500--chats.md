@@ -59,7 +59,7 @@ place ends in an ellipsis.
 | **Failed** | A dot in the warning colour; why, such as *Usage limit*, in the warning colour | The dot in the warning colour | Its last turn failed. |
 | **Lost its agent** | A hollow dot, a ring in the caution colour; why, such as *Claude stopped.*, in the caution colour | The hollow dot | The chat lost its agent between turns. What the next message does depends on why, as the transcript's box for it says: for most reasons it tries again, but after `Incompatible` or `ShutDown`, nothing can help. |
 | **Restoring** | A spinner; *Restoring…* | The spinner | Briefly, as a saved chat opens. |
-| **Archived** | Title muted; *22 turns ·* and an *Archived* badge | Muted; minimal shows nothing | The user archived it. It can still be opened. |
+| **Archived** | Title muted; on the right, when it was archived; *22 turns ·* and an *Archived* badge | Muted; minimal shows nothing | The user archived it. It can still be opened, and stays archived, open or not, until the user unarchives it or sends to it. |
 | **Can't restore** | A badge in the warning colour: *Can't restore: damaged*, naming the reason | A warning sign in the warning colour | Its last restore failed. |
 | **Agent gone** | A crossed-out plug and *Gemini isn't available*, muted | The crossed-out plug | The app no longer offers its agent. It can be read but not carried on. |
 | **Agent can't be used** | A lock and *Claude can't be used*, muted | The lock | CAF won't run its agent, as it can't turn off the agent's own tools. It can be read but not carried on. The lock is the composer's, as [An agent that's gone](#an-agent-that-s-gone) shows. |
@@ -96,9 +96,9 @@ banner, not the loss.
 
 **Which state.** A chat is in the first of these that holds:
 
-1. **Restoring**, **Can't restore** or **Archived**, from how the chat is
-   saved, while it isn't open; and **Archived** for a chat that isn't saved
-   and was archived (`ChatState::Closed`).
+1. **Restoring** or **Can't restore**, from how the chat is saved, while it
+   isn't open; then **Archived**, while the chat is archived, open or not,
+   saved or not.
 2. **Agent gone**, when the app no longer offers its agent, or **Agent
    can't be used**, when CAF won't run it.
 3. **Waiting on you**, while a question waits.
@@ -126,6 +126,15 @@ minimal on clackatoo's workspaces with compact in its pane headers. They show
 it fitting in; they're not layouts to copy. Put chats wherever the app
 already puts its things.
 
+**An archived chat in a list. Required.** Wherever a list shows an
+archived chat, open or not, saved or not, it shows it in the identity's
+**Archived** state, at whatever size the list uses: the title muted, and
+at full size the *Archived* badge and when it was archived. It's never
+shown as idle, nor left out because it's still open: an archived chat
+the user has open is listed as archived until it's brought back, then as
+any other at once. Whether a list keeps archived chats apart, such as under an
+*Archived* heading, last, or behind a filter, is **up to the app**.
+
 ## The rules
 
 **Required.**
@@ -140,7 +149,9 @@ already puts its things.
    away; one that isn't saved stays open, out of sight.
    [Closing a tab](#closing-a-tab) says what happens to each.
 4. **Archive is CAF's close**: "I'm done with this one". It's a deliberate
-   action, never a side effect of closing a tab or a pane.
+   action, never a side effect of closing a tab or a pane. **Archiving
+   sticks**: an archived chat stays archived, opened or not, until the user
+   unarchives it or sends to it.
 5. **Delete can't be undone,** so it always asks first, naming the chat.
    Only a saved chat can be deleted.
 6. **A new chat is an empty chat.** There's no form: the agent is chosen in
@@ -261,26 +272,51 @@ sight, never archives it.
   Until it's put away, wherever the app lists it, it shows its state as
   usual, such as Working or Waiting on you. Opening it again before then
   just shows it: it's still open, and restoring it would be refused.
+  Once it's put away, CAF may still be writing it for a moment, and
+  refuses to restore it meanwhile (`Refused::Loaded`): opening it again
+  then, the app tries again for a moment, until it can.
 - **A chat that isn't saved stays open**, as it is, out of sight. The app
   can show it again, as it was, until the app stops; then it's gone.
 
 ## Archiving
 
 **Archive** is CAF's close: the user is done with the chat. Its agent is let
-go, and a saved chat is saved and marked closed. Where it's listed, it's
-muted, with an *Archived* badge.
+go, and a saved chat is saved, archived, and put away. Wherever it appears,
+it's muted, with an *Archived* badge, and the full identity shows on its
+right when it was archived, in place of when it last changed. A chat saved
+archived before CAF kept when shows when it last changed instead.
 
-![An archived chat, opened](chats-archived.webp "Opened again, it's an ordinary chat")
+![An archived chat, opened](chats-archived.webp "Opened, it's still archived: the tray says so, and sending brings it back")
 
-**Opening an archived chat** restores it, as any saved chat, and it's an
-ordinary chat again: no longer archived, and the next message carries it
-on. It's not marked *Archived* once it's open, because CAF no longer counts
-it closed.
-
-A chat that isn't saved, once archived, stays in memory until the app
-stops, and can be read but not written in: its composer says why, as
+**Opening an archived chat** restores it, as any saved chat, and it's
+still archived: archiving sticks. The chat shows it as anywhere else, with
+its title and the *Archived* badge in the app's header for it, and its
+composer's tray says *This chat is archived. Sending a message brings it
+back.*, with **Unarchive**, as
 [The composer](~caf/standard-interface/composer#what-the-chat-allows)
-shows.
+shows. It can be read, and written in; only its settings can't be changed
+meanwhile.
+
+**Bringing it back.** A message sent to an archived chat brings it back:
+CAF unarchives it, then sends the message as to any other. **Unarchive**
+brings it back without sending. Either way it's an ordinary chat again at
+once: the badge and the tray's note go, and its agent starts when a
+message is sent, as for a restored chat. Wherever it's listed, it goes
+back to how its state shows it.
+
+A saved chat is put away as it's archived, so the app no longer has it
+open. To send to it or unarchive it, the app restores it first
+(`Core::restore`), archived still, then sends or unarchives, as
+[The composer](~caf/standard-interface/composer#what-the-chat-allows)
+says: the user sees nothing of this. Right after it's archived, the
+restore is refused (`Refused::Loaded`) while CAF finishes writing it, for
+moments: the app tries again for a moment meanwhile, as
+[Closing a tab](#closing-a-tab) says for any chat just put away. A chat
+restored archived is `ChatState::Closed` until it's brought back, then
+`Idle`.
+
+A chat that isn't saved, once archived, stays in memory, archived, until
+the app stops, and is brought back the same way.
 
 ## An agent that's gone
 
@@ -391,13 +427,14 @@ viewer offers no Delete.
 | Failed | That turn's `TurnLife::Failed`, with its `Failure.reason`. |
 | Lost its agent | `ChatState::Lost`, with its `Lost` reason, in the transcript's words; but `Lost { reason: Stopped }` follows the banner while it shows. |
 | Restoring | `SavedState::Restoring`, or `Core::restoring`. |
-| Archived | `Header.closed` for a saved chat; `ChatState::Closed` for one that isn't saved. |
+| Archived | `Chat.archived`, when it was archived, while it is: for a chat that's open, and kept in its save. In a viewer's list of open chats, `ChatSummary.archived`. For a saved chat that isn't open, `Header.archived`, or, for a chat saved before CAF kept when, `Header.closed`. A chat's `Change::Archived` says when it's archived or unarchived. |
 | Can't restore | `SavedState::Failed`, with its `CannotRestore` reason: `NotFound`, `InUse`, `Newer`, `Damaged`, `AppData` or `Store`. Restoring answers with it too: `Error::CannotRestore`, or a viewer's `Outcome::CannotRestore`. |
 | Agent gone | The chat's agent isn't among those the app offers (`Core::agents`, or a viewer's `Welcome.agents`): sending is refused with `Refused::NoSuchAgent`. A renamed agent is found by `Header.profile`. |
 | Agent can't be used | Its `AgentStatus.own_tools_off` is false. With the cautious profile, sending is refused with `Refused::OwnTools`. With an agent that isn't the one its profile is for, sending isn't refused, but each open ends `Lost { reason: Incompatible(OwnTools) }`, and the lock is the app's own rule. |
 | Opening a saved chat | `Core::restore`, or a viewer's `Restore`, which the app decides (`ViewerRules::restore`; by default it refuses). |
 | Closing a tab | `Core::put_away` for a saved chat: at once, unless a turn is `Running` or `Stopping`, a turn is `Waiting` behind one, a question is in `Chat.questions`, or the chat is `Opening` with a turn `Waiting`; then once none is. A `WaitingForAgent` chat is put away at once, which stops its waiting turns with no `Note`. Until then it's loaded, and `Core::restore` would be refused, `Refused::Loaded`. One that isn't saved is refused, `Refused::NotSaved`, and is left open. Viewers can't put a chat away. |
-| Archive | `Core::close_chat`, or a viewer's `Close`, with the `act` right. |
+| Archive | `Core::close_chat`, or a viewer's `Close`, with the `act` right: `Chat.archived` is set to now. |
+| Unarchive | `Core::unarchive`, or a viewer's `Unarchive`, with the `act` right: `Chat.archived` is none again, and the chat is `Idle`. `Core::send` to an archived chat unarchives it first. While it's archived, CAF refuses to change its settings (`Refused::Closed`). |
 | Remove from list | `Core::list_saved` on the chat's shelf again, which reads the store anew. Viewers can't list. |
 | Delete | `Core::delete`, which takes the chat's shelf: only a saved chat. Viewers can't delete a chat. |
 | A new chat | `Core::open_chat` with an `OpenChat`: the agent, the folder, and the settings chosen in the menu (`OpenChat.settings`). A viewer asks with an `OpenRequest` (an agent and a folder), and sets the settings with `Set` once it's `Opened`. |
@@ -405,5 +442,6 @@ viewer offers no Delete.
 | A new chat refused | The app's own reason. A viewer gets `Outcome::NotAllowed`, or a `Refused` such as `NoSuchAgent`, `RelativeFolder` or `OwnTools`. |
 
 Only a loaded chat's summary comes to a viewer unasked: `ChatSummary` has its
-id, agent, folder, label and shelf, and when it was archived, if it is. Whether it's working, waiting on the
-user or failed, and its first message, come from watching it.
+id, agent, folder, label and shelf, and when it was archived, if it is.
+Whether it's working, waiting on the user or failed, and its first message,
+come from watching it.

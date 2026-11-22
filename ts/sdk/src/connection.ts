@@ -518,9 +518,18 @@ export class Connection {
     return this.#request("Done", (no) => ({ type: "Answer", value: { request: no, question, answer } }));
   }
 
-  /** Closes a chat. */
+  /** Closes a chat: archives it, as of now (`Chat.archived`). */
   close(chat: ChatId): Promise<void> {
     return this.#request("Done", (no) => ({ type: "Close", value: { request: no, chat } }));
+  }
+
+  /**
+   * Unarchives a chat: it's idle, and its agent starts when a message is
+   * sent. A chat that isn't archived is left as it is. Sending to an
+   * archived chat unarchives it too.
+   */
+  unarchive(chat: ChatId): Promise<void> {
+    return this.#request("Done", (no) => ({ type: "Unarchive", value: { request: no, chat } }));
   }
 
   /**
@@ -569,6 +578,15 @@ export class Connection {
    */
   learnSettings(agent: AgentName): Promise<void> {
     return this.#agent(agent, { type: "LearnSettings" });
+  }
+
+  /**
+   * Has CAF look at the machine again, as the user may have changed it,
+   * such as by installing Node: what's installed and what the machine
+   * has, for every agent, not only this one. `agents` follows.
+   */
+  checkAgain(agent: AgentName): Promise<void> {
+    return this.#agent(agent, { type: "CheckAgain" });
   }
 
   /**

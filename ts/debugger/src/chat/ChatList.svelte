@@ -1,5 +1,6 @@
 <script lang="ts">
-  // The open chats, and "New chat": an agent from the ones CAF offers,
+  // The open chats, an archived one marked so, and "New chat": an agent
+  // from the ones CAF offers,
   // a folder for it to work in, and its model, where CAF knows the
   // agent's models. Where it doesn't, the chat view offers them once the
   // chat is open, before anything is sent.
@@ -149,13 +150,17 @@
           type="button"
           class="chat"
           class:selected={chat.id === selected}
+          class:archived={chat.archived !== null}
           aria-current={chat.id === selected ? 'true' : undefined}
           title={chat.cwd}
           onclick={() => actions.select(chat.id)}
         >
           <!-- The app's line for it if it has one, or else its folder. -->
           <span class="name">{chat.label ?? folderName(chat.cwd)}</span>
-          <span class="meta">{chat.agent} · {chat.label == null ? shortId(chat.id) : folderName(chat.cwd)}</span>
+          <span class="meta"
+            >{chat.agent} · {chat.label == null ? shortId(chat.id) : folderName(chat.cwd)}{#if chat.archived !== null}{' '}·
+              archived{/if}</span
+          >
         </button>
       </li>
     {:else}
@@ -275,6 +280,9 @@
   .meta {
     color: var(--caf-muted);
     font-size: 0.85em;
+  }
+  .archived .name {
+    color: var(--caf-muted);
   }
   .none {
     color: var(--caf-faint);

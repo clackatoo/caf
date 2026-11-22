@@ -30,6 +30,16 @@ describe('the chat list', () => {
     expect(actions.select).toHaveBeenCalledWith(one)
   })
 
+  it('marks an archived chat so, its name muted', () => {
+    const archived = [{ ...chats[0]!, archived: 1_800_000_000_000 }, chats[1]!]
+    const { container } = render(ChatList, { chats: archived, agents: [], selected: null, actions: { select: vi.fn(), open: vi.fn() } })
+    const [first, second] = [...container.querySelectorAll('li button')]
+    expect(first!.querySelector('.meta')?.textContent?.replace(/\s+/g, ' ')).toBe('claude · #000001 · archived')
+    expect(first!.classList.contains('archived')).toBe(true)
+    expect(second!.querySelector('.meta')?.textContent).toBe('fake · #000002')
+    expect(second!.classList.contains('archived')).toBe(false)
+  })
+
   it("names a chat by the app's line for it, with its folder, or else by its folder, with its id's end", () => {
     const labelled = [{ ...chats[0]!, label: 'Fix the tests', shelf: 'work' }, chats[1]!]
     const { container } = render(ChatList, { chats: labelled, agents: [], selected: null, actions: { select: vi.fn(), open: vi.fn() } })

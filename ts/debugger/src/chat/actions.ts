@@ -12,6 +12,7 @@ import {
   type ChatId,
   type DeepReadonly,
   type QuestionId,
+  type Refused,
   type SettingChoice,
   type Shelf,
   type UserMessage,
@@ -27,8 +28,13 @@ export interface ChatActions {
   answer(question: QuestionId, answer: Answer): Promise<unknown> | void
   /** A failed turn's remedy, Send again: send its message once more. */
   sendAgain(message: DeepReadonly<UserMessage>): Promise<unknown> | void
-  /** Close the chat. */
+  /** Close the chat: archive it. */
   close(): Promise<unknown> | void
+  /**
+   * Unarchive the chat. Without it, an archived chat offers no Unarchive,
+   * only sending, which unarchives it too.
+   */
+  unarchive?: (() => Promise<unknown> | void) | undefined
   /** Install the chat's agent. */
   install(): Promise<unknown> | void
   /** Stop installing the chat's agent. */
@@ -43,6 +49,12 @@ export interface ChatActions {
   paste(text: string): Promise<unknown> | void
   /** Stop signing in to the chat's agent. */
   stopSignIn(): Promise<unknown> | void
+  /**
+   * Have CAF look at the machine again, as the user may have changed it,
+   * such as by installing Node. Without it, an agent that can't be
+   * installed for want of something on the machine offers no Check again.
+   */
+  checkAgain?: (() => Promise<unknown> | void) | undefined
   /**
    * Choose a setting of the chat's agent, such as its model, by the
    * agent's own id. The chat's settings show it waiting until the agent
@@ -93,11 +105,68 @@ export async function restoreOnceFree<T>(
     try {
       return await restore()
     } catch (error) {
-      const loaded = error instanceof CafError && error.why.type === 'Refused' && error.why.value.type === 'Loaded'
-      if (!loaded || tried >= tries) throw error
+      if (!refused(error, 'Loaded') || tried >= tries) throw error
       await new Promise((done) => setTimeout(done, wait))
     }
   }
+}
+
+/**
+ * Does something to a chat, `act`, such as unarchiving it or sending to
+ * it, as a host's `ChatActions` does, restoring it first if it must. A
+ * saved chat is put away as it's archived, so CAF no longer has it and
+ * refuses with `NoSuchChat`: then, given `restore`, it's restored,
+ * archived still, and `act` tried again. If CAF refuses to restore it as
+ * loaded, another restored it meanwhile, so `act` is tried again all the
+ * same; if CAF still has no such chat, that refusal to restore it says why
+ * truer, and is the caller's. Without `restore`, or for any other failure,
+ * the refusal is the caller's.
+ */
+export async function orRestored<T>(
+  act: () => Promise<T>,
+  restore?: (() => Promise<unknown>) | undefined,
+): Promise<T> {
+  try {
+    return await act()
+  } catch (error) {
+    if (!refused(error, 'NoSuchChat') || restore === undefined) throw error
+    let loaded: unknown = null
+    try {
+      await restore()
+    } catch (problem) {
+      if (!refused(problem, 'Loaded')) throw problem
+      loaded = problem
+    }
+    try {
+      return await act()
+    } catch (again) {
+      throw loaded !== null && refused(again, 'NoSuchChat') ? loaded : again
+    }
+  }
+}
+
+/** Runs `start` for `key`, unless one for it is under way: then gives back that one. */
+export type OneAtATime<K> = <T>(key: K, start: () => Promise<T>) => Promise<T>
+
+/**
+ * Runs one at a time, by key: while one started for a key is under way,
+ * starting another for it gives back the same, so two actions on one
+ * chat, such as sending and unarchiving it, restore it once.
+ */
+export function oneAtATime<K>(): OneAtATime<K> {
+  const running = new Map<K, Promise<unknown>>()
+  return <T>(key: K, start: () => Promise<T>): Promise<T> => {
+    const under = running.get(key)
+    if (under !== undefined) return under as Promise<T>
+    const started = start().finally(() => running.delete(key))
+    running.set(key, started)
+    return started
+  }
+}
+
+/** Whether `error` is CAF refusing, for this reason. */
+function refused(error: unknown, why: Refused['type']): boolean {
+  return error instanceof CafError && error.why.type === 'Refused' && error.why.value.type === why
 }
 
 /**

@@ -197,29 +197,68 @@ export function noteText(note: DeepReadonly<Note>): string {
     case 'SignedIn':
       return 'You signed in to the agent: send the message again to try it now.'
     case 'AgentChanged':
-      return `The agent changed by itself to ${choiceText(note.value.choice)}, and this chat follows it.`
-    case 'NotOffered': {
-      // A switch that's gone is gone on and off alike: it's named alone.
-      const choice = note.value.choice
-      const what = choice.value.type === 'Switch' ? settingText(choice) : choiceText(choice)
-      return `The agent doesn't offer ${what}, so that choice was dropped: the app's default, or else the agent's own, applies.`
-    }
+    case 'NotOffered':
     case 'NotApplied':
-      return `The agent refused ${choiceText(note.value.choice)}, so that choice was dropped: the app's default, or else the agent's own, applies.`
+      return notePieces(note)
+        .map((piece) => piece.text)
+        .join('')
     default:
       return `A note this viewer doesn't know (${tagOf(note)}).`
   }
 }
 
+/** A run of a note's text: the agent's own id for a choice is shown in a monospace font. */
+export interface Piece {
+  text: string
+  id?: boolean
+}
+
+/** Something CAF says in a turn, in pieces, its ids apart. */
+export function notePieces(note: DeepReadonly<Note>): Piece[] {
+  const dropped = ", so that choice was dropped: the app's default, or else the agent's own, applies."
+  switch (note.type) {
+    case 'AgentChanged':
+      return [
+        { text: 'The agent changed by itself to ' },
+        ...choicePieces(note.value.choice, note.value.name),
+        { text: ', and this chat follows it.' },
+      ]
+    case 'NotOffered': {
+      // A switch that's gone is gone on and off alike: it's named alone.
+      const { choice, name } = note.value
+      const what = choice.value.type === 'Switch' ? [{ text: settingText(choice) }] : choicePieces(choice, name)
+      return [{ text: "The agent doesn't offer " }, ...what, { text: dropped }]
+    }
+    case 'NotApplied':
+      return [{ text: 'The agent refused ' }, ...choicePieces(note.value.choice, note.value.name), { text: dropped }]
+    default:
+      return [{ text: noteText(note) }]
+  }
+}
+
+/** A setting chosen, as `choiceText` names it, in pieces: an id the agent never named apart. */
+function choicePieces(choice: DeepReadonly<SettingChoice>, name: string | null): Piece[] {
+  const text = choiceText(choice, name)
+  if (choice.value.type !== 'Choice' || name !== null) return [{ text }]
+  const id = choice.value.value
+  return [{ text: text.slice(0, text.length - id.length) }, { text: id, id: true }]
+}
+
 /**
- * A setting chosen, by the agent's own id, as a note names it: "the model
- * sonnet", "fast mode on". A note holds only the id, as the agent may no
- * longer offer it.
+ * A setting chosen, as a note names it: by `name`, the agent's name for
+ * it as it last said, if it said one, else by the agent's own id: "the
+ * model Sonnet 5.5", "the model sonnet", "fast mode on".
  */
-export function choiceText(choice: DeepReadonly<SettingChoice>): string {
+export function choiceText(choice: DeepReadonly<SettingChoice>, name: string | null = null): string {
   const value = choice.value
   const said =
-    value.type === 'Choice' ? value.value : value.type === 'Switch' ? (value.value ? 'on' : 'off') : `(${tagOf(value)})`
+    value.type === 'Choice'
+      ? (name ?? value.value)
+      : value.type === 'Switch'
+        ? value.value
+          ? 'on'
+          : 'off'
+        : `(${tagOf(value)})`
   return choice.kind.type === 'Model' || choice.kind.type === 'Effort' || choice.kind.type === 'Fast'
     ? `${settingText(choice)} ${said}`
     : `${settingText(choice)}, ${said}`
@@ -345,7 +384,7 @@ export function refusedText(reason: DeepReadonly<Refused>): string {
     case 'NoSuchChat':
       return 'There is no such chat.'
     case 'Closed':
-      return 'The chat is closed.'
+      return 'The chat is archived: unarchive it first.'
     case 'NoSuchAgent':
       return 'There is no such agent.'
     case 'RelativeFolder':
@@ -448,6 +487,37 @@ export function cannotRestoreText(why: DeepReadonly<CannotRestore>): string {
       return `it couldn't be read: ${why.value}`
     default:
       return `a reason this viewer doesn't know (${tagOf(why)}).`
+  }
+}
+
+/**
+ * Why something done to a chat failed, `verb` being what: as CAF SI's
+ * composer tray words a restore under it that failed, *Couldn't send:* and
+ * the chats page's heading for why, as a clause; anything else as
+ * `errorText` does.
+ */
+export function couldNotText(verb: 'send' | 'unarchive', error: unknown): string {
+  if (!(error instanceof CafError) || error.why.type !== 'CannotRestore') return errorText(error)
+  return `Couldn't ${verb}: ${restoreClause(error.why.value)}`
+}
+
+/** Why a chat can't be restored, as CAF SI's chats page heads it, made a clause. */
+function restoreClause(why: DeepReadonly<CannotRestore>): string {
+  switch (why.type) {
+    case 'NotFound':
+      return 'this chat is gone.'
+    case 'InUse':
+      return 'this chat is open somewhere else.'
+    case 'Newer':
+      return 'it was saved by a newer version.'
+    case 'Damaged':
+      return "this chat's save is damaged."
+    case 'AppData':
+      return "this app can't read its own data on this chat."
+    case 'Store':
+      return "this chat couldn't be read."
+    default:
+      return `it couldn't be restored, for a reason this viewer doesn't know (${tagOf(why)}).`
   }
 }
 
@@ -585,6 +655,15 @@ export function canRetry(state: DeepReadonly<InstallState>): boolean {
   return state.type === 'Cannot' && state.value.type === 'Failed'
 }
 
+/**
+ * Whether an agent that can't be installed may be once the user changes
+ * the machine, such as by installing Node, so it's worth CAF looking
+ * again: Check again.
+ */
+export function canCheckAgain(state: DeepReadonly<InstallState>): boolean {
+  return state.type === 'Cannot' && (state.value.type === 'Node' || state.value.type === 'Npm')
+}
+
 /** Whether an agent is signed in, in a few words. */
 export function signInLabel(state: DeepReadonly<SignInState>): string {
   switch (state.type) {
@@ -632,38 +711,62 @@ export function signInUrl(url: string | null): URL | null {
   }
 }
 
-/** Why CAF couldn't learn what an agent offers, in words. */
-export function learnFailureText(why: DeepReadonly<LearnFailure>): string {
+/**
+ * Why CAF couldn't learn what an agent offers, as CAF SI's composer page
+ * words it, after "CAF couldn't learn which models and settings Claude
+ * offers.". What the system or the agent said is apart:
+ * `learnFailureSaid`.
+ */
+export function learnFailureText(why: DeepReadonly<LearnFailure>, agent: string): string {
   switch (why.type) {
     case 'NotInstalled':
-      return "it isn't installed."
+      return `${agent} isn't installed.`
     case 'NotLookedYet':
-      return "CAF hasn't looked yet whether it's installed."
+      return `CAF hadn't checked yet whether ${agent} is installed.`
     case 'SigningIn':
-      return "it's being signed in to."
+      return `${agent} was being signed in to.`
     case 'SignInNeeded':
-      return 'it needs signing in to.'
+      return `${agent} wants you to sign in first.`
     case 'CouldNotStart':
-      return `it couldn't start: ${why.value.error}`
+      return `${agent} couldn't be started.`
     case 'Refused':
-      return `it refused: ${why.value.message}`
+      return `${agent} refused to open a chat.`
     case 'StartTimedOut':
-      return "it didn't start in time."
+      return `${agent} didn't start in time.`
     case 'OpenTimedOut':
-      return "it didn't open a chat in time."
+      return `${agent} didn't open a chat in time.`
     case 'Unreadable':
-      return "its answer couldn't be read."
+      return `${agent}'s answer made no sense.`
     case 'Restarted':
-      return 'it was restarted.'
+      return `${agent} was restarted.`
     case 'Stopped':
-      return 'it stopped.'
+      return `${agent} stopped.`
     case 'ShutDown':
-      return 'CAF is shutting down.'
+      return 'The app was closing.'
     case 'Incompatible':
-      return "CAF can't use it."
+      return `This version of ${agent} can't talk to this app.`
     case 'OwnTools':
-      return "CAF can't turn off its own tools."
+      return `${agent} can't be used: its own tools can't be turned off.`
     default:
-      return `a reason this viewer doesn't know (${tagOf(why)}).`
+      return `The reason is one this viewer doesn't know (${tagOf(why)}).`
   }
+}
+
+/**
+ * What the system said (`CouldNotStart`) or the agent said (`Refused`) of
+ * why CAF couldn't learn what it offers, to be shown as theirs, if either
+ * did.
+ */
+export function learnFailureSaid(why: DeepReadonly<LearnFailure>): { by: 'system' | 'agent'; text: string } | null {
+  if (why.type === 'CouldNotStart' && why.value.error !== '') return { by: 'system', text: why.value.error }
+  if (why.type === 'Refused' && why.value.message !== '') return { by: 'agent', text: why.value.message }
+  return null
+}
+
+/**
+ * Whether learning what an agent offers again could go otherwise: not
+ * while the app is closing, nor for an agent CAF can't use.
+ */
+export function mayLearnAgain(why: DeepReadonly<LearnFailure>): boolean {
+  return why.type !== 'ShutDown' && why.type !== 'Incompatible' && why.type !== 'OwnTools'
 }

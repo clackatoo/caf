@@ -87,8 +87,8 @@ makes CAF hold more than one picture of each chat for it.
   use chats the host opened.
 - **`restore`** does the same for a request to restore a saved chat: it
   gives the chat its tools, or refuses. The default refuses every one.
-- **`act`** says whether viewers may send, stop, answer and close. It's
-  `true` by default.
+- **`act`** says whether viewers may send, stop, answer, choose a chat's
+  settings, close and unarchive. It's `true` by default.
 
 Opening is always the host's decision, because a chat's MCP servers are
 programs to run. A viewer only asks for an agent CAF offered, a folder, and
@@ -144,8 +144,9 @@ once it has, so `agents` is right from the start. `onChats` and `onAgents`
 each return a function that stops them.
 
 `caf.may` says what the host lets this page do: `act` on chats (send,
-stop, answer, choose their settings and close), and on `agents` (install
-them, sign in and out, and learn their settings). Offer only what it may: anything else is answered `NotAllowed`. A
+stop, answer, choose their settings, close and unarchive), and on `agents`
+(install them, sign in and out, learn their settings, and check again what
+the machine has). Offer only what it may: anything else is answered `NotAllowed`. A
 page that may not act on agents gets no sign-in's link or code. Whether it
 may open chats, or restore saved ones, isn't said, as the host decides each
 request.
@@ -187,12 +188,14 @@ const chat = await caf.open({ agent: "claude", cwd: "/home/me/projects/app", ses
 const turn = await caf.send(chat, { parts: [{ type: "Text", value: "Fix the tests" }] });
 await caf.stop(chat);
 await caf.answer(question.id, { type: "Permission", value: option.id });
-await caf.close(chat);
+await caf.close(chat); // archives it
+await caf.unarchive(chat); // or send to it: that unarchives it too
 ```
 
 `open` resolves once the chat is open, and `send` once the core has taken
 the message, with the turn it will be: not once the turn has run, which
-the watch shows. `stop`, `answer` and `close` resolve once they're done.
+the watch shows. `stop`, `answer`, `close` and `unarchive` resolve once
+they're done.
 Questions waiting for an answer are on the chat, in `chat.questions`. When
 something isn't done, the promise rejects with a `CafError`, whose `why`
 says why:
@@ -246,14 +249,18 @@ lists no shelves never sends it, and `saved` stays empty.
 Each chat's `header` is what to show without loading it: its `chat` id,
 `agent`, `cwd`, when it was `made` and last `changed`, the app's `label`
 for it, the `first` line of its first message, how many `turns` it has,
-and whether it was `closed`. Its `state` is `Saved`, `Restoring`, `Loaded`,
-or `Failed`, with why the last restore failed.
+whether it was `closed`, and when it was `archived`, if it is (null for a
+chat saved closed by a CAF from before archiving: `closed` says it's
+archived). Its `state` is `Saved`, `Restoring`, `Loaded`, or `Failed`, with
+why the last restore failed.
 
 `restore` resolves with the chat's id once it's loaded. It's then in the
 next `Chats`, so in `chats` once `onChats` hears it, and watched like any
-other. A chat keeps its id when it's saved and
-restored. A restored chat is `Idle`: no session is open until a message is
-sent, which opens one, continuing the agent's session where the agent can.
+other. A chat keeps its id when it's saved and restored. A restored chat is
+`Idle`: no session is open until a message is sent, which opens one,
+continuing the agent's session where the agent can. One saved archived is
+restored archived, and `Closed` until it's unarchived, or sent to, which
+makes it `Idle`.
 
 The host decides each restore, as it does each open, so `may` doesn't say
 whether this page may: one it doesn't allow rejects with `NotAllowed`. One
@@ -518,6 +525,7 @@ care where the chat came from:
     answer: (question, answer) => caf.answer(question, answer),
     sendAgain: (message) => caf.send(chat.id, structuredClone(message)),
     close: () => caf.close(chat.id),
+    unarchive: () => caf.unarchive(chat.id),
     install: () => caf.install(chat.agent),
     stopInstall: () => caf.stopInstall(chat.agent),
     signIn: () => caf.signIn(chat.agent),
@@ -525,13 +533,47 @@ care where the chat came from:
     stopSignIn: () => caf.stopSignIn(chat.agent),
     setSetting: (choice) => caf.setSetting(chat.id, choice),
     learnSettings: () => caf.learnSettings(chat.agent),
+    checkAgain: () => caf.checkAgain(chat.agent),
   }}
 />
 ```
 
 It offers only what `may` lets it: without `act`, the chat can be watched,
 not acted in; without `agents`, it says what's happening to the agent but
-offers no Install or sign-in.
+offers no Install, sign-in or Check again. An archived chat says so above
+its composer, which stays usable, as sending brings it back, and offers
+Unarchive, if `unarchive` is given; only its settings can't be chosen.
+
+A saved chat is put away as it's archived, so CAF refuses to send to it or
+unarchive it (`NoSuchChat`) until it's restored, and its watch has ended.
+The same folder has what a host needs to do it as the debugger does:
+`orRestored` restores the chat, archived still, then tries again;
+`restoreOnceFree` tries the restore again for a moment while CAF refuses it
+as `Loaded`, still writing the chat just archived; and `oneAtATime` shares
+one restore per chat, so two actions at once restore it once. The host
+then watches the chat again, as its watch ended when it was put away:
+
+```ts
+import { oneAtATime, orRestored, restoreOnceFree } from "./chat";
+
+const restoring = oneAtATime<ChatId>();
+
+// Sends to, or unarchives, the chat shown, restoring it first if it was put
+// away; `shelf` is where `saved` lists it, if it's saved: a chat that isn't
+// is never put away.
+async function toChat<T>(act: () => Promise<T>): Promise<T> {
+  const restore =
+    shelf === undefined ? undefined : () => restoring(chat.id, () => restoreOnceFree(() => caf.restore(chat.id, shelf)));
+  try {
+    return await orRestored(act, restore);
+  } finally {
+    watchAgain(chat.id); // as it was watched before, unless another chat is shown by then
+  }
+}
+```
+
+and gives the view `send: (message) => toChat(() => caf.send(chat.id,
+message))`, and `unarchive` the same way.
 
 Given its agent's status, the view also shows what the agent needs before
 the chat can go on. While the chat waits for an agent that isn't

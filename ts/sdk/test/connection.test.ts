@@ -893,6 +893,25 @@ describe("requests", () => {
     await expect(Promise.all([stopping, answering, closing])).resolves.toStrictEqual([undefined, undefined, undefined]);
   });
 
+  test("unarchive asks to unarchive the chat, and resolves when done", async () => {
+    const { caf, link } = await connected();
+    const unarchiving = caf.unarchive(CHAT);
+    expect(link.take()).toStrictEqual([{ type: "Unarchive", value: { request: 1, chat: CHAT } }]);
+    link.deliver({ type: "Done", value: { request: 1, outcome: { type: "Done" } } });
+    await expect(unarchiving).resolves.toBeUndefined();
+  });
+
+  test("unarchive may be refused, or not allowed, and the link goes on", async () => {
+    const { caf, link } = await connected();
+    const refused = held(caf.unarchive(CHAT));
+    const notAllowed = held(caf.unarchive(CHAT));
+    link.deliver({ type: "Done", value: { request: 1, outcome: { type: "Refused", value: { type: "NoSuchChat" } } } });
+    link.deliver({ type: "Done", value: { request: 2, outcome: { type: "NotAllowed" } } });
+    expect(await rejection(refused)).toStrictEqual({ type: "Refused", value: { type: "NoSuchChat" } });
+    expect(await rejection(notAllowed)).toStrictEqual({ type: "NotAllowed" });
+    expect(link.closed).toBe(false);
+  });
+
   test("setSetting chooses a setting of the chat's agent, and resolves when done", async () => {
     const { caf, link } = await connected();
     const sonnet = { kind: { type: "Model" }, value: { type: "Choice", value: "sonnet" } } as const;
@@ -936,6 +955,7 @@ describe("requests", () => {
       caf.stopSignIn("fake"),
       caf.signOut("claude"),
       caf.learnSettings("claude"),
+      caf.checkAgain("claude"),
     ];
     expect(link.take()).toStrictEqual([
       { type: "Agent", value: { request: 1, agent: "claude", action: { type: "Install" } } },
@@ -945,8 +965,9 @@ describe("requests", () => {
       { type: "Agent", value: { request: 5, agent: "fake", action: { type: "StopSignIn" } } },
       { type: "Agent", value: { request: 6, agent: "claude", action: { type: "SignOut" } } },
       { type: "Agent", value: { request: 7, agent: "claude", action: { type: "LearnSettings" } } },
+      { type: "Agent", value: { request: 8, agent: "claude", action: { type: "CheckAgain" } } },
     ]);
-    for (const request of [7, 6, 5, 4, 3, 2, 1]) {
+    for (const request of [8, 7, 6, 5, 4, 3, 2, 1]) {
       link.deliver({ type: "Done", value: { request, outcome: { type: "Done" } } });
     }
     await expect(Promise.all(acting)).resolves.toStrictEqual(acting.map(() => undefined));

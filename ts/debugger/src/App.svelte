@@ -5,7 +5,7 @@
   // Live and following, the chat view shows `/viewer`'s chats, as any
   // host's does. Looking back, or replaying, it shows the chats as they
   // were, from the inspector channel's `Past` messages, read-only.
-  import type { AgentName, Answer, Chat, ChatId, DeepReadonly, QuestionId, SettingChoice, Shelf, UserMessage } from '@clackatoo/caf'
+  import type { AgentName, Answer, Chat, ChatId, Connection, DeepReadonly, QuestionId, SettingChoice, Shelf, UserMessage } from '@clackatoo/caf'
   import AgentsPanel, { type AgentActions } from './AgentsPanel.svelte'
   import {
     ChatList,
@@ -15,6 +15,7 @@
     openThenChoose,
     restoreOnceFree,
     showsAgent,
+    oneAtATime,
     type ChatActions,
     type ListActions,
     type SavedActions,
@@ -26,7 +27,7 @@
   import { webSocket } from '@clackatoo/caf'
   import { hasToken, httpUrl, socketUrl, type LinkState } from './link.ts'
   import { Live } from './live.svelte.ts'
-  import { canAct } from './view.ts'
+  import { canAct, chatActor, shownChat } from './view.ts'
   import { errorText } from './chat/words.ts'
 
   let inspector = $state.raw(connectInspector())
@@ -56,7 +57,7 @@
   const lookingBack = $derived(mode === 'Replay' || !inspector.position.live)
   const summaries = $derived(lookingBack ? inspector.past.summaries : (live?.chats ?? []))
   const chat = $derived(
-    selected === null ? null : lookingBack ? (inspector.past.chats.get(selected) ?? null) : (live?.chat ?? null),
+    selected === null ? null : lookingBack ? (inspector.past.chats.get(selected) ?? null) : shownChat(selected, live?.chat),
   )
   /** The app's line for the chat shown, from the list of chats. */
   const label = $derived(summaries.find((summary) => summary.id === selected)?.label ?? null)
@@ -96,12 +97,32 @@
     inspector = connectInspector()
   }
 
+  /** The restores under way for actions, one per chat. */
+  const restoring = oneAtATime<ChatId>()
+
+  /** Acts on the chat chosen, restoring it first if it was put away, and watching it again. */
+  const actOn = chatActor({
+    chosen: () => selected,
+    shelf: (chat) => saved.find((each) => each.header.chat === chat)?.shelf,
+    restore: (chat, shelf) => (live === null ? Promise.reject(new Error('Not live.')) : live.caf.restore(chat, shelf)),
+    watch: (chat) => live?.watch(chat),
+    restoring,
+  })
+
+  /** Does something to the chat shown, through `actOn`, with the connection as it is now. */
+  async function toChat<T>(act: (caf: Connection, chat: ChatId) => Promise<T>): Promise<T> {
+    if (live === null) throw new Error('Not live.')
+    const caf = live.caf
+    return actOn((chat) => act(caf, chat))
+  }
+
   const chatActions: ChatActions = {
-    send: (message: UserMessage) => live?.caf.send(need(selected), message),
+    send: (message: UserMessage) => toChat((caf, chat) => caf.send(chat, message)),
     stop: () => live?.caf.stop(need(selected)),
     answer: (question: QuestionId, answer: Answer) => live?.caf.answer(question, answer),
-    sendAgain: (message: DeepReadonly<UserMessage>) => live?.caf.send(need(selected), structuredClone(message) as UserMessage),
+    sendAgain: (message: DeepReadonly<UserMessage>) => toChat((caf, chat) => caf.send(chat, structuredClone(message) as UserMessage)),
     close: () => live?.caf.close(need(selected)),
+    unarchive: () => toChat((caf, chat) => caf.unarchive(chat)),
     install: () => live?.caf.install(agentOf(chat)),
     stopInstall: () => live?.caf.stopInstall(agentOf(chat)),
     signIn: () => live?.caf.signIn(agentOf(chat)),
@@ -116,6 +137,7 @@
       notice = kinds.length === 0 ? null : { ...notice, kinds }
     },
     learnSettings: () => live?.caf.learnSettings(agentOf(chat)),
+    checkAgain: () => live?.caf.checkAgain(agentOf(chat)),
   }
 
   const agentActions: AgentActions = {
@@ -125,6 +147,7 @@
     paste: (agent: AgentName, text: string) => live?.caf.paste(agent, text),
     stopSignIn: (agent: AgentName) => live?.caf.stopSignIn(agent),
     signOut: (agent: AgentName) => live?.caf.signOut(agent),
+    checkAgain: (agent: AgentName) => live?.caf.checkAgain(agent),
   }
 
   /** The agents on offer, live. Looking back, or replaying, there are none to show: a recording holds no statuses. */
@@ -162,9 +185,9 @@
    * that chat until each kind that failed is chosen, or it closes.
    */
   let notice = $state<{ chat: ChatId; kinds: string[]; text: string } | null>(null)
-  // A closed chat can't be chosen for: what it said is done with.
+  // An archived chat can't be chosen for: what it said is done with.
   $effect(() => {
-    if (notice !== null && chat?.id === notice.chat && !lookingBack && chat.state.type === 'Closed') notice = null
+    if (notice !== null && chat?.id === notice.chat && !lookingBack && chat.archived !== null) notice = null
   })
 
   /** A sentence as it reads after a colon: "The agent …." as "the agent …". */
@@ -177,7 +200,13 @@
     restore: async (chat: ChatId, shelf: Shelf) => {
       if (live === null) throw new Error('Not live.')
       const caf = live.caf
-      selected = await restoreOnceFree(() => caf.restore(chat, shelf))
+      // The same restore as an action's on it, if one is under way.
+      await restoring(chat, () => restoreOnceFree(() => caf.restore(chat, shelf)))
+      selected = chat
+      // Under the same id as when it was put away, whose watch has ended:
+      // choosing it again doesn't watch it again by itself. The link may
+      // have been made anew meanwhile, which watches it itself.
+      live?.watch(chat)
     },
   }
 
@@ -331,7 +360,7 @@
             actions={chatActions}
             readOnly={!actable}
             {readOnlyWhy}
-            notice={!lookingBack && notice?.chat === chat.id && chat.state.type !== 'Closed' ? notice.text : null}
+            notice={!lookingBack && notice?.chat === chat.id && chat.archived === null ? notice.text : null}
             openUsage={usable ? openUsage : undefined}
           />
         {:else}

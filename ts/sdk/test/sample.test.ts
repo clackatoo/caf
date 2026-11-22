@@ -52,6 +52,7 @@ describe("version 1's sample", () => {
       "StopSignIn",
       "SignOut",
       "LearnSettings",
+      "CheckAgain",
     ]);
     for (const { value } of expected) {
       const { agent, action } = value;
@@ -77,11 +78,27 @@ describe("version 1's sample", () => {
         case "LearnSettings":
           void caf.learnSettings(agent);
           break;
+        case "CheckAgain":
+          void caf.checkAgain(agent);
+          break;
       }
     }
     // The same, but for the request numbers, which are the viewer's own.
     const numbered = (messages: FromViewer[]) =>
       messages.map((message) => (message.type === "Agent" ? { ...message.value, request: 0 } : message));
+    expect(numbered(link.take())).toStrictEqual(numbered(expected));
+  });
+
+  test("closing and unarchiving a chat are sent as CAF reads them", async () => {
+    const { caf, link } = await opened();
+    const expected = sample.from_viewer.filter((message) => message.type === "Close" || message.type === "Unarchive");
+    expect(expected.map((message) => message.type)).toStrictEqual(["Close", "Unarchive"]);
+    for (const message of expected) {
+      if (message.type === "Close") void caf.close(message.value.chat).catch(() => {});
+      else if (message.type === "Unarchive") void caf.unarchive(message.value.chat).catch(() => {});
+    }
+    const numbered = (messages: FromViewer[]) =>
+      messages.map((message) => ({ ...message, value: { ...(message.value as object), request: 0 } }));
     expect(numbered(link.take())).toStrictEqual(numbered(expected));
   });
 

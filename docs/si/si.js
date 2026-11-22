@@ -21,6 +21,7 @@
     tick: svg('<path d="M5 12l5 5 9-11"/>', '', 'width:15px;height:15px'),
     warn: svg('<path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17.5v.5"/>', '', 'width:15px;height:15px'),
     lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>', '', 'width:15px;height:15px'),
+    archive: svg('<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 001 1h12a1 1 0 001-1V9M10 13h4"/>', '', 'width:15px;height:15px'),
     unplug: svg('<path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 01-10 0zM12 16v5M3 3l18 18"/>', '', 'width:15px;height:15px'),
     search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>', '', 'width:15px;height:15px'),
     star: svg('<path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8 6.6 19.7l1.1-6.1L3.2 9.4l6.1-.8z"/>', '', 'width:15px;height:15px'),
@@ -70,8 +71,15 @@
     text: '', running: false, stopping: false, waiting: 0, waitingFor: 'this turn', waitingNote: null, problem: null, gate: false,
     // A string, or { text, icon: 'lock' | 'unplug', bold }: nothing can be sent.
     blocked: null,
-    // known | unknown | learning | none
-    settings: 'known', model: 'Opus 5.5', effort: 'High', fast: true, held: {},
+    // Archived: the tray says so and offers Unarchive; the box is as usual,
+    // but the settings can't be chosen.
+    archived: false,
+    // known | unknown | learning | failed | none
+    settings: 'known',
+    // Why CAF couldn't learn the settings, as the composer page words it, and
+    // what the system or the agent said ({ by: 'system' | 'agent', text }),
+    // and whether trying again could help.
+    learnWhy: "Claude couldn't be started.", learnSaid: null, learnAgain: true, model: 'Opus 5.5', effort: 'High', fast: true, held: {},
     menu: false, filter: 'agent', menuAgent: null,
     // Percent of the context used, or null before there's any (a new chat).
     // The ring's dot for an account limit: false, or the lowest window's lowness, 'low' or 'out'.
@@ -97,6 +105,8 @@
     if (s.settings === 'learning') return `<span class="si-control si-quiet">${m}<span class="si-label">Learning ${name}'s settings…</span>${icon.spin}</span>`
     if (s.settings === 'unknown') return `<span class="si-control si-quiet${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${s.narrow ? 'Settings' : s.newChat ? name : 'Settings not known yet'}</span>${icon.chev}</span>`
     if (s.settings === 'failed') return `<span class="si-control si-quiet${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${s.narrow ? 'Settings' : `Couldn't learn ${name}'s settings`}</span>${icon.chev}</span>`
+    // Archived, the settings can't be chosen: shown, as when nothing can be sent, with nothing to open.
+    if (s.archived) return `<span class="si-control si-quiet">${m}<span class="si-label">${s.model} · ${s.effort}</span></span>`
     const part = (now, later) => later ? `<span class="si-part si-held" title="${s.running ? 'From the next turn' : 'Not applied yet'}">${icon.clock}${later}</span>` : `<span class="si-part">${now}</span>`
     const fast = OFFERS[s.model] && OFFERS[s.model].fast && s.fast
     return `<span class="si-control${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${part(s.model, s.held.model)}<span class="si-sep">·</span>${part(s.effort, s.held.effort)}${fast ? icon.bolt : ''}</span>${icon.chev}</span>`
@@ -123,7 +133,11 @@
       return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note"><b>${what}</b><br>Choose it, and this chat will offer to ${a.needs === 'Not installed' ? 'install it' : 'sign you in'} once you send. Its models show here once it's ready.<br><span class="si-btn si-primary si-act">Use ${AGENT_NAME[a.id]}</span></div></div></div>`
     }
     if (s.settings === 'failed') {
-      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF couldn't learn which models and settings ${name} offers. It tries again when the chat opens, or now.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
+      const said = !s.learnSaid ? '' : s.learnSaid.by === 'agent'
+        ? `<div class="si-quote"><b>${name} said:</b> “${s.learnSaid.text}”</div>`
+        : `<div class="si-sys">${s.learnSaid.text}</div>`
+      const again = s.learnAgain ? ` It tries again when the chat opens, or now.${said || '<br>'}<span class="si-btn" style="margin-top:8px">Learn them now</span>` : said
+      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF couldn't learn which models and settings ${name} offers. <b>${s.learnWhy}</b>${again}</div></div></div>`
     }
     if (s.settings === 'unknown') {
       return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF doesn't know yet which models and settings ${name} offers. It finds out when the chat opens, or now, without sending a message.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
@@ -154,6 +168,7 @@
         waiting.map(t => `<div class="si-item">${icon.clock}<span class="si-text">${t}</span></div>`).join('') + '</div>'
     }
     if (s.problem) h += `<div class="si-tray si-problem">${icon.warn}${s.problem}</div>`
+    if (s.archived) h += `<div class="si-tray si-note">${icon.archive}<span>This chat is archived. Sending a message brings it back.</span><span class="si-spacer"></span><span class="si-btn">Unarchive</span></div>`
     h += s.attached
     const joined = s.attached ? ` si-joined${s.joined ? ' si-' + s.joined : ''}` : ''
     h += `<div class="si-box${joined}">`

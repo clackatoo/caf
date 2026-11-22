@@ -7,7 +7,7 @@
   import { attempt } from './chat/actions.ts'
   import SignIn from './chat/SignIn.svelte'
   import Limits from './Limits.svelte'
-  import { bytes, cannotText, canRetry, errorText, installed, installLabel, signInLabel } from './chat/words.ts'
+  import { bytes, canCheckAgain, cannotText, canRetry, errorText, installed, installLabel, signInLabel } from './chat/words.ts'
 
   /** What the user can do about an agent. */
   export interface AgentActions {
@@ -17,6 +17,8 @@
     paste(agent: AgentName, text: string): Promise<unknown> | void
     stopSignIn(agent: AgentName): Promise<unknown> | void
     signOut(agent: AgentName): Promise<unknown> | void
+    /** Have CAF look at the machine again: what's installed, and what it has, for every agent. */
+    checkAgain(agent: AgentName): Promise<unknown> | void
   }
 
   let {
@@ -99,6 +101,13 @@
                 aria-label="Try again to install {agent.name}"
                 disabled={working}
                 onclick={() => run(agent.name, actions.install)}>Try again</button
+              >
+            {:else if canCheckAgain(install)}
+              <button
+                type="button"
+                aria-label="Check again whether {agent.name} can be installed"
+                disabled={working}
+                onclick={() => run(agent.name, actions.checkAgain)}>Check again</button
               >
             {:else if install.type === 'Installing'}
               <button

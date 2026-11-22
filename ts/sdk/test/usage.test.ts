@@ -8,6 +8,7 @@ import {
   cost,
   costByKind,
   group,
+  modelName,
   price,
   split,
   total,
@@ -359,5 +360,24 @@ describe("cost by kind and cache savings", () => {
     expect(costByKind(priced([]))).toBeNull();
     expect(cacheSavings(priced([bucket({ model: "gpt-9", tokens: million })]))).toBeNull();
     expect(cacheSavings(priced([bucket({ tokens: tokens({ input: 1e6 }) })]))).toBeNull();
+  });
+});
+
+describe("modelName", () => {
+  const names: [string, string][] = [
+    ["claude-opus-5-5", "Opus 5.5"],
+    ["claude-sonnet-5-5-20261001", "Sonnet 5.5"],
+  ];
+  const name = (model: string) => modelName({ ...summary([]), names }, model);
+
+  test("is the name the summary pairs with the agent's id for the model", () => {
+    expect(name("claude-opus-5-5")).toBe("Opus 5.5");
+    expect(name("claude-sonnet-5-5-20261001")).toBe("Sonnet 5.5");
+  });
+
+  test("is the id itself for a model the summary has no name for", () => {
+    expect(name("claude-sonnet-5-5")).toBe("claude-sonnet-5-5");
+    expect(name("gpt-9")).toBe("gpt-9");
+    expect(modelName(summary([]), "claude-opus-5-5")).toBe("claude-opus-5-5");
   });
 });

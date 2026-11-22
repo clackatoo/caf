@@ -72,19 +72,25 @@ export class Live {
 
   /**
    * Follows one chat, in place of the one before. With the link down, it's
-   * remembered, and nothing is shown for it until the link is back.
+   * remembered, and nothing is shown for it until the link is back. A chat
+   * whose watch has ended, as one closed and put away does, stays shown
+   * as it was last, and is watched afresh when it's chosen again, such as
+   * once it's restored, under the same id: shown as it was meanwhile, so a
+   * view drawing it, and what's being written in it, stay.
    */
   watch(chat: ChatId | null): void {
     if (this.#watched === chat && this.#watching !== null) return
     this.#watching?.stop()
     this.#watching = null
     this.#watched = chat
-    this.chat = null
+    if (this.chat?.id !== chat) this.chat = null
     if (chat === null || this.#caf === null) return
-    this.#watching = this.#caf.watch(chat, (event) => {
+    const watching = this.#caf.watch(chat, (event) => {
       if (this.#watched !== chat) return
       if (event.type === 'Chat') this.chat = event.chat
+      else if (event.type === 'Ended' && this.#watching === watching) this.#watching = null
     })
+    this.#watching = watching
   }
 
   /** The connection, for an action: rejects as `Disconnected` without one. */

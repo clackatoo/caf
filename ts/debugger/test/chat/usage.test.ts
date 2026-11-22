@@ -234,6 +234,20 @@ describe('the breakdown', () => {
     ])
   })
 
+  it("names a model as the summary does, by its id where it has no name, and keeps the id at hand", async () => {
+    const { container, setPrice } = draw(async (query) => summary(query, { names: [['claude-opus-5-5', 'Opus 5.5']] }))
+    await waitFor(() => expect(big(container)).toBe('$3.00'))
+    expect(rows(container).map((row) => row[1])).toStrictEqual(['Opus 5.5', 'gpt-6'])
+    expect(screen.getByRole('button', { name: 'Opus 5.5' }).title).toBe('claude-opus-5-5')
+    await press('Opus 5.5')
+    const card = screen.getByRole('group', { name: 'The price of Opus 5.5' })
+    await press('Set your own price')
+    // The price goes by the agent's id, so the form says it.
+    expect(text(card)).toContain('Your own price for Opus 5.5 (claude-opus-5-5)')
+    await press('Save')
+    await waitFor(() => expect(setPrice).toHaveBeenCalledWith('claude-opus-5-5', OPUS.price))
+  })
+
   it("shows a model's price and where it came from, and sets the user's own", async () => {
     const { container, load, setPrice } = draw()
     await waitFor(() => expect(big(container)).toBe('$3.00'))
@@ -426,6 +440,14 @@ describe('the price card', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Save' })).toBeNull())
     await press("Use the table's price")
     expect(setPrice).toHaveBeenLastCalledWith('my-opus', null)
+  })
+
+  it('names a model with no price by its name and its id, or its id alone', () => {
+    render(PriceCard, { model: 'claude-opus-4-8', name: 'Opus 4.8', priced: null, fetched: null })
+    expect(text(screen.getByRole('group', { name: 'The price of Opus 4.8' }))).toContain('CAF knows no price for Opus 4.8 (claude-opus-4-8), so')
+    cleanup()
+    render(PriceCard, { model: 'gpt-6', priced: null, fetched: null })
+    expect(text(screen.getByRole('group', { name: 'The price of gpt-6' }))).toContain('CAF knows no price for gpt-6, so')
   })
 
   it("sets a new price by the agent's id when the one that priced it isn't the user's own", async () => {
