@@ -540,8 +540,8 @@ fn a_time_from_a_clock_set_ahead_never_wins_for_long() {
         }),
     );
     let read = kept(folder.path());
+    assert_eq!(read.cleared, Some(NOW), "no later than now");
     let slack = Wall(NOW.0 + super::SLACK);
-    assert_eq!(read.cleared, Some(slack), "no later than now, near enough");
 
     write(
         folder.path(),
@@ -592,4 +592,85 @@ fn a_cleared_only_file_is_loaded() {
         load(folder.path(), NOW).0,
         [profile(limits(Vec::new(), Some(at(-1))))]
     );
+}
+
+#[test]
+fn extra_usage_a_later_caf_wrote_heard_later_is_kept_over_one_read() {
+    let folder = Folder::new("limits-later-extra");
+    let later = json!({"in_use": "partly", "heard": at(0)});
+    write(
+        folder.path(),
+        &json!({"windows": [], "extra_usage": later, "cleared": null}),
+    );
+    let given = json!({
+        "windows": [],
+        "extra_usage": {"in_use": true, "heard": at(-1)},
+        "cleared": null,
+    });
+    let given: AccountLimits = serde_json::from_value(given).unwrap();
+    assert_eq!(
+        saved(folder.path(), given.clone()),
+        None,
+        "nothing read is news"
+    );
+    assert_eq!(
+        written(folder.path())["extra_usage"],
+        later,
+        "the later kept"
+    );
+
+    // One heard earlier goes.
+    let earlier = json!({"in_use": "partly", "heard": at(-2)});
+    write(
+        folder.path(),
+        &json!({"windows": [], "extra_usage": earlier, "cleared": null}),
+    );
+    saved(folder.path(), given.clone());
+    assert_eq!(
+        written(folder.path()),
+        serde_json::to_value(&given).unwrap()
+    );
+}
+
+#[test]
+fn a_window_a_later_caf_wrote_heard_after_one_of_its_kind_is_kept_beside_it() {
+    let folder = Folder::new("limits-later-caf-after");
+    let mut throttled = five_hours(40, at(0));
+    throttled["state"] = json!({"type": "Throttled"});
+    write(
+        folder.path(),
+        &json!({"windows": [throttled], "extra_usage": null, "cleared": null}),
+    );
+    let given = limits(vec![five_hours(50, at(-1))], None);
+    assert_eq!(saved(folder.path(), given.clone()), None);
+    let mut expected = serde_json::to_value(&given).unwrap();
+    expected["windows"].as_array_mut().unwrap().push(throttled);
+    assert_eq!(written(folder.path()), expected);
+}
+
+#[test]
+fn a_clearing_from_a_clock_set_ahead_never_drops_news_heard_now() {
+    let folder = Folder::new("limits-clock-cleared");
+    write(
+        folder.path(),
+        &json!({"windows": [], "extra_usage": null, "cleared": at(24)}),
+    );
+    assert_eq!(kept(folder.path()).cleared, Some(NOW), "no later than now");
+    let news = limits(vec![five_hours(40, NOW.0)], None);
+    let merged = saved(folder.path(), news).expect("the clearing is news");
+    assert_eq!(merged.cleared, Some(NOW));
+    assert_eq!(
+        merged.window(&WindowKind::FiveHours).map(|five| five.used),
+        Some(40),
+        "kept"
+    );
+    assert_eq!(kept(folder.path()), merged);
+}
+
+#[test]
+fn a_file_written_over_is_a_warning_once_then_debugging() {
+    let said = std::sync::atomic::AtomicBool::new(false);
+    assert_eq!(super::once_then_debug(&said), log::Level::Warn);
+    assert_eq!(super::once_then_debug(&said), log::Level::Debug);
+    assert_eq!(super::once_then_debug(&said), log::Level::Debug);
 }

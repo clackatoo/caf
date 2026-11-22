@@ -28,9 +28,17 @@
 //!    or extra usage, this CAF can't read, of a kind or state it doesn't
 //!    know, is left out of what's loaded and written back as it was after
 //!    those it read, until it goes as one it read would: heard before a
-//!    clearing, past its reset, or one of its kind heard later.
-//! 5. **No clock set ahead wins for long:** a time read or saved later
-//!    than a minute from now is taken as a minute from now, and kept so.
+//!    clearing, past its reset, or one of its kind heard later. Extra usage
+//!    this CAF can't read is kept over that it can if heard later.
+//! 5. **No clock set ahead wins for long:** a window or extra usage heard
+//!    later than a minute from now is taken as heard a minute from now,
+//!    and a clearing later than now as now, and kept so: so a clearing
+//!    from a clock set ahead never drops news heard since.
+//!
+//! Guarantees 2, 4 and 5 hold for a window, or extra usage, this CAF
+//! can't read only as far as its `heard` and `resets` read as numbers, as
+//! that's all of it this CAF reads: one with neither is kept as it was
+//! until a CAF that can read it writes the file.
 //!
 //! So a field a later CAF adds, to the file or to a window this CAF can
 //! read, must be safe for an earlier one to lose as it writes the file
@@ -39,6 +47,7 @@
 
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use caf_core::limits::{AccountLimits, ExtraUsage, LimitWindow, ProfileLimits};
 use caf_core::profiles::Builtin;
@@ -51,8 +60,10 @@ use crate::{LIMITS, files};
 #[cfg(test)]
 mod tests;
 
-/// How far past now a time read or saved may be, in milliseconds: past
-/// it, it's taken as now and this.
+/// How far past now a window or extra usage read or saved may be heard,
+/// in milliseconds: past it, it's taken as now and this. A clearing has
+/// none: one later than now is taken as now, as an earlier clearing only
+/// keeps more.
 const SLACK: i64 = 60_000;
 
 /// The most a profile's file may be, in bytes: past that, it doesn't
@@ -115,7 +126,11 @@ pub fn save(folder: &Path, limits: &ProfileLimits, now: Wall) -> io::Result<Opti
     let was = match read(&folder, limits.profile, now) {
         Ok(was) => was,
         Err(error) if error.kind() == io::ErrorKind::InvalidData => {
-            log::warn!(target: "caf", "{error}: it's written over with the limits saved");
+            log::log!(
+                target: "caf",
+                once_then_debug(&WRITTEN_OVER),
+                "{error}: it's written over with the limits saved"
+            );
             None
         }
         Err(error) => return Err(error),
@@ -144,11 +159,14 @@ pub fn save(folder: &Path, limits: &ProfileLimits, now: Wall) -> io::Result<Opti
         if let Value::Array(windows) = &mut file["windows"] {
             windows.extend(unread);
         }
-        if merged.extra_usage.is_none()
-            && let Some(extra) = &was.unread_extra
-            && time(&extra["heard"]).is_none_or(|heard| heard >= cleared)
-        {
-            file["extra_usage"] = extra.clone();
+        if let Some(extra) = &was.unread_extra {
+            let heard = time(&extra["heard"]);
+            // Heard later than any read, as far as can be told.
+            let later = (merged.extra_usage)
+                .is_none_or(|read| heard.is_some_and(|heard| heard > read.heard.0));
+            if later && heard.is_none_or(|heard| heard >= cleared) {
+                file["extra_usage"] = extra.clone();
+            }
         }
     }
     if was.as_ref().map(|was| &was.json) != Some(&file) {
@@ -157,6 +175,21 @@ pub fn save(folder: &Path, limits: &ProfileLimits, now: Wall) -> io::Result<Opti
         files::replace(&folder, &file_name(limits.profile), &bytes)?;
     }
     Ok((merged != given).then_some(merged))
+}
+
+/// Whether a file of limits was written over yet, as it didn't read: the
+/// first is a warning, the rest only debugging, as each save would say it
+/// again.
+static WRITTEN_OVER: AtomicBool = AtomicBool::new(false);
+
+/// [`Warn`](log::Level::Warn) the first time, as `said` says, and
+/// [`Debug`](log::Level::Debug) after.
+fn once_then_debug(said: &AtomicBool) -> log::Level {
+    if said.swap(true, Ordering::Relaxed) {
+        log::Level::Debug
+    } else {
+        log::Level::Warn
+    }
 }
 
 /// The file a profile's limits are kept in.
@@ -234,7 +267,8 @@ fn time(value: &Value) -> Option<i64> {
     value.as_i64()
 }
 
-/// `limits` as they're kept: no time later than [`SLACK`] from `now`,
+/// `limits` as they're kept: heard no later than [`SLACK`] from `now`,
+/// cleared no later than `now`,
 /// each window once, in order, with none past its reset at `now`, nor
 /// heard before they were cleared.
 fn tidy(mut limits: AccountLimits, now: Wall) -> AccountLimits {
@@ -245,7 +279,7 @@ fn tidy(mut limits: AccountLimits, now: Wall) -> AccountLimits {
     if let Some(extra) = &mut limits.extra_usage {
         extra.heard = extra.heard.min(latest);
     }
-    limits.cleared = limits.cleared.map(|cleared| cleared.min(latest));
+    limits.cleared = limits.cleared.map(|cleared| cleared.min(now));
     let mut tidy = AccountLimits::default();
     tidy.merge(&limits);
     tidy.forget_passed(now);
