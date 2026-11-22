@@ -286,8 +286,13 @@ impl Builtin {
     /// `None` for an id it doesn't know the shape of.
     #[must_use]
     pub fn model_name(self, id: &str) -> Option<String> {
-        let _ = id;
-        todo!()
+        match self {
+            Self::ClaudeAgentAcp => claude_model_name(id),
+            #[cfg(test)]
+            Self::TestNpm | Self::TestDownload | Self::TestPlain | Self::TestModels => None,
+            #[cfg(feature = "fake")]
+            Self::Fake => claude_model_name(id),
+        }
     }
 
     /// The profile with this [slug](Builtin::slug), if any.
@@ -1336,6 +1341,25 @@ pub(crate) fn version(text: &str) -> Option<([u64; 3], bool)> {
     parts.next().is_none().then_some((version, pre))
 }
 
+/// Claude's name for a model of id `id`, as [`Builtin::model_name`]
+/// says: `claude-<family>-<major>-<minor>`, then perhaps `-<YYYYMMDD>`.
+fn claude_model_name(id: &str) -> Option<String> {
+    let mut parts = id.strip_prefix("claude-")?.split('-');
+    let family = parts.next().filter(|family| {
+        family.bytes().all(|byte| byte.is_ascii_lowercase()) && !family.is_empty()
+    })?;
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    let major = parts.next().filter(|part| digits(part))?;
+    let minor = parts.next().filter(|part| digits(part))?;
+    let date = parts.next();
+    if date.is_some_and(|date| date.len() != 8 || !digits(date)) || parts.next().is_some() {
+        return None;
+    }
+    let mut name = family[..1].to_ascii_uppercase();
+    name.push_str(&family[1..]);
+    Some(format!("{name} {major}.{minor}"))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -2166,6 +2190,59 @@ pub(crate) mod tests {
             ProfileChoice::Builtin(Builtin::Fake).limits(&update, HEARD),
             claude().limits(&update, HEARD)
         );
+    }
+
+    #[test]
+    fn claude_and_the_fake_name_claudes_models_and_test_agents_dont() {
+        let named = [
+            ("claude-opus-5-5", "Opus 5.5"),
+            ("claude-haiku-5-5-20261001", "Haiku 5.5"),
+            ("claude-sonnet-4-10", "Sonnet 4.10"),
+            ("claude-fable-5-1", "Fable 5.1"),
+        ];
+        for (id, name) in named {
+            assert_eq!(
+                Builtin::ClaudeAgentAcp.model_name(id).as_deref(),
+                Some(name),
+                "{id}"
+            );
+            #[cfg(feature = "fake")]
+            assert_eq!(Builtin::Fake.model_name(id).as_deref(), Some(name), "{id}");
+            for test in [
+                Builtin::TestNpm,
+                Builtin::TestDownload,
+                Builtin::TestPlain,
+                Builtin::TestModels,
+            ] {
+                assert_eq!(test.model_name(id), None, "{id}");
+            }
+        }
+        for unknown in [
+            "",
+            "sonnet",
+            "default",
+            "opus[1m]",
+            "claude-opus",
+            "claude-opus-5",
+            "claude-opus-5-",
+            "claude-opus-5-5-",
+            "claude-opus-5-5-2026100",
+            "claude-opus-5-5-2026100a",
+            "claude-opus-5-5-20261001-1",
+            "claude-opus-5-5[1m]",
+            "claude-3-5-sonnet-20241022",
+            "claude-Opus-5-5",
+            "claude--5-5",
+            "claude-opus-five-5",
+            "Claude-opus-5-5",
+            "gpt-5-5",
+        ] {
+            assert_eq!(
+                Builtin::ClaudeAgentAcp.model_name(unknown),
+                None,
+                "{unknown}"
+            );
+        }
     }
 
     #[test]
