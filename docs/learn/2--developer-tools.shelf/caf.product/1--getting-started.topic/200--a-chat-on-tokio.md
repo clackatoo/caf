@@ -60,7 +60,9 @@ A watch reads only when you ask it to, so nothing piles up for one you don't
 read. If it falls further behind than the chat's list of changes is long
 (`Limits::kept_changes`, 4096 by default), it gets the whole chat again.
 
-`next` returns `None` once the chat is closed or CAF has shut down. A watch
+`next` returns `None` once the chat is gone, put away or deleted (closing
+a saved chat puts it away), or CAF has shut down. Closing a chat that isn't
+saved archives it, and its watch goes on, as it may be unarchived. A watch
 that hasn't seen how shutting down left the chat gets it as one last picture
 first, even one that never read before.
 

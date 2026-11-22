@@ -176,7 +176,9 @@ CAF first sends a watched chat whole, then its numbered changes. The SDK
 applies them itself. If one is missing, doesn't fit, or is of a kind this
 version of the SDK doesn't know, it asks CAF for the chat whole again, and
 the listener only ever sees the right chat. The listener hears `Ended` once
-the chat is closed, or CAF has shut down.
+the chat is gone, put away or deleted (closing a saved chat puts it away),
+or CAF has shut down. A chat closed and still loaded is archived, and its
+watch goes on, as it may be unarchived.
 
 ### Act
 

@@ -159,16 +159,19 @@ under way, restoring it is refused as `Loaded`, though it's listed as
 saved: try again in a moment.
 
 **Close** a chat when the user is done with it: it's **archived**, as of
-then (`Chat::archived`), and a watch of it sees it archived. Its
-session is closed, and its adapter stopped if nothing else uses it. A saved
-chat is then put away, marked closed, with when it was archived in its
-header (`Header::archived`), and can still be restored. One that isn't saved
-stays, archived, until CAF stops.
+then (`Chat::archived`), and a watch of it sees it archived. Its session is
+closed, and its adapter stopped if nothing else uses it. A saved chat is
+then put away, marked closed, with when it was archived in its header
+(`Header::archived`), and can still be restored. One that isn't saved
+stays, archived, until CAF stops, and its watches go on. An archived
+chat's settings can't be chosen (`Refused::Closed`).
 
 **Archiving sticks.** A closed chat restored is still archived, as it was
-left, however many times it's put away and restored, so your program can
-keep it in an archive rather than among the user's chats. It's unarchived
-only when your program says so, or when the user sends it a message:
+left, with no agent started, however many times it's put away and
+restored, so your program can keep it in an archive rather than among the
+user's chats. Putting it away, or closing it again, keeps when it was
+archived. It's unarchived only when your program says so, or when the user
+sends it a message:
 
 ```rust
 chat.unarchive().await?; // or send to it: that unarchives it first

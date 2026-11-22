@@ -853,7 +853,7 @@ async fn refusals_and_unknown_chats() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn closing_a_chat_ends_its_watches() {
+async fn closing_a_chat_archives_it_and_its_watches_go_on() {
     let dir = Dir::new();
     let script = dir.script("script.jsonl", &handshake("s1"));
     let (caf, running) = start(common::config_for(host(), vec![fake(&dir, &script)]));
@@ -865,11 +865,21 @@ async fn closing_a_chat_ends_its_watches() {
     .await;
     let handle = caf.chat(chat.id);
     chat.close().await.unwrap();
+    // A chat that isn't saved stays, archived, and may be unarchived: its
+    // watch goes on.
+    until(&handle, &mut watch, "it archived", |chat| {
+        chat.archived.is_some() && chat.state == ChatState::Closed
+    })
+    .await;
+    handle.unarchive().await.unwrap();
+    until(&handle, &mut watch, "it unarchived", |chat| {
+        chat.archived.is_none() && chat.state == ChatState::Idle
+    })
+    .await;
+    shut_down(&caf, running).await;
     let ended =
         tokio::time::timeout(PATIENCE, async { while watch.next().await.is_some() {} }).await;
-    assert!(ended.is_ok(), "the watch ends once the chat is closed");
-    assert_eq!(picture(&handle).await.state, ChatState::Closed);
-    shut_down(&caf, running).await;
+    assert!(ended.is_ok(), "the watch ends once CAF has shut down");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
