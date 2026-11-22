@@ -415,6 +415,9 @@ pub enum SetupDirective {
         from: String,
         /// The patch to make.
         patch: Patch,
+        /// The agent's private folder, if its recipe gives it one: made
+        /// as [`Install`](SetupDirective::Install) makes it.
+        private: Option<String>,
     },
     /// Remove the folder `folder`, unless something runs from it.
     Remove {

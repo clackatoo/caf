@@ -85,35 +85,23 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             | InstallState::Cannot(CannotInstall::Failed(_)) => {}
             _ => return Err(Refused::NotInstallable),
         }
-        let (install, patch, size) = (recipe.install.clone(), recipe.patch.clone(), recipe.size);
-        let private = self.private_folder(agent);
-        let earlier = self.earlier_level(agent);
+        let (patched, size) = (recipe.patch.is_some(), recipe.size);
         // Another agent of the same profile is installing it already.
-        let started = self.install_job(&folder).is_some();
-        if let (false, Some(from)) = (started, earlier) {
-            // A new patch level of an install that's there: nothing to
-            // download.
-            self.prepare(agent, &folder, from, out);
-        } else if !started {
-            // Starting it later needs the folder installs live in.
-            if self.setup.machine.is_none() && self.setup.survey.is_none() {
-                self.survey(out);
+        if self.install_job(&folder).is_none() {
+            if let Some(from) = self.earlier_level(agent) {
+                // A new patch level of an install that's there: nothing
+                // to download.
+                self.prepare(agent, &folder, from, true, out);
+            } else if patched && self.setup.machine.is_none() {
+                // Whether an earlier level is there to prepare it from is
+                // for the survey to say.
+                if self.setup.survey.is_none() {
+                    self.survey(out);
+                }
+                self.setup.deferred.insert(agent.clone());
+            } else {
+                self.download(agent, &folder, out);
             }
-            let ticket = self.job(
-                agent,
-                Work::Install {
-                    folder: folder.clone(),
-                    from: None,
-                },
-            );
-            out.push(Directive::Setup(SetupDirective::Install {
-                ticket,
-                folder: folder.clone(),
-                install,
-                patch,
-                private,
-                size,
-            }));
         }
         for each in self.sharing(&folder) {
             if !matches!(
@@ -139,8 +127,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return Err(Refused::NoSuchAgent);
         }
         let folder = self.folder_of(agent).ok_or(Refused::NothingToStop)?;
-        let ticket = self.install_job(&folder).ok_or(Refused::NothingToStop)?;
-        self.stop_job(ticket, out);
+        let sharing = self.sharing(&folder);
+        let deferred =
+            (sharing.iter()).fold(false, |any, each| self.setup.deferred.remove(each) | any);
+        match self.install_job(&folder) {
+            Some(ticket) => self.stop_job(ticket, out),
+            None if deferred => {}
+            None => return Err(Refused::NothingToStop),
+        }
         let size = self.recipes.get(agent).map_or(0, |recipe| recipe.size);
         for each in self.sharing(&folder) {
             self.set_install(&each, InstallState::Missing { size });
@@ -323,12 +317,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 Work::Install {
                     folder,
                     from: Some(from),
+                    asked,
                 },
                 event @ (SetupEvent::InstallFailed(_) | SetupEvent::Failed(_)),
             ) => {
                 self.setup.jobs.remove(&ticket);
                 if !stopped {
-                    self.prepare_failed(&folder, &from, &event, out);
+                    self.prepare_failed(&agent, &folder, &from, asked, &event, out);
                 }
             }
             (Work::Install { folder, .. }, SetupEvent::InstallFailed(why)) => {
@@ -486,6 +481,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             SetupEvent::Failed(why) => {
                 // Asked again, it may answer.
                 self.setup.survey = None;
+                // Without knowing what's there, what the host asked to be
+                // installed is downloaded.
+                for agent in std::mem::take(&mut self.setup.deferred) {
+                    if let Some(folder) = self.folder_of(&agent)
+                        && self.install_job(&folder).is_none()
+                    {
+                        self.download(&agent, &folder, out);
+                    }
+                }
                 let why = agent_text(&why, MOST_REASON);
                 report(
                     out,
@@ -507,6 +511,18 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         machine.installed.append(&mut self.setup.fresh);
         self.setup.machine = Some(machine);
         self.setup.survey = None;
+        // Installs asked for meanwhile are judged afresh, then started as
+        // what's there allows.
+        let deferred = std::mem::take(&mut self.setup.deferred);
+        for agent in &deferred {
+            for each in self
+                .folder_of(agent)
+                .map(|folder| self.sharing(&folder))
+                .unwrap_or_default()
+            {
+                self.set_install(&each, InstallState::Unknown);
+            }
+        }
         for agent in self.setup.order.clone() {
             let Some(spec) = self.agents.get(&agent) else {
                 continue;
@@ -522,6 +538,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             let state = self.judge(&agent);
             self.set_install(&agent, state);
         }
+        for agent in deferred {
+            // Refused if it's installed already, or can't be: its state
+            // says so.
+            let _ = self.install_agent(&agent, out);
+        }
         // A new patch level of an install that's there is made from it,
         // with nothing downloaded, and nobody asked.
         for agent in self.setup.order.clone() {
@@ -536,7 +557,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 && self.install_job(&folder).is_none()
                 && let Some(from) = self.earlier_level(&agent)
             {
-                self.prepare(&agent, &folder, from, out);
+                self.prepare(&agent, &folder, from, false, out);
             }
         }
         for agent in self.setup.order.clone() {
@@ -571,13 +592,44 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map(|(_, each)| each.clone())
     }
 
-    /// Prepares `folder`, `agent`'s, from the earlier patch level `from`:
-    /// every agent of its profile is installing it meanwhile.
+    /// Downloads `folder`, `agent`'s, as its recipe says.
+    fn download(&mut self, agent: &AgentName, folder: &str, out: &mut Vec<Directive<A, D>>) {
+        let Some(recipe) = self.recipes.get(agent) else {
+            return;
+        };
+        let (install, patch, size) = (recipe.install.clone(), recipe.patch.clone(), recipe.size);
+        let private = self.private_folder(agent);
+        // Starting it later needs the folder installs live in.
+        if self.setup.machine.is_none() && self.setup.survey.is_none() {
+            self.survey(out);
+        }
+        let ticket = self.job(
+            agent,
+            Work::Install {
+                folder: folder.to_owned(),
+                from: None,
+                asked: true,
+            },
+        );
+        out.push(Directive::Setup(SetupDirective::Install {
+            ticket,
+            folder: folder.to_owned(),
+            install,
+            patch,
+            private,
+            size,
+        }));
+    }
+
+    /// Prepares `folder`, `agent`'s, from the earlier patch level `from`,
+    /// as the host `asked` or by itself: every agent of its profile is
+    /// installing it meanwhile.
     fn prepare(
         &mut self,
         agent: &AgentName,
         folder: &str,
         from: String,
+        asked: bool,
         out: &mut Vec<Directive<A, D>>,
     ) {
         let Some((patch, size)) =
@@ -595,27 +647,33 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Work::Install {
                 folder: folder.to_owned(),
                 from: Some(from.clone()),
+                asked,
             },
         );
+        let private = self.private_folder(agent);
         out.push(Directive::Setup(SetupDirective::Prepare {
             ticket,
             folder: folder.to_owned(),
             from,
             patch,
+            private,
         }));
         for each in self.sharing(folder) {
             self.set_install(&each, InstallState::Installing { done: 0, size });
         }
     }
 
-    /// Preparing `folder` from `from` failed: it's never tried again, and
-    /// every agent of its profile reads as not installed, to be installed
-    /// as any other is, with the user's leave. Messages waiting for it go
-    /// on waiting.
+    /// Preparing `folder`, `agent`'s, from `from` failed: it's never tried
+    /// again. If the host `asked` for it, the user agreed to install it,
+    /// so it's downloaded at once. Otherwise every agent of its profile
+    /// reads as not installed, to be installed as any other is, with the
+    /// user's leave. Either way, messages waiting for it go on waiting.
     fn prepare_failed(
         &mut self,
+        agent: &AgentName,
         folder: &str,
         from: &str,
+        asked: bool,
         event: &SetupEvent,
         out: &mut Vec<Directive<A, D>>,
     ) {
@@ -625,12 +683,20 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             other => setup_event_kind(other).to_owned(),
         };
         let why = agent_text(&why, MOST_REASON);
+        let then = if asked {
+            "downloading it instead"
+        } else {
+            "it's to be installed"
+        };
         report(
             out,
             Level::Warn,
-            format!("preparing {folder} from {from} failed, so it's to be installed: {why}"),
+            format!("preparing {folder} from {from} failed, so {then}: {why}"),
         );
         self.setup.unprepared.insert(folder.to_owned());
+        if asked {
+            return self.download(agent, folder, out);
+        }
         for agent in self.sharing(folder) {
             let size = self.recipes.get(&agent).map_or(0, |recipe| recipe.size);
             self.set_install(&agent, InstallState::Missing { size });
@@ -1194,6 +1260,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 _ => None,
             })
             .collect();
+        for agent in std::mem::take(&mut self.setup.deferred) {
+            let size = self.recipes.get(&agent).map_or(0, |recipe| recipe.size);
+            for each in self
+                .folder_of(&agent)
+                .map(|folder| self.sharing(&folder))
+                .unwrap_or_default()
+            {
+                self.set_install(&each, InstallState::Missing { size });
+            }
+        }
         for (ticket, agent, folder) in running {
             self.stop_job(ticket, out);
             if let Some(folder) = folder {
@@ -1437,8 +1513,9 @@ fn patch_level(slug: &str, folder: &str, upstream: &str) -> Option<u32> {
     if rest.is_empty() {
         return Some(0);
     }
+    // Only as CAF names a level: digits, from 1, with no leading zero.
     let level = rest.strip_prefix("+caf.")?;
-    if level.is_empty() || !level.bytes().all(|byte| byte.is_ascii_digit()) {
+    if level.starts_with('0') || !level.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
     level.parse().ok()
@@ -1551,7 +1628,6 @@ mod tests {
         let older = |folder: &str| older("claude-agent-acp", folder, "0.98.0", 2);
         assert!(older("claude-agent-acp-0.98.0"));
         assert!(older("claude-agent-acp-0.98.0+caf.1"));
-        assert!(older("claude-agent-acp-0.98.0+caf.0"));
         assert!(older("claude-agent-acp-0.97.0+caf.9"));
         assert!(older("claude-agent-acp-0.98.0-rc.1+caf.5"));
         assert!(!older("claude-agent-acp-0.98.0+caf.2"));
@@ -1559,6 +1635,8 @@ mod tests {
         assert!(!older("claude-agent-acp-0.99.0+caf.1"));
         // Patched some way this CAF doesn't know: never.
         assert!(!older("claude-agent-acp-0.98.0+caf.x"));
+        assert!(!older("claude-agent-acp-0.98.0+caf.0"));
+        assert!(!older("claude-agent-acp-0.98.0+caf.01"));
         assert!(!older("claude-agent-acp-0.98.0+caf."));
         assert!(!older("claude-agent-acp-0.98.0+caf.+1"));
         assert!(!older("claude-agent-acp-0.98.0+caf.1.1"));

@@ -1079,6 +1079,7 @@ pub(crate) fn every_type(s: &mut Samples) {
             folder: "claude-agent-acp-0.98.0+caf.2".into(),
             from: "claude-agent-acp-0.98.0+caf.1".into(),
             patch: patch(),
+            private: Some("claude-agent-acp-private".into()),
         },
         SetupDirective::Remove {
             ticket: Ticket(8),

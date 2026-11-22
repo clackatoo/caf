@@ -17,7 +17,9 @@
 //! install's files instead (copies where a link can't be made, and never
 //! its `.used`), renames each original back over its patched copy there,
 //! and patches that: only names in the new folder change, so the earlier
-//! install never does. Sign-in commands that open a browser are given a `BROWSER` of
+//! install never does. Its folders stay writable by the user until it's
+//! patched, so a failed one can always be removed. It makes the agent's
+//! private folder as an install does. Sign-in commands that open a browser are given a `BROWSER` of
 //! the driver's own, which hands their link back instead of opening
 //! anything.
 //!
@@ -234,6 +236,13 @@ pub(crate) struct Options {
     /// test can stop it meanwhile.
     #[cfg(test)]
     pub(crate) sync_pause: Option<std::time::Duration>,
+    /// How long linking each entry of an earlier install takes, as well,
+    /// so a test can stop a prepare meanwhile.
+    #[cfg(test)]
+    pub(crate) link_pause: Option<std::time::Duration>,
+    /// A prepare copies every file, as where hard links can't be made.
+    #[cfg(test)]
+    pub(crate) copy_only: bool,
 }
 
 impl Options {
@@ -342,11 +351,16 @@ impl SetupDriver {
                 folder,
                 from,
                 patch,
+                private,
             } => {
                 let (reporter, stop) = self.stoppable(ticket);
                 tokio::spawn(install::prepare(
                     self.root.clone(),
-                    (folder, from),
+                    install::Prepared {
+                        folder,
+                        from,
+                        private,
+                    },
                     patch,
                     self.options.clone(),
                     reporter,

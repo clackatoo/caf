@@ -201,20 +201,28 @@ async fn installing(
     done
 }
 
+/// What a prepare makes: the install's folder, from the earlier one, and
+/// the agent's private folder if it has one.
+pub(super) struct Prepared {
+    pub(super) folder: String,
+    pub(super) from: String,
+    pub(super) private: Option<String>,
+}
+
 /// Makes `root/folder` from the complete install `root/from`, an earlier
 /// patch level of the same upstream version, with nothing downloaded: its
 /// files linked into a new folder, those it patched put back, and that
-/// patched with `patch`.
+/// patched with `patch`. The agent's private folder is made as an
+/// install makes it.
 pub(super) async fn prepare(
     root: PathBuf,
-    folders: (String, String),
+    folders: Prepared,
     patch: Patch,
     options: Options,
     reporter: Reporter,
     mut stop: oneshot::Receiver<()>,
 ) {
-    let (folder, from) = folders;
-    let outcome = preparing(&root, &folder, &from, patch, &options, &mut stop).await;
+    let outcome = preparing(&root, &folders, patch, &options, &mut stop).await;
     reporter.last(match outcome {
         Ok(()) => SetupEvent::Installed,
         Err(failure) => SetupEvent::InstallFailed(failure),
@@ -225,12 +233,12 @@ pub(super) async fn prepare(
 /// what it built if it fails. `from` is only ever read.
 async fn preparing(
     root: &Path,
-    folder: &str,
-    from: &str,
+    folders: &Prepared,
     patch: Patch,
     options: &Options,
     stop: &mut oneshot::Receiver<()>,
 ) -> Result<(), InstallFailure> {
+    let (folder, from) = (folders.folder.as_str(), folders.from.as_str());
     for name in [folder, from] {
         if !is_install_name(name) {
             return Err(other(format!("{name:?} can't be an install's name")));
@@ -238,6 +246,13 @@ async fn preparing(
     }
     if folder == from {
         return Err(other(format!("{folder} can't be prepared from itself")));
+    }
+    if let Some(private) = &folders.private
+        && !is_private_name(private)
+    {
+        return Err(other(format!(
+            "{private:?} can't be a private folder's name"
+        )));
     }
     let lock = wait_for_lock(root, stop).await?;
     let place = root.join(folder);
@@ -250,7 +265,11 @@ async fn preparing(
             build.clone(),
             root.to_owned(),
         );
+        let private = folders.private.as_ref().map(|private| root.join(private));
         blocking(move || {
+            if let Some(private) = &private {
+                make_private(private)?;
+            }
             // Under the lock, so it's complete if it's there.
             if place.is_dir() {
                 return Ok(None);
@@ -274,19 +293,29 @@ async fn preparing(
     let stopped = Arc::new(AtomicBool::new(false));
     let making = {
         let (earlier, build, stopped) = (earlier, build.clone(), Arc::clone(&stopped));
+        let (from, linking) = (from.to_owned(), linking(options));
         tokio::task::spawn_blocking(move || {
-            match super::patch::link_earlier(&earlier, &build, &stopped) {
-                Ok(true) => super::patch::patch_install(&build, &patch),
-                Ok(false) => Err(InstallFailure::Stopped),
-                Err(error) => Err(failure(error)),
-            }
+            let linked = match super::patch::link_earlier(&earlier, &build, linking, &stopped) {
+                Ok(Some(linked)) => linked,
+                Ok(None) => return Err(InstallFailure::Stopped),
+                Err(error) => {
+                    return Err(match failure(error) {
+                        InstallFailure::Other(why) => {
+                            other(format!("preparing it from {from} failed: {why}"))
+                        }
+                        failed => failed,
+                    });
+                }
+            };
+            super::patch::patch_install(&build, &patch)?;
+            linked.finish().map_err(failure)
         })
     };
     tokio::pin!(making);
     let made = tokio::select! {
         made = &mut making => made,
         _ = &mut *stop => {
-            // It sees that between files, and ends.
+            // It sees that between entries, and ends.
             stopped.store(true, Ordering::Relaxed);
             let _ = making.await;
             Ok(Err(InstallFailure::Stopped))
@@ -304,6 +333,20 @@ async fn preparing(
     }
     drop(lock);
     done
+}
+
+/// How an earlier install is linked: only tests change it.
+fn linking(options: &Options) -> super::patch::Linking {
+    #[cfg(test)]
+    return super::patch::Linking {
+        pause: options.link_pause.unwrap_or_default(),
+        copy: options.copy_only,
+    };
+    #[cfg(not(test))]
+    {
+        let _ = options;
+        super::patch::Linking::default()
+    }
 }
 
 /// Removes `root/folder`, unless something runs from it.
@@ -1551,7 +1594,7 @@ fn other(why: String) -> InstallFailure {
 }
 
 /// An install failure for an error on the disk.
-fn failure(error: io::Error) -> InstallFailure {
+pub(super) fn failure(error: io::Error) -> InstallFailure {
     io_failure(&error, false)
 }
 

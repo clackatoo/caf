@@ -450,6 +450,10 @@ pub(super) struct Setup {
     /// Folders preparing failed for: they're installed as any other, and
     /// never prepared again, so a failure can't repeat itself.
     pub(super) unprepared: BTreeSet<String>,
+    /// Agents the host asked to install before any survey answered, whose
+    /// recipe patches them: whether they're prepared from an earlier level
+    /// or downloaded waits for the survey.
+    pub(super) deferred: BTreeSet<AgentName>,
 }
 
 /// Where one agent stands.
@@ -517,6 +521,9 @@ pub(super) enum Work {
         /// The earlier patch level it's prepared from, with nothing
         /// downloaded, if it is.
         from: Option<String>,
+        /// The host asked for it: a prepare it asked for that fails is
+        /// downloaded at once, as the user agreed to install it.
+        asked: bool,
     },
     /// Removing this folder.
     Remove {
