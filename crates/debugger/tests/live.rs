@@ -100,6 +100,24 @@ async fn viewer_until(socket: &mut Socket, until: impl Fn(&Value) -> bool) -> Va
     }
 }
 
+/// [`viewer_until`], keeping in `agents` the agents' statuses last told
+/// on the way.
+async fn viewer_until_noting(
+    socket: &mut Socket,
+    agents: &mut Vec<AgentStatus>,
+    until: impl Fn(&Value) -> bool,
+) -> Value {
+    loop {
+        let message = next(socket).await.expect("the viewer is open");
+        if message["type"] == "Agents" {
+            *agents = serde_json::from_value(message["value"].clone()).unwrap();
+        }
+        if until(&message) {
+            return message;
+        }
+    }
+}
+
 /// The inspector's steps, collected as they come, and anything else.
 #[derive(Default)]
 struct Seen {
@@ -254,7 +272,11 @@ impl Debugger {
         assert_eq!(welcome["value"]["agents"], json!(["fake"]));
         let cwd = self.dir.0.display().to_string();
         send(&mut socket, json!({"type": "Open", "value": {"request": 1, "open": {"agent": "fake", "cwd": cwd, "session": {"type": "New"}}}})).await;
-        let done = viewer_until(&mut socket, |message| message["type"] == "Done").await;
+        let mut agents = Vec::new();
+        let done = viewer_until_noting(&mut socket, &mut agents, |message| {
+            message["type"] == "Done"
+        })
+        .await;
         assert_eq!(done["value"]["outcome"]["type"], "Opened", "{done}");
         let chat = done["value"]["outcome"]["value"].clone();
         send(
@@ -262,7 +284,10 @@ impl Debugger {
             json!({"type": "Watch", "value": {"chat": chat, "since": null}}),
         )
         .await;
-        let picture = viewer_until(&mut socket, |message| message["type"] == "Picture").await;
+        let picture = viewer_until_noting(&mut socket, &mut agents, |message| {
+            message["type"] == "Picture"
+        })
+        .await;
         let ToViewer::Picture {
             chat: whole,
             latest,
@@ -275,7 +300,7 @@ impl Debugger {
             chat,
             copy: ChatCopy::new(whole, latest),
             requests: 1,
-            agents: Vec::new(),
+            agents,
         }
     }
 }
@@ -674,6 +699,17 @@ async fn with_fake_limits_the_fakes_climb_turn_by_turn_and_limit_refuses_one() {
     viewer
         .until(|chat| lives(chat) == ["Finished", "Finished", "Failed"])
         .await;
+    let life = serde_json::to_value(&viewer.copy.chat().turns[2].life).unwrap();
+    assert_eq!(life["value"]["reason"]["type"], "UsageLimit", "{life:#}");
+    assert_eq!(life["value"]["remedy"]["type"], "SendAgain", "{life:#}");
+    // Only the five hours changed: the week isn't taken back.
+    let limits = &viewer
+        .agents
+        .iter()
+        .find(|agent| agent.name.0 == "fake")
+        .unwrap()
+        .limits;
+    assert_eq!(share(limits, &WindowKind::Week), Some(32));
     // Sent again, answered, and fine again.
     viewer.say(fake::LIMIT).await;
     viewer
@@ -702,11 +738,10 @@ async fn without_fake_limits_the_fake_says_none() {
     viewer.until(|chat| lives(chat) == ["Finished"]).await;
     viewer.say("hello").await;
     viewer.until(|chat| lives(chat) == ["Finished"; 2]).await;
-    let fake = viewer.agents.iter().find(|agent| agent.name.0 == "fake");
-    assert!(
-        fake.is_none_or(|fake| fake.limits == AccountLimits::default()),
-        "{fake:#?}"
-    );
+    let fake = (viewer.agents.iter())
+        .find(|agent| agent.name.0 == "fake")
+        .expect("the fake's status");
+    assert_eq!(fake.limits, AccountLimits::default());
     assert!(debugger.live.book.diverged().is_empty());
     debugger.live.caf.shutdown().await;
     // None kept, even as the made-up ones are.

@@ -20,10 +20,14 @@
 //!   Claude's adapter says them: after the first words of each answer to
 //!   a message, a `usage_update` with `_meta._claude/rateLimit`. Its
 //!   five hours climb a few percent a turn, warning past 80%, and its
-//!   week more slowly, both in `unifiedWindows`, with Opus's own week as
-//!   the limit itself, until they stop at the [last](CLIMB) turn's. Their
-//!   resets are made up from when the script was written: the five hours
-//!   three hours on, the weeks four days. A chat's fake has no memory, so
+//!   week, and its week with extra usage counted in, more slowly, all in
+//!   `unifiedWindows`, with Opus's own week as the limit itself, until
+//!   they stop at the [last](CLIMB) turn's. Their
+//!   resets are made up from when the script was written, as the
+//!   debugger starts: the five hours three hours on, the weeks four days.
+//!   The script can't say the time, so once the five hours' reset has
+//!   passed, CAF forgets them, and the fake goes on saying a reset gone
+//!   by, until the debugger starts again. A chat's fake has no memory, so
 //!   each starts the climb again, and as the latest news wins, a new
 //!   chat's first turn brings the limits back down. Made up too, and kept
 //!   in the usage folder every CAF app shares, under the fake's profile,
@@ -292,10 +296,8 @@ fn refused(now: SystemTime) -> Value {
         "rateLimitType": "five_hour",
         "utilization": 1.0,
         "isUsingOverage": false,
-        "unifiedWindows": {
-            "five_hour": five_hours,
-            "seven_day": window(now, WEEK_LEFT, week_used(0), "allowed"),
-        },
+        // Only the five hours: the rest are as the last turn said.
+        "unifiedWindows": {"five_hour": five_hours},
     })));
     steps.push(json!({"respond": {"error": {
         "code": -32603,
@@ -313,8 +315,14 @@ const FIVE_HOURS_LEFT: Duration = Duration::from_secs(3 * 60 * 60);
 const WEEK_LEFT: Duration = Duration::from_secs(4 * 24 * 60 * 60);
 
 /// Its limits on its `turn`th answer in a chat, counting from 0, as
-/// Claude's `rate_limit_info`: the five hours and the week in
-/// `unifiedWindows`, Opus's own week as the limit itself.
+/// Claude's `rate_limit_info`: the five hours, the week and the week with
+/// extra usage counted in, in `unifiedWindows`, and Opus's own week as the
+/// limit itself.
+///
+/// The limit itself has its own `status`, not the worst window's: CAF
+/// reads it as that window's state, as Claude's is the status of the one
+/// its `rateLimitType` names, so a warning on the five hours would show on
+/// Opus's week.
 fn report(now: SystemTime, turn: u32) -> Value {
     let five_hours = 0.60 + 0.07 * f64::from(turn);
     let status = if five_hours >= 0.80 {
@@ -322,6 +330,7 @@ fn report(now: SystemTime, turn: u32) -> Value {
     } else {
         "allowed"
     };
+    let week = 0.30 + 0.02 * f64::from(turn);
     let opus = window(now, WEEK_LEFT, 0.20 + 0.01 * f64::from(turn), "allowed");
     json!({
         "status": "allowed",
@@ -331,14 +340,10 @@ fn report(now: SystemTime, turn: u32) -> Value {
         "isUsingOverage": false,
         "unifiedWindows": {
             "five_hour": window(now, FIVE_HOURS_LEFT, five_hours, status),
-            "seven_day": window(now, WEEK_LEFT, week_used(turn), "allowed"),
+            "seven_day": window(now, WEEK_LEFT, week, "allowed"),
+            "seven_day_overage_included": window(now, WEEK_LEFT, week + 0.04, "allowed"),
         },
     })
-}
-
-/// How much of the week is used on its `turn`th answer.
-fn week_used(turn: u32) -> f64 {
-    0.30 + 0.02 * f64::from(turn)
 }
 
 /// One of `unifiedWindows`: `used`, a share of 1, resetting `left` after
@@ -547,6 +552,9 @@ mod tests {
             .collect();
         let five_hours: Vec<_> = said.iter().map(|each| share(each, "five_hour")).collect();
         let week: Vec<_> = said.iter().map(|each| share(each, "seven_day")).collect();
+        let extra: Vec<_> = (said.iter())
+            .map(|each| share(each, "seven_day_overage_included"))
+            .collect();
         for turn in 1..said.len() {
             let climbed = five_hours[turn] - five_hours[turn - 1];
             assert!(
@@ -558,13 +566,19 @@ mod tests {
                 "the week climbs slower"
             );
             assert!(week[turn] > week[turn - 1]);
+            assert!(extra[turn] > extra[turn - 1]);
         }
+        // Extra usage counted in, the week is never less used.
+        assert!(week.iter().zip(&extra).all(|(week, extra)| extra >= week));
         // From fine, through low, to out: under 10% left at the last.
         assert!(five_hours[0] < 0.8 && *five_hours.last().unwrap() > 0.9);
         for each in &said {
             let warned = each["unifiedWindows"]["five_hour"]["status"] == "allowed_warning";
             assert_eq!(warned, share(each, "five_hour") >= 0.8, "{each}");
             assert_eq!(each["unifiedWindows"]["seven_day"]["status"], "allowed");
+            let extra = &each["unifiedWindows"]["seven_day_overage_included"];
+            assert_eq!(extra["status"], "allowed");
+            assert_eq!(extra["resetsAt"], NOW + 4 * 86_400);
             // Opus's week is the limit itself.
             assert_eq!(each["rateLimitType"], "seven_day_opus");
             assert!(each["utilization"].as_f64().unwrap() > 0.0);
@@ -615,6 +629,14 @@ mod tests {
         let steps = handler["do"].as_array().unwrap();
         let said = limits(steps);
         assert_eq!(said.len(), 1);
+        // Only the five hours: the week said again as the first turn's
+        // would go backwards after a few turns.
+        let windows: Vec<_> = said[0]["unifiedWindows"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect();
+        assert_eq!(windows, ["five_hour"]);
         let five_hours = &said[0]["unifiedWindows"]["five_hour"];
         assert_eq!(five_hours["status"], "rejected");
         assert_eq!(five_hours["utilization"], 1.0);

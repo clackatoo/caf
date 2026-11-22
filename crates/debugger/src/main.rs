@@ -49,7 +49,9 @@ fetched from LiteLLM once a day unless --no-fetch-prices. The fake agent
 says what its turns spent, made-up figures that count as real usage, only
 with --fake-usage, and its account's limits, made up too and kept in the
 same folder under its own profile, only with --fake-limits: send it
-\"limit\" to see a turn refused for them.";
+\"limit\" to see a turn refused for them. Their resets are made up as the
+debugger starts, the five hours' three hours on, so after that they're
+gone until it starts again.";
 
 /// What the command line asks for.
 struct Args {
