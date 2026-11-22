@@ -168,7 +168,8 @@ is sent, as a restored chat's is. Sending a message to an archived chat
 unarchives it first, and the message goes as to any other; one refused,
 such as an empty message, leaves it archived. Putting an archived chat
 away, or closing it again, keeps when it was archived. A chat saved
-closed by a CAF from before archiving is restored archived as of then.
+closed by a CAF from before archiving is restored archived as of when it's
+restored.
 
 **Delete** a chat for good, loaded or not: one that's loaded is closed and
 let go first.
