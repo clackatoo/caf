@@ -32,10 +32,24 @@ pub(crate) fn open(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
     if FileType::from_raw_mode(rustix::fs::fstat(&file)?.st_mode) != FileType::RegularFile {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            format!("{} isn't a file", path.display()),
+            format!("{} isn't a plain file", name(path)),
         ));
     }
     Ok(file)
+}
+
+/// A file's name in the ledger's folder, such as `prices/own.json`: every
+/// file CAF keeps is in a folder of the ledger's. What an error says, as
+/// errors can reach a viewer, and the rest of the path, with the user's
+/// home folder in it, is no viewer's business.
+fn name(path: &Path) -> String {
+    let mut parts: Vec<_> = path.iter().rev().take(2).collect();
+    parts.reverse();
+    parts
+        .iter()
+        .map(|part| part.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// A file, opened to read: `None` if it isn't there.
@@ -93,7 +107,7 @@ pub(crate) fn lock(folder: &Path) -> io::Result<File> {
                         io::ErrorKind::TimedOut,
                         format!(
                             "another program has held {} for {waited:?}",
-                            folder.display()
+                            name(&folder.join(LOCK))
                         ),
                     ));
                 }

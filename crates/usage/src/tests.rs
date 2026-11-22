@@ -180,9 +180,10 @@ fn two_programs(folder: &Path, how: &str) {
                 .spawn()
                 .expect("it starts")
         })
+        .map(crate::testing::Child)
         .collect();
     for mut child in children {
-        assert!(child.wait().expect("it ends").success());
+        assert!(child.0.wait().expect("it ends").success());
     }
 }
 
@@ -1486,7 +1487,8 @@ fn a_pipe_where_a_month_should_be_never_hangs() {
         summary.unreadable,
         ["clackatoo/2026-11.jsonl.zst", "clackatoo/2026-11.jsonl"]
     );
-    assert!(recorded.is_err(), "a pipe isn't written to as a month");
+    let error = recorded.expect_err("a pipe isn't written to as a month");
+    crate::testing::names_only(&error, folder.path(), "clackatoo/2026-11.jsonl");
 }
 
 /// Holds an app's lock in a program of its own, until it's killed: set by
@@ -1511,12 +1513,13 @@ fn a_lock_held_by_another_program_is_given_up_on() {
     std::fs::create_dir_all(&app).expect("it's made");
     let lock = app.join(".lock");
     let me = std::env::current_exe().expect("the test's program");
-    let mut child = std::process::Command::new(me)
+    let child = std::process::Command::new(me)
         .args(["--exact", "tests::holder", "--ignored", "--quiet"])
         .env("CAF_USAGE_HOLD", &lock)
         .stdout(std::process::Stdio::null())
         .spawn()
         .expect("it starts");
+    let child = crate::testing::Child(child);
     let held = lock.with_extension("held");
     let waiting = std::time::Instant::now();
     while !held.exists() {
@@ -1530,9 +1533,9 @@ fn a_lock_held_by_another_program_is_given_up_on() {
         Ledger::new(path, APP).record(&read(line("2026-11-22T10:00:00Z", 1, 1)))
     });
     let took = started.elapsed();
-    let _ = child.kill();
-    let _ = child.wait();
+    drop(child);
     let error = recorded.expect_err("it gives up");
+    crate::testing::names_only(&error, folder.path(), "clackatoo/.lock");
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     assert!(took >= crate::files::LOCK_WAIT, "{took:?}");
     assert!(!file(folder.path(), APP, "2026-11").exists());

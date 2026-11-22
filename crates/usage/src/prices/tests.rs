@@ -422,7 +422,8 @@ fn a_pipe_where_a_prices_file_should_be_never_hangs() {
     // Read as absent; never written over.
     assert_eq!(table, bundled());
     assert_eq!(at, None);
-    assert!(set.is_err());
+    let error = set.expect_err("a pipe isn't read as prices");
+    crate::testing::names_only(&error, folder.path(), "prices/own.json");
 }
 
 #[test]
@@ -450,13 +451,14 @@ fn a_prices_lock_held_elsewhere_is_given_up_on() {
         })
     });
     let took = started.elapsed();
-    assert_eq!(
-        own.expect_err("it gives up").kind(),
-        std::io::ErrorKind::TimedOut
-    );
-    assert!(
-        matches!(fetched, Err(PriceError::Io(error)) if error.kind() == std::io::ErrorKind::TimedOut)
-    );
+    let own = own.expect_err("it gives up");
+    assert_eq!(own.kind(), std::io::ErrorKind::TimedOut);
+    crate::testing::names_only(&own, folder.path(), "prices/.lock");
+    let Err(PriceError::Io(fetched)) = fetched else {
+        panic!("it gives up: {fetched:?}");
+    };
+    assert_eq!(fetched.kind(), std::io::ErrorKind::TimedOut);
+    crate::testing::names_only(&fetched, folder.path(), "prices/.lock");
     assert!(took >= crate::files::LOCK_WAIT, "{took:?}");
     assert!(!prices.join("own.json").exists());
 }
