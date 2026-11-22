@@ -86,8 +86,9 @@ in a row is reported to the log (target `caf`). By the time
 that has hung holds shutting down up for thirty seconds at most: then how
 many lines may be lost is reported, and CAF stops without them.
 
-The folder also keeps each agent profile's account limits, how much of
-the subscription's five hours and week is used, as the agent last said:
+The folder also keeps each agent profile's [account
+limits](~caf/getting-started/account-limits), how much of the
+subscription's five hours and week is used, as the agent last said:
 a file per profile in `limits/`, so CAF has them as it starts, before the
 agent says again. Each save is merged with the file, window by window, the
 latest heard winning, so two apps never undo each other's news, and an app
