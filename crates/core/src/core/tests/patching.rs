@@ -419,3 +419,151 @@ fn an_install_asked_for_before_any_survey_can_be_stopped() {
     assert!(with(&out, "install").is_empty(), "{out:#?}");
     assert_eq!(script.agent_status("npm-agent")["install"], missing());
 }
+
+#[test]
+fn a_prepare_the_host_asks_for_while_it_runs_is_downloaded_if_it_fails() {
+    let _patched = Patched::at(2);
+    let mut script = Script::new(host());
+    let prepare = ticket_of(
+        &script.found(&["test-npm-2.0.0+caf.1"], Wall(EPOCH)),
+        "prepare",
+    );
+    // Started by the survey, then asked for: the user has agreed now.
+    let (done, out) = script.install("npm-twin");
+    assert_eq!(done, Ok(()));
+    assert!(out.is_empty(), "{out:#?}");
+    let out = script.setup(prepare, SetupEvent::Failed("the work panicked".into()));
+    assert_eq!(one(&out, "install")["folder"], "test-npm-2.0.0+caf.2");
+    assert_eq!(script.agent_status("npm-agent")["install"], installing());
+}
+
+#[test]
+fn a_patch_level_the_user_stopped_isnt_prepared_again_until_asked() {
+    let _patched = Patched::at(2);
+    let mut script = Script::new(host());
+    let prepare = ticket_of(
+        &script.found(&["test-npm-2.0.0+caf.1"], Wall(EPOCH)),
+        "prepare",
+    );
+    assert_eq!(script.stop_install("npm-agent").0, Ok(()));
+    script.setup(prepare, SetupEvent::InstallFailed(InstallFailure::Stopped));
+    // Each survey after leaves it as the user did.
+    for _ in 0..2 {
+        let out = script.found(&["test-npm-2.0.0+caf.1"], Wall(EPOCH));
+        assert!(with(&out, "prepare").is_empty(), "{out:#?}");
+        assert_eq!(script.agent_status("npm-agent")["install"], missing());
+    }
+    // Until the host asks: then, and at each survey after, it's as before.
+    let asked = ticket_of(&script.install("npm-agent").1, "prepare");
+    script.setup(asked, SetupEvent::Installed);
+    assert_eq!(
+        script.agent_status("npm-agent")["install"],
+        json!({ "type": "Installed", "value": { "version": "2.0.0+caf.2" } })
+    );
+}
+
+#[test]
+fn an_install_waiting_for_the_survey_goes_as_caf_shuts_down() {
+    let _patched = Patched::at(2);
+    let mut script = Script::new(host());
+    let survey = ticket_of(&script.install("npm-agent").1, "survey");
+    script.shutdown();
+    for agent in ["npm-agent", "npm-twin"] {
+        assert_eq!(script.agent_status(agent)["install"], missing());
+    }
+    let out = script.setup(survey, found(&["test-npm-2.0.0+caf.1"]));
+    assert!(
+        with(&out, "install").is_empty() && with(&out, "prepare").is_empty(),
+        "{out:#?}"
+    );
+}
+
+#[test]
+fn an_install_waiting_for_the_survey_waits_for_the_latest() {
+    let _patched = Patched::at(2);
+    let mut script = Script::new(host());
+    let first = ticket_of(&script.install("npm-agent").1, "survey");
+    let latest = ticket_of(&script.check_agents(), "survey");
+    // The first is stale: nothing's decided by it.
+    let out = script.setup(first, found(&[]));
+    assert!(
+        with(&out, "install").is_empty() && with(&out, "prepare").is_empty(),
+        "{out:#?}"
+    );
+    assert_eq!(script.agent_status("npm-agent")["install"], installing());
+    let out = script.setup(latest, found(&["test-npm-2.0.0+caf.1"]));
+    assert_eq!(one(&out, "prepare")["from"], "test-npm-2.0.0+caf.1");
+}
+
+#[test]
+fn a_chat_waiting_for_an_install_the_survey_finds_done_starts() {
+    let _patched = Patched::at(2);
+    let mut script = Script::new(host());
+    let survey = ticket_of(&script.install("npm-agent").1, "survey");
+    let chat = (script.open(OpenChat::new("npm-agent", "/work")).0).expect("opened");
+    let turn = script.send(chat, "hello").0.expect("sent");
+    assert_has(
+        &script.chat(chat),
+        &json!({ "state": { "type": "WaitingForAgent" }, "turns": [{ "id": turn.0, "life": { "type": "Waiting" } }] }),
+    );
+    let out = script.setup(survey, found(&["test-npm-2.0.0+caf.2"]));
+    let start = one(&out, "start");
+    assert_eq!(start["hold"], "/caf/agents/test-npm-2.0.0+caf.2");
+}
+
+#[test]
+fn an_install_waiting_for_the_survey_that_cant_happen_stops_the_messages_waiting() {
+    let _patched = Patched::at(2);
+    let mut script = Script::new(host());
+    let survey = ticket_of(&script.install("npm-agent").1, "survey");
+    let chat = (script.open(OpenChat::new("npm-agent", "/work")).0).expect("opened");
+    let turn = script.send(chat, "hello").0.expect("sent");
+    let SetupEvent::Surveyed {
+        root,
+        installed,
+        platform,
+        used,
+        ..
+    } = found(&[])
+    else {
+        unreachable!()
+    };
+    let out = script.setup(
+        survey,
+        SetupEvent::Surveyed {
+            root,
+            installed,
+            node: Some(18),
+            npm: true,
+            platform,
+            used,
+        },
+    );
+    assert!(with(&out, "install").is_empty(), "{out:#?}");
+    assert_eq!(
+        script.agent_status("npm-agent")["install"],
+        json!({ "type": "Cannot", "value": { "type": "Node", "value": { "needs": 22, "has": 18 } } })
+    );
+    // As for an install that failed: the user asked, it couldn't be, and
+    // the agent's status says why.
+    let whole = script.chat(chat);
+    assert_has(
+        &whole,
+        &json!({ "state": { "type": "WaitingForAgent" }, "turns": [{ "id": turn.0, "life": { "type": "Stopped" } }, {}] }),
+    );
+    assert_eq!(notes(&whole), ["InstallFailed"]);
+}
+
+#[test]
+fn learning_while_an_install_waits_for_the_survey_says_caf_hasnt_looked() {
+    let _patched = Patched::at(2);
+    let mut script = Script::new(host());
+    assert_eq!(script.install("npm-agent").0, Ok(()));
+    let (done, out) = script.learn_settings("npm-agent");
+    done.expect("taken");
+    assert!(with(&out, "start").is_empty());
+    assert_eq!(
+        script.agent_status("npm-agent")["settings"],
+        json!({ "type": "Failed", "value": "CAF hasn't looked whether the agent is installed yet" })
+    );
+}

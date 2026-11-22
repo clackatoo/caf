@@ -454,6 +454,9 @@ pub(super) struct Setup {
     /// recipe patches them: whether they're prepared from an earlier level
     /// or downloaded waits for the survey.
     pub(super) deferred: BTreeSet<AgentName>,
+    /// Folders the user stopped installing this run: a survey never
+    /// prepares one by itself, until the host asks to install it again.
+    pub(super) declined: BTreeSet<String>,
 }
 
 /// Where one agent stands.

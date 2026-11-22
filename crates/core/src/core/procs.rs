@@ -160,7 +160,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     // Unlike a chat, learning doesn't wait for it.
                     let why = if self.signing_in(&agent).is_some() {
                         "the agent is being signed in to"
-                    } else if matches!(self.install_state(&agent), Some(InstallState::Unknown)) {
+                    } else if matches!(self.install_state(&agent), Some(InstallState::Unknown))
+                        || self.awaiting_survey(&agent)
+                    {
                         "CAF hasn't looked whether the agent is installed yet"
                     } else {
                         "the agent isn't installed"

@@ -79,13 +79,30 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let standing = self.setup.agents.get(agent).ok_or(Refused::NoSuchAgent)?;
         match &standing.install {
             InstallState::Installed { .. } => return Err(Refused::AlreadyInstalled),
-            InstallState::Installing { .. } => return Ok(()),
+            InstallState::Installing { .. } => {
+                // A prepare the survey started is one the user agreed to
+                // now: if it fails, it's downloaded.
+                for job in self.setup.jobs.values_mut() {
+                    if let Work::Install {
+                        folder: each,
+                        asked,
+                        ..
+                    } = &mut job.work
+                        && *each == folder
+                        && !job.stopped
+                    {
+                        *asked = true;
+                    }
+                }
+                return Ok(());
+            }
             InstallState::Unknown
             | InstallState::Missing { .. }
             | InstallState::Cannot(CannotInstall::Failed(_)) => {}
             _ => return Err(Refused::NotInstallable),
         }
         let (patched, size) = (recipe.patch.is_some(), recipe.size);
+        self.setup.declined.remove(&folder);
         // Another agent of the same profile is installing it already.
         if self.install_job(&folder).is_none() {
             if let Some(from) = self.earlier_level(agent) {
@@ -135,6 +152,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             None if deferred => {}
             None => return Err(Refused::NothingToStop),
         }
+        // As the user left it, for this run: no survey prepares it.
+        self.setup.declined.insert(folder.clone());
         let size = self.recipes.get(agent).map_or(0, |recipe| recipe.size);
         for each in self.sharing(&folder) {
             self.set_install(&each, InstallState::Missing { size });
@@ -285,7 +304,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         out: &mut Vec<Directive<A, D>>,
     ) {
         if self.setup.survey == Some(ticket) || matches!(event, SetupEvent::Surveyed { .. }) {
-            return self.survey_said(ticket, event, out);
+            return self.survey_said(now, ticket, event, out);
         }
         let Some(job) = self.setup.jobs.get(&ticket) else {
             return report(
@@ -451,7 +470,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// A survey's report: what it found, if it's the one waited for, or
     /// that it couldn't look.
-    fn survey_said(&mut self, ticket: Ticket, event: SetupEvent, out: &mut Vec<Directive<A, D>>) {
+    fn survey_said(
+        &mut self,
+        now: Now,
+        ticket: Ticket,
+        event: SetupEvent,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
         if self.setup.survey != Some(ticket) {
             return report(
                 out,
@@ -476,7 +501,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     platform,
                     used: used.into_iter().collect(),
                 };
-                self.surveyed(machine, out);
+                self.surveyed(now, machine, out);
             }
             SetupEvent::Failed(why) => {
                 // Asked again, it may answer.
@@ -507,7 +532,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// A survey answered: each agent CAF installs is installed, can be, or
     /// can't be, and those that have a status command are asked.
-    fn surveyed(&mut self, mut machine: Machine, out: &mut Vec<Directive<A, D>>) {
+    fn surveyed(&mut self, now: Now, mut machine: Machine, out: &mut Vec<Directive<A, D>>) {
         machine.installed.append(&mut self.setup.fresh);
         self.setup.machine = Some(machine);
         self.setup.survey = None;
@@ -540,8 +565,17 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         for agent in deferred {
             // Refused if it's installed already, or can't be: its state
-            // says so.
-            let _ = self.install_agent(&agent, out);
+            // says so. One that can't be is as an install that failed:
+            // the user asked, so the messages waiting for it are stopped.
+            if self.install_agent(&agent, out) == Err(Refused::NotInstallable) {
+                for each in self
+                    .folder_of(&agent)
+                    .map(|folder| self.sharing(&folder))
+                    .unwrap_or_default()
+                {
+                    self.stop_waiting_messages(now, &each, Note::InstallFailed);
+                }
+            }
         }
         // A new patch level of an install that's there is made from it,
         // with nothing downloaded, and nobody asked.
@@ -554,6 +588,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 Some(InstallState::Installing { .. } | InstallState::Installed { .. })
             );
             if waiting
+                && !self.shutting_down
+                && !self.setup.declined.contains(&folder)
                 && self.install_job(&folder).is_none()
                 && let Some(from) = self.earlier_level(&agent)
             {
@@ -1321,6 +1357,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             })
             .cloned()
             .collect()
+    }
+
+    /// Whether `agent`'s install, or that of another agent of its profile,
+    /// waits for a survey to say whether it can be prepared.
+    pub(super) fn awaiting_survey(&self, agent: &AgentName) -> bool {
+        (self.folder_of(agent).map(|folder| self.sharing(&folder))).is_some_and(|sharing| {
+            sharing
+                .iter()
+                .any(|each| self.setup.deferred.contains(each))
+        })
     }
 
     /// The ticket of the install of `folder` under way and not stopped.
