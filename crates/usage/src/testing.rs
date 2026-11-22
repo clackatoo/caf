@@ -30,6 +30,28 @@ impl Drop for Folder {
     }
 }
 
+/// Asserts an error names no path outside the ledger, only `name`, the
+/// file's name in it: an error can reach a viewer, and the user's home
+/// folder is no viewer's business.
+#[track_caller]
+pub(crate) fn names_only(error: &std::io::Error, folder: &Path, name: &str) {
+    let text = error.to_string();
+    let folder = folder.to_str().expect("text");
+    assert!(!text.contains(folder), "{text:?} names {folder:?}");
+    assert!(text.contains(name), "{text:?} doesn't name {name:?}");
+}
+
+/// A program a test started, killed when the test is done with it,
+/// whether it passed or not.
+pub(crate) struct Child(pub(crate) std::process::Child);
+
+impl Drop for Child {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// Makes a named pipe at `path`: what a reader that waits for a writer
 /// would hang on.
 pub(crate) fn pipe(path: &Path) {
