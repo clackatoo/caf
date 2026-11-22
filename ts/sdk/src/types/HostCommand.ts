@@ -51,6 +51,10 @@ answer: Answer, } } | { "type": "CloseChat", "value": {
 /**
  * The chat.
  */
+chat: ChatId, } } | { "type": "Unarchive", "value": { 
+/**
+ * The chat.
+ */
 chat: ChatId, } } | { "type": "ListSaved", "value": Shelf } | { "type": "Restore", "value": RestoreChat } | { "type": "PutAway", "value": { 
 /**
  * The chat.

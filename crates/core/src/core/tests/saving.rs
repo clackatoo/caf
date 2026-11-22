@@ -372,6 +372,7 @@ fn saved(chat: &Value, session: Option<&str>, changed: i64) -> Saved {
             first: None,
             turns: chat.turns.len() as u64,
             closed: false,
+            archived: None,
         },
         chat,
         session: session.map(|session| crate::ids::AgentSessionId(session.to_owned())),

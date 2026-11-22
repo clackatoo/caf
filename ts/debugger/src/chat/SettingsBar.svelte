@@ -16,7 +16,7 @@
   import type { DeepReadonly, KnownSettings, Setting, SettingChoice, Settings, SettingValue } from '@clackatoo/caf'
   import { attempt } from './actions.ts'
   import { offered, runs, standing, valueName } from './settings.ts'
-  import { errorText, tagOf } from './words.ts'
+  import { errorText, learnFailureText, tagOf } from './words.ts'
 
   let {
     settings,
@@ -203,7 +203,7 @@
         {now
           ? 'Learning what the agent offers, such as its models…'
           : known.type === 'Failed'
-            ? `What the agent offers couldn't be learned: ${known.value}`
+            ? `What the agent offers couldn't be learned: ${learnFailureText(known.value)}`
             : 'What the agent offers, such as its models, shows once its session opens.'}
       </span>
       {#if canLearn}

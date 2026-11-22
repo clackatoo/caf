@@ -155,8 +155,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     .filter(|model| !model.is_empty())
                     .or_else(|| turn_model.clone())
                     .unwrap_or_else(|| UNKNOWN_MODEL.to_owned());
+                // Drafted: the builder names it, from the agent's profile.
                 ModelTokens {
                     model,
+                    name: None,
                     tokens: row.tokens,
                 }
             })

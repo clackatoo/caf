@@ -86,6 +86,14 @@ request: RequestNo,
 /**
  * The chat.
  */
+chat: ChatId, } } | { "type": "Unarchive", "value": { 
+/**
+ * The viewer's number for this request.
+ */
+request: RequestNo, 
+/**
+ * The chat.
+ */
 chat: ChatId, } } | { "type": "Set", "value": { 
 /**
  * The viewer's number for this request.

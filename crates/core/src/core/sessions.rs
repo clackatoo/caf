@@ -93,6 +93,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 questions: Vec::new(),
                 settings,
                 spend: Box::default(),
+                archived: None,
             },
         );
         self.logs.insert(chat, Log::new(self.ids.first));
@@ -904,7 +905,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map(|(&conn, _)| conn)
             .collect();
         for conn in learning {
-            self.learn_failed(conn, "CAF shut down");
+            self.learn_failed(conn, crate::settings::LearnFailure::ShutDown);
         }
         // Closing an adapter's input ends every session it has, so they
         // aren't closed one by one first.
@@ -993,4 +994,17 @@ pub(super) fn mcp_server(server: &McpServer) -> Option<Value> {
             "headers": headers.iter().map(|(name, value)| pair(name, value)).collect::<Vec<_>>(),
         }),
     })
+}
+
+impl<A: AppItem, D: AppData> Core<A, D> {
+    /// Unarchives `chat`, as [`Core::unarchive`] says.
+    pub(super) fn unarchive_chat(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        out: &mut Vec<Directive<A, D>>,
+    ) -> Result<(), Refused> {
+        let _ = (now, chat, out);
+        todo!("unarchive a chat")
+    }
 }

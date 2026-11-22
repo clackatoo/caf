@@ -977,6 +977,7 @@ fn restored(defaults: Vec<SettingChoice>, chat: &Value) -> Script {
             first: None,
             turns: chat.turns.len() as u64,
             closed: false,
+            archived: None,
         },
         chat,
         session: Some(AgentSessionId(SESSION.to_owned())),

@@ -49,6 +49,12 @@ first: string | null,
  */
 turns: number, 
 /**
- * Whether it was closed.
+ * Whether it was closed: archived.
  */
-closed: boolean, };
+closed: boolean, 
+/**
+ * When it was archived, if it was ([`Chat::archived`](crate::Chat::archived)).
+ * Headers written before it was added read as `None`, even if
+ * `closed`.
+ */
+archived: Wall | null, };

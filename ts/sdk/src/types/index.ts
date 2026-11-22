@@ -58,6 +58,7 @@ export type * from "./ItemId.ts";
 export type * from "./ItemKind.ts";
 export type * from "./KnownSettings.ts";
 export type * from "./Launch.ts";
+export type * from "./LearnFailure.ts";
 export type * from "./LedgerLine.ts";
 export type * from "./Level.ts";
 export type * from "./LimitState.ts";

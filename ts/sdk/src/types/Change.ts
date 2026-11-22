@@ -14,11 +14,12 @@ import type { TurnId } from "./TurnId.ts";
 import type { TurnLife } from "./TurnLife.ts";
 import type { TurnUsage } from "./TurnUsage.ts";
 import type { Usage } from "./Usage.ts";
+import type { Wall } from "./Wall.ts";
 
 /**
  * One change to a chat.
  */
-export type Change = { "type": "State", "value": ChatState } | { "type": "Settings", "value": Settings } | { "type": "TurnAdded", "value": Turn } | { "type": "TurnInserted", "value": { 
+export type Change = { "type": "State", "value": ChatState } | { "type": "Archived", "value": Wall | null } | { "type": "Settings", "value": Settings } | { "type": "TurnAdded", "value": Turn } | { "type": "TurnInserted", "value": { 
 /**
  * The turn it goes before.
  */

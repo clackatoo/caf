@@ -31,8 +31,8 @@ use crate::host::Grouping;
 use crate::ids::{AgentName, AgentSessionId, ChatId, ConnectionId, Ticket};
 use crate::profiles::{AUTH_REQUIRED, SettingsStyle, own_instructions};
 use crate::settings::{
-    Choice, KnownSettings, ModelUsed, Setting, SettingChoice, SettingForm, SettingKind,
-    SettingValue, Settings,
+    Choice, KnownSettings, LearnFailure, ModelUsed, Setting, SettingChoice, SettingForm,
+    SettingKind, SettingValue, Settings,
 };
 use crate::time::{Now, Window};
 
@@ -349,11 +349,25 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let own = whole.settings.own.contains(&choice.kind);
         self.drop_or_fall_back(chat, choice);
         let (note, refused) = match why {
-            Unapplied::NotOffered => (Note::NotOffered(choice.clone()), None),
-            Unapplied::Refused(words) => (Note::NotApplied(choice.clone()), words),
+            Unapplied::NotOffered => (
+                Note::NotOffered {
+                    choice: choice.clone(),
+                    name: None,
+                },
+                None,
+            ),
+            Unapplied::Refused(words) => (
+                Note::NotApplied {
+                    choice: choice.clone(),
+                    name: None,
+                },
+                words,
+            ),
         };
         let why = match (&note, &refused) {
-            (Note::NotOffered(_), _) => "the agent doesn't offer it as CAF can set it".to_owned(),
+            (Note::NotOffered { .. }, _) => {
+                "the agent doesn't offer it as CAF can set it".to_owned()
+            }
             (_, Some(words)) => format!("the agent refused it: {words}"),
             (_, None) => "the agent refused it".to_owned(),
         };
@@ -618,7 +632,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 let own = whole.settings.own.contains(&choice.kind);
                 self.drop_or_fall_back(chat, &choice);
                 if own {
-                    self.tell(now, chat, Note::NotOffered(choice));
+                    self.tell(now, chat, Note::NotOffered { choice, name: None });
                 }
             } else if let Some(value) = current(&whole.settings, choice.kind)
                 .filter(|value| **value != choice.value)
@@ -643,7 +657,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             settings.own.retain(|kind| *kind != choice.kind);
             choose(settings, choice.clone());
         });
-        self.tell(now, chat, Note::AgentChanged(choice));
+        self.tell(now, chat, Note::AgentChanged { choice, name: None });
     }
 
     /// Says `note` in `chat`: in the turn open, the agent's or one it
@@ -714,10 +728,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return Ok(());
         }
         if self.shutting_down {
-            set_known(
-                standing,
-                KnownSettings::Failed("CAF is shutting down".to_owned()),
-            );
+            set_known(standing, KnownSettings::Failed(LearnFailure::ShutDown));
             return Ok(());
         }
         // What was learned last stays, while it's learned again.
@@ -774,7 +785,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         let profile = profile_of(each, &self.agents);
         if !profile.strips() {
-            return self.learn_failed(conn, "CAF can't turn off its own tools");
+            return self.learn_failed(conn, LearnFailure::OwnTools);
         }
         let cwd = (self.setup.machine.as_ref())
             .filter(|machine| !machine.installed.is_empty())
@@ -827,15 +838,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 KnownSettings::Known(offer(style, &result).settings)
             }
             Reply::Error(error) if error.code == AUTH_REQUIRED => {
-                KnownSettings::Failed("signing in is needed".to_owned())
+                KnownSettings::Failed(LearnFailure::SignInNeeded)
             }
-            Reply::Error(error) => KnownSettings::Failed(format!(
-                "the agent refused to open a session: {}",
-                agent_text(&error.message, self.host.limits.failure_text)
-            )),
-            Reply::Unreadable => {
-                KnownSettings::Failed("the agent's answer couldn't be read".to_owned())
-            }
+            Reply::Error(error) => KnownSettings::Failed(LearnFailure::Refused {
+                message: agent_text(&error.message, self.host.limits.failure_text),
+            }),
+            Reply::Unreadable => KnownSettings::Failed(LearnFailure::Unreadable),
         };
         if !waited {
             return;
@@ -851,7 +859,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Learning `conn`'s agent's settings failed, as `why` says.
-    pub(super) fn learn_failed(&mut self, conn: ConnectionId, why: &str) {
+    pub(super) fn learn_failed(&mut self, conn: ConnectionId, why: LearnFailure) {
         let Some(each) = self.conns.get_mut(&conn) else {
             return;
         };
@@ -859,7 +867,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return;
         }
         if let Some(standing) = self.setup.agents.get_mut(&each.agent) {
-            set_known(standing, KnownSettings::Failed(why.to_owned()));
+            set_known(standing, KnownSettings::Failed(why));
         }
     }
 }
@@ -876,15 +884,19 @@ fn set_known(standing: &mut Standing, known: KnownSettings) {
 }
 
 /// Why learning an agent's settings failed, when its adapter was `lost`.
-pub(super) fn lost_why(lost: &Lost) -> String {
+pub(super) fn lost_why(lost: &Lost) -> LearnFailure {
     match lost {
-        Lost::SignInNeeded => "signing in is needed".to_owned(),
-        Lost::CouldNotStart { error } => format!("the agent couldn't start: {error}"),
-        Lost::Refused { message } => format!("the agent refused: {message}"),
-        Lost::Restarted => "the agent was restarted".to_owned(),
-        Lost::ShutDown => "CAF shut down".to_owned(),
-        Lost::Incompatible(_) => "CAF can't use the agent".to_owned(),
-        _ => "the agent stopped".to_owned(),
+        Lost::SignInNeeded => LearnFailure::SignInNeeded,
+        Lost::CouldNotStart { error } => LearnFailure::CouldNotStart {
+            error: error.clone(),
+        },
+        Lost::Refused { message } => LearnFailure::Refused {
+            message: message.clone(),
+        },
+        Lost::Restarted => LearnFailure::Restarted,
+        Lost::ShutDown => LearnFailure::ShutDown,
+        Lost::Incompatible(_) => LearnFailure::Incompatible,
+        _ => LearnFailure::Stopped,
     }
 }
 

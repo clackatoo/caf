@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{AgentName, AgentSessionId, ChatId, ItemId, TurnId};
 use crate::question::Question;
 use crate::settings::{ModelUsed, SettingChoice, Settings};
-use crate::time::Window;
+use crate::time::{Wall, Window};
 
 /// An app's own kind of item, such as eyespy's "the agent moved the map
 /// here".
@@ -142,6 +142,14 @@ pub struct Chat<A: AppItem = NoAppItems> {
     /// read as having spent nothing.
     #[serde(default)]
     pub spend: Box<Spend>,
+    /// When it was archived ([`Core::close_chat`](crate::Core::close_chat)),
+    /// while it is: `None` for a chat that isn't. An archived chat stays so
+    /// when it's restored, until it's unarchived
+    /// ([`Core::unarchive`](crate::Core::unarchive)) or a message is sent
+    /// to it. Chats saved before it was added read as `None`; one of them
+    /// saved archived is restored archived, as of when it's restored.
+    #[serde(default)]
+    pub archived: Option<Wall>,
 }
 
 /// How full the agent's memory is, as it says.
@@ -614,20 +622,36 @@ pub enum Note {
     SignedIn,
     /// The agent changed a setting by itself, such as falling back to
     /// another model; the choice follows it.
-    AgentChanged(SettingChoice),
+    AgentChanged {
+        /// What it changed to.
+        choice: SettingChoice,
+        /// The agent's name for it, as it last said: [`Choice::name`](crate::settings::Choice::name).
+        name: Option<String>,
+    },
     /// A setting chosen for the chat isn't offered by the agent, or no
     /// longer is, such as a model it no longer has. The setting falls back
     /// to the host's default for the agent, if the agent offers it, and
     /// otherwise to what the agent uses. The messages waiting failed if it
     /// wasn't applied yet; if it was, and the agent stopped offering it,
     /// they go on what's used now.
-    NotOffered(SettingChoice),
+    NotOffered {
+        /// What was chosen.
+        choice: SettingChoice,
+        /// The agent's name for it, as it last said, if it ever did: one
+        /// it never offered has none.
+        name: Option<String>,
+    },
     /// A setting chosen for the chat was refused by the agent. It falls
     /// back as for [`Note::NotOffered`], and the messages waiting failed.
     /// A change the agent never answers isn't refused: it's a stuck
     /// request (see [`Timers::request`](crate::host::Timers::request)),
     /// and the change is sent again as the session opens again.
-    NotApplied(SettingChoice),
+    NotApplied {
+        /// What was chosen.
+        choice: SettingChoice,
+        /// The agent's name for it, as it last said.
+        name: Option<String>,
+    },
 }
 
 /// Something the agent sent that CAF couldn't read, or an app item a

@@ -52,6 +52,7 @@ export function chat(fields: Partial<Chat> = {}): Chat {
     questions: [],
     settings: { offered: [], chosen: [], own: [] },
     spend: { tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0, thinking: null }, reported: 0, estimated: 0, unpriced: 0, turns: 0 },
+    archived: null,
     ...fields,
   }
 }

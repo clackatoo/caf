@@ -152,6 +152,14 @@ pub enum FromViewer {
         /// The chat.
         chat: ChatId,
     },
+    /// Unarchive a chat. See [`Core::unarchive`](crate::Core::unarchive).
+    /// Allowed as the rest of acting on chats is ([`Rights::act`]).
+    Unarchive {
+        /// The viewer's number for this request.
+        request: RequestNo,
+        /// The chat.
+        chat: ChatId,
+    },
     /// Choose a setting of a chat's agent, such as its model. See
     /// [`Core::set_setting`](crate::Core::set_setting). Allowed as the
     /// rest of acting on chats is ([`Rights::act`]).
@@ -229,6 +237,11 @@ pub enum AgentAction {
     /// Learn what settings it offers. See
     /// [`Core::learn_settings`](crate::Core::learn_settings).
     LearnSettings,
+    /// Look at the machine again, as the user may have changed it, such as
+    /// by installing Node: what's installed and what the machine has, for
+    /// every agent, not only this one. See
+    /// [`Core::check_agents`](crate::Core::check_agents).
+    CheckAgain,
 }
 
 /// A message from CAF to a viewer.

@@ -125,6 +125,11 @@ pub enum HostCommand<A: AppItem = NoAppItems, D: AppData = NoAppData> {
         /// The chat.
         chat: ChatId,
     },
+    /// Unarchive a chat.
+    Unarchive {
+        /// The chat.
+        chat: ChatId,
+    },
     /// List a shelf's saved chats.
     ListSaved(Shelf),
     /// Restore a saved chat.

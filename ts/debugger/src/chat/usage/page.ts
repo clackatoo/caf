@@ -43,7 +43,8 @@ export function queryFor(period: Period, now: Wall, zone: string): UsageQuery {
  */
 function startOf(t: Wall, zone: string, by: Resolution): Wall {
   const query: UsageQuery = { since: t, until: t + 1, zone, by, apps: [], agents: [] }
-  const one: Summary = { query, buckets: [], chats: { all: 0, by_app: [], by_agent: [] }, prices: [], matched: [], fetched: null, unreadable: [] }
+  const one: Summary = { query, buckets: [], chats: { all: 0, by_app: [], by_agent: [] }, prices: [], matched: [],
+    names: [], fetched: null, unreadable: [] }
   return Number(group(one, 'period')[0]!.key)
 }
 

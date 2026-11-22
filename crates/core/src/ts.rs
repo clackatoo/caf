@@ -94,8 +94,8 @@ mod tests {
     };
     use crate::save::{CannotRestore, Entry, Header, RestoreChat, Saved, SavedChat, SavedState};
     use crate::settings::{
-        Choice, KnownSettings, ModelUsed, Setting, SettingChoice, SettingForm, SettingKind,
-        SettingValue, Settings,
+        Choice, KnownSettings, LearnFailure, ModelUsed, Setting, SettingChoice, SettingForm,
+        SettingKind, SettingValue, Settings,
     };
     use crate::shape::{Samples, every_type, traces};
     use crate::time::{End, Mono, Now, Wall, Window};
@@ -181,6 +181,7 @@ mod tests {
             // settings
             Choice,
             KnownSettings,
+            LearnFailure,
             ModelUsed,
             Setting,
             SettingChoice,

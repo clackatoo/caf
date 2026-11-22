@@ -32,7 +32,7 @@ use crate::question::{
     SlowToOpen,
 };
 use crate::save::{CannotRestore, Header, SavedChat, SavedState};
-use crate::settings::{KnownSettings, ModelUsed, SettingChoice};
+use crate::settings::{KnownSettings, LearnFailure, ModelUsed, SettingChoice};
 use crate::shape::{account_limits, model_price, settings, spend, turn_usage};
 use crate::time::{End, Wall, Window};
 use crate::usage::{BadQuery, ModelPrice, PriceLayer, PricedModel, UsageQuery};
@@ -166,9 +166,18 @@ fn chat() -> Chat {
         Note::NotInstalled,
         Note::InstallFailed,
         Note::SignedIn,
-        Note::AgentChanged(SettingChoice::model("sonnet")),
-        Note::NotOffered(SettingChoice::fast(true)),
-        Note::NotApplied(SettingChoice::effort("high")),
+        Note::AgentChanged {
+            choice: SettingChoice::model("sonnet"),
+            name: Some("Sonnet".into()),
+        },
+        Note::NotOffered {
+            choice: SettingChoice::fast(true),
+            name: None,
+        },
+        Note::NotApplied {
+            choice: SettingChoice::effort("high"),
+            name: Some("High".into()),
+        },
     ];
     // 24 to 34 are taken, so the newer notes follow.
     let notes = (notes.into_iter().zip([21, 22, 23, 41, 42, 43, 44, 45, 46]))
@@ -269,6 +278,7 @@ fn chat() -> Chat {
         ],
         settings: settings(),
         spend: Box::new(spend()),
+        archived: None,
     };
     if let Some(finished) = chat.turns.iter_mut().find(|turn| turn.id == TurnId(19)) {
         finished.spent = Some(Box::new(turn_usage()));
@@ -349,6 +359,8 @@ fn changes() -> Vec<Change> {
     };
     let mut changes: Vec<Change> = states.into_iter().map(Change::State).collect();
     changes.push(Change::Settings(settings()));
+    changes.push(Change::Archived(Some(Wall(1_700_000_120_000))));
+    changes.push(Change::Archived(None));
     changes.push(Change::TurnAdded(turn(
         30,
         Starter::User(UserMessage::text("And the docs")),
@@ -497,7 +509,9 @@ fn agents() -> Vec<AgentStatus> {
             KnownSettings::Unknown,
             KnownSettings::Learning,
             KnownSettings::Known(settings().offered),
-            KnownSettings::Failed("the agent didn't start".into()),
+            KnownSettings::Failed(LearnFailure::CouldNotStart {
+                error: "No such file or directory (os error 2)".into(),
+            }),
         ][at % 4]
             .clone(),
         name: AgentName(format!("agent-{at}")),
@@ -569,6 +583,10 @@ fn version_1() -> Sample {
             request: RequestNo(9),
             chat: ChatId::from_number(1),
         },
+        FromViewer::Unarchive {
+            request: RequestNo(30),
+            chat: ChatId::from_number(1),
+        },
     ];
     let actions = [
         AgentAction::Install,
@@ -578,6 +596,7 @@ fn version_1() -> Sample {
         AgentAction::StopSignIn,
         AgentAction::SignOut,
         AgentAction::LearnSettings,
+        AgentAction::CheckAgain,
     ];
     from_viewer.extend((actions.into_iter().zip(10..)).map(|(action, request)| {
         FromViewer::Agent {
@@ -713,6 +732,7 @@ fn saved() -> Vec<SavedChat> {
         first: Some("Fix the tests".into()),
         turns: 3,
         closed: no == 2,
+        archived: (no == 2).then_some(Wall(1_700_000_060_000)),
     };
     let failures = [
         CannotRestore::NotFound,

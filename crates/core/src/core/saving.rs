@@ -1536,6 +1536,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             first: first_line(whole),
             turns: u64::try_from(whole.turns.len()).unwrap_or(u64::MAX),
             closed: whole.state == ChatState::Closed,
+            archived: whole.archived,
         })
     }
 

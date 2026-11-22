@@ -28,6 +28,7 @@ function saved(number: number, fields: Partial<SavedChat['header']> = {}, state:
       cwd: '/home/me/project',
       made: NOON - 60_000,
       changed: NOON,
+      archived: null,
       label: null,
       first: 'Fix the tests',
       turns: 3,

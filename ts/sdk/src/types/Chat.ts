@@ -7,6 +7,7 @@ import type { Settings } from "./Settings.ts";
 import type { Spend } from "./Spend.ts";
 import type { Turn } from "./Turn.ts";
 import type { Usage } from "./Usage.ts";
+import type { Wall } from "./Wall.ts";
 
 /**
  * A chat: the user's conversation with an agent.
@@ -53,4 +54,13 @@ settings: Settings,
  * as the core prices it now. Chats saved before CAF recorded usage
  * read as having spent nothing.
  */
-spend: Spend, };
+spend: Spend, 
+/**
+ * When it was archived ([`Core::close_chat`](crate::Core::close_chat)),
+ * while it is: `None` for a chat that isn't. An archived chat stays so
+ * when it's restored, until it's unarchived
+ * ([`Core::unarchive`](crate::Core::unarchive)) or a message is sent
+ * to it. Chats saved before it was added read as `None`; one of them
+ * saved archived is restored archived, as of when it's restored.
+ */
+archived: Wall | null, };

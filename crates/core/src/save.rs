@@ -107,8 +107,13 @@ pub struct Header {
     pub first: Option<String>,
     /// How many turns it has.
     pub turns: u64,
-    /// Whether it was closed.
+    /// Whether it was closed: archived.
     pub closed: bool,
+    /// When it was archived, if it was ([`Chat::archived`](crate::Chat::archived)).
+    /// Headers written before it was added read as `None`, even if
+    /// `closed`.
+    #[serde(default)]
+    pub archived: Option<Wall>,
 }
 
 /// One entry in a chat's journal: what changed since its last save.

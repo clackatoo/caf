@@ -10,6 +10,12 @@ export type ModelTokens = {
  */
 model: string, 
 /**
+ * Its name to show, such as *Haiku 5.5*, as the agent's profile names
+ * its ids ([`Builtin::model_name`](crate::profiles::Builtin::model_name)),
+ * if it does. Records made before it was added read as `None`.
+ */
+name: string | null, 
+/**
  * Its tokens.
  */
 tokens: Tokens, };

@@ -231,8 +231,53 @@ pub enum KnownSettings {
     Learning,
     /// Known: what a session with it last offered, as it offered it.
     Known(Vec<Setting>),
-    /// Couldn't be learned, saying why in CAF's words.
-    Failed(String),
+    /// Couldn't be learned, and why.
+    Failed(LearnFailure),
+}
+
+/// Why CAF couldn't learn what an agent offers. An app words each as CAF
+/// SI's composer page does; where the agent or the system said why, its
+/// words are kept apart, to be shown as theirs.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum LearnFailure {
+    /// The agent isn't installed.
+    NotInstalled,
+    /// CAF hasn't looked yet whether the agent is installed.
+    NotLookedYet,
+    /// The agent is being signed in to.
+    SigningIn,
+    /// The agent needs signing in to.
+    SignInNeeded,
+    /// The agent couldn't be started.
+    CouldNotStart {
+        /// What the system said, cleaned and capped.
+        error: String,
+    },
+    /// The agent refused to start a chat.
+    Refused {
+        /// What the agent said, cleaned and capped.
+        message: String,
+    },
+    /// The agent didn't start in time.
+    StartTimedOut,
+    /// The agent didn't start a chat in time.
+    OpenTimedOut,
+    /// The agent's answer couldn't be read.
+    Unreadable,
+    /// The agent was restarted while CAF asked.
+    Restarted,
+    /// The agent stopped.
+    Stopped,
+    /// CAF is shutting down.
+    ShutDown,
+    /// CAF can't use this agent: it doesn't speak to CAF as its profile
+    /// expects.
+    Incompatible,
+    /// CAF can't turn off the agent's own tools, so it won't run it.
+    OwnTools,
 }
 
 /// The model that answered a turn.

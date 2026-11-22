@@ -108,6 +108,7 @@ export function saved(number: number, state: SavedChat["state"] = { type: "Saved
       first: "Fix the tests",
       turns: 3,
       closed: false,
+    archived: null,
     },
     state,
   };

@@ -217,7 +217,8 @@ pub enum SessionChoice {
 pub enum Refused {
     /// No chat has that id.
     NoSuchChat,
-    /// The chat is closed.
+    /// The chat is archived, so its settings can't be chosen: unarchive
+    /// it first ([`Core::unarchive`]). Sending to it unarchives it.
     Closed,
     /// No agent has that name.
     NoSuchAgent,
@@ -559,11 +560,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// If another turn is running, or the session isn't open yet, the new
     /// turn waits, in order: messages are never dropped. If the chat's
     /// session was lost, sending opens it again, continuing it where the
-    /// agent can. It calls a shutdown off ([`Core::shutdown`]).
+    /// agent can. Sending to an archived chat unarchives it first
+    /// ([`Core::unarchive`]), and the message goes as to any other. It
+    /// calls a shutdown off ([`Core::shutdown`]).
     ///
     /// # Errors
     ///
-    /// [`Refused::NoSuchChat`], [`Refused::Closed`], [`Refused::QueueFull`],
+    /// [`Refused::NoSuchChat`], [`Refused::QueueFull`],
     /// [`Refused::Unsupported`] or [`Refused::CommandNotAlone`]; for a
     /// restored chat, [`Refused::NoSuchAgent`] if the host no longer
     /// offers its agent, and [`Refused::OwnTools`] if CAF can't turn off
@@ -636,11 +639,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         Ok(())
     }
 
-    /// Closes a chat: the user is done with it. Its session is closed, if
-    /// the agent can close sessions, and its adapter stopped if nothing
-    /// else uses it. A saved chat is then put away ([`Core::put_away`]),
-    /// marked closed, and can still be restored; one that isn't saved
-    /// stays, closed, until CAF stops.
+    /// Closes a chat: the user is done with it, and it's archived, as of
+    /// `now` ([`Chat::archived`]). Its session is closed, if the agent can
+    /// close sessions, and its adapter stopped if nothing else uses it. A
+    /// saved chat is then put away ([`Core::put_away`]), marked closed,
+    /// and can still be restored: archived, as it was left. One that isn't
+    /// saved stays, archived, until CAF stops. Either is unarchived by
+    /// [`Core::unarchive`], or by a message sent to it ([`Core::send`]).
     ///
     /// # Errors
     ///
@@ -652,6 +657,25 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         self.command(now, HostCommand::CloseChat { chat }, out)?;
+        self.finish(now, out);
+        Ok(())
+    }
+
+    /// Unarchives a chat: it's no longer archived ([`Chat::archived`] is
+    /// `None`), and is [idle](crate::chat::ChatState::Idle), its agent
+    /// started when a message is sent, as a restored chat is. A chat that
+    /// isn't archived is left as it is.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::NoSuchChat`].
+    pub fn unarchive(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        out: &mut Vec<Directive<A, D>>,
+    ) -> Result<(), Refused> {
+        self.command(now, HostCommand::Unarchive { chat }, out)?;
         self.finish(now, out);
         Ok(())
     }
@@ -991,6 +1015,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 self.answer_question(now, question, answer, out)
             }
             HostCommand::CloseChat { chat } => self.close(now, chat, out),
+            HostCommand::Unarchive { chat } => self.unarchive_chat(now, chat, out),
             HostCommand::Shutdown => {
                 self.shut_down(now, out);
                 Ok(())

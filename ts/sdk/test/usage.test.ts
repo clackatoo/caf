@@ -62,6 +62,7 @@ function summary(buckets: Bucket[], fields: Partial<UsageQuery> = {}, prices: Pr
     chats: { all: 1, by_app: [], by_agent: [] },
     prices,
     matched: [],
+    names: [],
     fetched: null,
     unreadable: [],
   };
@@ -98,8 +99,8 @@ describe("counting", () => {
   test("a turn's tokens are every model's added up; thinking is unknown only if no model knows it", () => {
     const usage = {
       models: [
-        { model: "opus", tokens: tokens({ input: 1, cache_read: 2, cache_write: 3, output: 4 }) },
-        { model: "haiku", tokens: tokens({ input: 10, cache_read: 20, cache_write: 30, output: 40, thinking: 5 }) },
+        { model: "opus", name: null, tokens: tokens({ input: 1, cache_read: 2, cache_write: 3, output: 4 }) },
+        { model: "haiku", name: null, tokens: tokens({ input: 10, cache_read: 20, cache_write: 30, output: 40, thinking: 5 }) },
       ],
       cost: null,
       fast: false,

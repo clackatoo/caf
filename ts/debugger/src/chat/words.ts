@@ -15,6 +15,7 @@ import type {
   Incompatible,
   InstallFailure,
   InstallState,
+  LearnFailure,
   Lost,
   Note,
   OptionKind,
@@ -196,15 +197,15 @@ export function noteText(note: DeepReadonly<Note>): string {
     case 'SignedIn':
       return 'You signed in to the agent: send the message again to try it now.'
     case 'AgentChanged':
-      return `The agent changed by itself to ${choiceText(note.value)}, and this chat follows it.`
+      return `The agent changed by itself to ${choiceText(note.value.choice)}, and this chat follows it.`
     case 'NotOffered': {
       // A switch that's gone is gone on and off alike: it's named alone.
-      const choice = note.value
+      const choice = note.value.choice
       const what = choice.value.type === 'Switch' ? settingText(choice) : choiceText(choice)
       return `The agent doesn't offer ${what}, so that choice was dropped: the app's default, or else the agent's own, applies.`
     }
     case 'NotApplied':
-      return `The agent refused ${choiceText(note.value)}, so that choice was dropped: the app's default, or else the agent's own, applies.`
+      return `The agent refused ${choiceText(note.value.choice)}, so that choice was dropped: the app's default, or else the agent's own, applies.`
     default:
       return `A note this viewer doesn't know (${tagOf(note)}).`
   }
@@ -628,5 +629,41 @@ export function signInUrl(url: string | null): URL | null {
     return parsed.protocol === 'https:' ? parsed : null
   } catch {
     return null
+  }
+}
+
+/** Why CAF couldn't learn what an agent offers, in words. */
+export function learnFailureText(why: DeepReadonly<LearnFailure>): string {
+  switch (why.type) {
+    case 'NotInstalled':
+      return "it isn't installed."
+    case 'NotLookedYet':
+      return "CAF hasn't looked yet whether it's installed."
+    case 'SigningIn':
+      return "it's being signed in to."
+    case 'SignInNeeded':
+      return 'it needs signing in to.'
+    case 'CouldNotStart':
+      return `it couldn't start: ${why.value.error}`
+    case 'Refused':
+      return `it refused: ${why.value.message}`
+    case 'StartTimedOut':
+      return "it didn't start in time."
+    case 'OpenTimedOut':
+      return "it didn't open a chat in time."
+    case 'Unreadable':
+      return "its answer couldn't be read."
+    case 'Restarted':
+      return 'it was restarted.'
+    case 'Stopped':
+      return 'it stopped.'
+    case 'ShutDown':
+      return 'CAF is shutting down.'
+    case 'Incompatible':
+      return "CAF can't use it."
+    case 'OwnTools':
+      return "CAF can't turn off its own tools."
+    default:
+      return `a reason this viewer doesn't know (${tagOf(why)}).`
   }
 }

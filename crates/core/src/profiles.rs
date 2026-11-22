@@ -279,6 +279,17 @@ impl Builtin {
         }
     }
 
+    /// A model's name to show, from the agent's id for it, as this profile
+    /// knows its agent names models, if it does: Claude's
+    /// `claude-<family>-<major>-<minor>`, with or without a date after,
+    /// is *Family major.minor*, such as `claude-opus-5-5` *Opus 5.5*.
+    /// `None` for an id it doesn't know the shape of.
+    #[must_use]
+    pub fn model_name(self, id: &str) -> Option<String> {
+        let _ = id;
+        todo!()
+    }
+
     /// The profile with this [slug](Builtin::slug), if any.
     #[must_use]
     pub fn from_slug(slug: &str) -> Option<Self> {

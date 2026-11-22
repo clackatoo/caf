@@ -135,6 +135,13 @@
       }
     },
     {
+      "type": "Unarchive",
+      "value": {
+        "request": 30,
+        "chat": "00000000-0000-0000-0000-000000000001"
+      }
+    },
+    {
       "type": "Agent",
       "value": {
         "request": 10,
@@ -202,6 +209,16 @@
         "agent": "claude",
         "action": {
           "type": "LearnSettings"
+        }
+      }
+    },
+    {
+      "type": "Agent",
+      "value": {
+        "request": 17,
+        "agent": "claude",
+        "action": {
+          "type": "CheckAgain"
         }
       }
     },
@@ -849,13 +866,16 @@
                     "value": {
                       "type": "AgentChanged",
                       "value": {
-                        "kind": {
-                          "type": "Model"
+                        "choice": {
+                          "kind": {
+                            "type": "Model"
+                          },
+                          "value": {
+                            "type": "Choice",
+                            "value": "sonnet"
+                          }
                         },
-                        "value": {
-                          "type": "Choice",
-                          "value": "sonnet"
-                        }
+                        "name": "Sonnet"
                       }
                     }
                   }
@@ -875,13 +895,16 @@
                     "value": {
                       "type": "NotOffered",
                       "value": {
-                        "kind": {
-                          "type": "Fast"
+                        "choice": {
+                          "kind": {
+                            "type": "Fast"
+                          },
+                          "value": {
+                            "type": "Switch",
+                            "value": true
+                          }
                         },
-                        "value": {
-                          "type": "Switch",
-                          "value": true
-                        }
+                        "name": null
                       }
                     }
                   }
@@ -901,13 +924,16 @@
                     "value": {
                       "type": "NotApplied",
                       "value": {
-                        "kind": {
-                          "type": "Effort"
+                        "choice": {
+                          "kind": {
+                            "type": "Effort"
+                          },
+                          "value": {
+                            "type": "Choice",
+                            "value": "high"
+                          }
                         },
-                        "value": {
-                          "type": "Choice",
-                          "value": "high"
-                        }
+                        "name": "High"
                       }
                     }
                   }
@@ -953,6 +979,7 @@
                 "models": [
                   {
                     "model": "claude-sonnet-5-5",
+                    "name": "Sonnet 5.5",
                     "tokens": {
                       "input": 12,
                       "cache_read": 3000,
@@ -963,6 +990,7 @@
                   },
                   {
                     "model": "claude-haiku-5-5",
+                    "name": null,
                     "tokens": {
                       "input": 12,
                       "cache_read": 3000,
@@ -1234,7 +1262,8 @@
             "estimated": 0.5,
             "unpriced": 80,
             "turns": 2
-          }
+          },
+          "archived": null
         },
         "latest": 5
       }
@@ -1629,6 +1658,20 @@
           {
             "no": 25,
             "change": {
+              "type": "Archived",
+              "value": 1700000120000
+            }
+          },
+          {
+            "no": 26,
+            "change": {
+              "type": "Archived",
+              "value": null
+            }
+          },
+          {
+            "no": 27,
+            "change": {
               "type": "TurnAdded",
               "value": {
                 "id": 30,
@@ -1660,7 +1703,7 @@
             }
           },
           {
-            "no": 26,
+            "no": 28,
             "change": {
               "type": "TurnInserted",
               "value": {
@@ -1707,7 +1750,7 @@
             }
           },
           {
-            "no": 27,
+            "no": 29,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1722,7 +1765,7 @@
             }
           },
           {
-            "no": 28,
+            "no": 30,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1737,7 +1780,7 @@
             }
           },
           {
-            "no": 29,
+            "no": 31,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1752,7 +1795,7 @@
             }
           },
           {
-            "no": 30,
+            "no": 32,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1768,7 +1811,7 @@
             }
           },
           {
-            "no": 31,
+            "no": 33,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1784,7 +1827,7 @@
             }
           },
           {
-            "no": 32,
+            "no": 34,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1800,7 +1843,7 @@
             }
           },
           {
-            "no": 33,
+            "no": 35,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1825,7 +1868,7 @@
             }
           },
           {
-            "no": 34,
+            "no": 36,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1850,7 +1893,7 @@
             }
           },
           {
-            "no": 35,
+            "no": 37,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1875,7 +1918,7 @@
             }
           },
           {
-            "no": 36,
+            "no": 38,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1898,7 +1941,7 @@
             }
           },
           {
-            "no": 37,
+            "no": 39,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1923,7 +1966,7 @@
             }
           },
           {
-            "no": 38,
+            "no": 40,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1948,7 +1991,7 @@
             }
           },
           {
-            "no": 39,
+            "no": 41,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1973,7 +2016,7 @@
             }
           },
           {
-            "no": 40,
+            "no": 42,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -1996,7 +2039,7 @@
             }
           },
           {
-            "no": 41,
+            "no": 43,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -2021,7 +2064,7 @@
             }
           },
           {
-            "no": 42,
+            "no": 44,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -2046,7 +2089,7 @@
             }
           },
           {
-            "no": 43,
+            "no": 45,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -2071,7 +2114,7 @@
             }
           },
           {
-            "no": 44,
+            "no": 46,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -2094,7 +2137,7 @@
             }
           },
           {
-            "no": 45,
+            "no": 47,
             "change": {
               "type": "TurnLife",
               "value": {
@@ -2119,7 +2162,7 @@
             }
           },
           {
-            "no": 46,
+            "no": 48,
             "change": {
               "type": "TurnModel",
               "value": {
@@ -2132,7 +2175,7 @@
             }
           },
           {
-            "no": 47,
+            "no": 49,
             "change": {
               "type": "ItemAdded",
               "value": {
@@ -2168,7 +2211,7 @@
             }
           },
           {
-            "no": 48,
+            "no": 50,
             "change": {
               "type": "Appended",
               "value": {
@@ -2178,7 +2221,7 @@
             }
           },
           {
-            "no": 49,
+            "no": 51,
             "change": {
               "type": "ToolChanged",
               "value": {
@@ -2201,7 +2244,7 @@
             }
           },
           {
-            "no": 50,
+            "no": 52,
             "change": {
               "type": "ItemEnded",
               "value": {
@@ -2214,7 +2257,7 @@
             }
           },
           {
-            "no": 51,
+            "no": 53,
             "change": {
               "type": "Usage",
               "value": {
@@ -2225,7 +2268,7 @@
             }
           },
           {
-            "no": 52,
+            "no": 54,
             "change": {
               "type": "QuestionAsked",
               "value": {
@@ -2256,14 +2299,14 @@
             }
           },
           {
-            "no": 53,
+            "no": 55,
             "change": {
               "type": "QuestionGone",
               "value": 26
             }
           },
           {
-            "no": 54,
+            "no": 56,
             "change": {
               "type": "TurnSpent",
               "value": {
@@ -2272,6 +2315,7 @@
                   "models": [
                     {
                       "model": "claude-sonnet-5-5",
+                      "name": "Sonnet 5.5",
                       "tokens": {
                         "input": 12,
                         "cache_read": 3000,
@@ -2282,6 +2326,7 @@
                     },
                     {
                       "model": "claude-haiku-5-5",
+                      "name": null,
                       "tokens": {
                         "input": 12,
                         "cache_read": 3000,
@@ -2301,7 +2346,7 @@
             }
           },
           {
-            "no": 55,
+            "no": 57,
             "change": {
               "type": "Spend",
               "value": {
@@ -2614,7 +2659,12 @@
           "own_tools_off": false,
           "settings": {
             "type": "Failed",
-            "value": "the agent didn't start"
+            "value": {
+              "type": "CouldNotStart",
+              "value": {
+                "error": "No such file or directory (os error 2)"
+              }
+            }
           },
           "limits": {
             "windows": [],
@@ -2920,7 +2970,12 @@
           "own_tools_off": true,
           "settings": {
             "type": "Failed",
-            "value": "the agent didn't start"
+            "value": {
+              "type": "CouldNotStart",
+              "value": {
+                "error": "No such file or directory (os error 2)"
+              }
+            }
           },
           "limits": {
             "windows": [],
@@ -3222,7 +3277,12 @@
           "own_tools_off": true,
           "settings": {
             "type": "Failed",
-            "value": "the agent didn't start"
+            "value": {
+              "type": "CouldNotStart",
+              "value": {
+                "error": "No such file or directory (os error 2)"
+              }
+            }
           },
           "limits": {
             "windows": [],
@@ -3534,7 +3594,12 @@
           "own_tools_off": false,
           "settings": {
             "type": "Failed",
-            "value": "the agent didn't start"
+            "value": {
+              "type": "CouldNotStart",
+              "value": {
+                "error": "No such file or directory (os error 2)"
+              }
+            }
           },
           "limits": {
             "windows": [],
@@ -3559,7 +3624,8 @@
             "label": "Fix the tests",
             "first": "Fix the tests",
             "turns": 3,
-            "closed": false
+            "closed": false,
+            "archived": null
           },
           "state": {
             "type": "Saved"
@@ -3577,7 +3643,8 @@
             "label": "Fix the tests",
             "first": "Fix the tests",
             "turns": 3,
-            "closed": true
+            "closed": true,
+            "archived": 1700000060000
           },
           "state": {
             "type": "Restoring"
@@ -3595,7 +3662,8 @@
             "label": "Fix the tests",
             "first": "Fix the tests",
             "turns": 3,
-            "closed": false
+            "closed": false,
+            "archived": null
           },
           "state": {
             "type": "Loaded"
@@ -3613,7 +3681,8 @@
             "label": "Fix the tests",
             "first": "Fix the tests",
             "turns": 3,
-            "closed": false
+            "closed": false,
+            "archived": null
           },
           "state": {
             "type": "Failed",
@@ -3634,7 +3703,8 @@
             "label": "Fix the tests",
             "first": "Fix the tests",
             "turns": 3,
-            "closed": false
+            "closed": false,
+            "archived": null
           },
           "state": {
             "type": "Failed",
@@ -3655,7 +3725,8 @@
             "label": "Fix the tests",
             "first": "Fix the tests",
             "turns": 3,
-            "closed": false
+            "closed": false,
+            "archived": null
           },
           "state": {
             "type": "Failed",
@@ -3679,7 +3750,8 @@
             "label": "Fix the tests",
             "first": "Fix the tests",
             "turns": 3,
-            "closed": false
+            "closed": false,
+            "archived": null
           },
           "state": {
             "type": "Failed",
@@ -3701,7 +3773,8 @@
             "label": "Fix the tests",
             "first": "Fix the tests",
             "turns": 3,
-            "closed": false
+            "closed": false,
+            "archived": null
           },
           "state": {
             "type": "Failed",
@@ -3723,7 +3796,8 @@
             "label": "Fix the tests",
             "first": "Fix the tests",
             "turns": 3,
-            "closed": false
+            "closed": false,
+            "archived": null
           },
           "state": {
             "type": "Failed",
@@ -3832,6 +3906,12 @@
             [
               "claude-sonnet-5-5",
               "anthropic/claude-sonnet-5-5"
+            ]
+          ],
+          "names": [
+            [
+              "claude-sonnet-5-5",
+              "Sonnet 5.5"
             ]
           ],
           "fetched": 1800000000000,

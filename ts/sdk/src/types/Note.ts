@@ -4,4 +4,29 @@ import type { SettingChoice } from "./SettingChoice.ts";
 /**
  * Something CAF says in a turn.
  */
-export type Note = { "type": "SessionGone" } | { "type": "CannotContinue" } | { "type": "SessionStuck" } | { "type": "NotInstalled" } | { "type": "InstallFailed" } | { "type": "SignedIn" } | { "type": "AgentChanged", "value": SettingChoice } | { "type": "NotOffered", "value": SettingChoice } | { "type": "NotApplied", "value": SettingChoice };
+export type Note = { "type": "SessionGone" } | { "type": "CannotContinue" } | { "type": "SessionStuck" } | { "type": "NotInstalled" } | { "type": "InstallFailed" } | { "type": "SignedIn" } | { "type": "AgentChanged", "value": { 
+/**
+ * What it changed to.
+ */
+choice: SettingChoice, 
+/**
+ * The agent's name for it, as it last said: [`Choice::name`](crate::settings::Choice::name).
+ */
+name: string | null, } } | { "type": "NotOffered", "value": { 
+/**
+ * What was chosen.
+ */
+choice: SettingChoice, 
+/**
+ * The agent's name for it, as it last said, if it ever did: one
+ * it never offered has none.
+ */
+name: string | null, } } | { "type": "NotApplied", "value": { 
+/**
+ * What was chosen.
+ */
+choice: SettingChoice, 
+/**
+ * The agent's name for it, as it last said.
+ */
+name: string | null, } };

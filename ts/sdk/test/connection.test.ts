@@ -1242,6 +1242,7 @@ describe("usage", () => {
     chats: { all: 1, by_app: [["clackatoo", 1]], by_agent: [["claude-agent-acp", 1]] },
     prices: [],
     matched: [],
+      names: [],
     fetched: null,
     unreadable: [],
   };

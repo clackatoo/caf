@@ -669,7 +669,7 @@ async fn learned(caf: &Caf, agent: &AgentName) -> Vec<Setting> {
             // Only the settings: a status may name the account.
             match &statuses[0].settings {
                 KnownSettings::Known(known) => return Ok(known.clone()),
-                KnownSettings::Failed(why) => return Err(why.clone()),
+                KnownSettings::Failed(why) => return Err(format!("{why:?}")),
                 _ => {}
             }
         }

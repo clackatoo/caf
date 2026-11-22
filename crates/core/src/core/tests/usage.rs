@@ -569,6 +569,7 @@ fn a_restored_chats_spend_is_worked_out_again_from_its_turns() {
             first: None,
             turns: 1,
             closed: false,
+            archived: None,
         },
         chat,
         session: Some(AgentSessionId(SESSION.to_owned())),

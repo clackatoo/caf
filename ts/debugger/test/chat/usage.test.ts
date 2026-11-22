@@ -72,6 +72,7 @@ function summary(query: UsageQuery, fields: Partial<Summary> = {}): Summary {
     },
     prices: [OPUS],
     matched: [['claude-opus-5-5', OPUS.model]],
+    names: [],
     fetched: Date.UTC(2026, 10, 21, 8),
     unreadable: [],
     ...fields,

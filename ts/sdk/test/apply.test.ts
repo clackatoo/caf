@@ -211,7 +211,7 @@ describe("apply", () => {
   test("TurnSpent records what a turn spent, sharing every other turn", () => {
     const before = busy();
     const spent: TurnUsage = {
-      models: [{ model: "claude-haiku-5-5", tokens: { input: 10, cache_read: 2, cache_write: 1, output: 5, thinking: null } }],
+      models: [{ model: "claude-haiku-5-5", name: null, tokens: { input: 10, cache_read: 2, cache_write: 1, output: 5, thinking: null } }],
       cost: { amount: 0.01, currency: "USD" },
       fast: false,
     };

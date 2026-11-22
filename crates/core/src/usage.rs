@@ -115,6 +115,11 @@ impl Tokens {
 pub struct ModelTokens {
     /// The model, by the agent's id for it, such as `claude-haiku-5-5`.
     pub model: String,
+    /// Its name to show, such as *Haiku 5.5*, as the agent's profile names
+    /// its ids ([`Builtin::model_name`](crate::profiles::Builtin::model_name)),
+    /// if it does. Records made before it was added read as `None`.
+    #[serde(default)]
+    pub name: Option<String>,
     /// Its tokens.
     pub tokens: Tokens,
 }
@@ -486,6 +491,13 @@ pub struct Summary {
     /// sorted by the agent's id: so a viewer never repeats
     /// [`PriceTable::find`].
     pub matched: Vec<(String, String)>,
+    /// Each model in it that has a name to show, by the agent's id for it,
+    /// with that name, sorted by the agent's id: the name its lines were
+    /// recorded with, or, for lines recorded before CAF named models, the
+    /// one its agent's profile gives now. A model with none is shown by its
+    /// id.
+    #[serde(default)]
+    pub names: Vec<(String, String)>,
     /// When LiteLLM's table was last fetched, if ever.
     pub fetched: Option<Wall>,
     /// Ledger files that couldn't be read, by name, such as
@@ -503,6 +515,7 @@ impl Summary {
             chats: ChatCounts::default(),
             prices: Vec::new(),
             matched: Vec::new(),
+            names: Vec::new(),
             fetched: None,
             unreadable: Vec::new(),
         }

@@ -46,8 +46,8 @@ use crate::question::{
 };
 use crate::save::{CannotRestore, Entry, Header, RestoreChat, Saved, SavedChat, SavedState};
 use crate::settings::{
-    Choice, KnownSettings, ModelUsed, Setting, SettingChoice, SettingForm, SettingKind,
-    SettingValue, Settings,
+    Choice, KnownSettings, LearnFailure, ModelUsed, Setting, SettingChoice, SettingForm,
+    SettingKind, SettingValue, Settings,
 };
 use crate::time::{End, Mono, Now, Wall, Window};
 use crate::usage::{
@@ -269,10 +269,12 @@ pub(crate) fn turn_usage() -> TurnUsage {
         models: vec![
             ModelTokens {
                 model: "claude-sonnet-5-5".into(),
+                name: Some("Sonnet 5.5".into()),
                 tokens: tokens(),
             },
             ModelTokens {
                 model: "claude-haiku-5-5".into(),
+                name: None,
                 tokens: Tokens {
                     thinking: None,
                     ..tokens()
@@ -379,6 +381,7 @@ pub(crate) fn summary() -> Summary {
     )];
     summary.fetched = Some(Wall(1_800_000_000_000));
     summary.unreadable = vec!["eyespy/2026-10.jsonl.zst".into()];
+    summary.names = vec![("claude-sonnet-5-5".into(), "Sonnet 5.5".into())];
     summary
 }
 
@@ -395,6 +398,7 @@ pub(crate) fn chat() -> Chat {
         questions: vec![question()],
         settings: settings(),
         spend: Box::default(),
+        archived: None,
     }
 }
 
@@ -626,6 +630,7 @@ fn header() -> Header {
         first: Some("Fix the tests".into()),
         turns: 1,
         closed: false,
+        archived: Some(Wall(2)),
     }
 }
 
@@ -871,6 +876,29 @@ pub(crate) fn every_type(s: &mut Samples) {
     s.both(&SettingValue::Switch(true));
     s.both(&SettingChoice::model("sonnet"));
     s.both(&KnownSettings::Learning);
+    for why in [
+        LearnFailure::NotInstalled,
+        LearnFailure::NotLookedYet,
+        LearnFailure::SigningIn,
+        LearnFailure::SignInNeeded,
+        LearnFailure::CouldNotStart {
+            error: "No such file or directory (os error 2)".into(),
+        },
+        LearnFailure::Refused {
+            message: "Internal error".into(),
+        },
+        LearnFailure::StartTimedOut,
+        LearnFailure::OpenTimedOut,
+        LearnFailure::Unreadable,
+        LearnFailure::Restarted,
+        LearnFailure::Stopped,
+        LearnFailure::ShutDown,
+        LearnFailure::Incompatible,
+        LearnFailure::OwnTools,
+    ] {
+        s.both(&KnownSettings::Failed(why.clone()));
+        s.both(&why);
+    }
     s.both(&ModelUsed {
         id: "haiku".into(),
         name: None,

@@ -31,6 +31,7 @@ function start(at: number, zone: string, by: Resolution): number {
     chats: { all: 0, by_app: [], by_agent: [] },
     prices: [],
     matched: [],
+    names: [],
     fetched: null,
     unreadable: [],
   };

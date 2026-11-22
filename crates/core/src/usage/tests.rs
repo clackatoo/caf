@@ -25,6 +25,7 @@ fn usage(rows: &[(&str, Tokens)], fast: bool) -> TurnUsage {
             .iter()
             .map(|(model, tokens)| ModelTokens {
                 model: (*model).into(),
+                name: None,
                 tokens: tokens.clone(),
             })
             .collect(),
@@ -327,6 +328,7 @@ fn a_new_summary_is_of_nothing() {
             chats: ChatCounts::default(),
             prices: Vec::new(),
             matched: Vec::new(),
+            names: Vec::new(),
             fetched: None,
             unreadable: Vec::new(),
         }

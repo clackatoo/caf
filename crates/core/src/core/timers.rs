@@ -275,7 +275,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                         proc.0
                     ),
                 );
-                self.learn_failed(conn, "the agent didn't open a session in time");
+                self.learn_failed(conn, crate::settings::LearnFailure::OpenTimedOut);
                 self.advance(now, conn, out);
                 self.tidy(conn);
             }

@@ -7,7 +7,9 @@
 //! until they do. [`Seen`] walks a value and notes every variant in it,
 //! however deep.
 
-use crate::settings::{KnownSettings, Setting, SettingForm, SettingKind, SettingValue, Settings};
+use crate::settings::{
+    KnownSettings, LearnFailure, Setting, SettingForm, SettingKind, SettingValue, Settings,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
@@ -59,6 +61,7 @@ kinds!(FromViewer {
     "Stop" => FromViewer::Stop { .. },
     "Answer" => FromViewer::Answer { .. },
     "Close" => FromViewer::Close { .. },
+    "Unarchive" => FromViewer::Unarchive { .. },
     "Restore" => FromViewer::Restore { .. },
     "Agent" => FromViewer::Agent { .. },
     "Usage" => FromViewer::Usage { .. },
@@ -74,6 +77,7 @@ kinds!(AgentAction {
     "StopSignIn" => AgentAction::StopSignIn,
     "SignOut" => AgentAction::SignOut,
     "LearnSettings" => AgentAction::LearnSettings,
+    "CheckAgain" => AgentAction::CheckAgain,
 });
 
 kinds!(ToViewer {
@@ -187,6 +191,7 @@ kinds!(Part {
 
 kinds!(Change {
     "State" => Change::State(_),
+    "Archived" => Change::Archived(_),
     "TurnAdded" => Change::TurnAdded(_),
     "TurnInserted" => Change::TurnInserted { .. },
     "TurnLife" => Change::TurnLife { .. },
@@ -330,9 +335,9 @@ kinds!(Note {
     "NotInstalled" => Note::NotInstalled,
     "InstallFailed" => Note::InstallFailed,
     "SignedIn" => Note::SignedIn,
-    "AgentChanged" => Note::AgentChanged(_),
-    "NotOffered" => Note::NotOffered(_),
-    "NotApplied" => Note::NotApplied(_),
+    "AgentChanged" => Note::AgentChanged { .. },
+    "NotOffered" => Note::NotOffered { .. },
+    "NotApplied" => Note::NotApplied { .. },
 });
 
 kinds!(QuestionKind {
@@ -478,6 +483,9 @@ impl Seen {
         if let KnownSettings::Known(offered) = &agent.settings {
             offered.iter().for_each(|setting| self.offered(setting));
         }
+        if let KnownSettings::Failed(why) = &agent.settings {
+            self.mark(why);
+        }
     }
 
     /// A change, and everything in it.
@@ -485,6 +493,7 @@ impl Seen {
         self.mark(change);
         match change {
             Change::State(state) => self.state(state),
+            Change::Archived(_) => {}
             Change::Settings(settings) => self.settings(settings),
             Change::TurnAdded(turn) | Change::TurnInserted { turn, .. } => self.turn(turn),
             Change::TurnLife { life, end, .. } => {
@@ -617,6 +626,23 @@ kinds!(KnownSettings {
     "Learning" => KnownSettings::Learning,
     "Known" => KnownSettings::Known(_),
     "Failed" => KnownSettings::Failed(_),
+});
+
+kinds!(LearnFailure {
+    "NotInstalled" => LearnFailure::NotInstalled,
+    "NotLookedYet" => LearnFailure::NotLookedYet,
+    "SigningIn" => LearnFailure::SigningIn,
+    "SignInNeeded" => LearnFailure::SignInNeeded,
+    "CouldNotStart" => LearnFailure::CouldNotStart { .. },
+    "Refused" => LearnFailure::Refused { .. },
+    "StartTimedOut" => LearnFailure::StartTimedOut,
+    "OpenTimedOut" => LearnFailure::OpenTimedOut,
+    "Unreadable" => LearnFailure::Unreadable,
+    "Restarted" => LearnFailure::Restarted,
+    "Stopped" => LearnFailure::Stopped,
+    "ShutDown" => LearnFailure::ShutDown,
+    "Incompatible" => LearnFailure::Incompatible,
+    "OwnTools" => LearnFailure::OwnTools,
 });
 
 kinds!(Resolution {

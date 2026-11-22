@@ -159,13 +159,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 } else if learning {
                     // Unlike a chat, learning doesn't wait for it.
                     let why = if self.signing_in(&agent).is_some() {
-                        "the agent is being signed in to"
+                        crate::settings::LearnFailure::SigningIn
                     } else if matches!(self.install_state(&agent), Some(InstallState::Unknown))
                         || self.awaiting_survey(&agent)
                     {
-                        "CAF hasn't looked whether the agent is installed yet"
+                        crate::settings::LearnFailure::NotLookedYet
                     } else {
-                        "the agent isn't installed"
+                        crate::settings::LearnFailure::NotInstalled
                     };
                     self.learn_failed(conn, why);
                     self.tidy(conn);
@@ -197,7 +197,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             );
             // Learning its agent's settings doesn't wait either.
             if let Some(conn) = self.procs.get(&proc).map(|each| each.conn) {
-                self.learn_failed(conn, "the agent didn't start in time");
+                self.learn_failed(conn, crate::settings::LearnFailure::StartTimedOut);
             }
             return self.lose_process(now, proc, Cause::Restarted, out);
         }
@@ -668,7 +668,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             self.session_lost(now, chat, lost.clone(), reopen, out);
         }
         if learned_on {
-            self.learn_failed(conn, &lost_why(&lost));
+            self.learn_failed(conn, lost_why(&lost));
         }
         self.advance(now, conn, out);
     }

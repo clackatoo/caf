@@ -378,7 +378,10 @@ async fn a_choice_the_agent_refuses_fails_the_waiting_message_with_send_again() 
     );
     assert_eq!(
         notes(&failed),
-        [&Note::NotApplied(SettingChoice::model("large"))]
+        [&Note::NotApplied {
+            choice: SettingChoice::model("large"),
+            name: None
+        }]
     );
     assert_eq!(
         chosen(&failed, SettingKind::Model),
@@ -603,8 +606,14 @@ async fn a_recorded_run_with_settings_replays_to_the_same_state() {
     assert_eq!(
         notes(&live),
         [
-            &Note::AgentChanged(SettingChoice::model("small")),
-            &Note::AgentChanged(SettingChoice::fast(false))
+            &Note::AgentChanged {
+                choice: SettingChoice::model("small"),
+                name: None
+            },
+            &Note::AgentChanged {
+                choice: SettingChoice::fast(false),
+                name: None
+            }
         ]
     );
     let fake = AgentName("fake".into());
