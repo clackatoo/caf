@@ -481,6 +481,11 @@ pub struct Summary {
     pub chats: ChatCounts,
     /// The price of every model in it that has one, as used.
     pub prices: Vec<PricedModel>,
+    /// Each model in it that has a price, by the agent's id for it, with
+    /// the name of the entry in [`prices`](Self::prices) that priced it,
+    /// sorted by the agent's id: so a viewer never repeats
+    /// [`PriceTable::find`].
+    pub matched: Vec<(String, String)>,
     /// When LiteLLM's table was last fetched, if ever.
     pub fetched: Option<Wall>,
     /// Ledger files that couldn't be read, by name, such as
@@ -497,6 +502,7 @@ impl Summary {
             buckets: Vec::new(),
             chats: ChatCounts::default(),
             prices: Vec::new(),
+            matched: Vec::new(),
             fetched: None,
             unreadable: Vec::new(),
         }
