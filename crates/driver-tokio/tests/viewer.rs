@@ -1738,3 +1738,31 @@ async fn a_slow_summary_never_holds_up_a_viewers_other_requests() {
     }
     shut_down(&caf, running).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_viewer_hears_why_a_price_couldnt_be_set() {
+    let dir = Dir::new();
+    // A file where the ledger's folder should be.
+    std::fs::write(dir.path("usage"), "in the way").unwrap();
+    let (caf, running) = Caf::start(config_with_ledger(&dir, host(), Vec::new()));
+    let (mut viewer, ..) = Viewer::welcomed(&caf, usage_rules(), 64).await;
+    viewer
+        .send(FromViewer::SetPrice {
+            request: RequestNo(1),
+            model: "claude-viewer-1".into(),
+            price: Some(ModelPrice::new(1.0, 2.0)),
+        })
+        .await;
+    let Outcome::PriceNotSet(why) = viewer.done(1).await else {
+        panic!("not set")
+    };
+    assert!(!why.is_empty(), "the system's words");
+    assert!(
+        caf.prices()
+            .await
+            .unwrap()
+            .find("claude-viewer-1")
+            .is_none()
+    );
+    shut_down(&caf, running).await;
+}

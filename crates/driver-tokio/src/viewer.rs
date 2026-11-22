@@ -152,8 +152,8 @@ impl Default for ViewerRules {
 /// link goes on meanwhile: it's answered with [`ToViewer::Usage`] once
 /// it's read, or [`Outcome::NoLedger`] or [`Outcome::BadQuery`]. A price
 /// set is answered [`Outcome::Done`] once every chat's spend is worked out
-/// with it, or [`Outcome::NoLedger`] with no ledger, or if it couldn't be
-/// written, which is reported to the log.
+/// with it, or [`Outcome::NoLedger`] with no ledger, or
+/// [`Outcome::PriceNotSet`] if it couldn't be written.
 ///
 /// Every request gets exactly one [`ToViewer::Done`], or one
 /// [`ToViewer::Usage`] for a summary, unless the link ends first: one
@@ -556,12 +556,7 @@ fn outcome(result: Result<Outcome, Error>) -> Outcome {
         Err(Error::CannotRestore(why)) => Outcome::CannotRestore(why),
         Err(Error::NoLedger) => Outcome::NoLedger,
         Err(Error::BadQuery(why)) => Outcome::BadQuery(why),
-        // The wire has no outcome of its own for it: the ledger's folder
-        // can't be written, which is as good as none.
-        Err(Error::Price(why)) => {
-            log::warn!(target: "caf", "a viewer's price couldn't be set: {why}");
-            Outcome::NoLedger
-        }
+        Err(Error::Price(why)) => Outcome::PriceNotSet(why),
         Err(_) => Outcome::Gone,
     }
 }

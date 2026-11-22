@@ -146,7 +146,9 @@ the rest of the chat. Summaries and prices cover every app on the machine,
 so they're for viewers the host lets: `ViewerRules::usage`, off by default.
 The welcome says if it's on (`Rights::usage`). A viewer asks for a summary
 with `FromViewer::Usage`, answered with `ToViewer::Usage`, and sets a price
-with `FromViewer::SetPrice`. One that isn't let is answered `NotAllowed`.
+with `FromViewer::SetPrice`, answered `Done`, or `PriceNotSet` with the
+system's words if it couldn't be written. One that isn't let is answered
+`NotAllowed`.
 The link goes on while a summary is read.
 
 ## Turning it off
