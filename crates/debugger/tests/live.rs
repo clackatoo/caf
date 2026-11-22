@@ -497,14 +497,20 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
         Some(ToInspector::Position { live: true, .. })
     ));
 
-    // Closed, the chat is still in what looking back shows, as it ended.
+    // Closed, the chat is archived, and still in what looking back shows,
+    // as it was. Not saved, it stays loaded, so its watch goes on.
     send(
         &mut viewer,
         json!({"type": "Close", "value": {"request": 99, "chat": chat}}),
     )
     .await;
-    let ended = viewer_until(&mut viewer, |message| message["type"] == "Ended").await;
-    assert_eq!(ended["value"]["chat"], chat);
+    let archived = viewer_until(&mut viewer, |message| {
+        message["type"] == "Changes"
+            && (message["value"]["changes"].as_array().unwrap().iter())
+                .any(|each| each["change"]["type"] == "Archived")
+    })
+    .await;
+    assert_eq!(archived["value"]["chat"], chat);
     // The close's step may still be on its way into the book.
     let started = Instant::now();
     while !(running.book.after(0).iter()).any(|step| step.event.get().contains(r#""CloseChat""#)) {
@@ -550,12 +556,14 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
     live.running.await;
     live.book.all_in().await;
     let running = &live.book;
-    // The list of open chats, or the agents' statuses, may still be on
-    // their way: each comes on its own, so either can trail the chat's
-    // end.
+    // The list of open chats, the agents' statuses, and the archived
+    // chat's last changes and the end of its watch, may still be on their
+    // way: each comes on its own, so any can trail the chat's end.
     let closed = loop {
         match next(&mut viewer).await {
-            Ok(message) if message["type"] == "Chats" || message["type"] == "Agents" => {}
+            Ok(message)
+                if ["Chats", "Agents", "Changes", "Ended"]
+                    .contains(&message["type"].as_str().unwrap_or("")) => {}
             other => break other,
         }
     };
