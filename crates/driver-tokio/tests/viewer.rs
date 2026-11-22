@@ -16,7 +16,7 @@ use caf_core::viewer::{
 };
 use caf_core::{Chat, OpenChat, Refused, SettingChoice};
 use caf_driver_tokio::viewer::{ViewerRules, serve};
-use caf_driver_tokio::{Caf, Config, Running};
+use caf_driver_tokio::{Caf, Running};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -236,7 +236,7 @@ fn opening() -> ViewerRules {
 /// host opened.
 async fn started(dir: &Dir, steps: &[Value]) -> (Caf, Running, caf_driver_tokio::ChatHandle) {
     let script = dir.script("script.jsonl", &after_handshake(steps));
-    let (caf, running) = Caf::start(Config::new(host(), vec![fake(dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host(), vec![fake(dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     (caf, running, chat)
 }
@@ -415,7 +415,7 @@ async fn a_watch_since_resumes_or_starts_over() {
     let script = dir.script("script.jsonl", &after_handshake(&steps));
     let mut host = host();
     host.limits.kept_changes = 16;
-    let (caf, running) = Caf::start(Config::new(host, vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host, vec![fake(&dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     let (mut first, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 64).await;
@@ -483,7 +483,7 @@ async fn a_viewer_that_falls_behind_gets_a_picture() {
     let script = dir.script("script.jsonl", &after_handshake(&steps));
     let mut host = host();
     host.limits.kept_changes = 8;
-    let (caf, running) = Caf::start(Config::new(host, vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host, vec![fake(&dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     // Room for one message only, and the viewer stops reading.
@@ -651,7 +651,7 @@ async fn a_viewer_that_may_not_act_only_watches() {
 async fn a_viewer_hears_of_chats_others_open_and_close() {
     let dir = Dir::new();
     let script = dir.script("script.jsonl", &handshake("s1"));
-    let (caf, running) = Caf::start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host(), vec![fake(&dir, &script)]));
     let (mut opener, ..) = Viewer::welcomed(&caf, opening(), 8).await;
     let (mut other, _, chats) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
     assert!(chats.is_empty());
@@ -1017,7 +1017,7 @@ async fn a_request_while_caf_shuts_down_is_answered_gone() {
     );
     let mut host = host();
     host.timers.kill_after = std::time::Duration::from_secs(3);
-    let (caf, running) = Caf::start(Config::new(host, vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host, vec![fake(&dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     until(&chat, &mut watch, "the session", |chat| {
@@ -1096,7 +1096,7 @@ async fn viewers_that_stop_reading_dont_hold_caf_up() {
     let script = dir.script("script.jsonl", &after_handshake(&[prompt()]));
     let hold = Hold::default();
     let (caf, running) =
-        Caf::start_watching(Config::new(host(), vec![fake(&dir, &script)]), hold.clone());
+        Caf::start_watching(config_for(host(), vec![fake(&dir, &script)]), hold.clone());
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     until(&chat, &mut watch, "the session", |chat| {
@@ -1218,7 +1218,7 @@ async fn a_viewer_watches_only_as_many_chats_as_the_host_allows() {
             json!({"respond": {"result": {"sessionId": "s2"}}}),
         ]),
     );
-    let (caf, running) = Caf::start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host(), vec![fake(&dir, &script)]));
     let first = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let second = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     // Open, so nothing changes in them meanwhile.
@@ -1258,7 +1258,7 @@ async fn watching_a_chat_again_before_anything_comes_starts_it_once() {
     let script = dir.script("script.jsonl", &after_handshake(&hello_there()));
     let hold = Hold::default();
     let (caf, running) =
-        Caf::start_watching(Config::new(host(), vec![fake(&dir, &script)]), hold.clone());
+        Caf::start_watching(config_for(host(), vec![fake(&dir, &script)]), hold.clone());
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let (mut viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
     let (_, before) = viewer.watch(chat.id).await;
@@ -1366,9 +1366,9 @@ async fn serve_ends_though_its_viewer_has_stopped_reading() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_viewer_hears_its_cafs_run_and_each_caf_has_its_own() {
-    let (one, one_running) = Caf::start(Config::new(host(), Vec::new()));
+    let (one, one_running) = Caf::start(config_for(host(), Vec::new()));
     let (other, other_running) =
-        Caf::start_watching(Config::new(host(), Vec::new()), Hold::default());
+        Caf::start_watching(config_for(host(), Vec::new()), Hold::default());
     assert_ne!(one.run(), other.run());
     for caf in [&one, &other] {
         let run = caf.run();
@@ -1440,7 +1440,7 @@ async fn a_viewer_chooses_a_setting_and_learns_an_agents_as_the_host_allows() {
         json!({"respond": {"result": {"sessionId": "learn", "configOptions": options("small", "high", true)}}}),
     ]);
     let script = dir.script("script.jsonl", &script);
-    let (caf, running) = Caf::start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host(), vec![fake(&dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     until(&chat, &mut watch, "the session", |chat| {

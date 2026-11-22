@@ -15,7 +15,7 @@ use caf_core::ids::AgentName;
 use caf_core::profiles::{Builtin, ProfileChoice};
 use caf_core::settings::{KnownSettings, ModelUsed, SettingKind, SettingValue};
 use caf_core::{Chat, Core, Now, OpenChat, Refused, SettingChoice};
-use caf_driver_tokio::{Caf, Config, Error};
+use caf_driver_tokio::{Caf, Error};
 use serde_json::{Value, json};
 
 use common::*;
@@ -108,7 +108,7 @@ async fn a_chats_choices_are_sent_model_first_before_its_first_message() {
     steps.extend(set_to("fast", json!(true), &options("large", "high", true)));
     steps.extend([prompt(), say("s1", "Hello"), end_turn()]);
     let script = dir.script("script.jsonl", &offering(&steps));
-    let (caf, running) = Caf::start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host(), vec![fake(&dir, &script)]));
     let open = choosing(
         &dir,
         vec![
@@ -173,7 +173,7 @@ async fn an_agent_that_lists_its_models_the_older_way_is_set_with_set_model() {
         end_turn(),
     ]);
     let script = dir.script("script.jsonl", &script);
-    let (caf, running) = Caf::start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host(), vec![fake(&dir, &script)]));
     let chat = caf
         .open_chat(choosing(&dir, vec![SettingChoice::model("fake-flash")]))
         .await
@@ -221,7 +221,7 @@ async fn a_change_during_a_turn_is_held_until_it_ends_and_only_the_latest_counts
     ));
     steps.extend([prompt(), say("s1", "Thorough"), end_turn()]);
     let script = dir.script("script.jsonl", &offering(&steps));
-    let (caf, running) = Caf::start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host(), vec![fake(&dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     chat.send(UserMessage::text("One")).await.unwrap();
@@ -299,7 +299,7 @@ async fn the_hosts_defaults_are_sent_and_one_the_agent_doesnt_offer_is_dropped_q
     let script = dir.script("script.jsonl", &script);
     let mut agent = fake(&dir, &script);
     agent.settings = vec![SettingChoice::model("large"), SettingChoice::effort("max")];
-    let (caf, running) = Caf::start(Config::new(host(), vec![agent]));
+    let (caf, running) = Caf::start(config_for(host(), vec![agent]));
     let chat = caf
         .open_chat(choosing(&dir, vec![SettingChoice::fast(true)]))
         .await
@@ -348,7 +348,7 @@ async fn a_choice_the_agent_refuses_fails_the_waiting_message_with_send_again() 
         say("s1", "Small it is"),
         end_turn(),
     ]));
-    let (caf, running) = Caf::start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host(), vec![fake(&dir, &script)]));
     let chat = caf
         .open_chat(choosing(&dir, vec![SettingChoice::model("large")]))
         .await
@@ -439,7 +439,7 @@ async fn a_change_the_agent_never_answers_restarts_its_adapter_and_goes_again() 
 exec "$FAKE" "$DIR/$script.jsonl" --record "$DIR/record.jsonl""#;
     let mut host = host();
     host.timers.request = std::time::Duration::from_secs(2);
-    let (caf, running) = Caf::start(Config::new(host, vec![fake_by_shell(&dir, shell)]));
+    let (caf, running) = Caf::start(config_for(host, vec![fake_by_shell(&dir, shell)]));
     let chat = caf
         .open_chat(choosing(&dir, vec![SettingChoice::model("large")]))
         .await
@@ -472,7 +472,7 @@ async fn learning_an_agents_settings_opens_a_session_reads_it_and_lets_it_go() {
         answer,
     ]);
     let script = dir.script("script.jsonl", &steps);
-    let (caf, running) = Caf::start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host(), vec![fake(&dir, &script)]));
     let fake = AgentName("fake".into());
     let mut agents = caf.watch_agents();
     let statuses = agents.next().await.unwrap();
@@ -578,7 +578,7 @@ async fn a_recorded_run_with_settings_replays_to_the_same_state() {
     let mut agent = fake(&dir, &script);
     agent.settings = vec![SettingChoice::fast(true)];
     let recording = dir.path("run.jsonl");
-    let mut config = Config::new(host(), vec![agent]);
+    let mut config = config_for(host(), vec![agent]);
     config.record = Some(recording.clone());
     let (caf, running) = Caf::start(config);
     let chat = caf

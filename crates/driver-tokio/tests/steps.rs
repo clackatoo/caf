@@ -10,7 +10,7 @@ use caf_core::event::{Event, HostCommand};
 use caf_core::host::Host;
 use caf_core::question::{Answer, OptionId};
 use caf_core::{ChatId, Core, Directive, Now, OpenChat};
-use caf_driver_tokio::{Caf, Config, Error, Step, Steps};
+use caf_driver_tokio::{Caf, Error, Step, Steps};
 use serde_json::{Value, json};
 
 use common::*;
@@ -91,7 +91,7 @@ async fn a_watcher_sees_one_step_per_recording_line_with_its_directives() {
     );
     let agents = || vec![fake(&dir, &script)];
     let recording = dir.path("run.jsonl");
-    let mut config = Config::new(host(), agents());
+    let mut config = config_for(host(), agents());
     config.record = Some(recording.clone());
     let notebook = Notebook::default();
     let (caf, running) = Caf::start_watching(config, notebook.clone());
@@ -174,7 +174,7 @@ async fn a_watcher_without_a_recording_sees_the_host_calls_the_core_took() {
     );
     let notebook = Notebook::default();
     let (caf, running) = Caf::start_watching(
-        Config::new(host(), vec![fake(&dir, &script)]),
+        config_for(host(), vec![fake(&dir, &script)]),
         notebook.clone(),
     );
     let refused = caf.open_chat(OpenChat::new("nobody", &dir.0)).await.err();
@@ -221,7 +221,7 @@ async fn a_watcher_sees_secrets_as_they_are_and_its_steps_replay_exactly() {
     let script = dir.script("script.jsonl", &script);
     let agents = || vec![fake(&dir, &script)];
     let recording = dir.path("run.jsonl");
-    let mut config = Config::new(host(), agents());
+    let mut config = config_for(host(), agents());
     config.record = Some(recording.clone());
     let notebook = Notebook::default();
     let (caf, running) = Caf::start_watching(config, notebook.clone());
@@ -287,7 +287,7 @@ async fn a_hold_lasts_however_late_the_test_looks() {
     let script = dir.script("script.jsonl", &handshake("s1"));
     let hold = Hold::default();
     let (caf, running) =
-        Caf::start_watching(Config::new(host(), vec![fake(&dir, &script)]), hold.clone());
+        Caf::start_watching(config_for(host(), vec![fake(&dir, &script)]), hold.clone());
     hold.next_step();
     let opening = tokio::spawn({
         let caf = caf.clone();

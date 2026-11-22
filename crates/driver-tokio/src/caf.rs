@@ -509,6 +509,12 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
             config.agent_limits.biggest_line, config.host.limits.biggest_message,
             "the agent driver's biggest line must be the host's biggest message"
         );
+        #[cfg(test)]
+        assert!(
+            (config.usage.as_ref())
+                .is_none_or(|usage| Some(&usage.folder) != caf_usage::default_folder().as_ref()),
+            "a test's CAF never keeps the user's usage ledger"
+        );
         let recorder = (config.record.as_ref())
             .and_then(|path| Recorder::start(path, &config.host, &config.agents));
         let (commands, inbox) = mpsc::channel(COMMANDS);
@@ -2731,6 +2737,14 @@ mod tests {
 
     use super::*;
 
+    /// A config for these tests, offering `agents`, keeping no usage
+    /// ledger.
+    fn test_config(agents: Vec<AgentSpec>) -> Config {
+        let mut config = Config::new(Host::new("test", "1.0.0"), agents);
+        config.usage = None;
+        config
+    }
+
     /// A writer that keeps what it's given, and waits to be let go before
     /// taking anything.
     struct Stalled {
@@ -2945,8 +2959,7 @@ mod tests {
 
     #[tokio::test]
     async fn watching_a_chat_that_isnt_there_leaves_nothing_behind() {
-        let (caf, running) =
-            Caf::<NoAppItems>::start(Config::new(Host::new("test", "1.0.0"), vec![]));
+        let (caf, running) = Caf::<NoAppItems>::start(test_config(vec![]));
         for chat in 1000..1100 {
             let mut watch = caf.chat(ChatId::from_number(chat)).watch();
             assert!(watch.next().await.is_none());
@@ -2959,8 +2972,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_watch_made_after_caf_has_ended_leaves_nothing_behind() {
-        let (caf, running) =
-            Caf::<NoAppItems>::start(Config::new(Host::new("test", "1.0.0"), vec![]));
+        let (caf, running) = Caf::<NoAppItems>::start(test_config(vec![]));
         caf.shutdown().await;
         running.await;
         let mut watch = caf.chat(ChatId::from_number(1000)).watch();
@@ -3021,8 +3033,7 @@ mod tests {
             command,
             ProfileChoice::Builtin(caf_core::profiles::Builtin::Fake),
         );
-        let (caf, running) =
-            Caf::<NoAppItems>::start(Config::new(Host::new("test", "1.0.0"), vec![fake]));
+        let (caf, running) = Caf::<NoAppItems>::start(test_config(vec![fake]));
         let chat = caf.open_chat(OpenChat::new("fake", &dir)).await.unwrap();
         let first = chat.watch();
         let second = chat.watch();
@@ -3039,8 +3050,7 @@ mod tests {
 
     #[tokio::test]
     async fn watches_dropped_unread_leave_nothing_behind() {
-        let (caf, running) =
-            Caf::<NoAppItems>::start(Config::new(Host::new("test", "1.0.0"), vec![]));
+        let (caf, running) = Caf::<NoAppItems>::start(test_config(vec![]));
         for chat in 1000..2000 {
             drop(caf.chat(ChatId::from_number(chat)).watch());
         }

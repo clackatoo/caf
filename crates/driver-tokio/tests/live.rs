@@ -25,6 +25,14 @@ use caf_core::settings::{Choice, KnownSettings, Setting, SettingForm, SettingKin
 use caf_core::{Chat, OpenChat, Refused, SettingChoice};
 use caf_driver_tokio::{Caf, ChatHandle, Config, Error, Update, Watch};
 
+/// A config for `host` offering `agents`, keeping no usage ledger, so a
+/// live test never writes to the user's.
+fn config_for(host: Host, agents: Vec<AgentSpec>) -> Config {
+    let mut config = Config::new(host, agents);
+    config.usage = None;
+    config
+}
+
 /// Long enough for a model to answer.
 const PATIENCE: Duration = Duration::from_secs(180);
 
@@ -103,7 +111,7 @@ async fn claude_answers_and_stops() {
         command,
         ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
     );
-    let mut config = Config::new(Host::new("caf-live-test", "0.0.0"), vec![claude]);
+    let mut config = config_for(Host::new("caf-live-test", "0.0.0"), vec![claude]);
     config.record = Some(recording.clone());
     let (caf, running) = Caf::start(config);
 
@@ -214,7 +222,7 @@ async fn a_restored_claude_chat_carries_on_its_session() {
     std::fs::create_dir_all(&folder).unwrap();
     let shelf = Shelf("live".into());
     let start = || {
-        let mut config = Config::new(Host::new("caf-live-test", "0.0.0"), vec![claude()]);
+        let mut config = config_for(Host::new("caf-live-test", "0.0.0"), vec![claude()]);
         config.store = Some(Box::new(FileStore::new(folder.join("chats"))));
         Caf::start(config)
     };
@@ -278,7 +286,7 @@ async fn installing_claude_for_real_then_asking_whether_its_signed_in() {
 
     let installs = std::env::temp_dir().join(format!("caf-live-install-{}", std::process::id()));
     let recording = installs.with_extension("jsonl");
-    let mut config = Config::new(
+    let mut config = config_for(
         Host::new("caf-live", "1.0.0"),
         vec![AgentSpec::installed("claude", Builtin::ClaudeAgentAcp)],
     );
@@ -526,7 +534,7 @@ async fn claude_runs_with_none_of_its_own_tools() {
         command,
         ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
     );
-    let mut config = Config::new(Host::new("caf-live-test", "0.0.0"), vec![claude]);
+    let mut config = config_for(Host::new("caf-live-test", "0.0.0"), vec![claude]);
     config.record = Some(recording.clone());
     config.policy = Box::new(OnlyTheAppsTool);
     let (caf, running) = Caf::start(config);
@@ -710,7 +718,7 @@ async fn claude_answers_on_the_model_and_effort_chosen() {
         SpawnCommand::new(adapter()),
         ProfileChoice::Builtin(Builtin::ClaudeAgentAcp),
     );
-    let mut config = Config::new(Host::new("caf-live-test", "0.0.0"), vec![claude]);
+    let mut config = config_for(Host::new("caf-live-test", "0.0.0"), vec![claude]);
     config.record = std::env::var_os("CAF_LIVE_RECORD").map(PathBuf::from);
     let (caf, running) = Caf::start(config);
 

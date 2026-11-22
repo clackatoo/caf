@@ -8,6 +8,7 @@ use std::time::SystemTime;
 
 use caf_debugger::server::{self, App};
 use caf_debugger::{agents, fake, files, live, replay};
+use caf_driver_tokio::UsageConfig;
 use caf_save::FileStore;
 
 /// Prints a line, as `println!` does, but one that can't be printed, as
@@ -32,7 +33,8 @@ macro_rules! tell {
 const PORT: u16 = 7320;
 
 const USAGE: &str = "\
-usage: caf-debugger [--port PORT] [--agents agents.toml] [--store DIR]   run CAF live
+usage: caf-debugger [--port PORT] [--agents agents.toml] [--store DIR]
+                    [--usage DIR] [--no-fetch-prices]                   run CAF live
        caf-debugger --replay FILE.jsonl [--port PORT]                   replay a recording
 
 The page is served on 127.0.0.1 only, at the URL printed, which holds this
@@ -40,7 +42,9 @@ launch's token. Port 7320 unless given; 0 picks a free one.
 
 Live, chats are saved in DIR, by default $XDG_DATA_HOME/caf-debugger/chats
 (~/.local/share/caf-debugger/chats), and those saved before are listed, to
-restore.";
+restore. Usage goes in the ledger in DIR, by default the one every CAF app
+shares, $XDG_DATA_HOME/caf/usage (~/.local/share/caf/usage), and prices are
+fetched from LiteLLM once a day unless --no-fetch-prices.";
 
 /// What the command line asks for.
 struct Args {
@@ -48,6 +52,8 @@ struct Args {
     agents: Option<PathBuf>,
     replay: Option<PathBuf>,
     store: Option<PathBuf>,
+    usage: Option<PathBuf>,
+    fetch_prices: bool,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
@@ -56,6 +62,8 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         agents: None,
         replay: None,
         store: None,
+        usage: None,
+        fetch_prices: true,
     };
     while let Some(arg) = args.next() {
         let mut value = |name: &str| args.next().ok_or_else(|| format!("{name} needs a value"));
@@ -67,6 +75,8 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--agents" => parsed.agents = Some(value("--agents")?.into()),
             "--replay" => parsed.replay = Some(value("--replay")?.into()),
             "--store" => parsed.store = Some(value("--store")?.into()),
+            "--usage" => parsed.usage = Some(value("--usage")?.into()),
+            "--no-fetch-prices" => parsed.fetch_prices = false,
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown argument: {other}")),
         }
@@ -76,6 +86,12 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     }
     if parsed.store.is_some() && parsed.replay.is_some() {
         return Err("--store is for running live, not replaying".into());
+    }
+    if parsed.usage.is_some() && parsed.replay.is_some() {
+        return Err("--usage is for running live, not replaying".into());
+    }
+    if !parsed.fetch_prices && parsed.replay.is_some() {
+        return Err("--no-fetch-prices is for running live, not replaying".into());
     }
     Ok(parsed)
 }
@@ -155,7 +171,23 @@ async fn run(args: Args) -> Result<(), String> {
                     )
                 })?;
             }
-            let live = live::start(agents, Some(recording), store);
+            let usage = match &args.usage {
+                Some(usage) => Some(UsageConfig::new(
+                    std::path::absolute(usage)
+                        .map_err(|error| format!("{}: {error}", usage.display()))?,
+                )),
+                None => UsageConfig::for_user().or_else(|| {
+                    log::warn!(
+                        "there's no $XDG_DATA_HOME or $HOME to keep usage in: it isn't kept"
+                    );
+                    None
+                }),
+            }
+            .map(|mut usage| {
+                usage.fetch_prices = args.fetch_prices;
+                usage
+            });
+            let live = live::start(agents, Some(recording), store, usage);
             let names: Vec<_> = live
                 .caf
                 .agents()
@@ -169,6 +201,9 @@ async fn run(args: Args) -> Result<(), String> {
             }
             if let Some(store) = &live.store {
                 say!("Keeping chats in {}.", store.display());
+            }
+            if let Some(usage) = &live.usage {
+                say!("Keeping usage in {}.", usage.display());
             }
             let mut app = App::new(Arc::clone(&live.book), port, token.clone());
             app.live = Some((live.caf.clone(), Arc::clone(&live.rules)));
