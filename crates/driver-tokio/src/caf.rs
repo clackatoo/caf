@@ -76,7 +76,7 @@ use caf_core::Shelf;
 use caf_core::acp::{Frame, Message};
 use caf_core::agent::AgentStatus;
 use caf_core::agent::{AgentSpec, EnvChange, Launch, McpServer};
-use caf_core::chat::{ChatState, UserMessage};
+use caf_core::chat::UserMessage;
 use caf_core::directive::{
     Level, PolicyDirective, StorageDirective, TimerDirective, UsageDirective, ViewerDirective,
 };
@@ -280,7 +280,8 @@ struct Common<A: AppItem> {
     ended: watch::Receiver<()>,
     /// The agents' names, in order.
     agents: Arc<[AgentName]>,
-    /// The open chats, in the order they were opened.
+    /// The chats loaded, archived ones included, in the order they were
+    /// opened or restored.
     chats: watch::Receiver<Vec<ChatSummary>>,
     /// Where every agent stands, in the order they were offered.
     statuses: watch::Receiver<Vec<AgentStatus>>,
@@ -796,7 +797,8 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
         self.about(agent, AgentCall::LearnSettings).await
     }
 
-    /// Follows which chats are open, with each one's agent and folder.
+    /// Follows which chats are loaded, with each one's agent and folder,
+    /// and when it was archived if it is.
     #[must_use]
     pub fn watch_chats(&self) -> ChatsWatch {
         self.downgrade().watch_chats()
@@ -1229,9 +1231,12 @@ impl SavedWatch {
     }
 }
 
-/// Follows which chats are open: opened by the host, by any viewer, or
-/// closed, which archives them. An archived chat isn't open, until it's
-/// unarchived. Like [`Watch`], it doesn't keep CAF running.
+/// Follows which chats are loaded: opened or restored by the host or by
+/// any viewer, closed, which archives them, unarchived, put away or
+/// deleted. An archived chat still loaded, such as one closed that isn't
+/// saved, or one restored archived, is listed, marked
+/// ([`ChatSummary::archived`]). Like [`Watch`], it doesn't keep CAF
+/// running.
 pub struct ChatsWatch {
     list: watch::Receiver<Vec<ChatSummary>>,
     /// It hasn't given the list yet.
@@ -1245,7 +1250,8 @@ impl ChatsWatch {
         self.list.mark_changed();
     }
 
-    /// The open chats, in the order they were opened: at once the first
+    /// The chats loaded, in the order they were opened or restored, each
+    /// marked if it's archived: at once the first
     /// time, then each time the list changes. `None` once CAF has shut
     /// down.
     ///
@@ -1729,7 +1735,7 @@ struct Task<A: AppItem, D: AppData> {
     recorder: Option<Recorder>,
     /// Who sees every step, if anyone.
     steps: Option<Box<dyn Steps<A, D>>>,
-    /// The open chats, for [`ChatsWatch`]es. Dropped as the task ends.
+    /// The chats loaded, for [`ChatsWatch`]es. Dropped as the task ends.
     open: watch::Sender<Vec<ChatSummary>>,
     /// Every agent's status, for [`AgentsWatch`]es. Dropped as the task
     /// ends.
@@ -2379,12 +2385,10 @@ impl<A: AppItem, D: AppData> Task<A, D> {
         });
     }
 
-    /// Tells the [`ChatsWatch`]es which chats are open, with each one's
-    /// label and shelf, if that changed.
+    /// Tells the [`ChatsWatch`]es which chats are loaded, with each one's
+    /// label and shelf, and when it was archived if it is, if that changed.
     fn tell_chats(&self) {
-        let open: Vec<ChatSummary> = (self.core.summaries().into_iter())
-            .filter(|summary| !self.closed(summary.id))
-            .collect();
+        let open = self.core.summaries();
         self.open.send_if_modified(|was| {
             let changed = *was != open;
             if changed {
@@ -2511,13 +2515,6 @@ impl<A: AppItem, D: AppData> Task<A, D> {
             }
             changed
         });
-    }
-
-    /// Whether `chat` isn't open: archived, or not there.
-    fn closed(&self, chat: ChatId) -> bool {
-        self.core
-            .chat(chat)
-            .is_none_or(|whole| whole.state == ChatState::Closed)
     }
 
     /// What a watch that has seen up to `since` hasn't seen of `chat`.

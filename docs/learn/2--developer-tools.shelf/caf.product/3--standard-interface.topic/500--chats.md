@@ -418,6 +418,6 @@ viewer offers no Delete.
 | The new chat's menu | The agents CAF offers, each with its `AgentStatus.settings`, and whether it's installed and signed in. |
 | A new chat refused | The app's own reason. A viewer gets `Outcome::NotAllowed`, or a `Refused` such as `NoSuchAgent`, `RelativeFolder` or `OwnTools`. |
 
-Only an open chat's summary comes to a viewer unasked: `ChatSummary` has its
-id, agent, folder, label and shelf. Whether it's working, waiting on the
+Only a loaded chat's summary comes to a viewer unasked: `ChatSummary` has its
+id, agent, folder, label and shelf, and when it was archived, if it is. Whether it's working, waiting on the
 user or failed, and its first message, come from watching it.

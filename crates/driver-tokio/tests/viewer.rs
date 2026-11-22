@@ -694,14 +694,24 @@ async fn a_viewer_hears_of_chats_others_open_and_close() {
         })
         .await;
     assert_eq!(opener.done(2).await, Outcome::Done);
+    // Closed, a chat that isn't saved stays, archived: listed, and marked.
+    let archived = |chats: &[ChatSummary]| {
+        (chats.iter())
+            .map(|chat| chat.archived.is_some())
+            .collect::<Vec<_>>()
+    };
     match other.next().await {
-        Some(ToViewer::Chats(chats)) => assert_eq!(ids(&chats), [second.id]),
-        other => panic!("the list without the closed chat, not {other:?}"),
+        Some(ToViewer::Chats(chats)) => {
+            assert_eq!(ids(&chats), [first, second.id]);
+            assert_eq!(archived(&chats), [true, false]);
+        }
+        other => panic!("the list with the closed chat archived, not {other:?}"),
     }
     // The kit's own watch on the list agrees.
     let mut list = caf.watch_chats();
     let now = list.next().await.unwrap();
-    assert_eq!(ids(&now), [second.id]);
+    assert_eq!(ids(&now), [first, second.id]);
+    assert_eq!(archived(&now), [true, false]);
     shut_down(&caf, running).await;
     assert_eq!(list.next().await, None, "the list ends with CAF");
     opener.ends().await;
@@ -774,13 +784,14 @@ async fn a_watched_chat_goes_on_through_being_archived_and_unarchived() {
             chat.archived.is_some() && chat.state == ChatState::Closed
         })
         .await;
-    // It isn't among the open chats.
+    // It's listed, archived as of when the copy says.
+    let listed = |message: &ToViewer| {
+        matches!(message, ToViewer::Chats(chats)
+            if chats.len() == 1 && chats[0].archived == copy.archived)
+    };
     let mut heard = Vec::new();
-    while !heard
-        .iter()
-        .any(|message| matches!(message, ToViewer::Chats(chats) if chats.is_empty()))
-    {
-        heard.push(viewer.next().await.expect("the list without it"));
+    while !heard.iter().any(listed) {
+        heard.push(viewer.next().await.expect("the list with it archived"));
     }
     assert!(
         !heard.contains(&ToViewer::Ended { chat: chat.id }),
@@ -859,10 +870,15 @@ async fn a_viewer_watching_an_archived_chat_hears_it_unarchived() {
     let dir = Dir::new();
     let (caf, running, chat) = started(&dir, &[]).await;
     caf.chat(chat.id).close().await.unwrap();
-    let (mut viewer, _, open) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
-    assert!(open.is_empty(), "an archived chat isn't open: {open:?}");
+    let (mut viewer, _, listed) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
     let (copy, _) = viewer.watch(chat.id).await;
     assert!(copy.archived.is_some());
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        (listed[0].id, listed[0].archived),
+        (chat.id, copy.archived),
+        "the welcome lists it, archived"
+    );
     assert_eq!(copy.state, ChatState::Closed);
     // The watch goes on: the host unarchives it, and the viewer hears.
     chat.unarchive().await.unwrap();
@@ -875,7 +891,7 @@ async fn a_viewer_watching_an_archived_chat_hears_it_unarchived() {
     loop {
         match viewer.next().await {
             Some(ToViewer::Chats(chats)) => {
-                assert_eq!(chats[0].id, chat.id, "open again");
+                assert_eq!((chats[0].id, chats[0].archived), (chat.id, None));
                 break;
             }
             Some(ToViewer::Ended { .. }) | None => panic!("the watch goes on"),

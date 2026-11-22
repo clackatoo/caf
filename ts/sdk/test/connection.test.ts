@@ -82,7 +82,7 @@ describe("the handshake", () => {
     link.deliver(agents);
     const caf = await opening;
     expect(caf.agents).toStrictEqual(agents.value);
-    expect(caf.chats).toStrictEqual([{ id: CHAT, agent: "claude", cwd: "/home/me/project", label: null, shelf: null }]);
+    expect(caf.chats).toStrictEqual([{ id: CHAT, agent: "claude", cwd: "/home/me/project", label: null, shelf: null, archived: null }]);
     expect(caf.run).toBe("run-1");
     expect(caf.may).toStrictEqual({ act: true, agents: true, usage: true });
     expect(link.closed).toBe(false);
@@ -323,7 +323,7 @@ describe("the list of chats", () => {
     const stop = caf.onChats((chats) => lists.push(chats));
     const next = [
       { id: CHAT, agent: "claude", cwd: "/a", label: "Fix the tests", shelf: "work" },
-      { id: chatId(1100), agent: "fake", cwd: "/b", label: null, shelf: null },
+      { id: chatId(1100), agent: "fake", cwd: "/b", label: null, shelf: null, archived: null },
     ];
     link.deliver({ type: "Chats", value: next });
     expect(caf.chats).toStrictEqual(next);

@@ -1029,6 +1029,7 @@ pub(crate) fn every_type(s: &mut Samples) {
         cwd: "/work".into(),
         label: Some("Fix the tests".into()),
         shelf: Some(Shelf("work".into())),
+        archived: Some(Wall(1_700_000_000_000)),
     });
     s.both(&RequestNo(1));
     s.both(&Rights::new(true, false));

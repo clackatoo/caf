@@ -497,17 +497,18 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
         Some(ToInspector::Position { live: true, .. })
     ));
 
-    // Closed, the chat is archived, and still in what looking back shows,
-    // as it was. Not saved, it stays loaded, so its watch goes on.
+    // Closed, the chat is archived, and still watched, as it may be
+    // unarchived; and it's still in what looking back shows.
     send(
         &mut viewer,
         json!({"type": "Close", "value": {"request": 99, "chat": chat}}),
     )
     .await;
     let archived = viewer_until(&mut viewer, |message| {
+        assert_ne!(message["type"], "Ended", "the watch goes on");
         message["type"] == "Changes"
-            && (message["value"]["changes"].as_array().unwrap().iter())
-                .any(|each| each["change"]["type"] == "Archived")
+            && message["value"]["chat"] == chat
+            && message.to_string().contains(r#""Archived""#)
     })
     .await;
     assert_eq!(archived["value"]["chat"], chat);
@@ -545,10 +546,11 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
     let (status, body) = get(port, &format!("/recording?token={token}")).await;
     assert_eq!(status, 200);
     let text = String::from_utf8(body).unwrap();
-    assert!(text.starts_with(r#"{"caf_recording":3,"#), "{text}");
+    assert!(text.starts_with(r#"{"caf_recording":2,"#), "{text}");
     assert!(text.ends_with('\n'));
 
-    // Shutting down ends the chat, and `serve`, which closes the socket.
+    // Shutting down ends the chat, archived but still watched, and
+    // `serve`, which closes the socket.
     running.caf.shutdown().await;
     let Debugger {
         live, dir: _dir, ..
@@ -556,17 +558,28 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
     live.running.await;
     live.book.all_in().await;
     let running = &live.book;
-    // The list of open chats, the agents' statuses, and the archived
-    // chat's last changes and the end of its watch, may still be on their
-    // way: each comes on its own, so any can trail the chat's end.
+    // The list of open chats, or the agents' statuses, may still be on
+    // their way: each comes on its own, so either can trail the chat's
+    // end. So may the chat as shutting down left it.
+    let mut ended = false;
     let closed = loop {
         match next(&mut viewer).await {
+            Ok(message) if message["type"] == "Chats" || message["type"] == "Agents" => {}
             Ok(message)
-                if ["Chats", "Agents", "Changes", "Ended"]
-                    .contains(&message["type"].as_str().unwrap_or("")) => {}
+                if message["type"] == "Ended" && message["value"]["chat"] == chat && !ended =>
+            {
+                ended = true;
+            }
+            Ok(message)
+                if (message["type"] == "Picture" || message["type"] == "Changes") && !ended =>
+            {
+                let id = chat.as_str().expect("an id");
+                assert!(message.to_string().contains(id), "{message}");
+            }
             other => break other,
         }
     };
+    assert!(ended, "the watched chat's end comes first");
     assert_eq!(closed, Err(Some(1000)), "closed, normally");
     // The recording check checked every step.
     assert_eq!(running.recording_checked(), running.end());

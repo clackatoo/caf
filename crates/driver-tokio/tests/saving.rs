@@ -474,14 +474,56 @@ async fn a_chat_unarchived_by_the_host_is_saved_so() {
     let mut saved = caf.watch_saved();
     caf.list_saved(shelf(SHELF)).await.unwrap();
     restore_once_written(&caf, id).await;
-    closed_and_listed(&caf, &mut saved, id).await;
-    let chat = restore_once_written(&caf, id).await;
-    assert!(picture(&chat).await.archived.is_some());
+    let list = closed_and_listed(&caf, &mut saved, id).await;
+    let archived = list[0].header.archived;
+    assert!(archived.is_some());
+
+    // Restored by a viewer, it's listed with the open chats, archived.
+    let mut rules = ViewerRules::default();
+    rules.restore = Box::new(|chat, on| Some(RestoreChat::new(chat, on.clone())));
+    let (to, mut from) = viewer(&caf, rules).await;
+    // Refused as loaded until it's written, as `restore_once_written` is.
+    let opened = tokio::time::timeout(PATIENCE, async {
+        for request in 1.. {
+            to.send(FromViewer::Restore {
+                request: RequestNo(request),
+                chat: id,
+                shelf: shelf(SHELF),
+            })
+            .await
+            .unwrap();
+            match outcome(&mut from, request).await {
+                Outcome::Refused(Refused::Loaded) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                other => return other,
+            }
+        }
+        unreachable!()
+    })
+    .await;
+    assert_eq!(opened.expect("written in good time"), Outcome::Opened(id));
+    let summary = heard(&mut from, |message| match message {
+        ToViewer::Chats(chats) => chats.into_iter().find(|each| each.id == id),
+        _ => None,
+    })
+    .await;
+    assert_eq!(summary.archived, archived, "as of when it was closed");
+    let chat = caf.chat(id);
+    assert_eq!(picture(&chat).await.archived, archived);
 
     chat.unarchive().await.unwrap();
     let now = picture(&chat).await;
     assert_eq!(now.archived, None);
     assert_eq!(now.state, ChatState::Idle);
+    let summary = heard(&mut from, |message| match message {
+        ToViewer::Chats(chats) => chats.into_iter().find(|each| each.id == id),
+        _ => None,
+    })
+    .await;
+    assert_eq!(summary.archived, None, "unarchived, it's listed so");
+    let open = caf.watch_chats().next().await.unwrap();
+    assert_eq!((open[0].id, open[0].archived), (id, None));
     // Put away and restored, it stays unarchived.
     chat.put_away().await.unwrap();
     let list = listed(&mut saved, "the chat, put away", |saved| {
