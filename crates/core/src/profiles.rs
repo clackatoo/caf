@@ -154,9 +154,12 @@
 //! that names itself otherwise falls to the cautious profile, and its
 //! chats get no session, as any other adapter's.
 //!
-//! The fake reads what a turn spent as the Claude profile does, so a
-//! script can send a split by model and name its model in `usage_update`;
-//! the test agents read only ACP's `usage`, as any agent might send.
+//! The fake reads what a turn spent, its account's limits and why a
+//! request failed (`data.errorKind`) as the Claude profile does, so a
+//! script can send a split by model and name its model in `usage_update`,
+//! say its limits, and fail a turn for them; the test agents read only
+//! ACP's `usage`, as any agent might send, and fail every turn as
+//! `Other`.
 //!
 //! The fake, and the test agents but one, list their settings as Claude
 //! does, as ACP's session config options, with fast mode the option
@@ -651,6 +654,8 @@ impl ProfileChoice {
             .and_then(Value::as_str);
         let (reason, remedy) = match (self, kind) {
             (Self::Builtin(Builtin::ClaudeAgentAcp), Some(kind)) => claude_kind(kind),
+            #[cfg(feature = "fake")]
+            (Self::Builtin(Builtin::Fake), Some(kind)) => claude_kind(kind),
             _ => (FailureReason::Other, Some(Remedy::SendAgain)),
         };
         Said {
@@ -1781,6 +1786,24 @@ pub(crate) mod tests {
             ProfileChoice::Builtin(Builtin::Fake).limits(&update, HEARD),
             claude().limits(&update, HEARD)
         );
+    }
+
+    #[test]
+    fn claude_and_the_fake_read_why_a_request_failed_and_test_agents_dont() {
+        let error: RpcError = serde_json::from_value(json!({ "code": -32603,
+            "message": "Internal error: API Error: Rate limited", "data": { "errorKind": "rate_limit" } }))
+        .expect("an error");
+        let claude = claude().failure(&error);
+        assert_eq!(claude.reason, FailureReason::UsageLimit);
+        assert_eq!(claude.remedy, Some(Remedy::SendAgain));
+        let plain = ProfileChoice::Builtin(Builtin::TestPlain).failure(&error);
+        assert_eq!(plain.reason, FailureReason::Other);
+        #[cfg(feature = "fake")]
+        {
+            let fake = ProfileChoice::Builtin(Builtin::Fake).failure(&error);
+            assert_eq!(fake.reason, FailureReason::UsageLimit);
+            assert_eq!(fake.remedy, Some(Remedy::SendAgain));
+        }
     }
 
     #[cfg(feature = "fake")]
