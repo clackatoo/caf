@@ -28,7 +28,8 @@
 //! Each line is one [`LedgerLine`], as JSON in CAF's one shape (see
 //! caf-core's docs), in its app's file for the month the turn ended in,
 //! in UTC. An app writes only in its own folder, under that folder's lock
-//! (`.lock`). A turn that ends in a month already compressed, as one
+//! (`.lock`). No app may be named `prices` or `limits`, in any case: those
+//! folders are the prices' and the account limits'. A turn that ends in a month already compressed, as one
 //! recorded just after midnight may, goes in that month's `.jsonl` all the
 //! same: a reader reads both files, and the next compression joins them.
 //!
@@ -187,9 +188,10 @@ impl Ledger {
     /// [`Unsupported`](io::ErrorKind::Unsupported) if the month's file
     /// isn't a plain file.
     /// [`InvalidInput`](io::ErrorKind::InvalidInput) if the app's name
-    /// can't be a folder's (empty, `prices`, starting with a dot, or with
-    /// a slash, backslash or nothing character in it; `prices` in any
-    /// case); if the line is another app's, has no models, a count of 2^53
+    /// can't be a folder's (empty, `prices` or `limits` in any case, as
+    /// those folders are the prices' and the account limits', starting
+    /// with a dot, or with a slash, backslash or nothing character in
+    /// it); if the line is another app's, has no models, a count of 2^53
     /// or more, or a cost that isn't a number; or if the turn ended outside
     /// the years 0 to 9999.
     pub fn record(&self, line: &LedgerLine) -> io::Result<()> {
@@ -370,11 +372,12 @@ fn whole_end(file: &File, size: u64) -> io::Result<u64> {
 fn compress(folder: &Path, month: &str) -> io::Result<()> {
     let plain = folder.join(format!("{month}.jsonl"));
     let name = format!("{month}.jsonl.zst");
-    let Some(mut lines) = files::read(&plain)? else {
+    // A month is as big as its turns made it: it's compressed whole.
+    let Some(mut lines) = files::read(&plain, u64::MAX)? else {
         return Ok(());
     };
     lines.truncate(whole(&lines));
-    if let Some(packed) = files::read(&folder.join(&name))? {
+    if let Some(packed) = files::read(&folder.join(&name), u64::MAX)? {
         // The `.jsonl` holds turns that ended in the month after it was
         // compressed, or, after a crash between the last compression's
         // rename and removal, what it compressed: only lines it doesn't

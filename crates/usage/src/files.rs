@@ -154,12 +154,20 @@ pub(crate) fn sync_folder(folder: &Path) -> io::Result<()> {
         .sync_all()
 }
 
-/// A file's bytes, or `None` if it isn't there.
-pub(crate) fn read(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    let Some(mut file) = open_to_read(path)? else {
+/// A file's bytes, or `None` if it isn't there: up to `most` of them, and
+/// [`InvalidData`](io::ErrorKind::InvalidData) past that, so a file that
+/// has grown far past what CAF writes is never read whole.
+pub(crate) fn read(path: &Path, most: u64) -> io::Result<Option<Vec<u8>>> {
+    let Some(file) = open_to_read(path)? else {
         return Ok(None);
     };
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
+    file.take(most.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > most {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} is bigger than {most} bytes", name(path)),
+        ));
+    }
     Ok(Some(bytes))
 }

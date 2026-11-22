@@ -417,3 +417,179 @@ fn a_lock_held_by_another_is_given_up_on() {
     assert_eq!(saved(folder.path(), given.clone()), None);
     assert_eq!(kept(folder.path()), given);
 }
+
+/// The profile's file in `folder`, as JSON.
+fn written(folder: &Path) -> Value {
+    serde_json::from_slice(&std::fs::read(file(folder)).expect("it's there")).expect("JSON")
+}
+
+/// Writes the profile's file in `folder` as `json`, as another CAF might.
+fn write(folder: &Path, json: &Value) {
+    std::fs::create_dir_all(folder.join("limits")).unwrap();
+    std::fs::write(file(folder), json.to_string()).unwrap();
+}
+
+#[test]
+fn windows_a_later_caf_wrote_are_skipped_and_kept_as_they_were() {
+    let folder = Folder::new("limits-later-caf");
+    let mut unknown_kind = window(&json!({"type": "Fortnight"}), 30, Some(at(24)), at(-1));
+    unknown_kind["pace"] = json!("steady");
+    let mut unknown_state = window(&json!({"type": "Week"}), 99, Some(at(24)), at(-1));
+    unknown_state["state"] = json!({"type": "Throttled"});
+    let unknown_extra = json!({"in_use": "partly", "heard": at(-1)});
+    write(
+        folder.path(),
+        &json!({
+            "windows": [five_hours(40, at(-1)), unknown_kind, unknown_state],
+            "extra_usage": unknown_extra,
+            "cleared": null,
+        }),
+    );
+    assert_eq!(
+        kept(folder.path()),
+        limits(vec![five_hours(40, at(-1))], None),
+        "the rest read"
+    );
+
+    let merged = saved(
+        folder.path(),
+        limits(vec![model_week("opus", 7, at(0))], None),
+    );
+    let read = limits(
+        vec![five_hours(40, at(-1)), model_week("opus", 7, at(0))],
+        None,
+    );
+    assert_eq!(merged, Some(read.clone()), "only what reads is news");
+    let mut expected = serde_json::to_value(&read).unwrap();
+    expected["windows"]
+        .as_array_mut()
+        .unwrap()
+        .extend([unknown_kind, unknown_state]);
+    expected["extra_usage"] = unknown_extra;
+    assert_eq!(
+        written(folder.path()),
+        expected,
+        "carried through as they were"
+    );
+
+    // Each goes as a window this CAF reads would: cleared after it was
+    // heard, or its reset passed.
+    let mut passed = window(&json!({"type": "Fortnight"}), 30, Some(at(-1)), at(-2));
+    passed["state"] = json!({"type": "Throttled"});
+    let mut later = expected.clone();
+    later["windows"].as_array_mut().unwrap().push(passed);
+    write(folder.path(), &later);
+    saved(
+        folder.path(),
+        limits(vec![model_week("opus", 7, at(0))], None),
+    );
+    assert_eq!(written(folder.path()), expected, "past its reset");
+    saved(folder.path(), limits(Vec::new(), Some(NOW.0 - 1)));
+    assert_eq!(
+        written(folder.path()),
+        json!({"windows": [model_week("opus", 7, at(0))], "extra_usage": null, "cleared": NOW.0 - 1}),
+        "heard before the clearing"
+    );
+}
+
+#[test]
+fn a_window_a_later_caf_wrote_goes_once_one_of_its_kind_is_heard_later() {
+    let folder = Folder::new("limits-later-caf-kind");
+    let mut throttled = five_hours(40, at(-1));
+    throttled["state"] = json!({"type": "Throttled"});
+    write(
+        folder.path(),
+        &json!({"windows": [throttled], "extra_usage": null, "cleared": null}),
+    );
+    let given = limits(vec![five_hours(50, at(0))], None);
+    assert_eq!(saved(folder.path(), given.clone()), None);
+    assert_eq!(
+        written(folder.path()),
+        serde_json::to_value(&given).unwrap()
+    );
+}
+
+#[test]
+fn a_file_far_bigger_than_limits_are_isnt_read() {
+    let folder = Folder::new("limits-big");
+    let mut big = limits(vec![five_hours(40, at(-1))], None);
+    big.windows[0].kind = WindowKind::Other("x".repeat(2 << 20));
+    write(folder.path(), &serde_json::to_value(&big).unwrap());
+    let (read, errors) = load(folder.path(), NOW);
+    assert!(read.is_empty());
+    let [error] = errors.as_slice() else {
+        panic!("one error: {errors:?}");
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    crate::testing::names_only(error, folder.path(), "limits/claude-agent-acp.json");
+    let given = limits(vec![five_hours(50, at(0))], None);
+    assert_eq!(saved(folder.path(), given.clone()), None, "written over");
+    assert_eq!(kept(folder.path()), given);
+}
+
+#[test]
+fn a_time_from_a_clock_set_ahead_never_wins_for_long() {
+    let folder = Folder::new("limits-clock");
+    let ahead = at(24);
+    write(
+        folder.path(),
+        &json!({
+            "windows": [],
+            "extra_usage": null,
+            "cleared": ahead,
+        }),
+    );
+    let read = kept(folder.path());
+    let slack = Wall(NOW.0 + super::SLACK);
+    assert_eq!(read.cleared, Some(slack), "no later than now, near enough");
+
+    write(
+        folder.path(),
+        &json!({"windows": [five_hours(90, ahead)], "extra_usage": {"in_use": true, "heard": ahead}, "cleared": null}),
+    );
+    let read = kept(folder.path());
+    assert_eq!(read.windows[0].heard, slack);
+    assert_eq!(read.extra_usage.map(|extra| extra.heard), Some(slack));
+    // Kept as of then, so news heard after it wins.
+    saved(folder.path(), limits(vec![five_hours(40, at(-1))], None));
+    let then = NOW.0 + 2 * super::SLACK;
+    let news = profile(limits(vec![five_hours(50, then)], None));
+    save(folder.path(), &news, Wall(then)).unwrap();
+    let (read, _) = load(folder.path(), Wall(then));
+    let five = read[0].limits.window(&WindowKind::FiveHours).unwrap();
+    assert_eq!((five.used, five.heard), (50, Wall(then)));
+    // And a save's own times are held to it too.
+    let ahead = profile(limits(vec![model_week("opus", 5, at(24))], None));
+    save(folder.path(), &ahead, Wall(then)).unwrap();
+    let (read, _) = load(folder.path(), Wall(then));
+    let week = read[0].limits.window(&WindowKind::ModelWeek("opus".into()));
+    assert_eq!(week.map(|week| week.heard), Some(Wall(then + super::SLACK)));
+}
+
+#[test]
+fn a_save_that_changes_nothing_isnt_written() {
+    use std::os::unix::fs::MetadataExt;
+    let folder = Folder::new("limits-unchanged");
+    let given = limits(vec![five_hours(40, at(-1))], None);
+    saved(folder.path(), given.clone());
+    let before = std::fs::metadata(file(folder.path())).unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    assert_eq!(saved(folder.path(), given.clone()), None);
+    let older = limits(vec![five_hours(30, at(-2))], None);
+    assert_eq!(saved(folder.path(), older), Some(given));
+    let after = std::fs::metadata(file(folder.path())).unwrap();
+    assert_eq!(
+        (before.ino(), before.mtime_nsec()),
+        (after.ino(), after.mtime_nsec())
+    );
+}
+
+#[test]
+fn a_cleared_only_file_is_loaded() {
+    let folder = Folder::new("limits-cleared-only");
+    saved(folder.path(), limits(Vec::new(), Some(at(-1))));
+    assert_eq!(
+        load(folder.path(), NOW).0,
+        [profile(limits(Vec::new(), Some(at(-1))))]
+    );
+}

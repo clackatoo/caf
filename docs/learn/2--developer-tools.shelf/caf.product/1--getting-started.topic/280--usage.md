@@ -71,7 +71,9 @@ for the whole machine, shared by every CAF app on it.
 ```
 
 Each app has a folder, named for its host (`Host::new("eyespy", …)`), and
-a file per month, with a line per turn. A month that has ended is
+a file per month, with a line per turn. So no host may be named `prices`
+or `limits`, in any case, as those folders are CAF's: its lines are
+refused, which is reported to the log, and never written. A month that has ended is
 compressed. Lines are only ever added, each whole, so two copies of an app
 never mix theirs. A line holds when the turn ended, the app, the chat and
 turn, the agent, and what it spent: never what was said, and never the
@@ -90,9 +92,11 @@ The folder also keeps each agent profile's account limits, how much of
 the subscription's five hours and week is used, as the agent last said:
 a file per profile in `limits/`, so CAF has them as it starts, before the
 agent says again. Each save is merged with the file, window by window, the
-latest heard winning, so two apps never undo each other's news, and an app
-that finds news another kept in it takes it in. One that can't be kept is
-reported to the log, and costs only keeping them across restarts.
+latest heard winning, so two apps never undo each other's news. Another
+app's news reaches this one as it starts, or with its own next save, when
+it finds that news in the file: not before. Limits that can't be kept are
+reported to the log, and tried again with the next save, every hour and as
+CAF shuts down; they cost only keeping them across restarts.
 
 ## Prices
 
