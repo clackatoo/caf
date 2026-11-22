@@ -235,6 +235,15 @@ fetched from LiteLLM once a day; `--no-fetch-prices` never fetches them:
 cargo run -p caf-debugger -- --usage /tmp/usage --no-fetch-prices
 ```
 
+The fake agent says what its turns spent only with `--fake-usage`: it
+makes the figures up (a chat's first turn costs $0.0125), and with the
+shared ledger they would count in your real usage. Give it a ledger of its
+own to try the usage page with them:
+
+```sh
+cargo run -p caf-debugger -- --usage /tmp/usage --no-fetch-prices --fake-usage
+```
+
 See [Usage](~caf/getting-started/usage).
 
 ## The token

@@ -189,7 +189,7 @@ impl Debugger {
     /// The debugger, keeping chats in `store` if given.
     async fn start_with(name: &str, store: Option<PathBuf>) -> Self {
         let dir = Dir::new(name);
-        let script = fake::write(&dir.0).unwrap();
+        let script = fake::write(&dir.0, false).unwrap();
         let mut command = SpawnCommand::new(caf_fake_agent::binary());
         command.args = vec![script.into_os_string()];
         let agents = vec![AgentSpec::command(
@@ -733,7 +733,7 @@ async fn the_recording_check_passes_with_secrets_the_recording_hides() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_recording_that_couldnt_be_made_is_none() {
     let dir = Dir::new("no-recording");
-    let script = fake::write(&dir.0).unwrap();
+    let script = fake::write(&dir.0, false).unwrap();
     let mut command = SpawnCommand::new(caf_fake_agent::binary());
     command.args = vec![script.into_os_string()];
     let agents = vec![AgentSpec::command(

@@ -34,7 +34,7 @@ const PORT: u16 = 7320;
 
 const USAGE: &str = "\
 usage: caf-debugger [--port PORT] [--agents agents.toml] [--store DIR]
-                    [--usage DIR] [--no-fetch-prices]                   run CAF live
+                    [--usage DIR] [--no-fetch-prices] [--fake-usage]    run CAF live
        caf-debugger --replay FILE.jsonl [--port PORT]                   replay a recording
 
 The page is served on 127.0.0.1 only, at the URL printed, which holds this
@@ -44,7 +44,9 @@ Live, chats are saved in DIR, by default $XDG_DATA_HOME/caf-debugger/chats
 (~/.local/share/caf-debugger/chats), and those saved before are listed, to
 restore. Usage goes in the ledger in DIR, by default the one every CAF app
 shares, $XDG_DATA_HOME/caf/usage (~/.local/share/caf/usage), and prices are
-fetched from LiteLLM once a day unless --no-fetch-prices.";
+fetched from LiteLLM once a day unless --no-fetch-prices. The fake agent
+says what its turns spent, made-up figures that count as real usage, only
+with --fake-usage.";
 
 /// What the command line asks for.
 struct Args {
@@ -54,6 +56,8 @@ struct Args {
     store: Option<PathBuf>,
     usage: Option<PathBuf>,
     fetch_prices: bool,
+    /// Whether the fake agent says what its turns spent.
+    fake_usage: bool,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
@@ -64,6 +68,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         store: None,
         usage: None,
         fetch_prices: true,
+        fake_usage: false,
     };
     while let Some(arg) = args.next() {
         let mut value = |name: &str| args.next().ok_or_else(|| format!("{name} needs a value"));
@@ -77,6 +82,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--store" => parsed.store = Some(value("--store")?.into()),
             "--usage" => parsed.usage = Some(value("--usage")?.into()),
             "--no-fetch-prices" => parsed.fetch_prices = false,
+            "--fake-usage" => parsed.fake_usage = true,
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown argument: {other}")),
         }
@@ -92,6 +98,9 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     }
     if !parsed.fetch_prices && parsed.replay.is_some() {
         return Err("--no-fetch-prices is for running live, not replaying".into());
+    }
+    if parsed.fake_usage && parsed.replay.is_some() {
+        return Err("--fake-usage is for running live, not replaying".into());
     }
     Ok(parsed)
 }
@@ -139,8 +148,8 @@ async fn run(args: Args) -> Result<(), String> {
             let dir = files::state_dir()
                 .ok_or("there's no $XDG_STATE_HOME or $HOME to keep recordings in")?;
             files::make(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
-            let script =
-                fake::write(&dir).map_err(|error| format!("the fake agent's script: {error}"))?;
+            let script = fake::write(&dir, args.fake_usage)
+                .map_err(|error| format!("the fake agent's script: {error}"))?;
             let agents = match &args.agents {
                 Some(path) => {
                     agents::load(path).map_err(|why| format!("{}: {why}", path.display()))?
