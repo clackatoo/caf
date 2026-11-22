@@ -2,10 +2,13 @@
 import type { AgentName } from "./AgentName.ts";
 import type { ChatId } from "./ChatId.ts";
 import type { Shelf } from "./Shelf.ts";
+import type { Wall } from "./Wall.ts";
 
 /**
- * An open chat, as the list of chats shows it: enough to draw the list
- * without watching every chat. Names and the like are the app's own.
+ * A chat CAF has loaded, as the list of chats shows it: enough to draw
+ * the list without watching every chat. Names and the like are the app's
+ * own. Archived chats loaded, such as one closed that isn't saved, or one
+ * restored archived, are listed too, marked ([`ChatSummary::archived`]).
  */
 export type ChatSummary = { 
 /**
@@ -28,4 +31,9 @@ label: string | null,
 /**
  * Where it's kept, if it's saved.
  */
-shelf: Shelf | null, };
+shelf: Shelf | null, 
+/**
+ * When it was archived, while it is ([`Chat::archived`]): `None` for
+ * a chat that isn't.
+ */
+archived: Wall | null, };

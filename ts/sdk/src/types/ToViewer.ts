@@ -25,7 +25,8 @@ version: number,
  */
 agents: Array<AgentName>, 
 /**
- * The open chats, in the order they were opened.
+ * The chats CAF has loaded, in the order they were opened or
+ * restored, archived ones included and marked.
  */
 chats: Array<ChatSummary>, 
 /**

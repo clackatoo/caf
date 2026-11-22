@@ -299,7 +299,8 @@
             "agent": "claude",
             "cwd": "/work",
             "label": "Fix the tests",
-            "shelf": "work"
+            "shelf": "work",
+            "archived": null
           }
         ],
         "run": "7f3a9c2e",
@@ -325,7 +326,16 @@
           "agent": "claude",
           "cwd": "/work",
           "label": "Fix the tests",
-          "shelf": "work"
+          "shelf": "work",
+          "archived": null
+        },
+        {
+          "id": "00000000-0000-0000-0000-000000000002",
+          "agent": "claude",
+          "cwd": "/work",
+          "label": "Fix the tests",
+          "shelf": "work",
+          "archived": 1700000000000
         }
       ]
     },

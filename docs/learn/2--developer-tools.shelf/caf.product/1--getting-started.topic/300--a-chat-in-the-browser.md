@@ -127,7 +127,7 @@ import { Connection, webSocket } from "@clackatoo/caf";
 
 const caf = await Connection.open(await webSocket("ws://127.0.0.1:7320/viewer"));
 caf.agents; // every agent on offer: its name, whether it's installed and signed in
-caf.chats; // the open chats: id, agent, folder, and the app's label and shelf, if any
+caf.chats; // the chats loaded: id, agent, folder, the app's label and shelf, and when archived, if any
 caf.onChats((chats) => drawList(chats));
 caf.onAgents((agents) => drawAgents(agents));
 ```
