@@ -264,8 +264,21 @@ impl Builtin {
     /// The profile with this [slug](Builtin::slug), if any.
     #[must_use]
     pub fn from_slug(slug: &str) -> Option<Self> {
-        let _ = slug;
-        todo!()
+        // Every profile in this build: one added is added here too.
+        let every = [
+            Self::ClaudeAgentAcp,
+            #[cfg(test)]
+            Self::TestNpm,
+            #[cfg(test)]
+            Self::TestDownload,
+            #[cfg(test)]
+            Self::TestPlain,
+            #[cfg(test)]
+            Self::TestModels,
+            #[cfg(feature = "fake")]
+            Self::Fake,
+        ];
+        every.into_iter().find(|each| each.slug() == slug)
     }
 
     /// The name its adapter gives in `initialize`.
