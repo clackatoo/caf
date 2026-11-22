@@ -574,11 +574,13 @@ fn keep(
     while let Some(work) = next.take() {
         // Limits given are saved before anything else is done, so those
         // given one after another are one save.
+        let mut tried = false;
         if limits.given
             && !matches!(work, Work::SaveLimits(_))
             && let Some(ledger) = ledger
         {
             limits.try_saving(ledger, &report);
+            tried = true;
         }
         match work {
             Work::Record(line) => {
@@ -611,7 +613,8 @@ fn keep(
                         kept.cooling = None;
                         kept.try_writing(ledger);
                     }
-                    if asked.is_none() {
+                    // Not again if they were just now.
+                    if asked.is_none() && !tried {
                         limits.try_saving(ledger, &report);
                     }
                     give(read_prices(Some(ledger)));

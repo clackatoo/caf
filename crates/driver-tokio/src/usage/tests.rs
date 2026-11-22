@@ -971,15 +971,18 @@ async fn a_cleared_only_file_is_reported() {
 /// own by its folder, which they name.
 static LOGGED: Mutex<Vec<(log::Level, String)>> = Mutex::new(Vec::new());
 
-/// Keeps what's logged, in [`LOGGED`].
+/// Keeps what CAF logs, in [`LOGGED`].
 struct Logged;
 
 impl log::Log for Logged {
-    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
-        true
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.target() == "caf" && metadata.level() <= log::Level::Debug
     }
 
     fn log(&self, record: &log::Record<'_>) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
         let text = record.args().to_string();
         let mut logged = LOGGED.lock().unwrap_or_else(PoisonError::into_inner);
         logged.push((record.level(), text));
@@ -1003,7 +1006,7 @@ fn logging() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         log::set_logger(&Logged).expect("the tests' logger");
-        log::set_max_level(log::LevelFilter::Trace);
+        log::set_max_level(log::LevelFilter::Debug);
     });
 }
 
@@ -1049,5 +1052,35 @@ async fn a_save_that_panics_is_reported_once_in_a_row_and_dropped() {
         levels,
         [log::Level::Warn, log::Level::Debug],
         "a warning, then not again; nothing lost as it finishes"
+    );
+}
+
+#[test]
+fn a_failing_save_followed_by_the_hourly_look_is_tried_once_before_it() {
+    static TRIES: AtomicUsize = AtomicUsize::new(0);
+    let dir = Dir::new("limits-tried-once");
+    let ledger = Ledger::new(dir.0.clone(), "caf-test");
+    let (work, inbox) = std::sync::mpsc::channel();
+    let (tell, _told) = mpsc::unbounded_channel();
+    let save: Saver = |_, _, _| {
+        TRIES.fetch_add(1, Ordering::SeqCst);
+        Err(std::io::Error::other("it fails"))
+    };
+    work.send(Work::SaveLimits(limits(40, 1000))).unwrap();
+    work.send(Work::Reload(None)).unwrap();
+    drop(work);
+    let limits = Limits::new(LOCK_COOLDOWN, save);
+    keep(
+        Some(&ledger),
+        &inbox,
+        &tell,
+        &AtomicUsize::new(0),
+        LOCK_COOLDOWN,
+        limits,
+    );
+    assert_eq!(
+        TRIES.load(Ordering::SeqCst),
+        2,
+        "before the look, not again in it, and once as it ends"
     );
 }
