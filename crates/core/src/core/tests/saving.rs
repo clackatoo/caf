@@ -615,6 +615,41 @@ fn a_failed_write_is_tried_again_whole_later() {
 }
 
 #[test]
+fn a_restore_finds_a_chat_archived_if_its_state_or_when_says_so() {
+    let at = Wall(EPOCH);
+    let now = Wall(EPOCH + 5000);
+    let tidy = |state: Value, archived: Value| {
+        let mut chat = mid_turn("claude");
+        chat["turns"] = json!([]);
+        chat["questions"] = json!([]);
+        chat["state"] = state;
+        chat["archived"] = archived;
+        let chat: Chat = serde_json::from_value(chat).expect("a chat");
+        serde_json::to_value(crate::core::saving::tidy(&chat, at, now)).expect("JSON")
+    };
+    let closed = json!({ "type": "Closed" });
+    let idle = json!({ "type": "Idle" });
+    // Archived as it should be: left so.
+    assert_eq!(tidy(closed.clone(), json!(EPOCH - 1)), json!([]));
+    // Closed before CAF kept when: archived as of now.
+    assert_eq!(
+        tidy(closed.clone(), Value::Null),
+        json!([{ "type": "Archived", "value": EPOCH + 5000 }])
+    );
+    // Archived, but saved in another state: closed, as it's archived.
+    assert_eq!(
+        tidy(idle.clone(), json!(EPOCH - 1)),
+        json!([{ "type": "State", "value": closed }])
+    );
+    // Neither: idle.
+    assert_eq!(tidy(idle, Value::Null), json!([]));
+    assert_eq!(
+        tidy(json!({ "type": "Opening" }), Value::Null),
+        json!([{ "type": "State", "value": { "type": "Idle" } }])
+    );
+}
+
+#[test]
 fn a_restore_finds_what_was_under_way_and_tidies_it() {
     let chat: Chat = serde_json::from_value(mid_turn("claude")).expect("a chat");
     let at = Wall(EPOCH);
@@ -851,6 +886,38 @@ fn a_chat_whose_agent_is_gone_comes_back_and_sending_to_it_is_refused() {
         &append,
         &json!({ "value": { "header": { "agent": "gone", "profile": "long-gone-acp" } } }),
     );
+}
+
+#[test]
+fn an_archived_chat_whose_agent_is_gone_stays_archived_when_sent_to_and_unarchives_to_no_connection()
+ {
+    let mut script = Script::new(host());
+    script
+        .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
+        .0
+        .expect("restoring");
+    let mut chat = mid_turn("gone");
+    chat["state"] = json!({ "type": "Closed" });
+    chat["archived"] = json!(EPOCH - 10_000);
+    let mut saved = saved(&chat, Some("old"), 0);
+    saved.header.profile = Some("long-gone-acp".to_owned());
+    script.storage(1000, StorageEvent::Loaded(Box::new(saved)));
+    let archived = json!({ "state": { "type": "Closed" }, "archived": EPOCH - 10_000 });
+    assert_has(&script.chat(CHAT), &archived);
+    assert_eq!(script.send(CHAT, "hello?").0, Err(Refused::NoSuchAgent));
+    assert_has(&script.chat(CHAT), &archived);
+
+    // Unarchived, it's idle, but on no connection: there's no agent to
+    // start.
+    let (done_, out) = script.unarchive(CHAT);
+    done_.expect("unarchived");
+    assert!(with(&out, "start").is_empty());
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "state": { "type": "Idle" }, "archived": null }),
+    );
+    assert_eq!(script.state()["conns"], json!({}));
+    assert_eq!(script.send(CHAT, "hello?").0, Err(Refused::NoSuchAgent));
 }
 
 #[test]
@@ -1165,10 +1232,17 @@ fn closing_a_saved_chat_archives_it_and_puts_it_away_and_restoring_it_brings_it_
     );
 
     // Sending to it unarchives it, and the message goes as to any other:
-    // its agent started, its session continued.
+    // its agent started, its session continued, the turn and the
+    // connection it's put on numbered apart.
     script.at(3000);
     let (turn, out) = script.send(CHAT, "Again");
-    turn.expect("sent");
+    let turn = turn.expect("sent");
+    let conns = script.state()["conns"].clone();
+    assert!(
+        conns.get(turn.0.to_string()).is_none(),
+        "turn {} isn't a connection's number too: {conns:#}",
+        turn.0
+    );
     assert_eq!(with(&out, "start").len(), 1);
     let proc = with(&out, "start")[0]["start"].as_u64().expect("a process");
     let init = sent(&out, "initialize")["id"].as_u64().expect("an id");

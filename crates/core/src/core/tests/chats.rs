@@ -307,6 +307,46 @@ fn closing_an_unsaved_chat_archives_it_until_its_unarchived_or_sent_to() {
 }
 
 #[test]
+fn unarchiving_a_chat_of_its_own_adapter_gives_it_a_new_one_once_the_old_lets_its_session_go() {
+    let mut per_chat = host();
+    per_chat.grouping = crate::host::Grouping::PerChat;
+    let mut script = Script::new(per_chat);
+    script.open_claude();
+    script.close(CHAT).0.expect("closed");
+    script.unarchive(CHAT).0.expect("unarchived");
+    // Its old adapter, let go, still ends: a new one is started for it,
+    // on a connection of its own.
+    let (turn, out) = script.send(CHAT, "Again");
+    let turn = turn.expect("sent");
+    let proc = with(&out, "start")[0]["start"].as_u64().expect("a process");
+    assert_ne!(proc, PROC);
+    let conns = script.state()["conns"].clone();
+    let mine: Vec<&Value> = (conns
+        .as_object()
+        .into_iter()
+        .flat_map(|conns| conns.values()))
+    .filter(|conn| conn["chats"] == json!([CHAT]))
+    .collect();
+    assert_eq!(mine.len(), 1, "{conns:#}");
+    assert_eq!(mine[0]["only"], json!(CHAT));
+    assert!(conns.get(turn.0.to_string()).is_none(), "{conns:#}");
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    script.answers(proc, init, &claude_init());
+    // Its session continues once the old adapter has let it go.
+    for event in [
+        AgentEvent::Exited(Exit::Code(0)),
+        AgentEvent::OutputClosed,
+        AgentEvent::Group { empty: true },
+    ] {
+        script.agent(PROC, event);
+    }
+    let resumed = (script.outs.iter().flatten())
+        .filter(|directive| directive["write"] == json!(proc))
+        .any(|directive| directive["message"]["method"] == "session/resume");
+    assert!(resumed, "its session is continued on the new adapter");
+}
+
+#[test]
 fn mcp_servers_go_with_the_session_unless_the_agent_cant_take_them() {
     let mut script = Script::new(super::harness::host());
     let mut open = OpenChat::new("claude", "/work");

@@ -61,7 +61,7 @@ pub(crate) struct Script {
     /// Every event given so far, as JSON, with its time.
     trace: Vec<(u64, String)>,
     /// What each event gave out, rendered.
-    outs: Vec<Vec<Value>>,
+    pub(crate) outs: Vec<Vec<Value>>,
     /// The agent's requests, by process and id, and how often each was
     /// answered.
     answers: BTreeMap<(u64, String), usize>,
