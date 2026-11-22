@@ -513,3 +513,36 @@ fn woken_before_the_wall_clock_says_a_reset_has_passed_the_core_waits_again() {
     assert_eq!(wake_in(&out), None);
     assert_eq!(core.inspect()["wake"], Value::Null);
 }
+
+#[test]
+fn history_a_session_replays_says_nothing_of_limits() {
+    use crate::core::SessionChoice;
+    use crate::ids::AgentSessionId;
+
+    let mut script = Script::new(host());
+    let mut open = OpenChat::new("claude", "/work");
+    open.session = SessionChoice::Continue(AgentSessionId("old".into()));
+    let (chat, out) = script.open(open);
+    chat.expect("opened");
+    // A Claude that can load sessions, but not resume them, so its
+    // history is replayed.
+    let mut init = super::claude_init();
+    init["agentCapabilities"]["sessionCapabilities"] = json!({});
+    let init_id = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let out = script.answers(PROC, init_id, &init);
+    let load = sent(&out, "session/load")["id"].as_u64().expect("an id");
+    script.at(1000);
+    let report = five_and_week(0.2, 3_600_000, 0.3, 86_400_000);
+    let out = script.update(PROC, "old", &report);
+    assert!(saved(&out).is_empty());
+    assert_eq!(script.limits("claude")["windows"], json!([]));
+    // Once it's loaded, what it says is heard.
+    script.answers(PROC, load, &json!({}));
+    script.at(2000);
+    let out = script.update(PROC, "old", &report);
+    assert_eq!(saved(&out).len(), 1);
+    assert_eq!(
+        script.limits("claude")["windows"].as_array().map(Vec::len),
+        Some(2)
+    );
+}
