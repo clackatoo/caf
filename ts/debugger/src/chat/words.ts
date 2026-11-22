@@ -567,6 +567,8 @@ export function failedText(why: DeepReadonly<InstallFailure>): string {
       return 'the last try failed: the disk is full.'
     case 'Stopped':
       return 'the last try was stopped.'
+    case 'Patch':
+      return `the last try failed, as CAF couldn't patch what it installed: ${why.value}`
     case 'Other':
       return `the last try failed: ${why.value}`
     default:

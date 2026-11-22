@@ -79,6 +79,7 @@ describe('a chat waiting for its agent', () => {
     [{ type: 'Cannot', value: { type: 'Failed', value: { type: 'Corrupt' } } }, "what was downloaded wasn't what CAF expected", true],
     [{ type: 'Cannot', value: { type: 'Failed', value: { type: 'NoSpace' } } }, 'the disk is full', true],
     [{ type: 'Cannot', value: { type: 'Failed', value: { type: 'Stopped' } } }, 'the last try was stopped', true],
+    [{ type: 'Cannot', value: { type: 'Failed', value: { type: 'Patch', value: "acp-agent.js isn't the file this patch was written for" } } }, "the last try failed, as CAF couldn't patch what it installed: acp-agent.js isn't the file this patch was written for", true],
     [{ type: 'Cannot', value: { type: 'Failed', value: { type: 'Other', value: 'npm ERR! code EACCES' } } }, 'the last try failed: npm ERR! code EACCES', true],
     [{ type: 'Cannot', value: { type: 'Failed', value: { type: 'Gremlins' } } } as never, "a reason this viewer doesn't know (Gremlins)", true],
     [{ type: 'Cannot', value: { type: 'Licence' } } as never, "a reason this viewer doesn't know (Licence)", false],
