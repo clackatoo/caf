@@ -112,6 +112,14 @@
 //! chat's choice itself once a session opens. A model the agent changes
 //! by itself, such as on a refusal, it reports in `config_option_update`.
 //!
+//! What a turn **spent** ([`usage`](crate::usage)) it says in its answer
+//! to the prompt: ACP's `usage`, and the same split by model in
+//! `_meta.quota.model_usage`, which counts the subagents and compaction
+//! the turn set off too, and so is what CAF keeps; it's empty on a turn
+//! stopped, whose `usage` CAF keeps instead. Both count input uncached,
+//! and thinking as part of output. What the session has cost so far it
+//! says in `usage_update`, just before the answer.
+//!
 //! It declares **nothing of JetBrains AIR**. Any AIR key switches the
 //! adapter into AIR's shapes for the whole connection: reads and searches
 //! arrive without their text, subagents' words stop, failures move into
@@ -141,12 +149,17 @@
 //! that names itself otherwise falls to the cautious profile, and its
 //! chats get no session, as any other adapter's.
 //!
+//! The fake reads what a turn spent as the Claude profile does, so a
+//! script can send a split by model; the test agents read only ACP's
+//! `usage`, as any agent might send.
+//!
 //! The fake, and the test agents but one, list their settings as Claude
 //! does, as ACP's session config options, with fast mode the option
 //! `fast`; the fake declares it takes on/off options. The made-up
 //! `models-acp` lists only its models, the older way, as Gemini's adapter
 //! did: in the unstable `models` field, set with `session/set_model`.
 
+use agent_client_protocol_schema::v1 as acp;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -156,6 +169,7 @@ use crate::install::{
     Bundled, Install, LinkFrom, Needs, NpmPackage, Program, Recipe, SignIn, SignedInAs, Status,
     StatusCommand,
 };
+use crate::usage::Tokens;
 
 /// Which profile an agent should have.
 #[non_exhaustive]
@@ -693,6 +707,125 @@ impl ProfileChoice {
     }
 }
 
+impl ProfileChoice {
+    /// What a turn spent, as an adapter with this profile says in its
+    /// answer to the prompt, `result`. Any agent may give ACP's `usage`;
+    /// Claude's adapter, and the fake, split it by model too
+    /// (`_meta.quota.model_usage`), counting the subagents and compaction
+    /// the turn set off, so the split is taken when it has rows. It's
+    /// empty on a turn stopped, whose `usage` still counts.
+    pub(crate) fn spent(&self, result: &Value) -> Reported {
+        let split = match self {
+            Self::Builtin(Builtin::ClaudeAgentAcp) => split_by_model(result),
+            #[cfg(test)]
+            Self::Builtin(
+                Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain | Builtin::TestModels,
+            ) => Reported::Nothing,
+            #[cfg(feature = "fake")]
+            Self::Builtin(Builtin::Fake) => split_by_model(result),
+            Self::Cautious => Reported::Nothing,
+        };
+        match split {
+            Reported::Nothing => acp_usage(result),
+            split => split,
+        }
+    }
+}
+
+/// What a turn spent, as its agent said it, read into CAF's terms but not
+/// yet checked.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Reported {
+    /// The agent didn't say.
+    Nothing,
+    /// It said, but not as counts CAF can read.
+    Unreadable,
+    /// Its tokens, one row per model, never none.
+    Rows(Vec<Reckoned>),
+}
+
+/// One model's tokens, as an agent said them.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Reckoned {
+    /// The model, by the agent's id for it: `None` if it didn't say, as
+    /// ACP's `usage` doesn't.
+    pub(crate) model: Option<String>,
+    /// Its tokens.
+    pub(crate) tokens: Tokens,
+    /// Every token, as the agent added them up.
+    pub(crate) total: u64,
+}
+
+/// ACP's `usage`, in the answer to a prompt, `result`. Its `inputTokens`
+/// are uncached.
+fn acp_usage(result: &Value) -> Reported {
+    let Some(usage) = result.get("usage").filter(|usage| !usage.is_null()) else {
+        return Reported::Nothing;
+    };
+    let Ok(usage) = serde_json::from_value::<acp::Usage>(usage.clone()) else {
+        return Reported::Unreadable;
+    };
+    Reported::Rows(vec![Reckoned {
+        model: None,
+        tokens: Tokens {
+            input: usage.input_tokens,
+            cache_read: usage.cached_read_tokens.unwrap_or(0),
+            cache_write: usage.cached_write_tokens.unwrap_or(0),
+            output: usage.output_tokens,
+            thinking: usage.thought_tokens,
+        },
+        total: usage.total_tokens,
+    }])
+}
+
+/// The split by model Claude's and Codex's adapters give, in the answer
+/// to a prompt, `result`: `_meta.quota.model_usage`. Its `inputTokens`
+/// are uncached too. `Nothing` if it isn't there or has no rows.
+fn split_by_model(result: &Value) -> Reported {
+    /// A row of it.
+    #[derive(Deserialize)]
+    struct Row {
+        model: String,
+        token_count: Count,
+    }
+    /// A row's tokens.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Count {
+        total_tokens: u64,
+        input_tokens: u64,
+        #[serde(default)]
+        cached_input_tokens: u64,
+        #[serde(default)]
+        cached_write_tokens: u64,
+        output_tokens: u64,
+        #[serde(default)]
+        reasoning_output_tokens: Option<u64>,
+    }
+    let Some(split) = (result.pointer("/_meta/quota/model_usage")).filter(|split| !split.is_null())
+    else {
+        return Reported::Nothing;
+    };
+    let Ok(rows) = serde_json::from_value::<Vec<Row>>(split.clone()) else {
+        return Reported::Unreadable;
+    };
+    if rows.is_empty() {
+        return Reported::Nothing;
+    }
+    let rows = rows.into_iter().map(|row| Reckoned {
+        model: Some(row.model),
+        tokens: Tokens {
+            input: row.token_count.input_tokens,
+            cache_read: row.token_count.cached_input_tokens,
+            cache_write: row.token_count.cached_write_tokens,
+            output: row.token_count.output_tokens,
+            thinking: row.token_count.reasoning_output_tokens,
+        },
+        total: row.token_count.total_tokens,
+    });
+    Reported::Rows(rows.collect())
+}
+
 /// How an adapter lists its settings, as its profile says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SettingsStyle {
@@ -1085,5 +1218,90 @@ pub(crate) mod tests {
             ["auth", "logout"]
         );
         assert!(!fake.pushes_status());
+    }
+
+    /// A prompt's answer with ACP's `usage` and Claude's split by model,
+    /// `split`.
+    fn answered(split: Value) -> Value {
+        json!({
+            "stopReason": "end_turn",
+            "usage": { "inputTokens": 2, "outputTokens": 4, "cachedReadTokens": 10, "totalTokens": 16 },
+            "_meta": { "quota": { "model_usage": split } },
+        })
+    }
+
+    /// A row of what a turn spent.
+    fn reckoned(model: Option<&str>, tokens: [u64; 4], thinking: Option<u64>) -> Reckoned {
+        let [input, cache_read, cache_write, output] = tokens;
+        Reckoned {
+            model: model.map(str::to_owned),
+            tokens: Tokens {
+                input,
+                cache_read,
+                cache_write,
+                output,
+                thinking,
+            },
+            total: input + cache_read + cache_write + output,
+        }
+    }
+
+    #[test]
+    fn claudes_split_by_model_is_read_when_it_has_rows_and_its_usage_otherwise() {
+        let split = json!([
+            { "model": "claude-sonnet-5-5", "token_count": { "totalTokens": 18, "inputTokens": 3, "cachedInputTokens": 5,
+              "cachedWriteTokens": 1, "outputTokens": 9, "reasoningOutputTokens": 2 } },
+            // Codex leaves out what it doesn't count.
+            { "model": "gpt-5.5", "token_count": { "totalTokens": 3, "inputTokens": 1, "outputTokens": 2 } },
+        ]);
+        assert_eq!(
+            claude().spent(&answered(split)),
+            Reported::Rows(vec![
+                reckoned(Some("claude-sonnet-5-5"), [3, 5, 1, 9], Some(2)),
+                reckoned(Some("gpt-5.5"), [1, 0, 0, 2], None),
+            ])
+        );
+        let usage = Reported::Rows(vec![reckoned(None, [2, 10, 0, 4], None)]);
+        assert_eq!(claude().spent(&answered(json!([]))), usage);
+        assert_eq!(claude().spent(&answered(Value::Null)), usage);
+        // Any agent's usage is read, but only Claude's split.
+        let plain = ProfileChoice::Builtin(Builtin::TestPlain);
+        let split = json!([{ "model": "m", "token_count": { "totalTokens": 2, "inputTokens": 1, "outputTokens": 1 } }]);
+        assert_eq!(plain.spent(&answered(split)), usage);
+        assert_eq!(
+            claude().spent(&json!({ "stopReason": "end_turn" })),
+            Reported::Nothing
+        );
+    }
+
+    #[test]
+    fn counts_that_arent_whole_numbers_are_unreadable() {
+        let usage = |count: Value| json!({ "usage": { "inputTokens": count, "outputTokens": 1, "totalTokens": 1 } });
+        for count in [
+            json!(-1),
+            json!(1.5),
+            json!("1"),
+            json!(u64::MAX as f64 * 2.0),
+        ] {
+            assert_eq!(
+                claude().spent(&usage(count.clone())),
+                Reported::Unreadable,
+                "{count}"
+            );
+        }
+        let split = json!([{ "model": "m", "token_count": { "totalTokens": 1, "inputTokens": -1, "outputTokens": 1 } }]);
+        assert_eq!(claude().spent(&answered(split)), Reported::Unreadable);
+        assert_eq!(claude().spent(&answered(json!({}))), Reported::Unreadable);
+    }
+
+    #[cfg(feature = "fake")]
+    #[test]
+    fn the_fake_profile_reads_a_split_by_model_as_claudes_does() {
+        let fake = ProfileChoice::Builtin(Builtin::Fake);
+        let split = json!([{ "model": "small", "token_count": { "totalTokens": 7, "inputTokens": 3, "outputTokens": 4 } }]);
+        assert_eq!(
+            fake.spent(&answered(split)),
+            Reported::Rows(vec![reckoned(Some("small"), [3, 0, 0, 4], None)])
+        );
     }
 }

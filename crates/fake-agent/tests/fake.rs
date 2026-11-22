@@ -290,6 +290,36 @@ fn a_prompt_streams_then_ends() {
 }
 
 #[test]
+fn a_prompt_says_what_it_spent_as_claudes_adapter_does() {
+    let cost = json!({"sessionUpdate": "usage_update", "used": 24928, "size": 200000, "cost": {"amount": 0.0125, "currency": "USD"}});
+    let result = json!({
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 2, "cachedReadTokens": 12799, "cachedWriteTokens": 12123, "outputTokens": 4, "totalTokens": 24928},
+        "_meta": {"quota": {"model_usage": [{"model": "small", "token_count": {
+            "totalTokens": 24928, "inputTokens": 2, "cachedInputTokens": 12799,
+            "cachedWriteTokens": 12123, "outputTokens": 4, "reasoningOutputTokens": 0,
+        }}]}},
+    });
+    let mut fake = Fake::start(&format!(
+        "{HANDSHAKE}\n{}\n{}\n{}\n",
+        json!({"wait": {"method": "session/prompt", "as": "prompt"}}),
+        json!({"update": {"session": "s1", "update": cost}}),
+        json!({"respond": {"to": "prompt", "result": result}}),
+    ));
+    handshake(&mut fake);
+    let prompt = json!({"sessionId": "s1", "prompt": [{"type": "text", "text": "hi"}]});
+    fake.send(&request(2, "session/prompt", &prompt));
+    assert_eq!(
+        fake.recv(),
+        json!({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s1", "update": cost}})
+    );
+    assert_eq!(
+        fake.recv(),
+        json!({"jsonrpc": "2.0", "id": 2, "result": result})
+    );
+}
+
+#[test]
 fn errors_carry_their_data_and_unanswered_requests_stay_so() {
     let mut fake = Fake::start(
         r#"

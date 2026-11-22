@@ -22,6 +22,7 @@ use crate::core::{Refused, SessionChoice};
 use crate::install::SignedInAs;
 use crate::question::{Answer, OptionKind, Question, QuestionKind, SlowChoice};
 use crate::time::{End, Window};
+use crate::usage::{BadQuery, PriceLayer, Resolution, UsageQuery};
 use crate::viewer::{AgentAction, FromViewer, Outcome, ToViewer};
 
 /// An enum whose variants are named.
@@ -401,6 +402,9 @@ impl Seen {
             self.missing::<InstallFailure>(),
             self.missing::<SignInState>(),
             self.missing::<SignedInAs>(),
+            self.missing::<Resolution>(),
+            self.missing::<PriceLayer>(),
+            self.missing::<BadQuery>(),
         ]
         .into_iter()
         .flatten()
@@ -420,8 +424,14 @@ impl Seen {
                 }
             }
             FromViewer::Agent { action, .. } => self.mark(action),
+            FromViewer::Usage { query, .. } => self.query(query),
             _ => {}
         }
+    }
+
+    /// What a usage summary covers.
+    fn query(&mut self, query: &UsageQuery) {
+        self.mark(&query.by);
     }
 
     /// A message to a viewer, and everything in it.
@@ -434,9 +444,15 @@ impl Seen {
             }
             ToViewer::Done { outcome, .. } => {
                 self.mark(outcome);
-                if let Outcome::Refused(refused) = outcome {
-                    self.mark(refused);
+                match outcome {
+                    Outcome::Refused(refused) => self.mark(refused),
+                    Outcome::BadQuery(bad) => self.mark(bad),
+                    _ => {}
                 }
+            }
+            ToViewer::Usage { summary, .. } => {
+                self.query(&summary.query);
+                (summary.prices.iter()).for_each(|priced| self.mark(&priced.layer));
             }
             ToViewer::Agents(agents) => agents.iter().for_each(|each| self.agent(each)),
             _ => {}
@@ -599,4 +615,20 @@ kinds!(KnownSettings {
     "Learning" => KnownSettings::Learning,
     "Known" => KnownSettings::Known(_),
     "Failed" => KnownSettings::Failed(_),
+});
+
+kinds!(Resolution {
+    "Hour" => Resolution::Hour,
+    "Day" => Resolution::Day,
+});
+
+kinds!(PriceLayer {
+    "Own" => PriceLayer::Own,
+    "Fetched" => PriceLayer::Fetched,
+    "Bundled" => PriceLayer::Bundled,
+});
+
+kinds!(BadQuery {
+    "Zone" => BadQuery::Zone(_),
+    "Period" => BadQuery::Period,
 });

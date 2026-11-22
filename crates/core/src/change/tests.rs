@@ -6,7 +6,7 @@ use crate::chat::{Chat, ChatState, Item, ItemKind, Lost, ToolStatus, TurnLife, U
 use crate::fixtures::{self, After};
 use crate::ids::{ChangeNo, ItemId, QuestionId, TurnId};
 use crate::settings::{ModelUsed, SettingChoice};
-use crate::shape::{chat, item, question, settings, tool, turn, usage};
+use crate::shape::{chat, item, question, settings, spend, tool, turn, turn_usage, usage};
 use crate::time::{End, Wall};
 
 /// The sample chat (turn 2, holding words 3; question 4), with a second
@@ -166,6 +166,22 @@ fn a_turn_sent_says_its_model() {
 }
 
 #[test]
+fn what_a_turn_spent_is_set_on_it() {
+    let chat = applied(Change::TurnSpent {
+        turn: TurnId(5),
+        usage: Box::new(turn_usage()),
+    });
+    assert_eq!(chat.turns[1].spent, Some(Box::new(turn_usage())));
+    assert_eq!(chat.turns[0], two_turns().turns[0]);
+}
+
+#[test]
+fn the_spend_is_replaced_whole() {
+    let chat = applied(Change::Spend(Box::new(spend())));
+    assert_eq!(*chat.spend, spend());
+}
+
+#[test]
 fn an_item_is_added_to_its_turn() {
     let new = Item {
         id: ItemId(9),
@@ -263,6 +279,14 @@ fn a_change_naming_what_the_chat_lacks_changes_nothing() {
                 id: "sonnet".into(),
                 name: None,
             },
+        },
+        Mismatch::NoTurn(TurnId(99)),
+    );
+    misfits(
+        "spent-of-no-turn",
+        Change::TurnSpent {
+            turn: TurnId(99),
+            usage: Box::new(turn_usage()),
         },
         Mismatch::NoTurn(TurnId(99)),
     );

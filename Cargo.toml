@@ -16,7 +16,7 @@ caf-save = { path = "crates/save" }
 caf-usage = { path = "crates/usage" }
 # ACP's types only: CAF frames and routes the messages itself. The same
 # pin as clackatoo, with the session notices clackatoo already declares.
-agent-client-protocol-schema = { version = "1.10", default-features = false, features = ["unstable_session_notices"] }
+agent-client-protocol-schema = { version = "1.10", default-features = false, features = ["unstable_end_turn_token_usage", "unstable_session_notices"] }
 # pidfd_send_signal with a flag rustix has no way to pass: signalling an
 # adapter's whole process group through its pidfd.
 libc = "0.2"

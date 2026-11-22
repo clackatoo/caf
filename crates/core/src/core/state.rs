@@ -9,9 +9,10 @@ use serde::Serialize;
 
 use super::clean::Tail;
 use super::settings::Choosing;
+use super::spending::Sent;
 use crate::acp::RequestId;
 use crate::agent::{InstallState, McpServer, SignInState};
-use crate::chat::{AppItem, Note, Turn};
+use crate::chat::{AppItem, Cost, Note, Turn};
 use crate::ids::{
     AgentName, AgentSessionId, ChatId, ConnectionId, ItemId, QuestionId, Ticket, TurnId,
 };
@@ -383,6 +384,9 @@ pub(super) struct Run<A: AppItem> {
     pub(super) restored: bool,
     /// Where it is with sending what's chosen of its settings.
     pub(super) choosing: Choosing,
+    /// What its session has cost so far, as the agent last said: an
+    /// update that doesn't say leaves it as it was.
+    pub(super) cost: Option<Cost>,
 }
 
 /// Where a chat is with its session.
@@ -420,6 +424,8 @@ pub(super) struct Running {
     /// Stop was asked for: when to give up waiting for the agent to
     /// stop.
     pub(super) stop_by: Option<Mono>,
+    /// What was so as it was sent, that what it spent is worked out from.
+    pub(super) sent: Sent,
 }
 
 /// Where the core is with installing agents and signing in to them.
