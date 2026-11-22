@@ -119,19 +119,49 @@ function isBucket(value: unknown): boolean {
   );
 }
 
+/** A model's price: every rate a number, fast mode's or null. */
+function isPriced(value: unknown): boolean {
+  if (!isRecord(value) || !isString(value.model) || !isTagged(value.layer) || !isRecord(value.price)) return false;
+  const price = value.price;
+  return (
+    isNumber(price.input) &&
+    isNumber(price.cache_read) &&
+    isNumber(price.cache_write) &&
+    isNumber(price.output) &&
+    (price.fast === null || isNumber(price.fast))
+  );
+}
+
+/** A name and its count, as a summary counts chats per app and agent. */
+function isCounted(value: unknown): boolean {
+  return Array.isArray(value) && value.length === 2 && isString(value[0]) && isNumber(value[1]);
+}
+
 /**
- * A usage summary: its buckets, and the query the helpers find its
- * periods from. Its other parts are only the app's to draw.
+ * A usage summary, whole: its query, buckets, chats and prices, which the
+ * helpers and every usage page read, and the files it couldn't read.
  */
 export function isUsageSummary(value: unknown): value is Summary {
-  if (!isRecord(value) || !isRecord(value.query) || !Array.isArray(value.buckets)) return false;
-  const query = value.query;
+  if (!isRecord(value) || !isRecord(value.query) || !isRecord(value.chats)) return false;
+  const { query, chats } = value;
   return (
     isNumber(query.since) &&
     isNumber(query.until) &&
     isString(query.zone) &&
     isTagged(query.by) &&
-    value.buckets.every(isBucket)
+    isArrayOf(query.apps, isString) &&
+    isArrayOf(query.agents, isString) &&
+    Array.isArray(value.buckets) &&
+    value.buckets.every(isBucket) &&
+    isNumber(chats.all) &&
+    Array.isArray(chats.by_app) &&
+    chats.by_app.every(isCounted) &&
+    Array.isArray(chats.by_agent) &&
+    chats.by_agent.every(isCounted) &&
+    Array.isArray(value.prices) &&
+    value.prices.every(isPriced) &&
+    (value.fetched === null || isNumber(value.fetched)) &&
+    isArrayOf(value.unreadable, isString)
   );
 }
 
@@ -167,7 +197,7 @@ export function isChange(value: unknown): boolean {
     case "Usage":
       return isRecord(held);
     case "TurnSpent":
-      return isNumber(fields.turn) && isRecord(fields.usage);
+      return isNumber(fields.turn) && isRecord(fields.usage) && Array.isArray(fields.usage.models);
     case "Spend":
       return isRecord(held);
     case "QuestionAsked":

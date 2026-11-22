@@ -132,6 +132,7 @@ describe("ChatCopy", () => {
     ["QuestionGone with no id", { type: "QuestionGone" }],
     ["TurnSpent with no turn", { type: "TurnSpent", value: { usage: { models: [], cost: null, fast: false } } }],
     ["TurnSpent with no usage", { type: "TurnSpent", value: { turn: 1003 } }],
+    ["TurnSpent whose models aren't a list", { type: "TurnSpent", value: { turn: 1003, usage: { models: {}, cost: null, fast: false } } }],
     ["Spend with no value", { type: "Spend" }],
     [
       "ItemAdded whose words aren't text",

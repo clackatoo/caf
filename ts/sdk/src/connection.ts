@@ -120,6 +120,8 @@ export class CafError extends Error {
       | { type: "CannotRestore"; value: CannotRestore }
       /** CAF keeps no usage ledger, so has no summary to give, nor prices to set. */
       | { type: "NoLedger" }
+      /** The price couldn't be written, and the prices are as they were: why, as the system said. */
+      | { type: "PriceNotSet"; value: string }
       /** No summary can be made for the query asked, for this reason. */
       | { type: "BadQuery"; value: BadQuery }
       /** It went in a way this SDK doesn't know, from a later version of CAF: `outcome` is its name. */
@@ -142,6 +144,8 @@ function describe(why: CafError["why"]): string {
       return `CannotRestore: ${why.value.type}`;
     case "BadQuery":
       return `BadQuery: ${why.value.type}`;
+    case "PriceNotSet":
+      return `PriceNotSet: ${why.value}`;
     case "Unknown":
       return `Unknown: ${why.value.outcome}`;
     case "NoCommonVersion":
@@ -726,6 +730,9 @@ export class Connection {
       case "NoLedger":
         if (pending.asked !== "Usage" && pending.asked !== "SetPrice") return broken();
         return pending.reject(new CafError({ type: "NoLedger" }));
+      case "PriceNotSet":
+        if (pending.asked !== "SetPrice" || !isString(value)) return broken();
+        return pending.reject(new CafError({ type: "PriceNotSet", value }));
       case "BadQuery":
         if (pending.asked !== "Usage" || !isTagged(value)) return broken();
         return pending.reject(new CafError({ type: "BadQuery", value: value as BadQuery }));
@@ -886,6 +893,7 @@ const OUTCOMES = new Set([
   "Gone",
   "CannotRestore",
   "NoLedger",
+  "PriceNotSet",
   "BadQuery",
 ]);
 

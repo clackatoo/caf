@@ -1291,6 +1291,14 @@ describe("usage", () => {
     expect(await rejection(clearing)).toStrictEqual({ type: "NoLedger" });
   });
 
+  test("setPrice rejects saying why a price couldn't be set, and the link goes on", async () => {
+    const { caf, link } = await connected();
+    const setting = held(caf.setPrice("claude-haiku-5-5", null));
+    link.deliver({ type: "Done", value: { request: 1, outcome: { type: "PriceNotSet", value: "Permission denied" } } });
+    expect(await rejection(setting)).toStrictEqual({ type: "PriceNotSet", value: "Permission denied" });
+    expect(link.closed).toBe(false);
+  });
+
   test.each([
     ["a usage request answered Done", () => ({ type: "Done", value: { request: 1, outcome: { type: "Done" } } })],
     ["a usage request answered Sent", () => ({ type: "Done", value: { request: 1, outcome: { type: "Sent", value: 3 } } })],
@@ -1311,6 +1319,27 @@ describe("usage", () => {
       }),
     ],
     ["a summary without its query", () => ({ type: "Usage", value: { request: 1, summary: { ...summary, query: null } } })],
+    ["a summary without its prices", () => ({ type: "Usage", value: { request: 1, summary: { ...summary, prices: null } } })],
+    [
+      "a summary whose price isn't a number",
+      () => ({
+        type: "Usage",
+        value: {
+          request: 1,
+          summary: {
+            ...summary,
+            prices: [{ model: "m", price: { input: "1", cache_read: 0, cache_write: 0, output: 0, fast: null }, layer: { type: "Own" } }],
+          },
+        },
+      }),
+    ],
+    [
+      "a summary whose chats per app aren't counts",
+      () => ({ type: "Usage", value: { request: 1, summary: { ...summary, chats: { ...summary.chats, by_app: [["a", "1"]] } } } }),
+    ],
+    ["a summary without its chats", () => ({ type: "Usage", value: { request: 1, summary: { ...summary, chats: undefined } } })],
+    ["a summary whose unreadable files aren't text", () => ({ type: "Usage", value: { request: 1, summary: { ...summary, unreadable: [1] } } })],
+    ["a summary whose fetched isn't a time", () => ({ type: "Usage", value: { request: 1, summary: { ...summary, fetched: "today" } } })],
     ["a Usage without its request", () => ({ type: "Usage", value: { summary } })],
   ])("%s ends the link", async (_, answer) => {
     const { caf, link } = await connected();
@@ -1323,6 +1352,7 @@ describe("usage", () => {
   test.each([
     ["a summary for a request that isn't for one", { type: "Usage", value: { request: 1, summary } }],
     ["NoLedger for a request that isn't for usage", { type: "Done", value: { request: 1, outcome: { type: "NoLedger" } } }],
+    ["PriceNotSet for a request that isn't for a price", { type: "Done", value: { request: 1, outcome: { type: "PriceNotSet", value: "no" } } }],
     [
       "BadQuery for a price",
       { type: "Done", value: { request: 1, outcome: { type: "BadQuery", value: { type: "Period" } } } },
@@ -1356,6 +1386,7 @@ describe("CafError", () => {
     expect(new CafError({ type: "Disconnected" }).message).toBe("Disconnected");
     expect(new CafError({ type: "NoLedger" }).message).toBe("NoLedger");
     expect(new CafError({ type: "BadQuery", value: { type: "Period" } }).message).toBe("BadQuery: Period");
+    expect(new CafError({ type: "PriceNotSet", value: "Permission denied" }).message).toBe("PriceNotSet: Permission denied");
   });
 });
 

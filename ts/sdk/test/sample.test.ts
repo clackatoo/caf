@@ -171,7 +171,9 @@ describe("version 1's sample", () => {
             ? caf.send(chat, { parts: [] })
             : outcome.type === "NoLedger" || outcome.type === "BadQuery"
               ? caf.usage(query)
-              : caf.stop(chat);
+              : outcome.type === "PriceNotSet"
+                ? caf.setPrice("claude-haiku-5-5", null)
+                : caf.stop(chat);
       const [request] = link.take();
       link.deliver({ type: "Done", value: { ...value, request: (request!.value as { request: number }).request } });
       const settled = await asked.then(
