@@ -1372,6 +1372,25 @@ fn learning_fails_by_the_kind_of_failure_keeping_what_the_agent_said_apart() {
         );
     });
     assert_eq!(unreadable, failed(json!({ "type": "Unreadable" })));
+    // An answer to `initialize` too big to read.
+    let mut script = Script::new(host());
+    let (_, out) = script.learn_settings("plain");
+    let proc = started(&out);
+    script.agent(
+        proc,
+        AgentEvent::Frame(Frame::TooBig {
+            id: Some(RequestId::Number(
+                id_of(&sent(&out, "initialize")).cast_signed(),
+            )),
+            method: None,
+            len: 70 << 20,
+            shape: Shape::Answer,
+        }),
+    );
+    assert_eq!(
+        script.agent_status("plain")["settings"],
+        failed(json!({ "type": "Unreadable" }))
+    );
     let stopped = learned("plain", &plain_init(false), |script, proc, _| {
         script.agent(proc, AgentEvent::Exited(Exit::Code(1)));
         script.agent(proc, AgentEvent::OutputClosed);
@@ -1423,6 +1442,10 @@ fn learning_fails_by_the_kind_of_failure_keeping_what_the_agent_said_apart() {
         (Lost::ShutDown, LearnFailure::ShutDown),
         (
             Lost::Incompatible(Incompatible::BadAnswer),
+            LearnFailure::Unreadable,
+        ),
+        (
+            Lost::Incompatible(Incompatible::Protocol { version: Some(2) }),
             LearnFailure::Incompatible,
         ),
         (
@@ -2277,6 +2300,32 @@ fn putting_a_chat_away_with_a_change_being_sent_leaves_nothing_behind() {
     );
     let (_, params) = set(&out);
     assert_eq!(params["value"], "sonnet");
+}
+
+#[test]
+fn an_unarchived_chat_takes_any_choice_until_its_session_opens_again_as_a_restored_one_does() {
+    let mut script = Script::new(host());
+    script.open_offering(
+        OpenChat::new("claude", "/work"),
+        &claude_options("default", "default", false),
+    );
+    // Not offered by its session: refused while it's open.
+    let unlisted = SettingChoice::model("opus[1m]");
+    assert_eq!(
+        script.set_setting(CHAT, unlisted.clone()).0,
+        Err(Refused::NoSuchSetting)
+    );
+    script.close(CHAT).0.expect("closed");
+    assert_eq!(
+        script.set_setting(CHAT, unlisted.clone()).0,
+        Err(Refused::Closed)
+    );
+    script.unarchive(CHAT).0.expect("unarchived");
+    // Checked as its session opens, as for a restored chat.
+    script
+        .set_setting(CHAT, unlisted)
+        .0
+        .expect("taken until the agent says what it offers");
 }
 
 #[test]

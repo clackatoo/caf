@@ -52,12 +52,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if self.waiting_turns(chat).len() >= self.host.limits.queued_messages {
             return Err(Refused::QueueFull);
         }
+        // Its number is taken before anything unarchiving numbers.
+        self.ids.seen(turn.0);
         // Unarchived only once the message can go: one refused leaves it
         // archived.
         if archived {
             self.unarchive_chat(now, chat, out)?;
         }
-        self.ids.seen(turn.0);
         self.call_off_shutdown(now);
         self.end_agent_turn(now, chat);
         self.add_turn(
