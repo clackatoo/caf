@@ -11,6 +11,7 @@ export {
   cost,
   costByKind,
   group,
+  modelName,
   price,
   split,
   total,

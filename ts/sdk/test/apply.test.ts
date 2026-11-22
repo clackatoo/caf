@@ -37,6 +37,18 @@ describe("apply", () => {
     expect(after.questions).toBe(before.questions);
   });
 
+  test("Archived archives the chat as of then, or unarchives it, sharing everything else", () => {
+    const before = busy();
+    const archived = applied(before, { type: "Archived", value: 1_800_000_000_000 });
+    expect(archived.archived).toBe(1_800_000_000_000);
+    expect(archived.state).toBe(before.state);
+    expect(archived.turns).toBe(before.turns);
+    expect(archived.questions).toBe(before.questions);
+    const unarchived = applied(archived, { type: "Archived", value: null });
+    expect(unarchived.archived).toBeNull();
+    expect(unarchived.turns).toBe(before.turns);
+  });
+
   test("TurnAdded adds a turn at the end", () => {
     const before = busy();
     const added = turn(1100);
