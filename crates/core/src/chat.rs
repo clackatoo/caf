@@ -10,6 +10,7 @@
 //!
 //! `A` is the app's own kind of item ([`AppItem`]), or [`NoAppItems`].
 
+use crate::usage::{Spend, TurnUsage};
 use std::fmt::Debug;
 use std::path::PathBuf;
 
@@ -136,6 +137,11 @@ pub struct Chat<A: AppItem = NoAppItems> {
     /// the agent offers, and what was chosen.
     #[serde(default)]
     pub settings: Settings,
+    /// What it has spent, over the turns that have a usage record, priced
+    /// as the core prices it now. Chats saved before CAF recorded usage
+    /// read as having spent nothing.
+    #[serde(default)]
+    pub spend: Box<Spend>,
 }
 
 /// How full the agent's memory is, as it says.
@@ -293,6 +299,10 @@ pub struct Turn<A: AppItem = NoAppItems> {
     /// shows as a note in it.
     #[serde(default)]
     pub model: Option<ModelUsed>,
+    /// What it spent, recorded when it ended, if the agent said. Turns
+    /// from before CAF recorded usage, and imported ones, have none.
+    #[serde(default)]
+    pub usage: Option<Box<TurnUsage>>,
 }
 
 /// What started a turn.

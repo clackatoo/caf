@@ -360,6 +360,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Event::Policy { ticket, answer } => self.policy_answered(now, ticket, answer, out),
             Event::Storage { ticket, event } => self.storage_event(now, ticket, event, out),
             Event::Setup { ticket, event } => self.setup_event(now, ticket, event, out),
+            Event::Prices(prices) => {
+                let _ = prices;
+                todo!("feature 6: keep the prices, and send every chat's spend again")
+            }
         }
         self.finish(now, out);
     }
@@ -908,6 +912,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// Every chat, oldest first.
     pub fn chats(&self) -> impl Iterator<Item = &Chat<A>> {
         self.chats.values()
+    }
+
+    /// The prices the core estimates cost with, as the usage driver last
+    /// gave them ([`Event::Prices`]): none until it has.
+    #[must_use]
+    pub fn prices(&self) -> &crate::usage::PriceTable {
+        todo!()
     }
 
     /// Every chat, oldest first, as lists of chats show them: with the

@@ -4,6 +4,7 @@ import type { ChatId } from "./ChatId.ts";
 import type { ChatState } from "./ChatState.ts";
 import type { Question } from "./Question.ts";
 import type { Settings } from "./Settings.ts";
+import type { Spend } from "./Spend.ts";
 import type { Turn } from "./Turn.ts";
 import type { Usage } from "./Usage.ts";
 
@@ -46,4 +47,10 @@ questions: Array<Question>,
  * The agent's settings the user may choose, such as its model: what
  * the agent offers, and what was chosen.
  */
-settings: Settings, };
+settings: Settings, 
+/**
+ * What it has spent, over the turns that have a usage record, priced
+ * as the core prices it now. Chats saved before CAF recorded usage
+ * read as having spent nothing.
+ */
+spend: Spend, };

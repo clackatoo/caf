@@ -92,6 +92,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 usage: None,
                 questions: Vec::new(),
                 settings,
+                spend: Box::default(),
             },
         );
         self.logs.insert(chat, Log::new(self.ids.first));
@@ -590,6 +591,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 items: vec![item],
                 imported: false,
                 model: None,
+                usage: None,
             },
         );
     }

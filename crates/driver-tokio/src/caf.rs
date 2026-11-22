@@ -69,6 +69,7 @@ use caf_core::ids::{AgentName, ChangeNo};
 use caf_core::question::Answer;
 use caf_core::save::{CannotRestore, RestoreChat, SavedChat, SavedState};
 use caf_core::settings::SettingChoice;
+use caf_core::usage::{BadQuery, ModelPrice, PriceTable, Summary, UsageQuery};
 use caf_core::viewer::ChatSummary;
 use caf_core::{
     AppData, AppItem, Chat, ChatId, Core, Directive, Event, Host, NoAppData, NoAppItems, Now,
@@ -168,6 +169,47 @@ pub struct Config {
     /// Once [`Caf::shutdown`] returns, every saved chat has been written
     /// whole and released.
     pub store: Option<Box<dyn Store>>,
+    /// The usage ledger every CAF app on the machine shares, and where
+    /// prices are kept: [`UsageConfig::for_user`] by default, so usage can
+    /// be summed across apps without each app opting in. `None` keeps no
+    /// ledger: chats still record their usage and spend, but there's no
+    /// summary ([`Error::NoLedger`]), and prices are the bundled snapshot's.
+    ///
+    /// Tests set it to a folder of their own, or `None`, so they never
+    /// write to the user's.
+    pub usage: Option<UsageConfig>,
+}
+
+/// Where the usage ledger is, and whether prices are fetched.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UsageConfig {
+    /// The ledger's folder, shared by every CAF app on the machine.
+    pub folder: PathBuf,
+    /// Whether to fetch LiteLLM's price table
+    /// ([`caf_usage::prices::LITELLM`]) once a day, across every CAF app
+    /// using `folder`. `true` by default. Without it, prices are the
+    /// user's own and the snapshot bundled with CAF.
+    pub fetch_prices: bool,
+}
+
+impl UsageConfig {
+    /// The ledger in `folder`, fetching prices.
+    #[must_use]
+    pub fn new(folder: PathBuf) -> Self {
+        Self {
+            folder,
+            fetch_prices: true,
+        }
+    }
+
+    /// The ledger in the folder every CAF program shares
+    /// ([`caf_usage::default_folder`]), fetching prices; `None` if there's
+    /// no home folder to find it from.
+    #[must_use]
+    pub fn for_user() -> Option<Self> {
+        caf_usage::default_folder().map(Self::new)
+    }
 }
 
 impl Config {
@@ -183,6 +225,7 @@ impl Config {
             record: None,
             installs: None,
             store: None,
+            usage: UsageConfig::for_user(),
         }
     }
 }
@@ -393,6 +436,13 @@ pub enum Error {
     Gone,
     /// A saved chat couldn't be restored. Its save is left as it was.
     CannotRestore(CannotRestore),
+    /// CAF keeps no usage ledger ([`Config::usage`] is `None`), so there's
+    /// no summary, and no price of the user's own can be set.
+    NoLedger,
+    /// A usage summary can't be made for this query.
+    BadQuery(BadQuery),
+    /// The user's own price couldn't be written, as the system said.
+    Price(String),
 }
 
 impl From<Refused> for Error {
@@ -407,6 +457,9 @@ impl std::fmt::Display for Error {
             Self::Refused(refused) => write!(f, "CAF refused: {refused:?}"),
             Self::Gone => f.write_str("CAF has shut down"),
             Self::CannotRestore(why) => write!(f, "CAF couldn't restore the chat: {why:?}"),
+            Self::NoLedger => f.write_str("CAF keeps no usage ledger"),
+            Self::BadQuery(why) => write!(f, "no usage summary for that query: {why:?}"),
+            Self::Price(why) => write!(f, "CAF couldn't set the price: {why}"),
         }
     }
 }
@@ -758,6 +811,44 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     pub async fn move_shelf(&self, from: Shelf, to: Shelf) -> Result<(), Error> {
         self.ask(|reply| Command::MoveShelf { from, to, reply })
             .await
+    }
+
+    /// Usage over a period, from every CAF app's lines in the ledger: what
+    /// a usage page is drawn from. Read on a blocking thread, apart from
+    /// CAF's task, so a summary never holds up a chat; turns that ended a
+    /// moment ago may not be in it yet. See [`caf_usage::summarise`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoLedger`] with no [`Config::usage`];
+    /// [`Error::BadQuery`]; or [`Error::Gone`].
+    pub async fn usage(&self, query: UsageQuery) -> Result<Summary, Error> {
+        let _ = query;
+        todo!()
+    }
+
+    /// Sets the user's own price for a model, by the agent's id for it,
+    /// or with `None` clears it, for every CAF app using the same ledger.
+    /// Every chat's spend is worked out again with it. See
+    /// [`caf_usage::prices::set_own`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoLedger`] with no [`Config::usage`]; [`Error::Price`] if
+    /// it couldn't be written; or [`Error::Gone`].
+    pub async fn set_price(&self, model: String, price: Option<ModelPrice>) -> Result<(), Error> {
+        let _ = (model, price);
+        todo!()
+    }
+
+    /// The prices CAF estimates cost with now: the user's own, then
+    /// LiteLLM's as last fetched, then the bundled snapshot.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Gone`].
+    pub async fn prices(&self) -> Result<PriceTable, Error> {
+        todo!()
     }
 
     /// Stops everything: every session closed, every adapter stopped,
@@ -2200,6 +2291,10 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                     self.storage.apply(storage);
                 }
                 Directive::Report(report) => log_report(&report),
+                Directive::Usage(usage) => {
+                    let _ = usage;
+                    todo!("feature 6: the usage driver")
+                }
                 // No other kind is given yet. One added later needs a
                 // driver here.
                 _ => {}

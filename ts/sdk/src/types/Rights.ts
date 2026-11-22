@@ -17,4 +17,11 @@ act: boolean,
  * their settings. A viewer that may not gets no sign-in's link or
  * code.
  */
-agents: boolean, };
+agents: boolean, 
+/**
+ * Whether it may read usage summaries and set prices. A summary
+ * covers every CAF app on the machine, not just this one, so it's a
+ * right of its own. A chat's own usage and spend come with watching
+ * it. Welcomes from before it was added read as `false`.
+ */
+usage?: boolean, };

@@ -250,7 +250,8 @@
         "run": "7f3a9c2e",
         "may": {
           "act": true,
-          "agents": false
+          "agents": false,
+          "usage": false
         }
       }
     },
@@ -326,7 +327,8 @@
                 }
               ],
               "imported": true,
-              "model": null
+              "model": null,
+              "usage": null
             },
             {
               "id": 17,
@@ -673,7 +675,8 @@
                 }
               ],
               "imported": false,
-              "model": null
+              "model": null,
+              "usage": null
             },
             {
               "id": 18,
@@ -873,7 +876,8 @@
                 }
               ],
               "imported": false,
-              "model": null
+              "model": null,
+              "usage": null
             },
             {
               "id": 19,
@@ -906,7 +910,8 @@
                 }
               ],
               "imported": false,
-              "model": null
+              "model": null,
+              "usage": null
             },
             {
               "id": 24,
@@ -935,7 +940,8 @@
               },
               "items": [],
               "imported": false,
-              "model": null
+              "model": null,
+              "usage": null
             },
             {
               "id": 25,
@@ -954,7 +960,8 @@
               },
               "items": [],
               "imported": false,
-              "model": null
+              "model": null,
+              "usage": null
             }
           ],
           "usage": {
@@ -1148,6 +1155,19 @@
                 "type": "Fast"
               }
             ]
+          },
+          "spend": {
+            "tokens": {
+              "input": 0,
+              "cache_read": 0,
+              "cache_write": 0,
+              "output": 0,
+              "thinking": null
+            },
+            "reported": 0.0,
+            "estimated": 0.0,
+            "unpriced": 0,
+            "turns": 0
           }
         },
         "latest": 5
@@ -1568,7 +1588,8 @@
                 },
                 "items": [],
                 "imported": false,
-                "model": null
+                "model": null,
+                "usage": null
               }
             }
           },
@@ -1613,7 +1634,8 @@
                     }
                   ],
                   "imported": false,
-                  "model": null
+                  "model": null,
+                  "usage": null
                 }
               }
             }

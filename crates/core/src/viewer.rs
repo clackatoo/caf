@@ -79,13 +79,14 @@ use crate::ids::{AgentName, ChangeNo, ChatId, QuestionId, Shelf, TurnId};
 use crate::question::Answer;
 use crate::save::{CannotRestore, SavedChat};
 use crate::settings::SettingChoice;
+use crate::usage::{BadQuery, ModelPrice, Summary, UsageQuery};
 
 /// The versions of the viewer wire this CAF speaks.
 pub const VERSIONS: RangeInclusive<u32> = 1..=1;
 
 /// A message from a viewer to CAF.
 #[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum FromViewer {
@@ -182,6 +183,28 @@ pub enum FromViewer {
         /// What to do.
         action: AgentAction,
     },
+    /// Ask for a usage summary: answered with [`ToViewer::Usage`], or a
+    /// [`ToViewer::Done`] saying why not. It covers every CAF app on the
+    /// machine, so it's allowed only with [`Rights::usage`].
+    Usage {
+        /// The viewer's number for this request.
+        request: RequestNo,
+        /// What it covers.
+        query: UsageQuery,
+    },
+    /// Set the user's own price for a model, or with `None` clear it, so
+    /// the next layer prices it again: kept beside the usage ledger, for
+    /// every CAF app. Allowed only with [`Rights::usage`].
+    SetPrice {
+        /// The viewer's number for this request.
+        request: RequestNo,
+        /// The model, by the agent's id for it, as a [`Bucket`] names it.
+        ///
+        /// [`Bucket`]: crate::usage::Bucket
+        model: String,
+        /// Its price, or `None`.
+        price: Option<ModelPrice>,
+    },
 }
 
 /// Something a viewer may ask CAF to do about an agent. See the core's
@@ -215,6 +238,10 @@ pub enum AgentAction {
 #[cfg_attr(feature = "ts", ts(concrete(A = NoAppItems), bound = "A: ts_rs::TS"))]
 #[serde(tag = "type", content = "value")]
 #[serde(bound = "A: AppItem")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a picture is a whole chat, sent and dropped: boxing it would reshape a released message for one word"
+)]
 pub enum ToViewer<A: AppItem = NoAppItems> {
     /// The answer to [`FromViewer::Hello`].
     Welcome {
@@ -290,6 +317,13 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
         /// How it went.
         outcome: Outcome,
     },
+    /// A usage summary, the answer to [`FromViewer::Usage`].
+    Usage {
+        /// The viewer's number for the request.
+        request: RequestNo,
+        /// The summary.
+        summary: Box<Summary>,
+    },
 }
 
 /// An open chat, as the list of chats shows it: enough to draw the list
@@ -328,13 +362,31 @@ pub struct Rights {
     /// their settings. A viewer that may not gets no sign-in's link or
     /// code.
     pub agents: bool,
+    /// Whether it may read usage summaries and set prices. A summary
+    /// covers every CAF app on the machine, not just this one, so it's a
+    /// right of its own. A chat's own usage and spend come with watching
+    /// it. Welcomes from before it was added read as `false`.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(as = "Option<bool>", optional))]
+    pub usage: bool,
 }
 
 impl Rights {
-    /// What a viewer may do: `act` on chats, and on `agents`.
+    /// What a viewer may do: `act` on chats, and on `agents`. Not `usage`:
+    /// give it with [`Rights::with_usage`].
     #[must_use]
     pub fn new(act: bool, agents: bool) -> Self {
-        Self { act, agents }
+        Self {
+            act,
+            agents,
+            usage: false,
+        }
+    }
+
+    /// These rights, with `usage` as given.
+    #[must_use]
+    pub fn with_usage(self, usage: bool) -> Self {
+        Self { usage, ..self }
     }
 }
 
@@ -407,6 +459,11 @@ pub enum Outcome {
     Gone,
     /// The saved chat couldn't be restored, and its save is as it was.
     CannotRestore(CannotRestore),
+    /// This CAF keeps no usage ledger, so there's no summary, and no price
+    /// of the user's own can be set.
+    NoLedger,
+    /// The usage summary can't be made for this query.
+    BadQuery(BadQuery),
 }
 
 /// A viewer's copy of one chat, and how far it has read: what a viewer

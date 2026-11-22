@@ -214,6 +214,7 @@ pub(crate) fn turn() -> Turn {
             id: "sonnet".into(),
             name: Some("Sonnet 4.6".into()),
         }),
+        usage: None,
     }
 }
 
@@ -256,6 +257,7 @@ pub(crate) fn chat() -> Chat {
         usage: Some(usage()),
         questions: vec![question()],
         settings: settings(),
+        spend: Box::default(),
     }
 }
 

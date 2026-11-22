@@ -18,6 +18,7 @@ use crate::ids::{ChangeNo, ItemId, QuestionId, TurnId};
 use crate::question::Question;
 use crate::settings::{ModelUsed, Settings};
 use crate::time::End;
+use crate::usage::{Spend, TurnUsage};
 
 /// A change, with its number.
 #[non_exhaustive]
@@ -105,6 +106,17 @@ pub enum Change<A: AppItem = NoAppItems> {
     },
     /// The agent said how full its memory is.
     Usage(Usage),
+    /// A turn's usage was recorded, as it ended: its
+    /// [`usage`](crate::chat::Turn::usage).
+    TurnUsage {
+        /// The turn.
+        turn: TurnId,
+        /// What it spent.
+        usage: Box<TurnUsage>,
+    },
+    /// What the chat has spent changed: a turn added to it, or the prices
+    /// changed. The whole of it, each time.
+    Spend(Box<Spend>),
     /// A question was asked.
     QuestionAsked(Question),
     /// A question was answered or withdrawn.
@@ -186,6 +198,8 @@ impl<A: AppItem> Chat<A> {
             },
             Change::ItemEnded { item, end } => self.item_mut(*item)?.window.end = *end,
             Change::Usage(usage) => self.usage = Some(usage.clone()),
+            Change::TurnUsage { turn, usage } => self.turn_mut(*turn)?.usage = Some(usage.clone()),
+            Change::Spend(spend) => self.spend = spend.clone(),
             Change::QuestionAsked(question) => self.questions.push(question.clone()),
             Change::QuestionGone(question) => {
                 // Every question with the id goes, as the core's record

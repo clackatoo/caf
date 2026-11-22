@@ -66,6 +66,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 items: Vec::new(),
                 imported: false,
                 model: None,
+                usage: None,
             },
         );
         if self
@@ -348,6 +349,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 items: Vec::new(),
                 imported: false,
                 model: None,
+                usage: None,
             },
         );
         let run = self.runs.get_mut(&chat)?;

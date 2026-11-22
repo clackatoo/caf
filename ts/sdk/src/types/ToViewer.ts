@@ -10,6 +10,7 @@ import type { Outcome } from "./Outcome.ts";
 import type { RequestNo } from "./RequestNo.ts";
 import type { Rights } from "./Rights.ts";
 import type { SavedChat } from "./SavedChat.ts";
+import type { Summary } from "./Summary.ts";
 
 /**
  * A message from CAF to a viewer.
@@ -72,4 +73,12 @@ request: RequestNo,
 /**
  * How it went.
  */
-outcome: Outcome, } };
+outcome: Outcome, } } | { "type": "Usage", "value": { 
+/**
+ * The viewer's number for the request.
+ */
+request: RequestNo, 
+/**
+ * The summary.
+ */
+summary: Summary, } };

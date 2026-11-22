@@ -45,6 +45,7 @@ export function turn(id: number, items: Item[] = []): Turn {
     items,
     imported: false,
     model: null,
+    usage: null,
   };
 }
 
@@ -80,6 +81,7 @@ export function chat(turns: Turn[] = [], questions: Question[] = []): Chat {
     usage: null,
     questions,
     settings: { offered: [], chosen: [], own: [] },
+    spend: { tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0, thinking: null }, reported: 0, estimated: 0, unpriced: 0, turns: 0 },
   };
 }
 

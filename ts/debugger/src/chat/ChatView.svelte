@@ -25,7 +25,7 @@
     chat,
     label = null,
     agent,
-    may = { act: true, agents: true },
+    may = { act: true, agents: true, usage: true },
     actions,
     readOnly = false,
     readOnlyWhy = 'As it was then: nothing can be done here.',

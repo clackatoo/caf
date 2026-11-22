@@ -159,7 +159,8 @@ pub mod viewer;
 
 pub use agent::{AgentDriver, AgentLimits};
 pub use caf::{
-    AgentsWatch, Caf, ChatHandle, ChatsWatch, Config, Error, Running, SavedWatch, Update, Watch,
+    AgentsWatch, Caf, ChatHandle, ChatsWatch, Config, Error, Running, SavedWatch, Update,
+    UsageConfig, Watch,
 };
 pub use policy::{AlwaysAsk, Policy, RefuseAll};
 pub use setup::SetupDriver;

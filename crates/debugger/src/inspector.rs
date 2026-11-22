@@ -75,6 +75,10 @@ use serde_json::value::RawValue;
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "its big variant holds a chat, sent and dropped: boxing it would reshape a released message for one word"
+)]
 pub enum ToInspector {
     /// The first message: what the server is doing.
     Hello {

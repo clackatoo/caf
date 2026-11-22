@@ -4,6 +4,7 @@ import type { ModelUsed } from "./ModelUsed.ts";
 import type { Starter } from "./Starter.ts";
 import type { TurnId } from "./TurnId.ts";
 import type { TurnLife } from "./TurnLife.ts";
+import type { TurnUsage } from "./TurnUsage.ts";
 import type { Window } from "./Window.ts";
 
 /**
@@ -40,4 +41,9 @@ imported: boolean,
  * the agent says. A change the agent makes by itself during the turn
  * shows as a note in it.
  */
-model: ModelUsed | null, };
+model: ModelUsed | null, 
+/**
+ * What it spent, recorded when it ended, if the agent said. Turns
+ * from before CAF recorded usage, and imported ones, have none.
+ */
+usage: TurnUsage | null, };

@@ -60,6 +60,8 @@ kinds!(FromViewer {
     "Close" => FromViewer::Close { .. },
     "Restore" => FromViewer::Restore { .. },
     "Agent" => FromViewer::Agent { .. },
+    "Usage" => FromViewer::Usage { .. },
+    "SetPrice" => FromViewer::SetPrice { .. },
     "Set" => FromViewer::Set { .. },
 });
 
@@ -83,6 +85,7 @@ kinds!(ToViewer {
     "Agents" => ToViewer::Agents(_),
     "Saved" => ToViewer::Saved(_),
     "Done" => ToViewer::Done { .. },
+    "Usage" => ToViewer::Usage { .. },
 });
 
 kinds!(InstallState {
@@ -132,6 +135,8 @@ kinds!(Outcome {
     "NotAllowed" => Outcome::NotAllowed,
     "Gone" => Outcome::Gone,
     "CannotRestore" => Outcome::CannotRestore(_),
+    "NoLedger" => Outcome::NoLedger,
+    "BadQuery" => Outcome::BadQuery(_),
 });
 
 kinds!(Refused {
@@ -187,6 +192,8 @@ kinds!(Change {
     "ToolChanged" => Change::ToolChanged { .. },
     "ItemEnded" => Change::ItemEnded { .. },
     "Usage" => Change::Usage(_),
+    "TurnUsage" => Change::TurnUsage { .. },
+    "Spend" => Change::Spend(_),
     "QuestionAsked" => Change::QuestionAsked(_),
     "QuestionGone" => Change::QuestionGone(_),
     "Settings" => Change::Settings(_),
@@ -473,6 +480,8 @@ impl Seen {
             Change::Appended { .. }
             | Change::TurnModel { .. }
             | Change::Usage(_)
+            | Change::TurnUsage { .. }
+            | Change::Spend(_)
             | Change::QuestionGone(_) => {}
         }
     }

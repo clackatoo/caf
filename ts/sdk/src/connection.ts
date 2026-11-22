@@ -9,6 +9,7 @@ import type {
   ChatId,
   ChatSummary,
   FromViewer,
+  ModelPrice,
   Numbered,
   OpenRequest,
   Outcome,
@@ -18,7 +19,9 @@ import type {
   SavedChat,
   SettingChoice,
   Shelf,
+  Summary,
   TurnId,
+  UsageQuery,
   UserMessage,
 } from "./types.ts";
 import { ChatCopy } from "./copy.ts";
@@ -218,7 +221,7 @@ export class Connection {
     this.#agents = agents;
     this.#chats = chats;
     this.#run = run;
-    this.#may = { act: may.act, agents: may.agents };
+    this.#may = { act: may.act, agents: may.agents, usage: may.usage ?? false };
   }
 
   /**
@@ -554,6 +557,30 @@ export class Connection {
    */
   learnSettings(agent: AgentName): Promise<void> {
     return this.#agent(agent, { type: "LearnSettings" });
+  }
+
+  /**
+   * Asks for usage over a period, from every CAF app on the machine: what
+   * a usage page is drawn from. Group it with `usage.ts`'s helpers. It
+   * rejects with `NotAllowed` unless `may.usage`, `NoLedger` if CAF keeps
+   * no ledger, and `BadQuery` saying why for a query that can't be
+   * answered. Ask again for newer figures: summaries aren't pushed.
+   */
+  usage(query: UsageQuery): Promise<Summary> {
+    void query;
+    throw new Error("todo: feature 6");
+  }
+
+  /**
+   * Sets the user's own price for a model, by the agent's id for it, or
+   * with `null` clears it, for every CAF app on the machine. Every chat's
+   * `spend` is sent again with it. It rejects with `NotAllowed` unless
+   * `may.usage`, or `NoLedger`.
+   */
+  setPrice(model: string, price: ModelPrice | null): Promise<void> {
+    void model;
+    void price;
+    throw new Error("todo: feature 6");
   }
 
   /** Ends the link. */

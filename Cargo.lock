@@ -192,6 +192,7 @@ dependencies = [
  "caf-core",
  "caf-fake-agent",
  "caf-save",
+ "caf-usage",
  "flate2",
  "libc",
  "log",
@@ -226,6 +227,18 @@ dependencies = [
  "serde_json",
  "sha2",
  "uuid",
+ "zstd",
+]
+
+[[package]]
+name = "caf-usage"
+version = "0.0.0"
+dependencies = [
+ "caf-core",
+ "jiff",
+ "rustix",
+ "serde",
+ "serde_json",
  "zstd",
 ]
 
