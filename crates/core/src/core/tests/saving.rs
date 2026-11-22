@@ -2168,7 +2168,7 @@ fn a_chat_saved_by_a_clean_shutdown_is_written_at_once_as_its_restore_makes_it_i
 fn a_damaged_save_isnt_restored_and_is_let_go() {
     /// What's wrong, and the damage.
     type Case = (&'static str, fn(&mut Saved));
-    let cases: [Case; 5] = [
+    let cases: [Case; 7] = [
         (
             "it holds chat 00000000-0000-0000-0000-00000000162e instead",
             |saved| {
@@ -2186,6 +2186,18 @@ fn a_damaged_save_isnt_restored_and_is_let_go() {
         }),
         ("its folder isn't absolute", |saved| {
             saved.chat.cwd = "work".into();
+        }),
+        ("what a turn in it spent counts past 2^53", |saved| {
+            let mut spent = crate::shape::turn_usage();
+            spent.models[0].tokens.thinking = Some(1 << 53);
+            saved.chat.turns[0].spent = Some(Box::new(spent));
+        }),
+        ("what a turn in it spent counts past 2^53", |saved| {
+            // Each count below it, but not added up.
+            let mut spent = crate::shape::turn_usage();
+            spent.models[0].tokens.input = (1 << 52) + 1;
+            spent.models[1].tokens.output = (1 << 52) + 1;
+            saved.chat.turns[1].spent = Some(Box::new(spent));
         }),
     ];
     for (why, damage) in cases {

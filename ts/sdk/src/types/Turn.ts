@@ -43,7 +43,8 @@ imported: boolean,
  */
 model: ModelUsed | null, 
 /**
- * What it spent, recorded when it ended, if the agent said. Turns
- * from before CAF recorded usage, and imported ones, have none.
+ * What it spent, recorded when its prompt was answered, however it
+ * ended, if the agent said. Turns from before CAF recorded usage, and
+ * imported ones, have none.
  */
 spent: TurnUsage | null, };
