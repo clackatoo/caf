@@ -14,9 +14,11 @@
 //! Each of these has a test.
 //!
 //! 1. **A save never undoes later news.** It's merged with what's kept
-//!    ([`AccountLimits::merge`]), under the folder's lock, and the file
-//!    replaced in one step, so a reader sees one whole file or the other,
-//!    and two apps saving at once both count.
+//!    ([`AccountLimits::merge`]), under the folder's lock
+//!    (`limits/.lock`), and the file replaced in one step, so a reader
+//!    sees one whole file or the other, and two apps saving at once both
+//!    count. A file kept that doesn't read is written over: it holds only
+//!    what an agent says again with its next turn.
 //! 2. **What's kept never holds a window past its reset**, nor one heard
 //!    before it was cleared: both are dropped as it's read and saved.
 //! 3. **Nothing waits for ever**, as for the ledger: files are opened
