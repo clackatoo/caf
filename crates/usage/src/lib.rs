@@ -45,7 +45,9 @@
 //!    written over it. A line that doesn't read names its file.
 //! 2. **Lines are only ever added**, and every line ever written is read by
 //!    every later CAF: fields are only added, and readers ignore those they
-//!    don't know.
+//!    don't know. The one line ever dropped is a turn's written again: when
+//!    a month's late lines are joined into its compressed file, one for a
+//!    turn it already holds, in a line that reads, is left out.
 //! 3. **A turn counts once**, however many times its line was written: the
 //!    first line for each `(chat, turn)` counts.
 //! 4. **A summary is never quietly short:** every file in its period it
@@ -90,8 +92,10 @@ mod tests;
 
 /// The folder prices are kept in, which no app may be named.
 const PRICES: &str = "prices";
-/// The longest period a summary covers: 400 days, in milliseconds.
-const LONGEST: i64 = 400 * 24 * 60 * 60 * 1000;
+/// A day, in milliseconds.
+const DAY: i64 = 24 * 60 * 60 * 1000;
+/// The longest period a summary covers: 400 days.
+const LONGEST: i64 = 400 * DAY;
 /// How hard a finished month is compressed: well, and still quickly, as
 /// it's done under the app's lock.
 const LEVEL: i32 = 12;
@@ -125,10 +129,10 @@ fn absolute(path: Option<OsString>) -> Option<PathBuf> {
 pub struct Ledger {
     folder: PathBuf,
     app: String,
-    /// The months whose compression failed: not tried again by this
-    /// ledger, so a month that can't be compressed isn't read again with
-    /// every line. The next ledger, as after a restart, tries again.
-    failed: Mutex<HashSet<String>>,
+    /// The months whose compression failed, with the UTC day of the line
+    /// it failed on: not tried again until a line of a later day, so a
+    /// month that can't be compressed isn't read again with every line.
+    failed: Mutex<HashMap<String, i64>>,
 }
 
 impl Ledger {
@@ -140,7 +144,7 @@ impl Ledger {
         Self {
             folder,
             app: app.into(),
-            failed: Mutex::new(HashSet::new()),
+            failed: Mutex::new(HashMap::new()),
         }
     }
 
@@ -160,7 +164,8 @@ impl Ledger {
     /// making the folders if need be. If that's a later month than a file
     /// left uncompressed, that file is compressed first; if that fails,
     /// it's left as it is, and the line is added all the same. A month
-    /// that failed is tried again by the next ledger made, as after a
+    /// that failed is tried again with the first line of a later day (in
+    /// UTC, by when the turn ended), or by the next ledger made, as after a
     /// restart.
     ///
     /// # Errors
@@ -170,8 +175,8 @@ impl Ledger {
     /// [`InvalidInput`](io::ErrorKind::InvalidInput) if the app's name
     /// can't be a folder's (empty, `prices`, starting with a dot, or with
     /// a slash, backslash or nothing character in it; `prices` in any
-    /// case); if the line is another app's, has a count of 2^53 or more or
-    /// a cost that isn't a number; or if the turn ended outside the years
+    /// case); if the line is another app's, has no models, a count of 2^53
+    /// or more, or a cost that isn't a number; or if the turn ended outside the years
     /// 0 to 9999.
     pub fn record(&self, line: &LedgerLine) -> io::Result<()> {
         if !is_app(&self.app) {
@@ -184,8 +189,10 @@ impl Ledger {
         if line.app != self.app {
             return Err(invalid("the line is another app's"));
         }
-        if !within(&line.usage) {
-            return Err(invalid("the line has a count of 2^53 or more"));
+        if !sound(&line.usage) {
+            return Err(invalid(
+                "the line has no models, or a count of 2^53 or more",
+            ));
         }
         if line
             .usage
@@ -207,11 +214,15 @@ impl Ledger {
         let folder = self.folder.join(&self.app);
         files::make_folder(&folder)?;
         let _lock = files::lock(&folder)?;
+        let day = line.at.0.div_euclid(DAY);
         let mut failed = self.failed.lock().unwrap_or_else(PoisonError::into_inner);
         for earlier in uncompressed(&folder)? {
-            if earlier < month && !failed.contains(&earlier) && compress(&folder, &earlier).is_err()
-            {
-                failed.insert(earlier);
+            let tried = failed.get(&earlier).is_some_and(|failed| *failed >= day);
+            if earlier < month && !tried {
+                match compress(&folder, &earlier) {
+                    Ok(()) => failed.remove(&earlier),
+                    Err(_) => failed.insert(earlier, day),
+                };
             }
         }
         drop(failed);
@@ -219,20 +230,22 @@ impl Ledger {
     }
 }
 
-/// Whether every count in a turn's usage is below 2^53.
-fn within(usage: &TurnUsage) -> bool {
-    usage.models.iter().all(|row| {
-        let tokens = &row.tokens;
-        [
-            tokens.input,
-            tokens.cache_read,
-            tokens.cache_write,
-            tokens.output,
-            tokens.thinking.unwrap_or(0),
-        ]
-        .into_iter()
-        .all(|count| count <= MOST)
-    })
+/// Whether a turn's usage is as CAF writes it: a model at least, and
+/// every count below 2^53.
+fn sound(usage: &TurnUsage) -> bool {
+    !usage.models.is_empty()
+        && usage.models.iter().all(|row| {
+            let tokens = &row.tokens;
+            [
+                tokens.input,
+                tokens.cache_read,
+                tokens.cache_write,
+                tokens.output,
+                tokens.thinking.unwrap_or(0),
+            ]
+            .into_iter()
+            .all(|count| count <= MOST)
+        })
 }
 
 /// Whether `app` can name an app's folder in the ledger's.
@@ -335,6 +348,8 @@ fn whole_end(file: &File, size: u64) -> io::Result<u64> {
 /// Compresses an app's file for a month that has ended: written beside it
 /// with what's already compressed for the month, if anything, replacing
 /// that in one step, then the `.jsonl` removed. Only under the app's lock.
+/// A compressed file that doesn't end in a line end is damaged, and left
+/// as it is.
 fn compress(folder: &Path, month: &str) -> io::Result<()> {
     let plain = folder.join(format!("{month}.jsonl"));
     let name = format!("{month}.jsonl.zst");
@@ -346,13 +361,23 @@ fn compress(folder: &Path, month: &str) -> io::Result<()> {
         // The `.jsonl` holds turns that ended in the month after it was
         // compressed, or, after a crash between the last compression's
         // rename and removal, what it compressed: only lines it doesn't
-        // hold already, by their text or their turn, are added.
+        // hold already are added, by their text, or their turn if its line
+        // there reads.
         let mut before = zstd::decode_all(packed.as_slice())?;
-        before.truncate(whole(&before));
+        if !before.is_empty() && !before.ends_with(b"\n") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the compressed month is cut short",
+            ));
+        }
         let added = {
             let held: HashSet<&[u8]> = before.split(|byte| *byte == b'\n').collect();
-            let turns: HashSet<(ChatId, TurnId)> =
-                held.iter().filter_map(|text| turn(text)).collect();
+            let turns: HashSet<(ChatId, TurnId)> = held
+                .iter()
+                .filter_map(|text| serde_json::from_slice::<LedgerLine>(text).ok())
+                .filter(|line| sound(&line.usage))
+                .map(|line| (line.chat, line.turn))
+                .collect();
             let mut added = Vec::new();
             for text in lines.split(|byte| *byte == b'\n') {
                 if text.iter().all(u8::is_ascii_whitespace)
@@ -516,7 +541,11 @@ impl Lines {
         for (name, bytes) in [(packed_name, packed), (plain_name, plain)] {
             match bytes {
                 Ok(Some(bytes)) => {
-                    if !self.lines(&bytes) {
+                    // A compressed file is written whole, so one cut short
+                    // is damaged: its whole lines count, and it's named.
+                    let cut =
+                        name.ends_with(".zst") && !bytes.is_empty() && !bytes.ends_with(b"\n");
+                    if !self.lines(&bytes) || cut {
                         unreadable.push(name);
                     }
                 }
@@ -538,7 +567,7 @@ impl Lines {
             }
             let line = serde_json::from_slice::<LedgerLine>(text)
                 .ok()
-                .filter(|line| within(&line.usage));
+                .filter(|line| sound(&line.usage));
             match line {
                 Some(line) => {
                     if self.seen.insert((line.chat, line.turn)) {
@@ -614,9 +643,6 @@ impl<'a> Sum<'a> {
     /// Adds a turn's line to the buckets for `start` and `agent`.
     fn add(&mut self, line: &LedgerLine, start: Wall, agent: String) {
         let usage = &line.usage;
-        if usage.models.is_empty() {
-            return;
-        }
         self.chats.insert(line.chat);
         self.by_app
             .entry(line.app.clone())
