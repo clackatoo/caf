@@ -111,6 +111,7 @@ kinds!(InstallFailure {
     "Corrupt" => InstallFailure::Corrupt,
     "NoSpace" => InstallFailure::NoSpace,
     "Stopped" => InstallFailure::Stopped,
+    "Patch" => InstallFailure::Patch(_),
     "Other" => InstallFailure::Other(_),
 });
 

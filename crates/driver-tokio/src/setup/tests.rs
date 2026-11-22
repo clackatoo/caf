@@ -327,6 +327,7 @@ async fn npm_installs_from_the_lockfile_into_place() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: Install::Npm(package),
+        patch: None,
         private: None,
         size: 1 << 30,
     });
@@ -379,6 +380,7 @@ async fn stopping_an_npm_install_stops_all_it_started() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: Install::Npm(NpmPackage::new("{}", "{}")),
+        patch: None,
         private: None,
         size: 1 << 30,
     });
@@ -424,6 +426,7 @@ async fn a_failed_npm_install_leaves_nothing() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: Install::Npm(package),
+        patch: None,
         private: None,
         size: 1 << 30,
     });
@@ -449,6 +452,7 @@ async fn a_package_that_doesnt_match_its_lockfile_is_thrown_away() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: Install::Npm(package),
+        patch: None,
         private: None,
         size: 1 << 30,
     });
@@ -600,6 +604,7 @@ async fn downloads_are_checked_and_unpacked_into_place() {
             ticket,
             folder: folder.clone(),
             install: download(&server.url, &body, unpack),
+            patch: None,
             private: None,
             size: 1 << 30,
         });
@@ -727,6 +732,7 @@ async fn nothing_in_a_download_reaches_outside_its_install() {
                 ticket,
                 folder: "fake-1.0.0".into(),
                 install: download(&server.url, &body, unpack),
+                patch: None,
                 private: None,
                 size: 1 << 30,
             });
@@ -767,6 +773,7 @@ async fn a_download_far_bigger_than_its_agent_is_cut_off() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: download(&server.url, &body, Unpack::No),
+        patch: None,
         private: None,
         // Its agent takes 1,000 bytes: 4 MiB is far past that.
         size: 1000,
@@ -812,6 +819,7 @@ async fn a_download_holding_a_file_its_owner_cant_read_installs() {
             ticket,
             folder: format!("fake-{n}"),
             install: download(&server.url, &body, unpack),
+            patch: None,
             private: None,
             size: 1 << 30,
         });
@@ -858,6 +866,7 @@ async fn stopping_an_install_while_it_is_synced_stops_it() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: Install::Npm(NpmPackage::new("{}", "{}")),
+        patch: None,
         private: None,
         size: 1 << 30,
     });
@@ -917,6 +926,7 @@ async fn stopping_a_download_while_it_is_unpacked_stops_it() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: download(&server.url, &body, Unpack::Zip),
+        patch: None,
         private: None,
         size: 1 << 30,
     });
@@ -986,6 +996,7 @@ async fn a_tar_holding_a_pipe_or_a_device_is_refused() {
             ticket,
             folder: "fake-1.0.0".into(),
             install: download(&server.url, &body, Unpack::TarGz),
+            patch: None,
             private: None,
             size: 1 << 30,
         });
@@ -1007,6 +1018,7 @@ async fn a_download_that_doesnt_match_its_checksum_is_thrown_away() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: download(&server.url, b"something else", Unpack::TarGz),
+        patch: None,
         private: None,
         size: 1 << 30,
     });
@@ -1030,6 +1042,7 @@ async fn downloads_must_be_https() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: download(&server.url, &body, Unpack::TarGz),
+        patch: None,
         private: None,
         size: 1 << 30,
     });
@@ -1055,6 +1068,7 @@ async fn an_install_stopped_partway_leaves_nothing() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: download(&server.url, &body, Unpack::No),
+        patch: None,
         private: None,
         size: 1 << 30,
     });
@@ -1122,6 +1136,7 @@ async fn a_download_goes_through_the_proxy_the_environment_names() {
             ticket,
             folder: format!("fake-{n}"),
             install: download(url, &body, Unpack::TarGz),
+            patch: None,
             private: None,
             size: 1 << 30,
         });
@@ -1213,6 +1228,7 @@ async fn a_download_that_stalls_with_nobody_stopping_it_ends_offline() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: download(&stalled, &body, Unpack::No),
+        patch: None,
         private: None,
         size: 1 << 30,
     });
@@ -1234,6 +1250,7 @@ async fn a_download_that_stalls_with_nobody_stopping_it_ends_offline() {
         ticket: Ticket(1001),
         folder: "fake-1.0.0".into(),
         install: download(&server.url, &good, Unpack::TarGz),
+        patch: None,
         private: None,
         size: 1 << 30,
     });
@@ -1298,6 +1315,7 @@ async fn a_failed_download_says_what_went_wrong_but_not_where() {
             ticket,
             folder: "fake-1.0.0".into(),
             install: download(&url, &body, Unpack::TarGz),
+            patch: None,
             private: None,
             size: 1 << 30,
         });
@@ -1334,6 +1352,7 @@ async fn a_download_ureq_wont_give_up_on_is_given_up_by_the_install() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: download(&stalled, &body, Unpack::No),
+        patch: None,
         private: None,
         size: 1 << 30,
     });
@@ -1361,6 +1380,7 @@ async fn a_download_that_stalls_stops_at_once() {
             ticket,
             folder: "fake-1.0.0".into(),
             install: download(&url, &body, Unpack::No),
+            patch: None,
             private: None,
             size: 1 << 30,
         });
@@ -1393,6 +1413,7 @@ async fn two_drivers_installing_one_folder_install_it_once() {
             ticket: Ticket(1000),
             folder: "fake-1.0.0".into(),
             install: download(&server.url, &body, Unpack::TarGz),
+            patch: None,
             private: None,
             size: 1 << 30,
         });
@@ -1436,6 +1457,7 @@ async fn waiting_for_another_install_can_be_stopped() {
         ticket: Ticket(1000),
         folder: "fake-1.0.0".into(),
         install: Install::Download(Vec::new()),
+        patch: None,
         private: None,
         size: 1 << 30,
     });
@@ -1457,6 +1479,7 @@ async fn an_install_makes_its_agents_private_folder_and_never_removes_it() {
         ticket: Ticket(ticket),
         folder: folder.into(),
         install: download(&server.url, &body, Unpack::TarGz),
+        patch: None,
         private: Some(private.into()),
         size: 1 << 30,
     };
@@ -1546,6 +1569,7 @@ async fn only_install_folders_can_be_installed_or_removed() {
             ticket,
             folder: folder.into(),
             install: Install::Download(Vec::new()),
+            patch: None,
             private: None,
             size: 1 << 30,
         });

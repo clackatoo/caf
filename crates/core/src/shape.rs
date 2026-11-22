@@ -33,8 +33,8 @@ use crate::ids::{
     TurnId,
 };
 use crate::install::{
-    Artifact, Bundled, EnvValue, Install, LinkFrom, Needs, NpmPackage, Platform, Program, Recipe,
-    SignIn, SignedInAs, Status, StatusCommand, Unpack,
+    Artifact, Bundled, Edit, EnvValue, FilePatch, Install, LinkFrom, Needs, NpmPackage, Patch,
+    PatchError, Platform, Program, Recipe, SignIn, SignedInAs, Status, StatusCommand, Unpack,
 };
 use crate::limits::{
     AccountLimits, ExtraUsage, LimitState, LimitWindow, ProfileLimits, WindowKind,
@@ -470,9 +470,32 @@ fn adapter(args: &[&str]) -> Bundled {
 
 /// A recipe with one of everything: an npm install, a sign-in, a sign-out
 /// and a status command.
+/// A patch of one file, by two edits.
+fn patch() -> Patch {
+    Patch::new(
+        1,
+        vec![FilePatch::new(
+            "node_modules/@agentclientprotocol/claude-agent-acp/dist/acp-agent.js",
+            "6b1bb4e7e9caaf4aeca1042ae4aec2dc2433b0b0e4b1614b38a4d41699902aaa",
+            "0f5a8e9a7c3b2d1e4f6a8b0c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e",
+            vec![
+                Edit::new(
+                    "version: packageJson.version,",
+                    "version: packageJson.version + \"+caf.1\",",
+                ),
+                Edit::new(
+                    "let lastAssistantUsage = null;",
+                    "let lastAssistantUsage = null;\n        let heldLimits = [];",
+                ),
+            ],
+        )],
+    )
+}
+
 fn recipe() -> Recipe {
     Recipe {
         version: "1.2.3".into(),
+        patch: Some(patch()),
         install: Install::Npm(NpmPackage {
             manifest: r#"{"dependencies":{"some-acp":"1.2.3"}}"#.into(),
             lockfile: r#"{"lockfileVersion":3}"#.into(),
@@ -738,6 +761,15 @@ pub(crate) fn every_type(s: &mut Samples) {
         has: Some(20),
     });
     s.both(&InstallFailure::Other("EACCES".into()));
+    s.both(&InstallFailure::Patch(
+        "acp-agent.js isn't the file this patch was written for".into(),
+    ));
+    s.both(&patch());
+    s.both(&patch().files[0]);
+    s.both(&patch().files[0].edits[0]);
+    s.both(&PatchError::NotAsPinned);
+    s.both(&PatchError::Found { edit: 1, times: 2 });
+    s.both(&PatchError::NotAsTested);
     s.both(&SignInState::SignedIn(SignedInAs::Account));
     s.both(&SignInLink {
         url: None,
@@ -1038,8 +1070,15 @@ pub(crate) fn every_type(s: &mut Samples) {
             ticket: Ticket(7),
             folder: "claude-agent-acp-0.98.0".into(),
             install: recipe().install,
+            patch: Some(patch()),
             private: Some("claude-agent-acp-private".into()),
             size: 626_797_331,
+        },
+        SetupDirective::Prepare {
+            ticket: Ticket(9),
+            folder: "claude-agent-acp-0.98.0+caf.2".into(),
+            from: "claude-agent-acp-0.98.0+caf.1".into(),
+            patch: patch(),
         },
         SetupDirective::Remove {
             ticket: Ticket(8),

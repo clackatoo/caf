@@ -81,8 +81,8 @@ mod tests {
         Ticket, TurnId,
     };
     use crate::install::{
-        Artifact, Bundled, EnvValue, Install, LinkFrom, Needs, NpmPackage, Platform, Program,
-        Recipe, SignIn, SignedInAs, Status, StatusCommand, Unpack,
+        Artifact, Bundled, Edit, EnvValue, FilePatch, Install, LinkFrom, Needs, NpmPackage, Patch,
+        PatchError, Platform, Program, Recipe, SignIn, SignedInAs, Status, StatusCommand, Unpack,
     };
     use crate::limits::{
         AccountLimits, ExtraUsage, LimitState, LimitWindow, ProfileLimits, WindowKind,
@@ -231,11 +231,15 @@ mod tests {
             // install
             Artifact,
             Bundled,
+            Edit,
             EnvValue,
+            FilePatch,
             Install,
             LinkFrom,
             Needs,
             NpmPackage,
+            Patch,
+            PatchError,
             Platform,
             Program,
             Recipe,

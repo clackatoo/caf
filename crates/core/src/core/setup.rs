@@ -85,7 +85,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             | InstallState::Cannot(CannotInstall::Failed(_)) => {}
             _ => return Err(Refused::NotInstallable),
         }
-        let (install, size) = (recipe.install.clone(), recipe.size);
+        let (install, patch, size) = (recipe.install.clone(), recipe.patch.clone(), recipe.size);
         let private = self.private_folder(agent);
         // Another agent of the same profile is installing it already.
         if self.install_job(&folder).is_none() {
@@ -103,6 +103,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 ticket,
                 folder: folder.clone(),
                 install,
+                patch,
                 private,
                 size,
             }));

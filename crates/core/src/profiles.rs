@@ -412,6 +412,7 @@ fn claude_recipe() -> Recipe {
     ];
     Recipe {
         version: "0.98.0".to_owned(),
+        patch: None,
         install: Install::Npm(NpmPackage {
             manifest: include_str!("profiles/claude-0.98.0/package.json").to_owned(),
             lockfile: include_str!("profiles/claude-0.98.0/package-lock.json").to_owned(),
@@ -489,6 +490,7 @@ fn fake_recipe() -> Recipe {
         .collect();
     Recipe {
         version: "0.0.0".to_owned(),
+        patch: None,
         install: Install::Download(artifacts),
         size: 4_000_000,
         needs: Needs::default(),
@@ -1251,6 +1253,7 @@ pub(crate) mod tests {
     pub(crate) fn npm_recipe() -> Recipe {
         Recipe {
             version: "2.0.0".to_owned(),
+            patch: None,
             install: Install::Npm(NpmPackage {
                 manifest: r#"{"dependencies":{"test-npm-acp":"2.0.0"}}"#.to_owned(),
                 lockfile: r#"{"name":"test","lockfileVersion":3,"packages":{}}"#.to_owned(),
@@ -1307,6 +1310,7 @@ pub(crate) mod tests {
         let status = bundled(Program::Adapter, &["auth", "status"]);
         Recipe {
             version: "1.4.0".to_owned(),
+            patch: None,
             install: Install::Download(vec![artifact("x86_64"), artifact("aarch64")]),
             size: 900_000_000,
             needs: Needs::default(),
@@ -1341,6 +1345,7 @@ pub(crate) mod tests {
     pub(crate) fn plain_recipe() -> Recipe {
         Recipe {
             version: "1.0.0".to_owned(),
+            patch: None,
             install: Install::Download(Vec::new()),
             size: 1_000_000,
             needs: Needs::default(),

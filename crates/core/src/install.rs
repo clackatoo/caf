@@ -32,11 +32,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Recipe {
-    /// The version installed: the one the profile was checked at. It names
-    /// the install's folder.
+    /// The upstream version installed: the one the profile was checked at.
+    /// With [`patch`](Recipe::patch), the install is of a version of its
+    /// own ([`Recipe::installed_version`]).
     pub version: String,
     /// How to install it.
     pub install: Install,
+    /// How CAF changes it once installed, if it does: see [`Patch`].
+    /// Recipes written before it was added read as none.
+    #[serde(default)]
+    pub patch: Option<Patch>,
     /// About how many bytes it takes once installed, to tell the user
     /// before they agree.
     pub size: u64,
@@ -165,6 +170,166 @@ pub enum Unpack {
     Zip,
     /// A gzipped tar archive.
     TarGz,
+}
+
+/// How CAF changes an adapter once it's installed, to fix what upstream
+/// hasn't yet: exact edits to files npm installed, kept in CAF's
+/// repository and compiled in, never downloaded.
+///
+/// # Patching
+///
+/// The setup driver patches an install as its last step
+/// ([`SetupDirective::Install`](crate::directive::SetupDirective::Install)),
+/// file by file, with [`FilePatch::apply`]: the file must be exactly the
+/// one the patch was written for (`before`), every edit's text must be
+/// there exactly once, and the result must be exactly the one tested
+/// (`after`). The original is kept beside it, named with
+/// [`ORIGINAL_SUFFIX`], and the patched file written whole and renamed
+/// into place; only then is the install complete. One that stops on the
+/// way fails ([`InstallFailure::Patch`](crate::agent::InstallFailure::Patch))
+/// and is removed, as a failed download is: CAF never runs a half-patched
+/// adapter.
+///
+/// # A new patch level
+///
+/// A later CAF may patch the same upstream version again, at a higher
+/// level. Its install is prepared from an earlier one complete on disk,
+/// with nothing downloaded and nobody asked
+/// ([`SetupDirective::Prepare`](crate::directive::SetupDirective::Prepare)):
+/// the earlier install is linked into a new folder, each original put back
+/// in place of its patched copy, and the new patch made as above. Nothing
+/// is ever changed in place, so the earlier install, and anything running
+/// from it, is untouched.
+///
+/// # Guarantees
+///
+/// Each of these has a test.
+///
+/// 1. **A patched file is exactly the one tested**, or there's none: no
+///    adapter is run from a file patched otherwise, or part-way.
+/// 2. **An earlier install is never changed** by preparing a later one.
+/// 3. **A patch level costs no download**, when an earlier one of the
+///    same upstream version is complete.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Patch {
+    /// Its level: the install is `<version>+caf.<level>`. From 1.
+    pub level: u32,
+    /// The files it changes.
+    pub files: Vec<FilePatch>,
+}
+
+/// How a patch changes one file.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct FilePatch {
+    /// The file, by its path inside the install, with `/` between its
+    /// parts and no `..`.
+    pub path: String,
+    /// The SHA-256, in hex, of the file as npm installed it.
+    pub before: String,
+    /// The SHA-256, in hex, of the file once patched.
+    pub after: String,
+    /// The edits, made in order.
+    pub edits: Vec<Edit>,
+}
+
+/// One edit: text found exactly once, and replaced.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Edit {
+    /// The text to find: it must appear exactly once, as the edits before
+    /// it left the file.
+    pub find: String,
+    /// What it becomes.
+    pub replace: String,
+}
+
+/// Why a file couldn't be patched.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum PatchError {
+    /// The file isn't the one the patch was written for.
+    NotAsPinned,
+    /// An edit's text, by its place in the list, from 0, appeared this many
+    /// times, not once.
+    Found {
+        /// The edit.
+        edit: usize,
+        /// How many times its text appeared.
+        times: usize,
+    },
+    /// The edits were made, but the result isn't the one tested.
+    NotAsTested,
+}
+
+/// What the original of a patched file is named with, beside it:
+/// `acp-agent.js.caf-original`.
+pub const ORIGINAL_SUFFIX: &str = ".caf-original";
+
+impl Recipe {
+    /// The version its install is of, and its folder named after: the
+    /// upstream [`version`](Recipe::version), and, with a
+    /// [`patch`](Recipe::patch), `+caf.` and its level: `0.98.0+caf.1`.
+    #[must_use]
+    pub fn installed_version(&self) -> String {
+        todo!()
+    }
+}
+
+impl Patch {
+    /// A patch at `level` changing these files.
+    #[must_use]
+    pub fn new(level: u32, files: Vec<FilePatch>) -> Self {
+        Self { level, files }
+    }
+}
+
+impl FilePatch {
+    /// `path`'s patch, from the file hashing `before` to one hashing
+    /// `after`, by `edits`.
+    #[must_use]
+    pub fn new(
+        path: impl Into<String>,
+        before: impl Into<String>,
+        after: impl Into<String>,
+        edits: Vec<Edit>,
+    ) -> Self {
+        Self {
+            path: path.into(),
+            before: before.into(),
+            after: after.into(),
+            edits,
+        }
+    }
+
+    /// The file `original` patched: checked against `before`, edited, and
+    /// checked against `after`. Pure: it reads and writes nothing.
+    ///
+    /// # Errors
+    ///
+    /// If `original` isn't as pinned, an edit's text isn't there exactly
+    /// once, or the result isn't as tested.
+    pub fn apply(&self, original: &[u8]) -> Result<Vec<u8>, PatchError> {
+        let _ = original;
+        todo!()
+    }
+}
+
+impl Edit {
+    /// Replace `find`, there exactly once, with `replace`.
+    #[must_use]
+    pub fn new(find: impl Into<String>, replace: impl Into<String>) -> Self {
+        Self {
+            find: find.into(),
+            replace: replace.into(),
+        }
+    }
 }
 
 /// What the machine must have before an agent can be installed.

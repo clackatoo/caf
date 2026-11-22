@@ -284,6 +284,10 @@ pub enum InstallFailure {
     NoSpace,
     /// The user stopped it.
     Stopped,
+    /// CAF couldn't patch it
+    /// ([`Patch`](crate::install::Patch)): which file, and which check
+    /// stopped it. It was removed.
+    Patch(String),
     /// Anything else, in the installer's words, cleaned and capped.
     Other(String),
 }

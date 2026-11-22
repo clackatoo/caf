@@ -3354,8 +3354,8 @@
             "value": {
               "type": "Failed",
               "value": {
-                "type": "Other",
-                "value": "npm ERR! code EACCES"
+                "type": "Patch",
+                "value": "acp-agent.js isn't the file this patch was written for"
               }
             }
           },
@@ -3510,6 +3510,36 @@
               "heard": 1795000000000
             },
             "cleared": 1794000000000
+          }
+        },
+        {
+          "name": "agent-15",
+          "install": {
+            "type": "Cannot",
+            "value": {
+              "type": "Failed",
+              "value": {
+                "type": "Other",
+                "value": "npm ERR! code EACCES"
+              }
+            }
+          },
+          "sign_in": {
+            "type": "SignedIn",
+            "value": {
+              "type": "Unknown"
+            }
+          },
+          "can_sign_in": false,
+          "own_tools_off": false,
+          "settings": {
+            "type": "Failed",
+            "value": "the agent didn't start"
+          },
+          "limits": {
+            "windows": [],
+            "extra_usage": null,
+            "cleared": null
           }
         }
       ]

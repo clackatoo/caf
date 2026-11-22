@@ -781,9 +781,18 @@ fn render_setup(setup: &SetupDirective) -> Value {
             install,
             private,
             size,
+            ..
         } => {
             let how = serde_json::to_value(install).expect("installs serialise");
             json!({ "install": ticket.0, "folder": folder, "how": how["type"], "private": private, "size": size })
+        }
+        SetupDirective::Prepare {
+            ticket,
+            folder,
+            from,
+            patch,
+        } => {
+            json!({ "prepare": ticket.0, "folder": folder, "from": from, "level": patch.level })
         }
         SetupDirective::Remove {
             ticket,

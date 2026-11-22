@@ -309,9 +309,12 @@ impl SetupDriver {
                 ticket,
                 folder,
                 install,
+                patch,
                 private,
                 size,
             } => {
+                // Drafted: the builder patches the install as its last step.
+                let _ = patch;
                 let (reporter, stop) = self.stoppable(ticket);
                 tokio::spawn(install::install(
                     self.root.clone(),
@@ -325,6 +328,15 @@ impl SetupDriver {
                     reporter,
                     stop,
                 ));
+            }
+            SetupDirective::Prepare {
+                ticket,
+                folder,
+                from,
+                patch,
+            } => {
+                let _ = (ticket, folder, from, patch);
+                todo!("prepare a patch level from an earlier install")
             }
             SetupDirective::Remove {
                 ticket,

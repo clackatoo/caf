@@ -2,6 +2,7 @@
 import type { Bundled } from "./Bundled.ts";
 import type { Install } from "./Install.ts";
 import type { Needs } from "./Needs.ts";
+import type { Patch } from "./Patch.ts";
 import type { SignIn } from "./SignIn.ts";
 import type { Status } from "./Status.ts";
 
@@ -10,14 +11,20 @@ import type { Status } from "./Status.ts";
  */
 export type Recipe = { 
 /**
- * The version installed: the one the profile was checked at. It names
- * the install's folder.
+ * The upstream version installed: the one the profile was checked at.
+ * With [`patch`](Recipe::patch), the install is of a version of its
+ * own ([`Recipe::installed_version`]).
  */
 version: string, 
 /**
  * How to install it.
  */
 install: Install, 
+/**
+ * How CAF changes it once installed, if it does: see [`Patch`].
+ * Recipes written before it was added read as none.
+ */
+patch: Patch | null, 
 /**
  * About how many bytes it takes once installed, to tell the user
  * before they agree.

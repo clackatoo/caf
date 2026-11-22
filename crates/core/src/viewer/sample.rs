@@ -463,6 +463,9 @@ fn agents() -> Vec<AgentStatus> {
         InstallState::Cannot(CannotInstall::Failed(InstallFailure::Corrupt)),
         InstallState::Cannot(CannotInstall::Failed(InstallFailure::NoSpace)),
         InstallState::Cannot(CannotInstall::Failed(InstallFailure::Stopped)),
+        InstallState::Cannot(CannotInstall::Failed(InstallFailure::Patch(
+            "acp-agent.js isn't the file this patch was written for".into(),
+        ))),
         InstallState::Cannot(CannotInstall::Failed(InstallFailure::Other(
             "npm ERR! code EACCES".into(),
         ))),

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use crate::agent::SpawnCommand;
 use crate::chat::{AppData, AppItem, NoAppData, NoAppItems};
 use crate::ids::{ChangeNo, ChatId, Shelf, Ticket};
-use crate::install::{Install, LinkFrom, SignedInAs};
+use crate::install::{Install, LinkFrom, Patch, SignedInAs};
 use crate::limits::ProfileLimits;
 use crate::save::{Entry, Header, Saved};
 use crate::time::{Mono, Wall};
@@ -383,6 +383,9 @@ pub enum SetupDirective {
         folder: String,
         /// What to install.
         install: Install,
+        /// How to patch it once installed, as the last step: see
+        /// [`crate::install::Patch`].
+        patch: Option<Patch>,
         /// The agent's private folder, such as `claude-agent-acp-private`, if its
         /// recipe gives it one
         /// ([`EnvValue::PrivateFolder`](crate::install::EnvValue::PrivateFolder)):
@@ -394,6 +397,24 @@ pub enum SetupDirective {
         /// says. A download that goes far past it is cut off and thrown
         /// away, so a bad server can't fill the disk.
         size: u64,
+    },
+    /// Make the folder `folder` from the complete install `from`, an
+    /// earlier patch level of the same upstream version, with nothing
+    /// downloaded: link `from` into it (copying where it can't), put each
+    /// file `from` patched back as it was ([`ORIGINAL_SUFFIX`](crate::install::ORIGINAL_SUFFIX)),
+    /// then patch it with `patch` as an install is. `from` is never
+    /// changed. Answered as an install is, done or failed; a failed one
+    /// leaves nothing behind.
+    Prepare {
+        /// Its ticket.
+        ticket: Ticket,
+        /// The folder's name, such as `claude-agent-acp-0.98.0+caf.2`.
+        folder: String,
+        /// The earlier install's folder, such as
+        /// `claude-agent-acp-0.98.0+caf.1`.
+        from: String,
+        /// The patch to make.
+        patch: Patch,
     },
     /// Remove the folder `folder`, unless something runs from it.
     Remove {

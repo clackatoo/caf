@@ -3,4 +3,4 @@
 /**
  * Why an install failed.
  */
-export type InstallFailure = { "type": "Offline" } | { "type": "Corrupt" } | { "type": "NoSpace" } | { "type": "Stopped" } | { "type": "Other", "value": string };
+export type InstallFailure = { "type": "Offline" } | { "type": "Corrupt" } | { "type": "NoSpace" } | { "type": "Stopped" } | { "type": "Patch", "value": string } | { "type": "Other", "value": string };
