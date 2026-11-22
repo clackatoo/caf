@@ -15,9 +15,12 @@
 //! - **Cost, as the agent reports it.** Claude says what its session has
 //!   cost so far ([`Usage::cost`](crate::chat::Usage::cost)); a turn's cost
 //!   is how much that rose between the turn's start and end, if the agent
-//!   said it during the turn, and otherwise unreported. If it went down,
-//!   the session was replaced, and the turn's cost is what it says at the
-//!   end ([`TurnUsage::cost`]).
+//!   said it during the turn and it changed, and otherwise unreported: a
+//!   cost said again unchanged, as Claude's adapter does for a turn
+//!   stopped, whose tokens it leaves out of its total, is estimated
+//!   instead. A session opened, new or again, counts from nothing. If it
+//!   went down, the session was replaced, and the turn's cost is what it
+//!   says at the end ([`TurnUsage::cost`]).
 //! - **Cost, estimated.** A turn with no reported cost is priced from a
 //!   [`PriceTable`]: the user's own prices, then the table fetched from
 //!   LiteLLM, then the snapshot bundled with CAF. Estimates are never
@@ -124,7 +127,8 @@ pub struct TurnUsage {
     /// `unknown`, if the agent never said which). Never empty.
     pub models: Vec<ModelTokens>,
     /// What it cost, as the agent reported it, if it did during the turn:
-    /// how much its session's cost rose over the turn. Never an estimate. A cost in a
+    /// how much its session's cost rose over the turn, `None` if it didn't
+    /// change. Never an estimate. A cost in a
     /// currency other than US dollars is kept here as reported, but
     /// counted as unreported in [`Spend`] and [`Summary`], which estimate
     /// it instead: CAF converts no currency.

@@ -234,10 +234,15 @@ const USD: &str = "USD";
 /// What a turn cost, by the session's cost as the agent said it before the
 /// turn was sent, `before`, and as it ended, `after`: how much it rose. If
 /// it went down, or changed currency, the session was replaced, and the
-/// turn cost what it says at the end. `None` if the agent never said.
-/// Asked only of a turn the agent said its cost during.
+/// turn cost what it says at the end. `None` if the agent never said, or
+/// if it didn't change: Claude's adapter leaves a stopped turn out of its
+/// total, though its tokens were spent, so it's estimated instead. Asked
+/// only of a turn the agent said its cost during.
 fn cost_over(before: Option<&Cost>, after: Option<&Cost>) -> Option<Cost> {
     let after = after?;
+    if before == Some(after) {
+        return None;
+    }
     let amount = match before {
         Some(before) if before.currency == after.currency && before.amount <= after.amount => {
             after.amount - before.amount
@@ -277,7 +282,10 @@ mod tests {
             Some(usd(0.25))
         );
         assert_eq!(cost_over(None, Some(&usd(0.75))), Some(usd(0.75)));
-        assert_eq!(cost_over(Some(&usd(0.5)), Some(&usd(0.5))), Some(usd(0.0)));
+        // Said, but unchanged: not reported.
+        assert_eq!(cost_over(Some(&usd(0.5)), Some(&usd(0.5))), None);
+        // Said for the first time, of a session opened afresh: reported.
+        assert_eq!(cost_over(None, Some(&usd(0.0))), Some(usd(0.0)));
         // The session was replaced: what it says at the end.
         assert_eq!(
             cost_over(Some(&usd(0.5)), Some(&usd(0.25))),

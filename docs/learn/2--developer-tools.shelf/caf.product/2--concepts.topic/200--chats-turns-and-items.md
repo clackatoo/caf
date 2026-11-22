@@ -53,7 +53,9 @@ the tokens by model, counting the subagents and compaction the turn set off
 too; an agent that doesn't gets one row, against the model it said it used
 during the turn, or else the model the turn was sent on. A turn's cost is
 how much the agent says its session's cost rose over it, if it says so
-during the turn; otherwise the turn is estimated like any other. An agent
+during the turn; otherwise, or if the cost didn't change (Claude's adapter
+leaves a stopped turn out of its total, though it spent tokens), the turn is
+estimated like any other. An agent
 that says nothing gives no record.
 
 The chat adds up its turns' records as what it has **spent**: tokens,

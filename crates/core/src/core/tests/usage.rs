@@ -305,15 +305,15 @@ fn a_turns_cost_is_how_much_its_sessions_rose_over_it_if_the_agent_said_during_i
     turn(&mut script, Some(0.75), &[costing(1.0)]);
     // Down: the session was replaced.
     turn(&mut script, None, &[costing(0.125)]);
-    // Said during the turn, but no higher: it cost nothing.
+    // Said during the turn, but no higher: not reported, as Claude's
+    // adapter leaves a stopped turn out of its total.
     turn(&mut script, None, &[costing(0.125)]);
     // Not said during the turn, though it was before: it didn't say.
     turn(&mut script, Some(0.125), &[]);
     let chat = script.chat(CHAT);
-    let costs: Vec<Value> = (0..5)
+    let costs: Vec<Value> = (0..6)
         .map(|at| chat["turns"][at]["spent"]["cost"]["amount"].clone())
         .collect();
-    assert_eq!(chat["turns"][5]["spent"]["cost"], Value::Null);
     assert_eq!(
         costs,
         [
@@ -321,7 +321,8 @@ fn a_turns_cost_is_how_much_its_sessions_rose_over_it_if_the_agent_said_during_i
             json!(0.25),
             json!(0.25),
             json!(0.125),
-            json!(0.0)
+            Value::Null,
+            Value::Null
         ]
     );
     assert_eq!(chat["spend"]["reported"], json!(1.125));

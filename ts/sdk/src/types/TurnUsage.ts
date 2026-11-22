@@ -17,7 +17,8 @@ export type TurnUsage = {
 models: Array<ModelTokens>, 
 /**
  * What it cost, as the agent reported it, if it did during the turn:
- * how much its session's cost rose over the turn. Never an estimate. A cost in a
+ * how much its session's cost rose over the turn, `None` if it didn't
+ * change. Never an estimate. A cost in a
  * currency other than US dollars is kept here as reported, but
  * counted as unreported in [`Spend`] and [`Summary`], which estimate
  * it instead: CAF converts no currency.
