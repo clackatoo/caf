@@ -2,7 +2,8 @@
 //! replays, of the steps' own events and of the recording's lines
 //! ([`Check`]). Chats are kept in a file store, on one shelf
 //! ([`SHELF`]), listed as CAF starts, so a restarted debugger offers to
-//! restore them.
+//! restore them. Usage goes in a usage ledger, and the page may read its
+//! summaries and set prices: the debugger is CAF's own app.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,7 +14,7 @@ use caf_core::save::RestoreChat;
 use caf_core::time::Now;
 use caf_core::{Core, Host, NoAppItems, OpenChat, Shelf};
 use caf_driver_tokio::viewer::ViewerRules;
-use caf_driver_tokio::{Caf, Config, Running, Step as CafStep, Steps};
+use caf_driver_tokio::{Caf, Config, Running, Step as CafStep, Steps, UsageConfig};
 use caf_save::{FileStore, Store};
 use serde_json::value::RawValue;
 use tokio::sync::mpsc;
@@ -36,6 +37,8 @@ pub struct Live {
     pub recording: Option<PathBuf>,
     /// The folder chats are kept in, if they're kept.
     pub store: Option<PathBuf>,
+    /// The usage ledger's folder, if there's a ledger.
+    pub usage: Option<PathBuf>,
 }
 
 /// The shelf the debugger keeps its chats on.
@@ -63,8 +66,9 @@ pub fn host() -> Host {
 }
 
 /// What viewers may do: open a chat with any of `agents` in any absolute
-/// folder, with no MCP servers, act on every chat, and install agents and
-/// sign in and out of them. If chats are `saved`, each opened is kept on
+/// folder, with no MCP servers, act on every chat, install agents and
+/// sign in and out of them, and read usage and set prices. If chats are
+/// `saved`, each opened is kept on
 /// [`SHELF`], and viewers may restore those kept there, with no MCP
 /// servers, as new chats have.
 #[must_use]
@@ -72,6 +76,7 @@ pub fn rules(agents: &[AgentSpec], saved: bool) -> ViewerRules {
     let names: Vec<_> = agents.iter().map(|agent| agent.name.clone()).collect();
     let mut rules = ViewerRules::default();
     rules.agents = true;
+    rules.usage = true;
     rules.open = Box::new(move |request| {
         if !names.contains(&request.agent) || !request.cwd.is_absolute() {
             return None;
@@ -89,11 +94,16 @@ pub fn rules(agents: &[AgentSpec], saved: bool) -> ViewerRules {
 }
 
 /// Starts CAF with `agents`, recording to `record` if given, keeping chats
-/// in a file store in `store` if given, and checking every step against
-/// replays of it. With a store, [`SHELF`] is listed at once. Must be
-/// called on a tokio runtime.
+/// in a file store in `store` if given, and usage in the ledger `usage`
+/// says if given, and checking every step against replays of it. With a
+/// store, [`SHELF`] is listed at once. Must be called on a tokio runtime.
 #[must_use]
-pub fn start(agents: Vec<AgentSpec>, record: Option<PathBuf>, store: Option<PathBuf>) -> Live {
+pub fn start(
+    agents: Vec<AgentSpec>,
+    record: Option<PathBuf>,
+    store: Option<PathBuf>,
+    usage: Option<UsageConfig>,
+) -> Live {
     let base = Base {
         host: host(),
         agents: agents.clone(),
@@ -102,6 +112,8 @@ pub fn start(agents: Vec<AgentSpec>, record: Option<PathBuf>, store: Option<Path
     let mut config = Config::new(base.host.clone(), agents);
     config.record.clone_from(&record);
     config.store = (store.as_ref()).map(|root| Box::new(FileStore::new(root)) as Box<dyn Store>);
+    let ledger = (usage.as_ref()).map(|usage| usage.folder.clone());
+    config.usage = usage;
     let (tap, steps) = mpsc::unbounded_channel();
     let (caf, running) = Caf::start_watching(config, Tap(tap));
     if store.is_some() {
@@ -131,6 +143,7 @@ pub fn start(agents: Vec<AgentSpec>, record: Option<PathBuf>, store: Option<Path
         rules,
         recording,
         store,
+        usage: ledger,
     }
 }
 
@@ -488,6 +501,11 @@ mod tests {
     #[test]
     fn viewers_may_install_agents_and_sign_in_and_out() {
         assert!(rules(&agents(), false).agents);
+    }
+
+    #[test]
+    fn viewers_may_read_usage_and_set_prices() {
+        assert!(rules(&agents(), false).usage);
     }
 
     #[test]

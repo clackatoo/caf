@@ -10,6 +10,7 @@ related:
   - caf/concepts/agents-and-profiles
   - caf/getting-started/saving-and-restoring-chats
   - caf/getting-started/choosing-the-model
+  - caf/getting-started/usage
 ---
 
 **CAF**, the Clackatoo Agent Framework, is a Rust library for putting chats
@@ -117,3 +118,17 @@ answers, whichever agent it is:
 - **Before any chat**: CAF learns what an agent offers without sending a
   message, so your program can offer its models before a chat opens.
   Viewers choose and learn too.
+
+The sixth, *usage*, says what the agent costs:
+
+- **[Each turn and chat](~caf/getting-started/usage)**: CAF records what
+  every turn spent, in tokens by model and as the agent reported its cost,
+  and adds up each chat's spend, estimating the cost the agent didn't
+  report.
+- **One ledger for the machine**: every turn of every CAF app goes into a
+  ledger they all share, unless the app turns the ledger off, never with what was said, so your program can
+  show how much the user has used across all of them, by day, app, agent
+  and model.
+- **Prices**: the user's own, then LiteLLM's table, fetched once a day,
+  then a snapshot that comes with CAF. A price put right puts every
+  figure right.

@@ -53,7 +53,9 @@ export function start(args: string[], setup: Setup = {}): Promise<Server & { pro
       .replaceAll('{fake}', fake)
       .replaceAll('{script}', join(state, 'caf', 'debugger', 'fake-agent.jsonl'))
       .replaceAll('{state}', state)
-  const extra: string[] = []
+  // Live, its usage ledger is under $XDG_DATA_HOME too, and never fetches
+  // prices: a test never reaches the network.
+  const extra: string[] = args.includes('--replay') ? [] : ['--no-fetch-prices']
   if (setup.agents !== undefined) {
     writeFileSync(join(state, 'agents.toml'), fill(setup.agents))
     extra.push('--agents', join(state, 'agents.toml'))

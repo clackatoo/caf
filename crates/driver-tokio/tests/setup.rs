@@ -84,7 +84,7 @@ fn signing_in(dir: &Dir) -> Auth {
 
 /// A config offering `agents`, with installs under the test's folder.
 fn config(dir: &Dir, agents: Vec<AgentSpec>) -> Config {
-    let mut config = Config::new(host(), agents);
+    let mut config = config_for(host(), agents);
     config.installs = Some(dir.path("agents"));
     config
 }
