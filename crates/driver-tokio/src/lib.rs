@@ -83,6 +83,8 @@
 //! - [`ChatHandle::put_away`] saves a chat whole and lets it go from
 //!   memory; closing a saved chat does too. [`Caf::delete`] deletes one
 //!   for good, and [`Caf::move_shelf`] moves a shelf's chats.
+//! - Closing a chat archives it, and it's restored archived, until
+//!   [`ChatHandle::unarchive`] or a message sent to it unarchives it.
 //! - [`ChatHandle::set_data`] keeps the app's own data on a chat, saved
 //!   with it, and its label shows in [`Caf::watch_chats`].
 //! - The store runs on a thread of its own, and [`Caf::shutdown`] returns
