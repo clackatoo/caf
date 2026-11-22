@@ -312,6 +312,13 @@ describe('acting on a chat put away as it was archived', () => {
     expect(send).toHaveBeenCalledTimes(2)
   })
 
+  it("says why restoring failed if another hadn't restored it after all", async () => {
+    const loaded = new CafError({ type: 'Refused', value: { type: 'Loaded' } })
+    const send = vi.fn().mockRejectedValue(gone())
+    await expect(orRestored(send, vi.fn().mockRejectedValue(loaded))).rejects.toBe(loaded)
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+
   it("leaves the refusal to the caller with nothing to restore, or for any other failure, or if restoring fails", async () => {
     await expect(orRestored(vi.fn().mockRejectedValue(gone()))).rejects.toEqual(gone())
     const notAllowed = new CafError({ type: 'NotAllowed' })

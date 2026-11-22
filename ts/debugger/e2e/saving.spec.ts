@@ -2,7 +2,7 @@
 // next run, started on the same folder, lists it, restores it with its
 // record, and carries it on.
 
-import { readdirSync, rmSync } from 'node:fs'
+import { readdirSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { expect, start, stop, test, type Page } from './server.ts'
@@ -102,6 +102,35 @@ test('an archived chat, unarchived, is an ordinary chat again, and carries on', 
   await expect(turns.last().locator('.life')).toHaveText('Finished')
 })
 
+/** Every file under `dir`, with its size and when it last changed. */
+function files(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, encoding: 'utf8' })
+    .sort()
+    .flatMap((name) => {
+      const at = statSync(join(dir, name))
+      return at.isFile() ? [`${name} ${at.size} ${at.mtimeMs}`] : []
+    })
+}
+
+/**
+ * Waits until a chat's whole save is under `dir`, a snapshot and its
+ * header, and nothing there has changed for a while: CAF's write has ended.
+ */
+async function written(dir: string) {
+  let last = ''
+  await expect
+    .poll(
+      () => {
+        const now = files(dir)
+        const settled = now.some((each) => each.includes('.caf ')) && now.some((each) => each.includes('.head ')) && now.join('\n') === last
+        last = now.join('\n')
+        return settled
+      },
+      { intervals: [500], timeout: 15_000 },
+    )
+    .toBe(true)
+}
+
 /** Archives the chat shown, and waits until CAF has put it away. */
 async function archive(page: Page) {
   await page.locator('.caf-chat > header').getByRole('button', { name: 'Close' }).click()
@@ -137,8 +166,11 @@ test("a message to an archived chat that can't be brought back stays, and says w
   await send(page, 'hello')
   await expect(page.locator('.caf-chat .turn .life').last()).toHaveText('Finished')
   await archive(page)
-  // Its save gone from under it, it can't be restored.
+  // Its save gone from under it, it can't be restored. CAF lists it as
+  // saved before it has written it, so this waits for the write to end
+  // first, or the write could fail, or put it back.
   const chats = join(server.state, 'caf-debugger', 'chats')
+  await written(chats)
   for (const shelf of readdirSync(chats)) rmSync(join(chats, shelf), { recursive: true })
   await send(page, 'and again')
   await expect(page.locator('.composer [role=alert]')).toContainText("isn't on its shelf any more")

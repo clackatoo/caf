@@ -118,8 +118,9 @@ export async function restoreOnceFree<T>(
  * refuses with `NoSuchChat`: then, given `restore`, it's restored,
  * archived still, and `act` tried again. If CAF refuses to restore it as
  * loaded, another restored it meanwhile, so `act` is tried again all the
- * same. Without `restore`, or for any other failure, the refusal is the
- * caller's.
+ * same; if CAF still has no such chat, that refusal to restore it says why
+ * truer, and is the caller's. Without `restore`, or for any other failure,
+ * the refusal is the caller's.
  */
 export async function orRestored<T>(
   act: () => Promise<T>,
@@ -129,12 +130,18 @@ export async function orRestored<T>(
     return await act()
   } catch (error) {
     if (!refused(error, 'NoSuchChat') || restore === undefined) throw error
+    let loaded: unknown = null
     try {
       await restore()
     } catch (problem) {
       if (!refused(problem, 'Loaded')) throw problem
+      loaded = problem
     }
-    return await act()
+    try {
+      return await act()
+    } catch (again) {
+      throw loaded !== null && refused(again, 'NoSuchChat') ? loaded : again
+    }
   }
 }
 
