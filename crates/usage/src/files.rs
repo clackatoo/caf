@@ -1,16 +1,51 @@
 //! Files and folders, as the ledger and prices keep them: locks, and files
 //! replaced in one step.
+//!
+//! Nothing here waits for ever. Every file is opened without waiting
+//! (`O_NONBLOCK`), and is only used if it's a plain file, so a pipe where
+//! one should be is an error, never a read that waits for a writer. A lock
+//! another holds is tried again for [`LOCK_WAIT`], then given up on.
 
 use std::fs::{DirBuilder, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
-use rustix::fs::FlockOperation;
+use rustix::fs::{FileType, FlockOperation, OFlags};
 use rustix::io::Errno;
 
 /// The lock in every folder CAF writes in.
 pub(crate) const LOCK: &str = ".lock";
+/// How long a lock another holds is waited for before giving up.
+pub(crate) const LOCK_WAIT: Duration = Duration::from_secs(5);
+/// The longest pause between tries of a lock.
+const LONGEST_PAUSE: Duration = Duration::from_millis(50);
+
+/// Opens a file as `options` say, without waiting, as long as it's a plain
+/// file: anything else, such as a pipe or a folder, is
+/// [`Unsupported`](io::ErrorKind::Unsupported).
+pub(crate) fn open(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
+    let file = options
+        .custom_flags(OFlags::NONBLOCK.bits() as i32)
+        .open(path)?;
+    if FileType::from_raw_mode(rustix::fs::fstat(&file)?.st_mode) != FileType::RegularFile {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!("{} isn't a file", path.display()),
+        ));
+    }
+    Ok(file)
+}
+
+/// A file, opened to read: `None` if it isn't there.
+pub(crate) fn open_to_read(path: &Path) -> io::Result<Option<File>> {
+    match open(path, OpenOptions::new().read(true)) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
 
 /// Makes a folder and those it's in, if they aren't there, private to the
 /// user, each synced into the folder it's in.
@@ -31,20 +66,40 @@ pub(crate) fn make_folder(path: &Path) -> io::Result<()> {
     }
 }
 
-/// Takes the folder's lock, waiting while another holds it: held until
-/// the file is dropped.
+/// Takes the folder's lock, held until the file is dropped. While another
+/// holds it, it's tried again, more slowly each time, for [`LOCK_WAIT`];
+/// then it's [`TimedOut`](io::ErrorKind::TimedOut), so a program stopped
+/// while it held the lock never stops this one.
 pub(crate) fn lock(folder: &Path) -> io::Result<File> {
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(folder.join(LOCK))?;
+    let lock = open(
+        &folder.join(LOCK),
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600),
+    )?;
+    let started = Instant::now();
+    let mut pause = Duration::from_millis(1);
     loop {
-        match rustix::fs::flock(&lock, FlockOperation::LockExclusive) {
+        match rustix::fs::flock(&lock, FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => return Ok(lock),
             Err(Errno::INTR) => {}
+            Err(Errno::WOULDBLOCK) => {
+                let waited = started.elapsed();
+                if waited >= LOCK_WAIT {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!(
+                            "another program has held {} for {waited:?}",
+                            folder.display()
+                        ),
+                    ));
+                }
+                std::thread::sleep(pause.min(LOCK_WAIT - waited));
+                pause = (pause * 2).min(LONGEST_PAUSE);
+            }
             Err(error) => return Err(error.into()),
         }
     }
@@ -56,12 +111,14 @@ pub(crate) fn lock(folder: &Path) -> io::Result<File> {
 pub(crate) fn replace(folder: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
     let new = folder.join(format!("{name}.new"));
     let written = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&new)?;
+        let mut file = open(
+            &new,
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600),
+        )?;
         file.write_all(bytes)?;
         file.sync_all()?;
         std::fs::rename(&new, folder.join(name))
@@ -75,14 +132,20 @@ pub(crate) fn replace(folder: &Path, name: &str, bytes: &[u8]) -> io::Result<()>
 
 /// Syncs a folder, so what was renamed or removed in it stays so.
 pub(crate) fn sync_folder(folder: &Path) -> io::Result<()> {
-    File::open(folder)?.sync_all()
+    // Only a folder: a pipe in its place is an error, never waited on.
+    OpenOptions::new()
+        .read(true)
+        .custom_flags((OFlags::DIRECTORY | OFlags::NONBLOCK).bits() as i32)
+        .open(folder)?
+        .sync_all()
 }
 
 /// A file's bytes, or `None` if it isn't there.
 pub(crate) fn read(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
+    let Some(mut file) = open_to_read(path)? else {
+        return Ok(None);
+    };
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(Some(bytes))
 }
