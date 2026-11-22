@@ -3,8 +3,8 @@
 use crate::chat::Cost;
 use crate::time::Wall;
 use crate::usage::{
-    Estimate, ModelPrice, ModelTokens, PriceLayer, PriceTable, PricedModel, Resolution, Spend,
-    Tokens, TurnUsage, UsageQuery,
+    Bucket, ChatCounts, Estimate, ModelPrice, ModelTokens, PriceLayer, PriceTable, PricedModel,
+    Resolution, Spend, Summary, Tokens, TurnUsage, UsageQuery,
 };
 
 /// Tokens of each kind, thinking unknown.
@@ -275,4 +275,70 @@ fn a_reported_cost_plays_no_part_in_an_estimate() {
             unpriced: 1,
         }
     );
+}
+
+#[test]
+fn a_new_priced_model_is_as_given() {
+    let price = ModelPrice::new(1.0, 5.0);
+    assert_eq!(
+        PricedModel::new("claude-haiku-5-5", price.clone(), PriceLayer::Bundled),
+        PricedModel {
+            model: "claude-haiku-5-5".into(),
+            price,
+            layer: PriceLayer::Bundled,
+        }
+    );
+}
+
+#[test]
+fn a_new_bucket_is_empty() {
+    let bucket = Bucket::new(
+        Wall(7),
+        "clackatoo",
+        "claude-agent-acp",
+        "claude-haiku-5-5",
+        true,
+    );
+    assert_eq!(
+        bucket,
+        Bucket {
+            start: Wall(7),
+            app: "clackatoo".into(),
+            agent: "claude-agent-acp".into(),
+            model: "claude-haiku-5-5".into(),
+            fast: true,
+            tokens: Tokens::default(),
+            reported: 0.0,
+            estimated: 0.0,
+            unpriced: 0,
+            turns: 0,
+        }
+    );
+}
+
+#[test]
+fn a_new_summary_is_of_nothing() {
+    let query = UsageQuery::new(Wall(1), Wall(2), "UTC");
+    assert_eq!(
+        Summary::new(query.clone()),
+        Summary {
+            query,
+            buckets: Vec::new(),
+            chats: ChatCounts::default(),
+            prices: Vec::new(),
+            fetched: None,
+            unreadable: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn a_prices_cost_is_its_rates_per_million() {
+    let price = ModelPrice {
+        fast: Some(2.0),
+        ..ModelPrice::new(2.0, 10.0)
+    };
+    let tokens = tokens(500_000, 0, 0, 100_000);
+    assert!((price.cost(&tokens, false) - 2.0).abs() < 1e-9);
+    assert!((price.cost(&tokens, true) - 4.0).abs() < 1e-9);
 }

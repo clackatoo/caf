@@ -213,7 +213,8 @@ impl ModelPrice {
 
     /// What `tokens` cost at these prices, in US dollars, at the fast
     /// rate if `fast` and the model has one.
-    fn cost(&self, tokens: &Tokens, fast: bool) -> f64 {
+    #[must_use]
+    pub fn cost(&self, tokens: &Tokens, fast: bool) -> f64 {
         // Every count is below 2^53, so each is exact as a float.
         let per_million = tokens.input as f64 * self.input
             + tokens.cache_read as f64 * self.cache_read
@@ -253,6 +254,18 @@ pub struct PricedModel {
     pub price: ModelPrice,
     /// Where it came from.
     pub layer: PriceLayer,
+}
+
+impl PricedModel {
+    /// `model`'s price, from `layer`.
+    #[must_use]
+    pub fn new(model: impl Into<String>, price: ModelPrice, layer: PriceLayer) -> Self {
+        Self {
+            model: model.into(),
+            price,
+            layer,
+        }
+    }
 }
 
 /// The prices CAF estimates cost with: each model's, from the first layer
@@ -447,6 +460,21 @@ pub struct Summary {
     pub unreadable: Vec<String>,
 }
 
+impl Summary {
+    /// A summary of nothing, for `query`: no buckets, chats or prices.
+    #[must_use]
+    pub fn new(query: UsageQuery) -> Self {
+        Self {
+            query,
+            buckets: Vec::new(),
+            chats: ChatCounts::default(),
+            prices: Vec::new(),
+            fetched: None,
+            unreadable: Vec::new(),
+        }
+    }
+}
+
 /// One period's usage by one app, agent, model and fast mode.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -476,6 +504,31 @@ pub struct Bucket {
     pub unpriced: u64,
     /// How many turns.
     pub turns: u64,
+}
+
+impl Bucket {
+    /// An empty bucket: no tokens, cost or turns yet.
+    #[must_use]
+    pub fn new(
+        start: Wall,
+        app: impl Into<String>,
+        agent: impl Into<String>,
+        model: impl Into<String>,
+        fast: bool,
+    ) -> Self {
+        Self {
+            start,
+            app: app.into(),
+            agent: agent.into(),
+            model: model.into(),
+            fast,
+            tokens: Tokens::default(),
+            reported: 0.0,
+            estimated: 0.0,
+            unpriced: 0,
+            turns: 0,
+        }
+    }
 }
 
 /// How many chats a summary covers.
