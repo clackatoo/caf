@@ -7,7 +7,6 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::limits::{AccountLimits, ExtraUsage, LimitState, LimitWindow, WindowKind};
-use crate::profiles::Builtin;
 use crate::time::Wall;
 
 /// An hour, in milliseconds.
@@ -325,9 +324,14 @@ impl Dice {
     fn limits(&mut self) -> AccountLimits {
         let kinds = every_kind();
         let states = [LimitState::Fine, LimitState::Warning, LimitState::Refused];
-        let windows = (0..self.roll(4))
+        // Now and then a crowd of others, more than a profile keeps.
+        let crowd = if self.roll(4) == 0 { 40 } else { 4 };
+        let windows = (0..self.roll(crowd))
             .map(|_| LimitWindow {
-                kind: kinds[usize::try_from(self.roll(5)).expect("small")].clone(),
+                kind: match self.roll(8) {
+                    at @ 0..5 => kinds[usize::try_from(at).expect("small")].clone(),
+                    _ => WindowKind::Other(format!("crowd{}", self.roll(40))),
+                },
                 used: u8::try_from(self.roll(3) * 40).expect("small"),
                 resets: (self.roll(3) > 0).then(|| Wall(RESETS + self.small(2))),
                 state: states[usize::try_from(self.roll(3)).expect("small")],
@@ -365,7 +369,74 @@ fn orders<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
 }
 
 #[test]
+fn a_merge_keeps_shares_to_100_and_resets_to_2020_to_2100() {
+    let mut kept = AccountLimits::default();
+    kept.merge(&limits(vec![
+        window(WindowKind::FiveHours, 250, Some(RESETS), 1000),
+        window(WindowKind::Week, 10, Some(1000), 1000),
+        window(WindowKind::ExtraWeek, 10, Some(4_102_444_800_000), 1000),
+        window(WindowKind::Other("x".into()), 10, Some(1 << 60), 1000),
+        window(
+            WindowKind::Other("y".into()),
+            10,
+            Some(1_577_836_800_000),
+            1000,
+        ),
+    ]));
+    let read: Vec<(u8, Option<Wall>)> = (kept.windows.iter())
+        .map(|window| (window.used, window.resets))
+        .collect();
+    assert_eq!(
+        read,
+        [
+            (100, Some(Wall(RESETS))),
+            (10, None),
+            (10, None),
+            (10, None),
+            (10, Some(Wall(1_577_836_800_000))),
+        ]
+    );
+}
+
+#[test]
+fn a_profile_keeps_32_windows_at_most_dropping_the_oldest_of_others_first() {
+    let mut kept = AccountLimits::default();
+    let mut news = vec![
+        window(WindowKind::FiveHours, 1, None, 0),
+        window(WindowKind::Week, 1, None, 0),
+        window(WindowKind::ExtraWeek, 1, None, 0),
+    ];
+    news.extend((0..20).map(|at| window(WindowKind::ModelWeek(format!("m{at:02}")), 1, None, at)));
+    news.extend((0..3000).map(|at| window(WindowKind::Other(format!("o{at:04}")), 1, None, at)));
+    kept.merge(&limits(news));
+    assert_eq!(kept.windows.len(), 32);
+    // Every window of a kind CAF knows, and the latest others.
+    let others: Vec<&str> = (kept.windows.iter())
+        .filter_map(|window| match &window.kind {
+            WindowKind::Other(name) => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        others,
+        [
+            "o2991", "o2992", "o2993", "o2994", "o2995", "o2996", "o2997", "o2998", "o2999"
+        ]
+    );
+    // Model weeks go next, the oldest first.
+    let mut kept = AccountLimits::default();
+    kept.merge(&limits(
+        (0..40)
+            .map(|at| window(WindowKind::ModelWeek(format!("m{at:02}")), 1, None, at))
+            .collect(),
+    ));
+    assert_eq!(kept.windows.len(), 32);
+    assert_eq!(kept.windows[0].kind, WindowKind::ModelWeek("m08".into()));
+}
+
+#[test]
 fn merging_ends_the_same_in_any_order() {
+    let mut capped = 0;
     for seed in 1..=300_u64 {
         let mut dice = Dice(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let news: Vec<AccountLimits> = (0..5).map(|_| dice.limits()).collect();
@@ -395,7 +466,14 @@ fn merging_ends_the_same_in_any_order() {
             assert!(window.state != LimitState::Refused || window.used == 100);
             assert!(first.cleared.is_none_or(|cleared| window.heard >= cleared));
         }
+        if first.windows.len() == crate::limits::MOST_WINDOWS {
+            capped += 1;
+        }
     }
+    assert!(
+        capped > 0,
+        "some seeds keep as many windows as a profile may"
+    );
 }
 
 #[test]
@@ -446,23 +524,6 @@ fn the_next_reset_is_the_earliest() {
         limits(vec![window(WindowKind::Week, 1, None, 0)]).next_reset(),
         None
     );
-}
-
-#[test]
-fn a_profile_is_found_by_its_slug() {
-    for profile in [
-        Builtin::ClaudeAgentAcp,
-        Builtin::TestNpm,
-        Builtin::TestDownload,
-        Builtin::TestPlain,
-        Builtin::TestModels,
-        #[cfg(feature = "fake")]
-        Builtin::Fake,
-    ] {
-        assert_eq!(Builtin::from_slug(profile.slug()), Some(profile));
-    }
-    assert_eq!(Builtin::from_slug("claude"), None);
-    assert_eq!(Builtin::from_slug(""), None);
 }
 
 /// `fixtures/pace.json`: the pace and length of a window of every kind at

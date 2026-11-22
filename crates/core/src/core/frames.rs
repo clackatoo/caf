@@ -190,7 +190,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             // Claude's adapter says who is signed in here, with the
             // account's email: only how is read, and the rest is never
             // kept, logged or passed on.
-            "_auth/status_update" => self.status_pushed(proc, &parse(params.as_deref()), out),
+            "_auth/status_update" => {
+                self.status_pushed(now, proc, &parse(params.as_deref()), out);
+            }
             _ => report(
                 out,
                 Level::Debug,

@@ -400,7 +400,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             (Work::Status, SetupEvent::Status(how)) => {
                 self.setup.jobs.remove(&ticket);
                 let state = how.map_or(SignInState::SignedOut, SignInState::SignedIn);
-                self.set_sign_in(&agent, state);
+                self.found_signed_in(now, &agent, state, out);
             }
             (
                 work @ (Work::Remove { .. } | Work::SignOut | Work::Status),
@@ -763,6 +763,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// adapter whose profile says it reports so.
     pub(super) fn status_pushed(
         &mut self,
+        now: Now,
         proc: Ticket,
         params: &Value,
         out: &mut Vec<Directive<A, D>>,
@@ -790,7 +791,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 );
             }
         };
-        self.set_sign_in(&agent, state);
+        self.found_signed_in(now, &agent, state, out);
     }
 
     /// A process of `agent`'s answered `initialize`. One of the host's own
@@ -1199,6 +1200,26 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     fn sign_in_state(&self, agent: &AgentName) -> SignInState {
         (self.setup.agents.get(agent))
             .map_or(SignInState::Unknown, |standing| standing.sign_in.clone())
+    }
+
+    /// A status check found `agent` signed in as `state` says. Found
+    /// signed out once known signed in, it was signed out elsewhere, such
+    /// as with `claude /logout`, perhaps to sign in to another account:
+    /// its limits are cleared.
+    fn found_signed_in(
+        &mut self,
+        now: Now,
+        agent: &AgentName,
+        state: SignInState,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
+        let was_in = (self.setup.agents.get(agent))
+            .is_some_and(|standing| matches!(standing.sign_in, SignInState::SignedIn(_)));
+        let out_now = state == SignInState::SignedOut;
+        self.set_sign_in(agent, state);
+        if was_in && out_now {
+            self.account_changed(now, agent, out);
+        }
     }
 
     /// Sets `agent`'s sign-in state, as something reported it. While a

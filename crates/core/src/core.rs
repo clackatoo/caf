@@ -370,7 +370,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Event::Storage { ticket, event } => self.storage_event(now, ticket, event, out),
             Event::Setup { ticket, event } => self.setup_event(now, ticket, event, out),
             Event::Prices(prices) => self.prices_given(prices),
-            Event::Limits(limits) => self.limits_given(limits),
+            Event::Limits(limits) => self.limits_given(now, limits),
         }
         self.finish(now, out);
     }
@@ -1045,7 +1045,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 ));
             }
         }
-        self.limits_woken(now);
+        self.limits_tidied(now);
         let next = self.next_deadline();
         if next != self.wake {
             self.wake = next;

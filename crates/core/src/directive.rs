@@ -144,6 +144,10 @@ pub enum Signal {
 pub enum TimerDirective {
     /// Wake the core at this time, replacing any earlier request, or never.
     /// There is only ever one: the core asks for its earliest deadline.
+    /// The steady clock may stop while the machine sleeps, so where the
+    /// core waits for a time on the wall clock, such as an account
+    /// limit's reset, it asks to be woken within five minutes, and looks
+    /// again.
     WakeAt(Option<Mono>),
 }
 
