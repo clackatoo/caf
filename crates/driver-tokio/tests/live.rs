@@ -797,3 +797,124 @@ async fn claude_answers_on_the_model_and_effort_chosen() {
     .expect("shutting down");
     drop(folders);
 }
+
+/// Every value of `key` anywhere in `value`.
+fn all_of<'a>(value: &'a serde_json::Value, key: &str, found: &mut Vec<&'a serde_json::Value>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (name, each) in map {
+                if name == key {
+                    found.push(each);
+                }
+                all_of(each, key, found);
+            }
+        }
+        serde_json::Value::Array(each) => each.iter().for_each(|each| all_of(each, key, found)),
+        _ => {}
+    }
+}
+
+/// What a report of Claude's limits holds, and never whose they are:
+/// its fields' names, its limit's kind and status, and its unified
+/// windows' names and fields' names.
+fn shape_of(info: &serde_json::Value) -> String {
+    let names = |value: &serde_json::Value| {
+        (value.as_object().into_iter().flatten())
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let windows = (info["unifiedWindows"].as_object().into_iter().flatten())
+        .map(|(name, window)| format!("{name} {{ {} }}", names(window)))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "fields {{ {} }}, rateLimitType {}, status {}, unifiedWindows [{windows}]",
+        names(info),
+        info["rateLimitType"],
+        info["status"],
+    )
+}
+
+/// Claude says its account's limits in its `usage_update`s, and CAF
+/// keeps them, on the agent's status and in a usage folder of the test's
+/// own: two short turns, recorded. Prints what came of the reports'
+/// shape, never whose account it is.
+///
+/// ```text
+/// cargo test -p caf-driver-tokio --test live limits -- --ignored --nocapture
+/// ```
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a signed-in Claude, and spends usage"]
+async fn claude_says_its_account_limits() {
+    use caf_driver_tokio::UsageConfig;
+
+    let folder = std::env::temp_dir().join(format!("caf-live-limits-{}", std::process::id()));
+    let work = folder.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let recording = std::env::var_os("CAF_LIVE_RECORD")
+        .map_or_else(|| folder.join("live.jsonl"), PathBuf::from);
+    let mut config = config_for(Host::new("caf-live-test", "0.0.0"), vec![claude()]);
+    let mut usage = UsageConfig::new(folder.join("usage"));
+    usage.fetch_prices = false;
+    config.usage = Some(usage);
+    config.record = Some(recording.clone());
+    let (caf, running) = Caf::start(config);
+
+    let chat = caf.open_chat(OpenChat::new("claude", &work)).await.unwrap();
+    for _ in 0..2 {
+        let turn = ask(&chat, "Reply with exactly the word pong.").await;
+        assert_eq!(turn.life, TurnLife::Finished, "{turn:#?}");
+    }
+    let statuses = caf.watch_agents().next().await.expect("statuses");
+    let limits = statuses[0].limits.clone();
+    drop(chat);
+    tokio::time::timeout(PATIENCE, async {
+        caf.shutdown().await;
+        running.await;
+    })
+    .await
+    .expect("shutting down");
+
+    let text = std::fs::read_to_string(&recording).unwrap();
+    let mut reports = Vec::new();
+    for line in text.lines() {
+        let line: serde_json::Value = serde_json::from_str(line).unwrap();
+        let mut found = Vec::new();
+        all_of(&line, "_claude/rateLimit", &mut found);
+        reports.extend(found.into_iter().cloned());
+    }
+    let updates = text.matches("usage_update").count();
+    println!("{updates} usage updates, {} with limits", reports.len());
+    for info in &reports {
+        println!("  {}", shape_of(info));
+    }
+    let kinds: Vec<String> = (limits.windows.iter())
+        .map(|window| {
+            format!(
+                "{:?} {}",
+                window.kind,
+                if window.resets.is_some() {
+                    "resetting"
+                } else {
+                    "with no reset"
+                }
+            )
+        })
+        .collect();
+    println!(
+        "kept: {kinds:?}, extra usage said: {}",
+        limits.extra_usage.is_some()
+    );
+    if !reports.is_empty() {
+        assert!(
+            !limits.windows.is_empty() || limits.extra_usage.is_some(),
+            "a report that was heard is kept"
+        );
+        assert!(folder.join("usage/limits/claude-agent-acp.json").exists());
+    }
+    println!("recorded to {}", recording.display());
+    if std::env::var_os("CAF_LIVE_RECORD").is_none() {
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+}
