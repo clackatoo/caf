@@ -472,7 +472,10 @@ pub enum SetupDirective {
 ///   (`clackatoo/2026-11.jsonl`), each line whole: a lock is held while one
 ///   is added, so two copies of an app never mix theirs. A file for a month
 ///   that has ended is compressed (`2026-10.jsonl.zst`).
-/// - **Lines are only ever added**, never changed or removed.
+/// - **Lines are only ever added**, never changed or removed, but for a
+///   turn's line written again: when a month's late lines are joined into
+///   its compressed file, one for a turn it already holds is dropped, and
+///   nothing else.
 /// - **A line it can't write is kept, and tried again** with the next one,
 ///   and the failure reported to the host. Nothing it does ever holds up a
 ///   chat, and it never answers the core: a ledger that fails costs only

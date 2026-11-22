@@ -300,38 +300,34 @@ impl PriceTable {
     /// A model's price, by the agent's id for it, from the first layer
     /// that has one (the user's own, then LiteLLM's as fetched, then the
     /// bundled snapshot), whatever form its name takes there. Within a
-    /// layer: the entry of that name; else one that's it with a provider
-    /// before it (`anthropic/claude-haiku-5-5`); else, if it ends in a date
-    /// (`claude-haiku-5-5-20261001`), the same without it. A name that
-    /// matches more than one entry with a provider is priced by the model's
-    /// maker (`anthropic`, `openai`, `gemini` or `xai`) before a reseller
-    /// (`azure`, `bedrock`, `vertex_ai` and the like), then by the first,
+    /// layer, the first of: the entry of that name; the model's maker's
+    /// (`anthropic/`, `openai/`, `gemini/` or `xai/` before it); if the id
+    /// ends in a date (`claude-haiku-5-5-20261001`), the same two without
+    /// it; a reseller's (any other provider before it, such as `bedrock/`);
+    /// then a reseller's without the date. So a reseller's price never
+    /// beats the maker's or a bare name's. Of several resellers, the first
     /// sorted by name.
     #[must_use]
     pub fn find(&self, model: &str) -> Option<&PricedModel> {
+        let ids: Vec<&str> = std::iter::once(model).chain(undated(model)).collect();
         [PriceLayer::Own, PriceLayer::Fetched, PriceLayer::Bundled]
             .into_iter()
             .find_map(|layer| {
-                self.find_as(layer, model)
-                    .or_else(|| undated(model).and_then(|model| self.find_as(layer, model)))
+                let entries = || self.models.iter().filter(move |entry| entry.layer == layer);
+                let provided = |id: &str, maker: bool| {
+                    entries().find(|entry| {
+                        provider(&entry.model, id)
+                            .is_some_and(|provider| MAKERS.contains(&provider) == maker)
+                    })
+                };
+                ids.iter()
+                    .find_map(|id| {
+                        entries()
+                            .find(|entry| entry.model == *id)
+                            .or_else(|| provided(id, true))
+                    })
+                    .or_else(|| ids.iter().find_map(|id| provided(id, false)))
             })
-    }
-
-    /// The entry of `layer` named `model`, else the best that's it with a
-    /// provider before it.
-    fn find_as(&self, layer: PriceLayer, model: &str) -> Option<&PricedModel> {
-        let entries = self.models.iter().filter(|entry| entry.layer == layer);
-        if let Some(exact) = entries.clone().find(|entry| entry.model == model) {
-            return Some(exact);
-        }
-        entries
-            .filter_map(|entry| {
-                let provider = entry.model.strip_suffix(model)?.strip_suffix('/')?;
-                (!provider.is_empty() && !provider.contains('/'))
-                    .then(|| (!MAKERS.contains(&provider), entry))
-            })
-            .min_by_key(|(reseller, _)| *reseller)
-            .map(|(_, entry)| entry)
     }
 
     /// What a turn would cost at these prices: each model's tokens at its
@@ -349,6 +345,13 @@ impl PriceTable {
         }
         estimate
     }
+}
+
+/// The provider before `id` in a table's name for a model, if it's
+/// `<provider>/<id>`.
+fn provider<'a>(name: &'a str, id: &str) -> Option<&'a str> {
+    let provider = name.strip_suffix(id)?.strip_suffix('/')?;
+    (!provider.is_empty() && !provider.contains('/')).then_some(provider)
 }
 
 /// The providers that make the models CAF's agents use, by LiteLLM's
@@ -469,6 +472,11 @@ pub struct Summary {
     pub chats: ChatCounts,
     /// The price of every model in it that has one, as used.
     pub prices: Vec<PricedModel>,
+    /// Each model in it that has a price, by the agent's id for it, with
+    /// the name of the entry in [`prices`](Self::prices) that priced it,
+    /// sorted by the agent's id: so a viewer never repeats
+    /// [`PriceTable::find`].
+    pub matched: Vec<(String, String)>,
     /// When LiteLLM's table was last fetched, if ever.
     pub fetched: Option<Wall>,
     /// Ledger files that couldn't be read, by name, such as
@@ -485,6 +493,7 @@ impl Summary {
             buckets: Vec::new(),
             chats: ChatCounts::default(),
             prices: Vec::new(),
+            matched: Vec::new(),
             fetched: None,
             unreadable: Vec::new(),
         }

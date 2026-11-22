@@ -130,27 +130,42 @@ fn near(actual: f64, expected: f64) {
     );
 }
 
-/// The writer the process test runs in each child: set by
-/// `CAF_USAGE_WRITER` as `<folder>|<first chat>`.
+/// The writer the process tests run in each child: set by
+/// `CAF_USAGE_WRITER` as `<folder>|<first chat>|<how>`. `november` writes
+/// 300 chats' turns in November; `crossing` writes 150 chats' first turns
+/// in October and second in November, one after the other, so each
+/// November line compresses October as the other program adds to it.
 #[test]
-#[ignore = "a child of two_programs_never_mix_lines"]
+#[ignore = "a child of the process tests"]
 fn writer() {
     let Some(task) = std::env::var_os("CAF_USAGE_WRITER") else {
         return;
     };
     let task = task.into_string().expect("text");
-    let (folder, first) = task.split_once('|').expect("folder|chat");
+    let mut parts = task.split('|');
+    let (Some(folder), Some(first), Some(how)) = (parts.next(), parts.next(), parts.next()) else {
+        panic!("folder|chat|how");
+    };
     let first: u64 = first.parse().expect("a number");
-    record(
-        Path::new(folder),
-        APP,
-        (first..first + 300).map(|chat| line("2026-11-22T10:00:00Z", chat, 1)),
-    );
+    let lines: Vec<Value> = match how {
+        "november" => (first..first + 300)
+            .map(|chat| line("2026-11-22T10:00:00Z", chat, 1))
+            .collect(),
+        "crossing" => (first..first + 150)
+            .flat_map(|chat| {
+                [
+                    line("2026-10-31T10:00:00Z", chat, 1),
+                    line("2026-11-01T10:00:00Z", chat, 2),
+                ]
+            })
+            .collect(),
+        how => panic!("no writer {how}"),
+    };
+    record(Path::new(folder), APP, lines);
 }
 
-#[test]
-fn two_programs_never_mix_lines() {
-    let folder = Folder::new("processes");
+/// Runs two writers, in programs of their own, at once.
+fn two_programs(folder: &Path, how: &str) {
     let me = std::env::current_exe().expect("the test's program");
     let children: Vec<_> = [0, 10_000]
         .into_iter()
@@ -159,7 +174,7 @@ fn two_programs_never_mix_lines() {
                 .args(["--exact", "tests::writer", "--ignored", "--quiet"])
                 .env(
                     "CAF_USAGE_WRITER",
-                    format!("{}|{first}", folder.path().display()),
+                    format!("{}|{first}|{how}", folder.display()),
                 )
                 .stdout(std::process::Stdio::null())
                 .spawn()
@@ -169,6 +184,28 @@ fn two_programs_never_mix_lines() {
     for mut child in children {
         assert!(child.wait().expect("it ends").success());
     }
+}
+
+#[test]
+fn two_programs_crossing_a_month_lose_no_line() {
+    let folder = Folder::new("processes-crossing");
+    two_programs(folder.path(), "crossing");
+    let all = summary(
+        folder.path(),
+        "2026-10-01T00:00:00Z",
+        "2026-12-01T00:00:00Z",
+        "UTC",
+        Resolution::Day,
+    );
+    assert_eq!(turns(&all), 600);
+    assert_eq!(all.chats.all, 300);
+    assert!(all.unreadable.is_empty());
+}
+
+#[test]
+fn two_programs_never_mix_lines() {
+    let folder = Folder::new("processes");
+    two_programs(folder.path(), "november");
     let text = std::fs::read_to_string(file(folder.path(), APP, "2026-11")).expect("it's there");
     assert_eq!(text.lines().count(), 600);
     assert!(
@@ -429,11 +466,9 @@ fn a_turn_counts_once_and_its_first_line_counts() {
         [line("2026-11-22T10:00:00Z", 1, 1), second],
     );
     // And from another app's folder, as if it wrote the same.
-    record(
-        folder.path(),
-        "eyespy",
-        [line("2026-11-22T10:00:00Z", 1, 1)],
-    );
+    let mut theirs = line("2026-11-22T10:00:00Z", 1, 1);
+    theirs["app"] = json!("eyespy");
+    record(folder.path(), "eyespy", [theirs]);
 
     let summary = november(folder.path());
     assert_eq!(turns(&summary), 1);
@@ -655,6 +690,17 @@ fn buckets_are_by_app_agent_model_and_fast_mode_sorted() {
         .map(|priced| priced.model.as_str())
         .collect();
     assert_eq!(priced, ["anthropic/claude-haiku-5-5", "claude-opus-5-5"]);
+    // Each model of the agent's, by the entry that priced it.
+    assert_eq!(
+        summary.matched,
+        [
+            (
+                "claude-haiku-5-5".to_owned(),
+                "anthropic/claude-haiku-5-5".to_owned()
+            ),
+            ("claude-opus-5-5".to_owned(), "claude-opus-5-5".to_owned()),
+        ]
+    );
 }
 
 #[test]
@@ -809,6 +855,13 @@ fn tokens_no_price_covers_are_unpriced() {
     near(mystery.estimated, 0.0);
     // Only models with a price are listed.
     assert_eq!(summary.prices.len(), 1);
+    assert_eq!(
+        summary.matched,
+        [(
+            "claude-haiku-5-5".to_owned(),
+            "anthropic/claude-haiku-5-5".to_owned()
+        )]
+    );
 }
 
 #[test]
@@ -919,4 +972,487 @@ fn the_default_folder_is_beside_the_agents_caf_installs() {
     );
     assert_eq!(folder_from(os("data"), os("home")), None);
     assert_eq!(folder_from(None, None), None);
+}
+
+/// Writes `bytes` to `app`'s file `name`, making its folder.
+fn put(folder: &Path, app: &str, name: &str, bytes: &[u8]) {
+    let app = folder.join(app);
+    std::fs::create_dir_all(&app).expect("it's made");
+    std::fs::write(app.join(name), bytes).expect("it's written");
+}
+
+/// A line's JSON as written, with its line end.
+fn text(value: &Value) -> String {
+    format!("{value}\n")
+}
+
+#[test]
+fn an_unreadable_last_line_with_its_end_names_the_file() {
+    let folder = Folder::new("garbage-last");
+    let good = text(&line("2026-11-22T10:00:00Z", 1, 1));
+    put(
+        folder.path(),
+        APP,
+        "2026-11.jsonl",
+        format!("{good}GARBAGE\n").as_bytes(),
+    );
+    let packed = zstd::encode_all(format!("{good}GARBAGE\n").as_bytes(), 3).expect("it packs");
+    put(folder.path(), "eyespy", "2026-11.jsonl.zst", &packed);
+
+    let summary = november(folder.path());
+    assert_eq!(turns(&summary), 1);
+    assert_eq!(
+        summary.unreadable,
+        ["clackatoo/2026-11.jsonl", "eyespy/2026-11.jsonl.zst"]
+    );
+}
+
+#[test]
+fn a_last_line_without_its_end_never_counts() {
+    let folder = Folder::new("unended");
+    let good = text(&line("2026-11-22T10:00:00Z", 1, 1));
+    let unended = line("2026-11-22T11:00:00Z", 1, 2).to_string();
+    put(
+        folder.path(),
+        APP,
+        "2026-11.jsonl",
+        format!("{good}{unended}").as_bytes(),
+    );
+    let before = november(folder.path());
+    assert_eq!(turns(&before), 1, "a line not ended may yet be cut off");
+    assert!(before.unreadable.is_empty());
+
+    // So the next line, written over it, takes nothing away.
+    record(folder.path(), APP, [line("2026-11-22T12:00:00Z", 1, 3)]);
+    assert_eq!(turns(&november(folder.path())), 2);
+}
+
+#[test]
+fn a_failed_compression_doesnt_stop_the_line() {
+    let folder = Folder::new("compress-fails");
+    let october = text(&line("2026-10-30T10:00:00Z", 1, 1));
+    put(folder.path(), APP, "2026-10.jsonl", october.as_bytes());
+    put(folder.path(), APP, "2026-10.jsonl.zst", b"not zstd");
+
+    let ledger = Ledger::new(folder.path().to_owned(), APP);
+    ledger
+        .record(&read(line("2026-11-22T10:00:00Z", 1, 2)))
+        .expect("the line is written all the same");
+    assert_eq!(turns(&november(folder.path())), 1);
+    let left = std::fs::read_to_string(file(folder.path(), APP, "2026-10")).expect("it's there");
+    assert_eq!(left, october, "October's lines are as they were");
+
+    // Not tried again by this ledger the same day, even once it could be.
+    std::fs::remove_file(folder.path().join(APP).join("2026-10.jsonl.zst")).expect("it's gone");
+    ledger
+        .record(&read(line("2026-11-22T23:59:59Z", 1, 3)))
+        .expect("it's written");
+    assert!(file(folder.path(), APP, "2026-10").exists());
+    // The next day's first line tries again.
+    ledger
+        .record(&read(line("2026-11-23T00:00:00Z", 1, 4)))
+        .expect("it's written");
+    assert_eq!(
+        names(folder.path(), APP),
+        ["2026-10.jsonl.zst", "2026-11.jsonl"]
+    );
+}
+
+#[test]
+fn a_line_with_a_count_past_2_to_the_53_is_unreadable() {
+    let folder = Folder::new("too-big");
+    let mut big = line("2026-11-22T10:00:00Z", 1, 1);
+    big["usage"]["models"][0]["tokens"]["output"] = json!(1_u64 << 53);
+    let mut thinking = line("2026-11-22T10:00:00Z", 1, 2);
+    thinking["usage"]["models"][0]["tokens"]["thinking"] = json!(1_u64 << 53);
+    let good = line("2026-11-22T10:00:00Z", 1, 3);
+    put(
+        folder.path(),
+        APP,
+        "2026-11.jsonl",
+        format!("{}{}{}", text(&big), text(&thinking), text(&good)).as_bytes(),
+    );
+    let summary = november(folder.path());
+    assert_eq!(turns(&summary), 1);
+    assert_eq!(summary.unreadable, ["clackatoo/2026-11.jsonl"]);
+
+    // Nor is one written.
+    let error = Ledger::new(folder.path().to_owned(), "eyespy")
+        .record(&read({
+            let mut big = big.clone();
+            big["app"] = json!("eyespy");
+            big
+        }))
+        .expect_err("it's refused");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn sums_stop_below_2_to_the_53() {
+    let folder = Folder::new("sums");
+    let most = (1_u64 << 53) - 1;
+    let lines = (1..=3).map(|turn| {
+        let mut line = line("2026-11-22T10:00:00Z", 1, turn);
+        line["usage"]["models"][0]["model"] = json!("mystery");
+        line["usage"]["models"][0]["tokens"]["input"] = json!(most);
+        line
+    });
+    record(folder.path(), APP, lines);
+    let bucket = &november(folder.path()).buckets[0];
+    assert_eq!(bucket.tokens.input, most);
+    assert_eq!(bucket.unpriced, most);
+    assert_eq!(bucket.turns, 3);
+}
+
+#[test]
+fn a_line_another_apps_or_with_a_cost_not_a_number_is_refused() {
+    let folder = Folder::new("refused");
+    let ledger = Ledger::new(folder.path().to_owned(), "eyespy");
+    let error = ledger
+        .record(&read(line("2026-11-22T10:00:00Z", 1, 1)))
+        .expect_err("clackatoo's isn't eyespy's to write");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+    let mut costly = line("2026-11-22T10:00:00Z", 1, 1);
+    costly["app"] = json!("eyespy");
+    costly["usage"]["cost"] = json!({"amount": 1.0, "currency": "USD"});
+    for amount in [f64::NAN, f64::INFINITY] {
+        let mut line = read(costly.clone());
+        if let Some(cost) = line.usage.cost.as_mut() {
+            cost.amount = amount;
+        }
+        let error = ledger.record(&line).expect_err("it's refused");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+    assert!(!folder.path().exists());
+}
+
+#[test]
+fn apps_not_asked_for_arent_read() {
+    let folder = Folder::new("unasked");
+    record(folder.path(), APP, [line("2026-11-22T10:00:00Z", 1, 1)]);
+    put(folder.path(), "eyespy", "2026-11.jsonl.zst", b"not zstd");
+    let mut query = UsageQuery::new(
+        wall("2026-11-01T00:00:00Z"),
+        wall("2026-12-01T00:00:00Z"),
+        "UTC",
+    );
+    query.apps = vec![APP.into()];
+    let summary = summarise(folder.path(), &query, &prices()).expect("it's good");
+    assert_eq!(turns(&summary), 1);
+    assert!(summary.unreadable.is_empty());
+}
+
+#[test]
+fn the_compressed_line_counts_over_a_later_one_and_joining_drops_it() {
+    let folder = Folder::new("join");
+    record(
+        folder.path(),
+        APP,
+        [
+            line("2026-10-30T10:00:00Z", 1, 1),
+            line("2026-11-01T10:00:00Z", 2, 1),
+        ],
+    );
+    // The same turn again, late, with other tokens.
+    let mut again = line("2026-10-30T10:00:00Z", 1, 1);
+    again["usage"]["models"][0]["tokens"]["input"] = json!(5);
+    record(
+        folder.path(),
+        APP,
+        [again, line("2026-10-30T11:00:00Z", 1, 2)],
+    );
+    let october = |folder: &Path| {
+        summary(
+            folder,
+            "2026-10-01T00:00:00Z",
+            "2026-11-01T00:00:00Z",
+            "UTC",
+            Resolution::Day,
+        )
+    };
+    let before = october(folder.path());
+    assert_eq!(turns(&before), 2);
+    assert_eq!(before.buckets[0].tokens.input, 2000);
+
+    record(folder.path(), APP, [line("2026-12-01T10:00:00Z", 3, 1)]);
+    assert_eq!(october(folder.path()), before);
+    let packed =
+        std::fs::read(folder.path().join(APP).join("2026-10.jsonl.zst")).expect("it's there");
+    let lines = zstd::decode_all(packed.as_slice()).expect("it's zstd");
+    assert_eq!(
+        lines.iter().filter(|byte| **byte == b'\n').count(),
+        2,
+        "the duplicate isn't kept"
+    );
+}
+
+#[test]
+fn a_cost_in_dollars_is_reported_however_its_currency_is_written() {
+    let folder = Folder::new("usd");
+    let mut turn = line("2026-11-22T10:00:00Z", 1, 1);
+    turn["usage"]["cost"] = json!({"amount": 0.25, "currency": "usd"});
+    record(folder.path(), APP, [turn]);
+    let bucket = &november(folder.path()).buckets[0];
+    near(bucket.reported, 0.25);
+    near(bucket.estimated, 0.0);
+}
+
+#[test]
+fn a_zone_ahead_of_utc_reads_across_the_month() {
+    let folder = Folder::new("ahead");
+    record(
+        folder.path(),
+        APP,
+        [
+            // 1 December, 01:00 in Auckland, but November in UTC.
+            line("2026-11-30T12:00:00Z", 1, 1),
+            // 18:00 that day, in December's file.
+            line("2026-12-01T05:00:00Z", 1, 3),
+            line("2026-12-01T12:00:00Z", 1, 2),
+        ],
+    );
+    let summary = summary(
+        folder.path(),
+        "2026-11-30T11:00:00Z",
+        "2026-12-01T11:00:00Z",
+        "Pacific/Auckland",
+        Resolution::Day,
+    );
+    let starts: Vec<(Wall, u64)> = summary
+        .buckets
+        .iter()
+        .map(|bucket| (bucket.start, bucket.turns))
+        .collect();
+    assert_eq!(starts, [(wall("2026-11-30T11:00:00Z"), 2)]);
+}
+
+#[test]
+fn a_ledger_that_cant_be_listed_is_named() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if rustix::process::geteuid().is_root() {
+        // Root lists anything.
+        return;
+    }
+    let folder = Folder::new("unlistable");
+    record(folder.path(), APP, [line("2026-11-22T10:00:00Z", 1, 1)]);
+    let set = |mode| {
+        std::fs::set_permissions(folder.path(), std::fs::Permissions::from_mode(mode))
+            .expect("it's set");
+    };
+    set(0o000);
+    let summary = november(folder.path());
+    set(0o700);
+    assert!(summary.buckets.is_empty());
+    assert_eq!(summary.unreadable, ["."]);
+}
+
+#[test]
+fn a_restarted_ledger_tries_a_failed_compression_again() {
+    let folder = Folder::new("compress-restart");
+    put(
+        folder.path(),
+        APP,
+        "2026-10.jsonl",
+        text(&line("2026-10-30T10:00:00Z", 1, 1)).as_bytes(),
+    );
+    put(folder.path(), APP, "2026-10.jsonl.zst", b"not zstd");
+    record(folder.path(), APP, [line("2026-11-22T10:00:00Z", 1, 2)]);
+    std::fs::remove_file(folder.path().join(APP).join("2026-10.jsonl.zst")).expect("it's gone");
+    record(folder.path(), APP, [line("2026-11-22T11:00:00Z", 1, 3)]);
+    assert_eq!(
+        names(folder.path(), APP),
+        ["2026-10.jsonl.zst", "2026-11.jsonl"]
+    );
+}
+
+#[test]
+fn a_compressed_month_cut_short_is_named_and_kept() {
+    let folder = Folder::new("zst-unended");
+    let good = text(&line("2026-10-30T10:00:00Z", 1, 1));
+    let unended = line("2026-10-30T11:00:00Z", 1, 2).to_string();
+    let packed = zstd::encode_all(format!("{good}{unended}").as_bytes(), 3).expect("it packs");
+    put(folder.path(), APP, "2026-10.jsonl.zst", &packed);
+    let october = |folder: &Path| {
+        summary(
+            folder,
+            "2026-10-01T00:00:00Z",
+            "2026-11-01T00:00:00Z",
+            "UTC",
+            Resolution::Day,
+        )
+    };
+    let before = october(folder.path());
+    assert_eq!(turns(&before), 1);
+    assert_eq!(before.unreadable, ["clackatoo/2026-10.jsonl.zst"]);
+
+    // Never joined, so never cut shorter.
+    record(
+        folder.path(),
+        APP,
+        [
+            line("2026-10-30T12:00:00Z", 1, 3),
+            line("2026-11-01T10:00:00Z", 1, 4),
+        ],
+    );
+    let after =
+        std::fs::read(folder.path().join(APP).join("2026-10.jsonl.zst")).expect("it's there");
+    assert_eq!(after, packed);
+    assert_eq!(turns(&october(folder.path())), 2);
+}
+
+#[test]
+fn joining_drops_a_turn_only_for_a_line_that_reads() {
+    let folder = Folder::new("join-unreadable");
+    let mut bad = line("2026-10-30T10:00:00Z", 1, 1);
+    bad["usage"]["models"][0]["tokens"]["input"] = json!(1_u64 << 53);
+    let packed = zstd::encode_all(text(&bad).as_bytes(), 3).expect("it packs");
+    put(folder.path(), APP, "2026-10.jsonl.zst", &packed);
+    // The same turn, sound, late.
+    record(
+        folder.path(),
+        APP,
+        [
+            line("2026-10-30T10:00:00Z", 1, 1),
+            line("2026-11-01T10:00:00Z", 1, 2),
+        ],
+    );
+    assert_eq!(
+        names(folder.path(), APP),
+        ["2026-10.jsonl.zst", "2026-11.jsonl"]
+    );
+    let october = summary(
+        folder.path(),
+        "2026-10-01T00:00:00Z",
+        "2026-11-01T00:00:00Z",
+        "UTC",
+        Resolution::Day,
+    );
+    assert_eq!(turns(&october), 1, "the sound line is kept");
+    assert_eq!(october.unreadable, ["clackatoo/2026-10.jsonl.zst"]);
+}
+
+#[test]
+fn a_line_with_no_models_is_refused_and_unreadable() {
+    let folder = Folder::new("no-models");
+    let mut empty = line("2026-11-22T10:00:00Z", 1, 1);
+    empty["usage"]["models"] = json!([]);
+    let error = Ledger::new(folder.path().to_owned(), APP)
+        .record(&read(empty.clone()))
+        .expect_err("it's refused");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+    let good = text(&line("2026-11-22T10:00:00Z", 1, 2));
+    put(
+        folder.path(),
+        APP,
+        "2026-11.jsonl",
+        format!("{}{good}", text(&empty)).as_bytes(),
+    );
+    let summary = november(folder.path());
+    assert_eq!(turns(&summary), 1);
+    assert_eq!(summary.unreadable, ["clackatoo/2026-11.jsonl"]);
+}
+
+/// The zones the period fixture covers: one with no offset, two whose
+/// clocks change by an hour (one each side of the equator, Santiago's at
+/// midnight), one half an hour off UTC, and one whose clocks change by
+/// half an hour.
+const PERIOD_ZONES: [&str; 5] = [
+    "UTC",
+    "Europe/London",
+    "America/Santiago",
+    "Asia/Kolkata",
+    "Australia/Lord_Howe",
+];
+
+/// Instants nothing special happens at, in every zone.
+const ORDINARY: [&str; 5] = [
+    "1970-01-01T00:00:00Z",
+    "2026-01-01T00:00:00Z",
+    "2026-06-15T13:47:12.345Z",
+    "2026-11-22T10:10:10.123Z",
+    "2026-12-31T23:59:59.999Z",
+];
+
+/// `fixtures/periods.json`: when the hour and the day each of many
+/// instants is in start, in each of [`PERIOD_ZONES`], as summaries cut
+/// them: what the SDKs check their own period maths against. Around each
+/// of 2026's clock changes, every quarter of an hour for three hours
+/// either side, and the last millisecond before it.
+fn periods() -> String {
+    let mut entries = Vec::new();
+    for name in PERIOD_ZONES {
+        let zone = jiff::tz::TimeZone::get(name).expect("the zone is known");
+        let mut instants: Vec<i64> = ORDINARY.iter().map(|at| wall(at).0).collect();
+        let year = wall("2026-01-01T00:00:00Z").0;
+        let changes = zone
+            .following(Timestamp::from_millisecond(year).expect("in range"))
+            .take_while(|change| {
+                change.timestamp().as_millisecond() < wall("2027-01-01T00:00:00Z").0
+            })
+            .map(|change| change.timestamp().as_millisecond());
+        for change in changes {
+            instants.push(change - 1);
+            let quarter = 15 * 60 * 1000;
+            instants.extend((-12..=12).map(|step| change + step * quarter));
+        }
+        instants.sort_unstable();
+        instants.dedup();
+        for at in instants {
+            let hour = crate::start(Wall(at), &zone, Resolution::Hour).expect("in range");
+            let day = crate::start(Wall(at), &zone, Resolution::Day).expect("in range");
+            entries.push(format!(
+                "  {{\"zone\": \"{name}\", \"at\": {at}, \"hour\": {}, \"day\": {}}}",
+                hour.0, day.0
+            ));
+        }
+    }
+    format!("[\n{}\n]\n", entries.join(",\n"))
+}
+
+#[test]
+fn the_period_fixture_is_current() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/periods.json");
+    let text = periods();
+    let old = std::fs::read_to_string(&path).ok();
+    if old.as_deref() == Some(text.as_str()) {
+        return;
+    }
+    let bless = "CAF_BLESS=1 cargo test -p caf-usage the_period_fixture";
+    assert!(
+        std::env::var_os("CAF_BLESS").is_some(),
+        "fixtures/periods.json is {}: run `{bless}`",
+        if old.is_some() { "stale" } else { "missing" }
+    );
+    let new = path.with_extension("json.new");
+    std::fs::write(&new, &text).expect("it's written");
+    std::fs::rename(&new, &path).expect("it's moved into place");
+}
+
+#[test]
+fn the_period_fixture_holds_the_clock_changes() {
+    let text = periods();
+    let entries: Vec<Value> = serde_json::from_str(&text).expect("it's JSON");
+    let find = |zone: &str, at: &str| {
+        entries
+            .iter()
+            .find(|entry| entry["zone"] == zone && entry["at"] == wall(at).0)
+            .unwrap_or_else(|| panic!("{zone} at {at} is in it"))
+    };
+    // London's repeated hour: 01:30 BST, then 01:30 GMT.
+    let first = find("Europe/London", "2026-10-25T00:30:00Z");
+    let second = find("Europe/London", "2026-10-25T01:30:00Z");
+    assert_eq!(first["hour"], wall("2026-10-25T00:00:00Z").0);
+    assert_eq!(second["hour"], wall("2026-10-25T01:00:00Z").0);
+    assert_eq!(first["day"], second["day"]);
+    assert_eq!(first["day"], wall("2026-10-24T23:00:00Z").0);
+    // Kolkata's hours start on the half hour, UTC.
+    let kolkata = find("Asia/Kolkata", "2026-11-22T10:10:10.123Z");
+    assert_eq!(kolkata["hour"], wall("2026-11-22T09:30:00Z").0);
+    for zone in ["Europe/London", "America/Santiago", "Australia/Lord_Howe"] {
+        let changes = entries.iter().filter(|entry| entry["zone"] == zone).count();
+        assert!(changes > 40, "{zone} has its clock changes: {changes}");
+    }
 }
