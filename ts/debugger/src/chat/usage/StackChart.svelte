@@ -23,7 +23,9 @@
     zone: string
   } = $props()
 
-  const W = 640
+  /** Its width, as laid out: the chart is drawn to it, so its text is never scaled. */
+  let laid = $state(0)
+  const W = $derived(laid > 0 ? laid : 640)
   const H = 220
   const LEFT = 48
   const BOTTOM = 22
@@ -31,12 +33,27 @@
 
   const show = (value: number) => (metric === 'cost' ? usd(value) : tokens(value))
   const heights = $derived(periods.map(({ groups }) => groups.reduce((all, each) => all + measure(each.totals, metric), 0)))
-  /** The top of the scale: a little over the tallest bar, or 1 for an empty chart. */
-  const top = $derived(Math.max(...heights, 0) * 1.12 || 1)
+  /** The scale's step: a round number, four of which reach past the tallest bar. */
+  const step = $derived(roundStep(Math.max(...heights, 0) / 4, metric))
+  const top = $derived(step * 4)
+  /** A tick's label: money to as many places as the step needs. */
+  const places = $derived(Math.max(0, -Math.floor(Math.log10(step))))
+  const money = $derived(
+    new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: places, maximumFractionDigits: places }),
+  )
+  const label = (value: number) => (metric === 'cost' ? money.format(value) : tokens(value))
   const width = $derived((W - LEFT) / Math.max(1, periods.length))
   /** Every how many bars a label goes, so they don't crowd. */
   const every = $derived(Math.max(1, Math.ceil(periods.length / 10)))
   const ticks = [0, 1, 2, 3, 4]
+
+  /** The smallest of 1, 2 or 5 times a power of ten that's at least `least`: a cent, or a token, at the least. */
+  function roundStep(least: number, metric: Metric): number {
+    const floor = metric === 'cost' ? 0.01 : 1
+    if (least <= floor) return floor
+    const power = 10 ** Math.floor(Math.log10(least))
+    return [1, 2, 5, 10].map((each) => each * power).find((each) => each >= least)!
+  }
 
   /** A period's bar, as rectangles stacked from the bottom in `keys`' order. */
   function stack(groups: Group[], at: number) {
@@ -55,11 +72,12 @@
   }
 </script>
 
-<svg class="chart" viewBox="0 0 {W} {H}" role="img" aria-label="{metric === 'cost' ? 'Cost' : 'Tokens'} by {by.type === 'Hour' ? 'hour' : 'day'}">
+<div class="box" bind:clientWidth={laid}>
+<svg class="chart" width={W} height={H} viewBox="0 0 {W} {H}" role="img" aria-label="{metric === 'cost' ? 'Cost' : 'Tokens'} by {by.type === 'Hour' ? 'hour' : 'day'}">
   {#each ticks as n (n)}
     {@const y = H - BOTTOM - ((H - BOTTOM - TOP) * n) / 4}
     <line class="grid" x1={LEFT} x2={W} y1={y} y2={y} />
-    <text x={LEFT - 6} y={y + 4} text-anchor="end">{show((top * n) / 4)}</text>
+    <text x={LEFT - 6} y={y + 4} text-anchor="end">{label(step * n)}</text>
   {/each}
   {#each periods as period, at (period.start)}
     {#each stack(period.groups, at) as rect (rect.key)}
@@ -72,11 +90,14 @@
     {/if}
   {/each}
 </svg>
+</div>
 
 <style>
-  .chart {
+  .box {
     width: 100%;
-    height: auto;
+    min-width: 0;
+  }
+  .chart {
     display: block;
   }
   text {

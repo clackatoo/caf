@@ -11,6 +11,14 @@ import { cacheSavings, costByKind, queryFor } from '../../src/chat/usage/page.ts
 
 afterEach(cleanup)
 
+// The chart follows its width, as laid out, which jsdom doesn't do: it
+// draws at its own width meanwhile.
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
 const HOUR = 3_600_000
 /** 09:30 UTC, Sunday 22 November 2026. */
 const NOW = Date.UTC(2026, 10, 22, 9, 30)

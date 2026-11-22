@@ -22,9 +22,10 @@ export function count(n: number): string {
   return whole.format(n)
 }
 
-/** A share of a whole, as a percentage: `33%`, or `4.2%` under a tenth. */
+/** A share of a whole, as a percentage: `33%`, `4.2%` under a tenth, or `<0.1%` for a sliver. */
 export function percent(share: number): string {
   if (!Number.isFinite(share)) return '–'
+  if (share > 0 && share < 0.001) return '<0.1%'
   return `${(share * 100).toFixed(share > 0 && share < 0.1 ? 1 : 0)}%`
 }
 
