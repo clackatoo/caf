@@ -409,6 +409,8 @@ export function errorText(error: unknown): string {
         return 'The app keeps no record of usage, so there is none to show.'
       case 'BadQuery':
         return badQueryText(why.value)
+      case 'PriceNotSet':
+        return `The price couldn't be set, and prices are as they were. The system said: ${why.value}`
       default:
         return `It wasn't done (${tagOf(why)}).`
     }

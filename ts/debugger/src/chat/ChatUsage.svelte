@@ -21,15 +21,23 @@
   const tone = $derived(share > 0.95 ? 'warning' : share > 0.8 ? 'caution' : null)
   const cost = $derived(costOf(spend))
   const processed = $derived(total(spend.tokens))
-  /** How the cost was come by: as the agent reported it, estimated at API prices, or both. */
+  /**
+   * How the cost was come by: as the agent reported it, estimated at API
+   * prices, or both; or not at all, for turns on models with no price
+   * that reported none.
+   */
   const how = $derived.by(() => {
+    if (spend.reported === 0 && spend.estimated === 0 && spend.unpriced > 0) {
+      return 'No price is known for the models it used, and the agent reported no cost.'
+    }
     if (spend.estimated === 0) return 'As the agent reported it.'
     if (spend.reported === 0) return 'An estimate, at API prices.'
     return `${usd(spend.reported)} as the agent reported it, ${usd(spend.estimated)} estimated at API prices.`
   })
 </script>
 
-<div class="chat-usage" role="dialog" aria-label="This chat's usage">
+<!-- Not a dialog: it takes no focus, and the chat goes on around it. -->
+<div class="chat-usage" role="region" aria-label="This chat's usage">
   <section>
     <h3>This chat</h3>
     <div class="rows">
@@ -167,7 +175,7 @@
     padding: 0;
     border: 0;
     background: none;
-    color: var(--caf-accent);
+    color: var(--caf-link);
     cursor: pointer;
   }
   .open-usage:hover {

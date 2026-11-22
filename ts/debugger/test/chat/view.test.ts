@@ -543,7 +543,7 @@ describe('usage', () => {
     ...fields,
   })
   const ring = () => screen.getByRole('button', { name: /This chat's usage/ })
-  const popover = () => screen.queryByRole('dialog', { name: "This chat's usage" })
+  const popover = () => screen.queryByRole('region', { name: "This chat's usage" })
 
   it('shows how full the memory is on the ring, amber past 80% and red past 95%', () => {
     const { container } = draw(chat({ usage: { used: 50_000, size: 200_000, cost: null } }))
@@ -596,6 +596,40 @@ describe('usage', () => {
     expect(text(shown)).toContain('$1.00 as the agent reported it, $0.84 estimated at API prices.')
     expect(text(shown)).toContain("40K tokens on models with no known price aren't in it.")
     expect(text(shown)).toContain('Context Not said yet')
+  })
+
+  it('says when no price is known and the agent reported no cost, rather than that it reported nothing', async () => {
+    draw(chat({ spend: spend({ reported: 0, estimated: 0, unpriced: 2_110_000 }) }))
+    await fireEvent.click(ring())
+    const shown = popover()!
+    expect(shown.querySelector('.cost')?.textContent?.trim()).toBe('$0.00')
+    expect(text(shown)).toContain('No price is known for the models it used, and the agent reported no cost.')
+    expect(text(shown)).not.toContain('As the agent reported it.')
+  })
+
+  it('takes Escape for itself, and gives focus back to the ring', async () => {
+    draw(chat({ spend: spend() }))
+    await fireEvent.click(ring())
+    const prevented: boolean[] = []
+    const later = (event: KeyboardEvent) => prevented.push(event.defaultPrevented)
+    window.addEventListener('keydown', later)
+    document.body.focus()
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+    window.removeEventListener('keydown', later)
+    expect(prevented).toStrictEqual([true])
+    expect(popover()).toBeNull()
+    expect(document.activeElement).toBe(ring())
+  })
+
+  it('leaves a question waiting alone when Escape closes it', async () => {
+    const { actions } = draw(
+      chat({ spend: spend(), questions: [question({ type: 'SlowToOpen', value: { adapter_answered: true } })] }),
+    )
+    await fireEvent.click(ring())
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(popover()).toBeNull()
+    expect(actions.answer).not.toHaveBeenCalled()
+    expect(actions.stop).not.toHaveBeenCalled()
   })
 
   it('says nothing has been spent before a turn has a record', async () => {

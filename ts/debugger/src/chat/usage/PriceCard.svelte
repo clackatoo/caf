@@ -65,11 +65,18 @@
     return { input: input!, cache_read: cache_read!, cache_write: cache_write!, output: output!, fast }
   }
 
+  /**
+   * The price to set or clear: the user's own entry that priced it, if
+   * that's what did, as it may be named otherwise than the agent's id;
+   * else a new one, by the agent's id.
+   */
+  const target = $derived(priced?.layer.type === 'Own' ? priced.model : model)
+
   async function save(price: ModelPrice | null) {
     if (setPrice === undefined || busy) return
     busy = true
     problem = null
-    const error = await attempt(() => setPrice(model, price))
+    const error = await attempt(() => setPrice(target, price))
     busy = false
     if (error !== null) problem = errorText(error)
     else editing = false
@@ -83,7 +90,7 @@
   }
 </script>
 
-<div class="price" aria-label="The price of {model}">
+<div class="price" role="group" aria-label="The price of {model}">
   {#if priced === null}
     <p>CAF knows no price for <code>{model}</code>, so turns on it that didn't report a cost aren't counted in the cost.</p>
   {:else}
@@ -101,7 +108,7 @@
   {#if setPrice !== undefined}
     {#if editing}
       <form onsubmit={submit}>
-        <p class="hint">Your own price for <code>{model}</code>, in US dollars per million tokens. Every CAF app on this computer uses it.</p>
+        <p class="hint">Your own price for <code>{target}</code>, in US dollars per million tokens. Every CAF app on this computer uses it.</p>
         <div class="fields">
           {#each KINDS as kind (kind.key)}
             <label>{kind.label}<input type="number" min="0" step="any" bind:value={draft[kind.key]} /></label>

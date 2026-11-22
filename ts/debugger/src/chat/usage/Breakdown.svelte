@@ -113,11 +113,11 @@
           {#if by === 'app'}<td>{chats.get(row.key) ?? 0}</td>{/if}
           <td>
             {#if row.totals.unpriced > 0 && row.totals.unpriced >= all && cost(row.totals) === 0}
-              <span class="unpriced" title="No price is known for it, and its agent reported no cost">Unpriced</span>
+              <span class="unpriced">Unpriced</span>
             {:else}
               {usd(cost(row.totals))}
               {#if row.totals.unpriced > 0}
-                <span class="unpriced" title="{count(row.totals.unpriced)} of its tokens had no price, and aren't in the cost">part unpriced</span>
+                <span class="unpriced">{tokens(row.totals.unpriced)} unpriced</span>
               {/if}
             {/if}
           </td>
@@ -135,6 +135,12 @@
       {/each}
     </tbody>
   </table>
+  {#if rows.some((row) => row.totals.unpriced > 0)}
+    <p class="footnote">
+      Unpriced: tokens on a model CAF knows no price for, of turns whose agent reported no cost. They aren't in the
+      cost.
+    </p>
+  {/if}
   {#if by === 'model'}<p class="footnote">Click a model for its price{setPrice === undefined ? '' : ', or to set your own'}.</p>{/if}
 {/if}
 

@@ -115,7 +115,26 @@ export const COLOURS = 8
 /** Each agent's colour, and each app's, as CSS colours. */
 export type Colours = Record<'agent' | 'app', Map<string, string>>
 
-/** The colour of the `n`th group, as a CSS colour. */
+/**
+ * The colour of the `n`th group, as a CSS colour. Past the eighth, each
+ * colour comes again paler, then paler still, so the first 24 groups are
+ * each a colour of their own.
+ */
 export function colour(n: number): string {
-  return `var(--caf-series-${(n % COLOURS) + 1})`
+  const base = `var(--caf-series-${(n % COLOURS) + 1})`
+  const round = Math.floor(n / COLOURS)
+  if (round === 0) return base
+  return `color-mix(in srgb, ${base} ${round === 1 ? 60 : 30}%, var(--caf-bg))`
+}
+
+/** The colour of the `n`th part of one whole, such as a kind of token: tones of one colour, never a group's. */
+export function tone(n: number): string {
+  return `var(--caf-tone-${(n % 4) + 1})`
+}
+
+/** What a summary covers, after "in": `the past 24 hours`, `the last 7 days`. */
+export function covering(summary: Summary): string {
+  const periods = group(summary, 'period').length
+  if (summary.query.by.type === 'Hour') return periods === 1 ? 'the past hour' : `the past ${periods} hours`
+  return periods === 1 ? 'one day' : `the last ${periods} days`
 }

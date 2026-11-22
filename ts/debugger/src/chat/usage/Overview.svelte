@@ -4,6 +4,7 @@
   import type { Summary } from '@clackatoo/caf'
   import { cost, group, split, total, totals } from '@clackatoo/caf'
   import { count, percent, tokens, usd } from '../figures.ts'
+  import Info from '../Info.svelte'
   import StackChart from './StackChart.svelte'
   import Switch from './Switch.svelte'
   import { measure, type Colours, type Metric } from './page.ts'
@@ -37,12 +38,18 @@
       {summary.chats.all}
       {summary.chats.all === 1 ? 'chat' : 'chats'}
       {#if metric === 'cost'}
-        · <span
-          class="estimate"
-          title="What agents reported, and an estimate at API prices for turns they didn't.{all.unpriced > 0
-            ? ` ${percent(1 - priced)} of tokens are on models with no known price, and aren't in it.`
-            : ''}">API estimate</span
-        >
+        {#if all.estimated > 0}
+          · <span class="estimate">API estimate</span>
+          <Info label="About the estimate">
+            What agents reported, and for turns they reported nothing, an estimate at the models' API prices. On a
+            plan, it isn't what you pay.
+          </Info>
+        {:else if all.reported > 0}
+          · as agents reported it
+        {/if}
+        {#if all.unpriced > 0}
+          <span class="unpriced">· {percent(1 - priced)} of tokens had no price, and aren't in it</span>
+        {/if}
       {/if}
     </div>
     <div class="split"><Switch options={[{ value: 'agent', label: 'By agent' }, { value: 'app', label: 'By app' }]} bind:value={by} label="Split by" small /></div>
@@ -93,9 +100,8 @@
     color: var(--caf-muted);
     margin: 0.3em 0 1.1em;
   }
-  .estimate {
-    text-decoration: underline dotted;
-    cursor: help;
+  .unpriced {
+    display: block;
   }
   .split {
     margin-bottom: 0.9em;

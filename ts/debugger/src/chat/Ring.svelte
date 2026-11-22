@@ -17,6 +17,7 @@
 
   let open = $state(false)
   let wrap = $state<HTMLElement>()
+  let button = $state<HTMLButtonElement>()
 
   const share = $derived(usage === null || usage.size <= 0 ? null : Math.min(1, usage.used / usage.size))
   const percent = $derived(share === null ? null : Math.round(share * 100))
@@ -24,20 +25,26 @@
   const RADIUS = 15.5
   const ROUND = 2 * Math.PI * RADIUS
 
-  // Closed by Escape, or a click anywhere else.
+  // Closed by a click anywhere else, or by Escape, which goes no further:
+  // heard before anything else hears it (a question waiting would take it
+  // as Stop), and handled, so nothing else acts on it. Focus goes back to
+  // the ring.
   $effect(() => {
     if (!open) return
     const away = (event: PointerEvent) => {
       if (wrap !== undefined && !wrap.contains(event.target as Node)) open = false
     }
     const key = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') open = false
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      open = false
+      button?.focus()
     }
     window.addEventListener('pointerdown', away)
-    window.addEventListener('keydown', key)
+    window.addEventListener('keydown', key, { capture: true })
     return () => {
       window.removeEventListener('pointerdown', away)
-      window.removeEventListener('keydown', key)
+      window.removeEventListener('keydown', key, { capture: true })
     }
   })
 
@@ -49,6 +56,7 @@
 
 <div class="ring-wrap" bind:this={wrap}>
   <button
+    bind:this={button}
     type="button"
     class="ring"
     data-tone={tone}

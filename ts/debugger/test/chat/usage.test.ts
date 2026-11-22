@@ -7,7 +7,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CafError, type Bucket, type PricedModel, type Summary, type Tokens, type UsageQuery } from '@clackatoo/caf'
 import UsagePage from '../../src/chat/usage/UsagePage.svelte'
-import { cacheSavings, costByKind, queryFor } from '../../src/chat/usage/page.ts'
+import { cacheSavings, colour, costByKind, queryFor } from '../../src/chat/usage/page.ts'
+import { percent } from '../../src/chat/figures.ts'
 
 afterEach(cleanup)
 
@@ -143,9 +144,21 @@ describe('the overview', () => {
   it('shows the cost, the chats, and that it is an estimate', async () => {
     const { container } = draw()
     await waitFor(() => expect(big(container)).toBe('$3.00'))
-    expect(text(container.querySelector('.sub')!)).toBe('3 chats · API estimate')
-    expect(container.querySelector('.estimate')?.getAttribute('title')).toContain("of tokens are on models with no known price, and aren't in it.")
+    expect(text(container.querySelector('.sub')!)).toBe("3 chats · API estimate ⓘ · 7.5% of tokens had no price, and aren't in it")
+    // What the estimate is, a click away, not only on hover.
+    expect(screen.queryByRole('note')).toBeNull()
+    await press('About the estimate')
+    expect(screen.getByRole('note').textContent).toContain("an estimate at the models' API prices")
     expect(shares()).toStrictEqual(['claude-agent-acp 2 chats $3.00 100% of cost · 6.2M tokens', 'codex 1 chat $0.00 0% of cost · 500K tokens'])
+  })
+
+  it("says it's as agents reported it when nothing was estimated", async () => {
+    const { container } = draw(async (query) =>
+      summary(query, { buckets: [bucket()], chats: { all: 1, by_app: [['clackatoo', 1]], by_agent: [['claude-agent-acp', 1]] } }),
+    )
+    await waitFor(() => expect(big(container)).toBe('$2.00'))
+    expect(text(container.querySelector('.sub')!)).toBe('1 chat · as agents reported it')
+    expect(screen.queryByRole('button', { name: 'About the estimate' })).toBeNull()
   })
 
   it('splits by app instead', async () => {
@@ -187,8 +200,14 @@ describe('the overview', () => {
       'Cache writes 0',
       'Output 100K',
       // 4M cached at $4.50 a million less, and 1M at twice that in fast mode.
-      'Cache savings $27.00',
+      'Cache savings ⓘ $27.00',
     ])
+    await press('About cache savings')
+    expect(screen.getByRole('note').textContent).toContain('against reading the same input fresh')
+    expect(text(container)).toContain('At the prices the models have: an agent’s reported cost isn’t split by type.')
+    // Kinds of token are tones of one colour, never an agent's.
+    const swatches = [...container.querySelectorAll('.share .keys i')].map((each) => (each as HTMLElement).style.background)
+    expect(swatches.every((each) => each.startsWith('var(--caf-tone-'))).toBe(true)
     const labels = [...container.querySelectorAll('.share .label')].map((each) => text(each))
     expect(labels).toStrictEqual(['Tokens by type', 'Cost by type', 'Cost by speed'])
     expect(parts(container.querySelectorAll('.share .keys')[2]!)).toBe('Standard 67% Fast mode 33%')
@@ -250,14 +269,32 @@ describe('the breakdown', () => {
     expect(setPrice).not.toHaveBeenCalled()
   })
 
-  it("clears the user's own price", async () => {
+  it("clears and changes the user's own price by the entry that priced it", async () => {
     const own = { ...OPUS, layer: { type: 'Own' as const } }
     const { container, setPrice } = draw(async (query) => summary(query, { prices: [own] }))
     await waitFor(() => expect(big(container)).toBe('$3.00'))
     await press('claude-opus-5-5')
     expect(text(container.querySelector('.price p')!)).toContain('Your own price')
     await press("Use the table's price")
-    expect(setPrice).toHaveBeenCalledWith('claude-opus-5-5', null)
+    expect(setPrice).toHaveBeenCalledWith('anthropic/claude-opus-5-5', null)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Change your price' })).toBeTruthy())
+    await press('Change your price')
+    await press('Save')
+    expect(setPrice).toHaveBeenLastCalledWith('anthropic/claude-opus-5-5', OPUS.price)
+  })
+
+  it("says why a price couldn't be set", async () => {
+    const { container, setPrice } = draw()
+    setPrice.mockRejectedValueOnce(new CafError({ type: 'PriceNotSet', value: 'Permission denied' }))
+    await waitFor(() => expect(big(container)).toBe('$3.00'))
+    await press('claude-opus-5-5')
+    await press('Set your own price')
+    await press('Save')
+    await waitFor(() =>
+      expect(screen.getByRole('group', { name: 'The price of claude-opus-5-5' }).querySelector('[role=alert]')?.textContent).toBe(
+        "The price couldn't be set, and prices are as they were. The system said: Permission denied",
+      ),
+    )
   })
 
   it('offers no price of your own without leave to set one', async () => {
@@ -265,7 +302,8 @@ describe('the breakdown', () => {
     await waitFor(() => expect(big(container)).toBe('$3.00'))
     await press('claude-opus-5-5')
     expect(screen.queryByRole('button', { name: 'Set your own price' })).toBeNull()
-    expect(text(container.querySelector('.footnote')!)).toBe('Click a model for its price.')
+    expect(text([...container.querySelectorAll('.footnote')].at(-1)!)).toBe('Click a model for its price.')
+    expect(text(container.querySelector('.footnote')!)).toContain("Unpriced: tokens on a model CAF knows no price for")
   })
 
   it('is by app, with its chats', async () => {
@@ -274,7 +312,7 @@ describe('the breakdown', () => {
     await press('App')
     expect(rows(container)).toStrictEqual([
       ['1', 'clackatoo', '1', '$2.00', '67%', '5.1M'],
-      ['2', 'eyespy', '2', '$1.00 part unpriced', '33%', '1.6M'],
+      ['2', 'eyespy', '2', '$1.00 500K unpriced', '33%', '1.6M'],
     ])
   })
 
@@ -308,6 +346,19 @@ describe('what goes wrong', () => {
     expect(screen.getByRole('alert').textContent).toContain("Usage couldn't be read")
   })
 
+  it('drops what it showed when asking again fails', async () => {
+    let asked = 0
+    const { container } = draw(async (query) => {
+      if (++asked === 1) return summary(query)
+      throw new CafError({ type: 'NoLedger' })
+    })
+    await waitFor(() => expect(big(container)).toBe('$3.00'))
+    await press('30 days')
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('The app keeps no record of usage'))
+    expect(container.querySelector('.big')).toBeNull()
+    expect(container.querySelector('table')).toBeNull()
+  })
+
   it('says the figures are short when some of the record could not be read', async () => {
     const { container } = draw(async (query) => summary(query, { unreadable: ['eyespy/2026-10.jsonl.zst', 'clackatoo/2026-11.jsonl'] }))
     await waitFor(() => expect(big(container)).toBe('$3.00'))
@@ -319,7 +370,7 @@ describe('what goes wrong', () => {
   it('says when there was nothing in the period', async () => {
     const { container } = draw(async (query) => summary(query, { buckets: [], chats: { all: 0, by_app: [], by_agent: [] } }))
     await waitFor(() => expect(big(container)).toBe('$0.00'))
-    expect(text(container)).toContain('No chats in this period (7 days).')
+    expect(text(container)).toContain('No chats in the last 7 days.')
     expect(container.querySelector('table')).toBeNull()
   })
 })
@@ -339,5 +390,21 @@ describe('prices of the tokens', () => {
   it('are none with no price', () => {
     expect(costByKind(summary(query, { prices: [] }))).toBeNull()
     expect(cacheSavings(summary(query, { prices: [] }))).toBeNull()
+  })
+})
+
+describe('colours and shares', () => {
+  it('gives the first 24 groups a colour each', () => {
+    const colours = Array.from({ length: 24 }, (_, n) => colour(n))
+    expect(new Set(colours).size).toBe(24)
+  })
+
+  it('rounds a share the same however close it comes to a tenth', () => {
+    expect(percent(0.0999)).toBe('10%')
+    expect(percent(0.1)).toBe('10%')
+    expect(percent(0.0994)).toBe('9.9%')
+    expect(percent(0.0004)).toBe('<0.1%')
+    expect(percent(0)).toBe('0%')
+    expect(percent(1)).toBe('100%')
   })
 })

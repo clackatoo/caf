@@ -14,7 +14,7 @@
   import Overview from './Overview.svelte'
   import Switch from './Switch.svelte'
   import Totals from './Totals.svelte'
-  import { colour, ownZone, PERIODS, queryFor, type Colours, type Metric, type Period } from './page.ts'
+  import { colour, covering, ownZone, PERIODS, queryFor, type Colours, type Metric, type Period } from './page.ts'
 
   let {
     load,
@@ -52,7 +52,11 @@
       const got = await load(queryFor(period, now(), zone))
       if (mine === asked) summary = got
     } catch (error) {
-      if (mine === asked) problem = errorText(error)
+      // What was shown was another period's, or may no longer be so.
+      if (mine === asked) {
+        summary = null
+        problem = errorText(error)
+      }
     } finally {
       if (mine === asked) loading = false
     }
@@ -75,8 +79,6 @@
     // Costs are estimated with the new price: ask again.
     await refresh()
   }
-
-  const ofPeriod = $derived(PERIODS.find((each) => each.value === period)!.label)
 </script>
 
 <section class="usage-page" aria-label="Usage">
@@ -109,7 +111,7 @@
         </p>
       {/if}
       {#if summary.buckets.length === 0}
-        <p class="notice">No chats in this period ({ofPeriod.toLowerCase()}).</p>
+        <p class="notice">No chats in {covering(summary)}.</p>
       {/if}
       <Overview {summary} {metric} bind:by {colours} />
       {#if summary.buckets.length > 0}

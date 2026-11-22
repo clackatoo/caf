@@ -22,11 +22,15 @@ export function count(n: number): string {
   return whole.format(n)
 }
 
-/** A share of a whole, as a percentage: `33%`, `4.2%` under a tenth, or `<0.1%` for a sliver. */
+/**
+ * A share of a whole, as a percentage: `33%`, `4.2%` under a tenth (as
+ * it rounds, so 0.0999 is `10%`, as 0.1 is), or `<0.1%` for a sliver.
+ */
 export function percent(share: number): string {
   if (!Number.isFinite(share)) return '–'
-  if (share > 0 && share < 0.001) return '<0.1%'
-  return `${(share * 100).toFixed(share > 0 && share < 0.1 ? 1 : 0)}%`
+  const points = share * 100
+  if (points > 0 && points < 0.05) return '<0.1%'
+  return `${points.toFixed(points > 0 && Math.round(points * 10) < 100 ? 1 : 0)}%`
 }
 
 const dollars = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' })

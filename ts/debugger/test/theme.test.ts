@@ -34,6 +34,7 @@ const pairs: [string, string[]][] = [
   ['warn', ['bg', 'warn-bg']],
   ['error', ['bg', 'error-bg']],
   ['accent', ['bg', 'panel']],
+  ['link', ['bg', 'panel']],
   ['caf', ['bg', 'caf-bg', 'error-bg']],
   ['accent-text', ['accent']],
 ]
