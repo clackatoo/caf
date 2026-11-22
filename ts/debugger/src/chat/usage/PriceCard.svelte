@@ -3,6 +3,7 @@
   // and, if the viewer may, a price of the user's own for it, or the
   // table's again. A price set is every CAF app's on the machine.
   import type { ModelPrice, PricedModel, Wall } from '@clackatoo/caf'
+  import { CafError } from '@clackatoo/caf'
   import { attempt } from '../actions.ts'
   import { rate } from '../figures.ts'
   import { dayAndTime } from '../time.ts'
@@ -78,7 +79,9 @@
     problem = null
     const error = await attempt(() => setPrice(target, price))
     busy = false
-    if (error !== null) problem = errorText(error)
+    if (error instanceof CafError && error.why.type === 'NoLedger') {
+      problem = 'The app keeps no record of usage, so prices of your own can’t be set here.'
+    } else if (error !== null) problem = errorText(error)
     else editing = false
   }
 

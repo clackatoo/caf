@@ -6,6 +6,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CafError, type Bucket, type PricedModel, type Summary, type Tokens, type UsageQuery } from '@clackatoo/caf'
+import PriceCard from '../../src/chat/usage/PriceCard.svelte'
 import UsagePage from '../../src/chat/usage/UsagePage.svelte'
 import { cacheSavings, colour, costByKind, queryFor } from '../../src/chat/usage/page.ts'
 import { percent } from '../../src/chat/figures.ts'
@@ -407,5 +408,42 @@ describe('colours and shares', () => {
     expect(percent(0.0004)).toBe('<0.1%')
     expect(percent(0)).toBe('0%')
     expect(percent(1)).toBe('100%')
+  })
+})
+
+describe('the price card', () => {
+  it("edits and clears the user's own price under the name it was found by, not the agent's id", async () => {
+    const setPrice = vi.fn(async () => {})
+    const own: PricedModel = { model: 'my-opus', price: OPUS.price, layer: { type: 'Own' } }
+    render(PriceCard, { model: 'claude-opus-5-5', priced: own, fetched: null, setPrice })
+    expect(text(screen.getByRole('group', { name: 'The price of claude-opus-5-5' }))).toContain('Your own price, as my-opus')
+    await press('Change your price')
+    expect(text(screen.getByRole('group'))).toContain('Your own price for my-opus')
+    await fireEvent.input(screen.getByRole('spinbutton', { name: 'Output' }), { target: { value: '30' } })
+    await press('Save')
+    await waitFor(() => expect(setPrice).toHaveBeenCalledWith('my-opus', { ...OPUS.price, output: 30 }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save' })).toBeNull())
+    await press("Use the table's price")
+    expect(setPrice).toHaveBeenLastCalledWith('my-opus', null)
+  })
+
+  it("sets a new price by the agent's id when the one that priced it isn't the user's own", async () => {
+    const setPrice = vi.fn(async () => {})
+    render(PriceCard, { model: 'claude-opus-5-5', priced: OPUS, fetched: null, setPrice })
+    await press('Set your own price')
+    await press('Save')
+    await waitFor(() => expect(setPrice).toHaveBeenCalledWith('claude-opus-5-5', OPUS.price))
+  })
+
+  it('says a price of your own needs a record of usage', async () => {
+    const setPrice = vi.fn(async () => {
+      throw new CafError({ type: 'NoLedger' })
+    })
+    render(PriceCard, { model: 'claude-opus-5-5', priced: OPUS, fetched: null, setPrice })
+    await press('Set your own price')
+    await press('Save')
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toBe('The app keeps no record of usage, so prices of your own can’t be set here.'),
+    )
   })
 })

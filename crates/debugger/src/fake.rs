@@ -64,6 +64,12 @@ pub const SIGN_IN: &str = "sign in";
 /// any message is.
 const ROUNDS: u32 = 200;
 
+/// The script's file.
+pub const FILE: &str = "fake-agent.jsonl";
+
+/// The script's file when it says what each turn spent.
+pub const USAGE_FILE: &str = "fake-agent-usage.jsonl";
+
 /// The session the fake opens.
 const SESSION: &str = "fake-1";
 
@@ -131,16 +137,20 @@ pub fn script(usage: bool) -> String {
 }
 
 /// Writes the script into `dir`, replacing any there, saying what each
-/// turn spent if `usage`, and returns its path.
+/// turn spent if `usage`, and returns its path. The one that says is a file
+/// of its own, `fake-agent-usage.jsonl`, never `fake-agent.jsonl`, so a
+/// debugger started with `--fake-usage` never makes another's fake, started
+/// without and sharing the folder, record made-up spend.
 ///
 /// # Errors
 ///
 /// If it can't be written.
 pub fn write(dir: &Path, usage: bool) -> std::io::Result<PathBuf> {
-    let path = dir.join("fake-agent.jsonl");
+    let name = if usage { USAGE_FILE } else { FILE };
+    let path = dir.join(name);
     // Written beside it and moved into place, so a fake starting now
     // never reads half of it.
-    let partial = dir.join(format!("fake-agent.jsonl.{}", std::process::id()));
+    let partial = dir.join(format!("{name}.{}", std::process::id()));
     std::fs::write(&partial, script(usage))?;
     std::fs::rename(&partial, &path)?;
     Ok(path)
@@ -242,13 +252,32 @@ fn words(text: &str) -> impl Iterator<Item = String> + '_ {
 mod tests {
     use caf_fake_agent::Script;
 
-    use super::script;
+    use super::{script, write};
 
     #[test]
     fn the_fake_agents_script_reads() {
         for usage in [false, true] {
             Script::parse(&script(usage)).expect("the script reads");
         }
+    }
+
+    #[test]
+    fn the_script_that_says_what_turns_spent_is_a_file_of_its_own() {
+        let dir = std::env::temp_dir().join(format!("caf-debugger-fake-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plain = write(&dir, false).unwrap();
+        let spending = write(&dir, true).unwrap();
+        // Written after, it leaves the plain one as it was.
+        let (plain_text, spending_text) = (
+            std::fs::read_to_string(&plain).unwrap(),
+            std::fs::read_to_string(&spending).unwrap(),
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_ne!(plain, spending);
+        assert_eq!(plain.file_name().unwrap(), super::FILE);
+        assert_eq!(spending.file_name().unwrap(), super::USAGE_FILE);
+        assert_eq!(plain_text, script(false));
+        assert_eq!(spending_text, script(true));
     }
 
     #[test]

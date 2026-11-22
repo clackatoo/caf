@@ -4,6 +4,14 @@
 // is in starts, in several zones, across changes of clocks, and every SDK
 // must find the same starts for a summary's periods as the ledger gives
 // its buckets.
+//
+// It also compares two copies of the time zone rules: those the fixture
+// was written with, by jiff (the system's tz database, or jiff-tzdb's copy
+// where there's none, as on Windows), and the ICU data of the Node (or
+// browser) running this. A zone whose rules change in one and not yet the
+// other fails here, though neither is wrong: bring whichever is behind up
+// to date, then write the fixture again with
+// `CAF_BLESS=1 cargo test -p caf-usage the_period_fixture`.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
