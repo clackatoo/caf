@@ -47,7 +47,11 @@
 //! ([`caf_usage::limits`]): read as it starts, after the prices, and
 //! reported, for the core; each save merged with the file, the merged
 //! limits reported if the file had news. A save that fails is reported,
-//! and not tried again: the next has news as fresh.
+//! the first in a row to the log's warnings, and not tried again: the
+//! next has news as fresh. Once another program's lock on them is given
+//! up on, saves are dropped untried for [`LOCK_COOLDOWN`], as lines are
+//! kept, so nothing else waits behind them. With the thread stuck, the
+//! limits kept come when it isn't: the core has those it hears meanwhile.
 //!
 //! With no ledger, the prices are the bundled snapshot's, and lines and
 //! limits are dropped.
@@ -110,6 +114,9 @@ pub(crate) enum Report {
     /// changed, so each is answered once the core has them. Or they
     /// weren't in time, and the core's are as good as it gets.
     Reloaded(Vec<oneshot::Sender<crate::caf::Priced>>),
+    /// Account limits kept: every profile's, as the thread starts, or
+    /// one's a save found news in.
+    Limits(Vec<ProfileLimits>),
 }
 
 /// What the ledger's thread tells the driver.
@@ -141,6 +148,7 @@ enum Work {
     /// The prices may have changed on disk: read them again, and say so if
     /// asked to, with this number. Every hour, also try the lines kept.
     Reload(Option<u64>),
+    SaveLimits(Box<ProfileLimits>),
 }
 
 /// How the driver runs: what's not the defaults is for tests.
@@ -309,13 +317,10 @@ impl UsageDriver {
     /// the merged limits are reported, for the core
     /// ([`Event::Limits`](caf_core::Event::Limits)). Not tried again: the
     /// next save has news as fresh.
-    #[allow(
-        clippy::boxed_local,
-        reason = "drafted: the builder sends it on to the thread"
-    )]
     pub(crate) fn save_limits(&mut self, limits: Box<ProfileLimits>) {
-        let _ = limits;
-        todo!()
+        if self.folder.is_some() {
+            self.send(Work::SaveLimits(limits));
+        }
     }
 
     /// Writes a turn's line to the ledger, or drops it with none.
@@ -544,7 +549,11 @@ fn keep(
             report(Report::Prices(now));
         }
     };
+    if let Some(ledger) = ledger {
+        load_limits(ledger, &report);
+    }
     let mut kept = Kept::new(unwritten, cooldown);
+    let mut limits = Limits::new(cooldown);
     while let Ok(work) = inbox.recv() {
         match work {
             Work::Record(line) => {
@@ -584,6 +593,11 @@ fn keep(
                     let _ = tell.send(Told::Reloaded(asked));
                 }
             }
+            Work::SaveLimits(given) => {
+                if let Some(ledger) = ledger {
+                    limits.save(ledger, &given, &report);
+                }
+            }
         }
     }
     // Once, whatever the lock did.
@@ -597,6 +611,101 @@ fn keep(
             ledger.folder().display()
         );
         kept.lose_all();
+    }
+}
+
+/// Reads the account limits kept, and reports them if there are any. A
+/// file that can't be read is reported to the log, and left out: its
+/// limits are heard again as agents say them. Reading them is never let
+/// panic the thread.
+fn load_limits(ledger: &Ledger, report: &impl Fn(Report)) {
+    let read = std::panic::catch_unwind(|| caf_usage::limits::load(ledger.folder(), wall_now()));
+    let Ok((kept, errors)) = read else {
+        log::warn!(target: "caf", "reading the account limits kept panicked: they're heard again as agents say them");
+        return;
+    };
+    for error in errors {
+        log::warn!(
+            target: "caf",
+            "account limits kept beside the usage ledger in {} can't be read: {error}. They're heard again as agents say them",
+            ledger.folder().display()
+        );
+    }
+    if !kept.is_empty() {
+        report(Report::Limits(kept));
+    }
+}
+
+/// Keeps account limits beside the ledger.
+struct Limits {
+    /// The last save failed, and that was reported.
+    failing: bool,
+    /// Another program's lock was given up on: saves are dropped untried
+    /// until then.
+    cooling: Option<Instant>,
+    /// [`LOCK_COOLDOWN`].
+    cooldown: Duration,
+}
+
+impl Limits {
+    fn new(cooldown: Duration) -> Self {
+        Self {
+            failing: false,
+            cooling: None,
+            cooldown,
+        }
+    }
+
+    /// Merges `given` into what's kept, reporting the merged limits if
+    /// what was kept had news. A save that fails, the first in a row
+    /// reported to the log's warnings, isn't tried again, as the next has
+    /// news as fresh; nor is one less than the cooldown after another
+    /// program's lock was given up on, which is dropped untried.
+    fn save(&mut self, ledger: &Ledger, given: &ProfileLimits, report: &impl Fn(Report)) {
+        if self.cooling.is_some_and(|until| Instant::now() < until) {
+            log::debug!(target: "caf", "account limits aren't kept while another program holds their lock");
+            return;
+        }
+        self.cooling = None;
+        let saved = std::panic::catch_unwind(|| {
+            caf_usage::limits::save(ledger.folder(), given, wall_now())
+        });
+        match saved {
+            Ok(Ok(merged)) => {
+                if self.failing {
+                    log::info!(target: "caf", "account limits are kept beside the usage ledger again");
+                }
+                self.failing = false;
+                if let Some(merged) = merged {
+                    report(Report::Limits(vec![ProfileLimits::new(
+                        given.profile,
+                        merged,
+                    )]));
+                }
+            }
+            Ok(Err(error)) => {
+                if error.kind() == std::io::ErrorKind::TimedOut {
+                    self.cooling = Some(Instant::now() + self.cooldown);
+                }
+                // Once in a row, as a save comes with every change.
+                let level = if self.failing {
+                    log::Level::Debug
+                } else {
+                    log::Level::Warn
+                };
+                log::log!(
+                    target: "caf",
+                    level,
+                    "account limits can't be kept beside the usage ledger in {}: {error}. \
+                     They're kept while CAF runs, and saved again as they change",
+                    ledger.folder().display()
+                );
+                self.failing = true;
+            }
+            Err(_) => {
+                log::warn!(target: "caf", "keeping account limits panicked: they're saved again as they change");
+            }
+        }
     }
 }
 

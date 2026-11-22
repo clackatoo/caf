@@ -345,6 +345,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
             (Work::SignIn { before }, SetupEvent::Ended { ok }) => {
                 self.setup.jobs.remove(&ticket);
+                if ok {
+                    // Perhaps to another account, even if stopped as it
+                    // finished.
+                    self.account_changed(now, &agent, out);
+                }
                 if !stopped && ok {
                     self.signed_in(now, &agent, out);
                 } else if ok {
@@ -380,6 +385,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 self.forget_status(&agent);
                 if ok {
                     self.set_sign_in(&agent, SignInState::SignedOut);
+                    self.account_changed(now, &agent, out);
                 } else {
                     report(
                         out,
