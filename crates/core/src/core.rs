@@ -112,6 +112,8 @@ pub struct Core<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     /// The prices to estimate cost with, as the usage driver last gave
     /// them.
     prices: crate::usage::PriceTable,
+    /// Every profile's account limits.
+    limits: limits::Limits,
     /// The host asked for everything to stop: nothing is started again
     /// until it asks for something new.
     shutting_down: bool,
@@ -340,6 +342,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             dirty: BTreeSet::new(),
             shutting_down: false,
             prices: crate::usage::PriceTable::default(),
+            limits: limits::Limits::default(),
             misfits: Vec::new(),
             #[cfg(test)]
             applied: BTreeMap::new(),
@@ -367,7 +370,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Event::Storage { ticket, event } => self.storage_event(now, ticket, event, out),
             Event::Setup { ticket, event } => self.setup_event(now, ticket, event, out),
             Event::Prices(prices) => self.prices_given(prices),
-            Event::Limits(limits) => self.limits_given(limits, out),
+            Event::Limits(limits) => self.limits_given(limits),
         }
         self.finish(now, out);
     }
@@ -1042,6 +1045,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 ));
             }
         }
+        self.limits_woken(now);
         let next = self.next_deadline();
         if next != self.wake {
             self.wake = next;
@@ -1089,6 +1093,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             "first_id": self.ids.first,
             "shutting_down": self.shutting_down,
             "prices": self.prices,
+            "limits": self.limits,
             "host": self.host,
             "agents": self.agents,
             "setup": self.setup,
