@@ -88,12 +88,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 tokens.output,
             ]
         };
-        let each = (rows.iter())
+        let readable = (rows.iter())
             .all(|row| within(&row.total) && row.tokens.thinking.is_none_or(|n| within(&n)));
         let total = (rows.iter().flat_map(counts))
             .try_fold(0_u64, u64::checked_add)
             .filter(within);
-        if !each || total.is_none() {
+        if !readable || total.is_none() {
             return report(
                 out,
                 Level::Warn,
