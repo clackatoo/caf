@@ -37,7 +37,8 @@
 //!
 //! 1. **Every line is whole.** One is added under the app's lock, in one
 //!    write, so two copies of an app never mix theirs; a line cut off by a
-//!    crash is the file's last, and is skipped as it's read.
+//!    crash is the file's last, is skipped as it's read, and is written
+//!    over by the next line added.
 //! 2. **Lines are only ever added**, and every line ever written is read by
 //!    every later CAF: fields are only added, and readers ignore those they
 //!    don't know.
@@ -158,7 +159,8 @@ impl Ledger {
     /// usage driver keeps it and tries again with the next.
     /// [`InvalidInput`](io::ErrorKind::InvalidInput) if the app's name
     /// can't be a folder's (empty, `prices`, starting with a dot, or with
-    /// a slash, backslash or nothing character in it), or the turn ended
+    /// a slash, backslash or nothing character in it; `prices` in any
+    /// case), or the turn ended
     /// outside the years 0 to 9999.
     pub fn record(&self, line: &LedgerLine) -> io::Result<()> {
         if !is_app(&self.app) {
@@ -191,7 +193,12 @@ impl Ledger {
 
 /// Whether `app` can name an app's folder in the ledger's.
 fn is_app(app: &str) -> bool {
-    !app.is_empty() && app != PRICES && !app.starts_with('.') && !app.contains(['/', '\\', '\0'])
+    // Not `Prices` either: a file system that ignores case would make
+    // them one.
+    !app.is_empty()
+        && !app.eq_ignore_ascii_case(PRICES)
+        && !app.starts_with('.')
+        && !app.contains(['/', '\\', '\0'])
 }
 
 /// The month `at` is in, in UTC, as its files are named: `2026-11`.
@@ -312,7 +319,8 @@ fn compress(folder: &Path, month: &str) -> io::Result<()> {
 ///
 /// [`BadQuery`] if the query's time zone isn't known, or its period is
 /// empty or longer than 400 days. Files that can't be read don't fail it:
-/// they're named in the summary.
+/// they're named in the summary, and the folder itself, if it's there but
+/// can't be listed, as `.`.
 pub fn summarise(
     folder: &Path,
     query: &UsageQuery,

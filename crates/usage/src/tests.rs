@@ -890,7 +890,9 @@ fn a_ledger_not_there_yet_has_no_usage() {
 #[test]
 fn an_app_named_as_no_folder_can_be_is_refused() {
     let folder = Folder::new("names");
-    for app in ["", "prices", ".hidden", "a/b", "a\\b", "a\0b", "..", "."] {
+    for app in [
+        "", "prices", "Prices", ".hidden", "a/b", "a\\b", "a\0b", "..", ".",
+    ] {
         let error = Ledger::new(folder.path().to_owned(), app)
             .record(&read(line("2026-11-22T10:00:00Z", 1, 1)))
             .expect_err("it's refused");

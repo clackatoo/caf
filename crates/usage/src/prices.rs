@@ -372,8 +372,9 @@ pub fn fetched_at(folder: &Path) -> Option<Wall> {
 /// # Errors
 ///
 /// What the system said, if it couldn't: the prices are as they were.
-/// [`InvalidInput`](io::ErrorKind::InvalidInput) for a model with no name
-/// or a price that's negative or not a number, and
+/// [`InvalidInput`](io::ErrorKind::InvalidInput) for a model with no name,
+/// a rate that's negative or not a number, or a fast multiplier that isn't
+/// above nothing; and
 /// [`InvalidData`](io::ErrorKind::InvalidData) if the prices kept don't
 /// read, so as not to write over them.
 pub fn set_own(folder: &Path, model: &str, price: Option<ModelPrice>) -> io::Result<()> {
@@ -383,18 +384,20 @@ pub fn set_own(folder: &Path, model: &str, price: Option<ModelPrice>) -> io::Res
     }
     if let Some(price) = &price {
         let rates = [
-            Some(price.input),
-            Some(price.cache_read),
-            Some(price.cache_write),
-            Some(price.output),
-            price.fast,
+            price.input,
+            price.cache_read,
+            price.cache_write,
+            price.output,
         ];
-        if !rates
-            .into_iter()
-            .flatten()
-            .all(|rate| rate.is_finite() && rate >= 0.0)
+        let fast = price.fast.is_none_or(|fast| fast.is_finite() && fast > 0.0);
+        if !fast
+            || !rates
+                .into_iter()
+                .all(|rate| rate.is_finite() && rate >= 0.0)
         {
-            return Err(invalid("a price is a number, not below nothing"));
+            return Err(invalid(
+                "a price is a number, not below nothing, and fast mode's above it",
+            ));
         }
     }
     let folder = folder.join(FOLDER);
