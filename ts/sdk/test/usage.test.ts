@@ -59,6 +59,7 @@ function summary(buckets: Bucket[], fields: Partial<UsageQuery> = {}, prices: Pr
     buckets,
     chats: { all: 1, by_app: [], by_agent: [] },
     prices,
+    matched: [],
     fetched: null,
     unreadable: [],
   };
@@ -291,28 +292,21 @@ describe("periods", () => {
 describe("price", () => {
   const rates = { input: 5, cache_read: 0.5, cache_write: 6.25, output: 25, fast: null };
   const priced = (model: string): PricedModel => ({ model, price: rates, layer: { type: "Bundled" } });
-  const prices = [priced("anthropic/claude-haiku-5-5"), priced("bedrock/claude-haiku-5-5"), priced("claude-opus-5-5"), priced("vertex/claude-opus-5-5")];
-  const find = (model: string) => price(summary([], {}, prices), model)?.model ?? null;
+  const prices = [priced("anthropic/claude-haiku-5-5"), priced("bedrock/claude-haiku-5-5"), priced("claude-opus-5-5")];
+  const matched: [string, string][] = [
+    ["claude-haiku-5-5-20261001", "bedrock/claude-haiku-5-5"],
+    ["claude-opus-5-5", "claude-opus-5-5"],
+    ["gpt-9", "openai/gpt-9"],
+  ];
+  const find = (model: string) => price({ ...summary([], {}, prices), matched }, model)?.model ?? null;
 
-  test("is the entry of the model's name", () => {
+  test("is the entry the summary says priced the model, whatever its name", () => {
+    expect(find("claude-haiku-5-5-20261001")).toBe("bedrock/claude-haiku-5-5");
     expect(find("claude-opus-5-5")).toBe("claude-opus-5-5");
   });
 
-  test("else one with a provider before it, the first by name", () => {
-    expect(find("claude-haiku-5-5")).toBe("anthropic/claude-haiku-5-5");
-  });
-
-  test("else, for a name ending in a date, the same without it", () => {
-    expect(find("claude-haiku-5-5-20261001")).toBe("anthropic/claude-haiku-5-5");
-  });
-
-  test("only with one provider before it, as the core finds it", () => {
-    const nested = summary([], {}, [priced("bedrock/us/claude-sonnet-5-5"), priced("/claude-sonnet-5-5")]);
-    expect(price(nested, "claude-sonnet-5-5")).toBeNull();
-  });
-
-  test("is null for a model with none", () => {
+  test("is null for a model the summary matched to nothing, or to an entry it doesn't hold", () => {
+    expect(find("claude-haiku-5-5")).toBeNull();
     expect(find("gpt-9")).toBeNull();
-    expect(find("haiku-5-5")).toBeNull();
   });
 });

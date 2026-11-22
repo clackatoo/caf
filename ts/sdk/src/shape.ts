@@ -138,8 +138,9 @@ function isCounted(value: unknown): boolean {
 }
 
 /**
- * A usage summary, whole: its query, buckets, chats and prices, which the
- * helpers and every usage page read, and the files it couldn't read.
+ * A usage summary, whole: its query, buckets, chats, prices and which
+ * entry priced each model, which the helpers and every usage page read,
+ * and the files it couldn't read.
  */
 export function isUsageSummary(value: unknown): value is Summary {
   if (!isRecord(value) || !isRecord(value.query) || !isRecord(value.chats)) return false;
@@ -160,6 +161,8 @@ export function isUsageSummary(value: unknown): value is Summary {
     chats.by_agent.every(isCounted) &&
     Array.isArray(value.prices) &&
     value.prices.every(isPriced) &&
+    Array.isArray(value.matched) &&
+    value.matched.every((pair) => Array.isArray(pair) && pair.length === 2 && isString(pair[0]) && isString(pair[1])) &&
     (value.fetched === null || isNumber(value.fetched)) &&
     isArrayOf(value.unreadable, isString)
   );

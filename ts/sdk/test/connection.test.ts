@@ -1241,6 +1241,7 @@ describe("usage", () => {
     ],
     chats: { all: 1, by_app: [["clackatoo", 1]], by_agent: [["claude-agent-acp", 1]] },
     prices: [],
+    matched: [],
     fetched: null,
     unreadable: [],
   };
@@ -1320,6 +1321,11 @@ describe("usage", () => {
     ],
     ["a summary without its query", () => ({ type: "Usage", value: { request: 1, summary: { ...summary, query: null } } })],
     ["a summary without its prices", () => ({ type: "Usage", value: { request: 1, summary: { ...summary, prices: null } } })],
+    [
+      "a summary whose matched models aren't pairs of names",
+      () => ({ type: "Usage", value: { request: 1, summary: { ...summary, matched: [["claude-haiku-5-5"]] } } }),
+    ],
+    ["a summary without its matched models", () => ({ type: "Usage", value: { request: 1, summary: { ...summary, matched: undefined } } })],
     [
       "a summary whose price isn't a number",
       () => ({

@@ -411,7 +411,7 @@ group(summary, "agent"); // by agent, biggest cost first; or "app", "model", "fa
 group(summary, "model", "tokens"); // biggest by tokens first
 group(summary, "period"); // in time order, every day of the period, empty ones too
 split(summary, "app"); // each day's groups: a stacked chart's bars
-price(summary, "claude-haiku-5-5"); // the price used for a model, found as the core finds it
+price(summary, "claude-haiku-5-5"); // the entry that priced it, as the summary's `matched` says
 await caf.setPrice("claude-haiku-5-5", { input: 1, cache_read: 0.1, cache_write: 1.25, output: 5, fast: null });
 await caf.setPrice("claude-haiku-5-5", null); // the table's price again
 ```

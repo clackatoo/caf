@@ -66,28 +66,13 @@ export function turnTokens(usage: TurnUsage): Tokens {
 }
 
 /**
- * The price a summary used for a model, by the agent's id for it as a
- * bucket names it, found as the core finds it: the entry of that name;
- * else one that's it with a provider before it (`anthropic/claude-haiku-5-5`,
- * not `bedrock/us/claude-haiku-5-5`), the first by name if several are; else, if it ends in a date
- * (`claude-haiku-5-5-20261001`), the same without it. Null if it had none.
+ * The price that priced a model in a summary, by the agent's id for it as
+ * a bucket names it: the entry `matched` names, as the core found it.
+ * Null if it had none.
  */
 export function price(summary: Summary, model: string): PricedModel | null {
-  // A provider is one name, such as `anthropic`, never a path.
-  const provided = (entry: string, name: string) => {
-    const provider = entry.endsWith(`/${name}`) ? entry.slice(0, -name.length - 1) : "";
-    return provider !== "" && !provider.includes("/");
-  };
-  const find = (name: string) =>
-    summary.prices.find((each) => each.model === name) ??
-    summary.prices
-      .filter((each) => provided(each.model, name))
-      .sort((a, b) => compare(a.model, b.model))[0] ??
-    null;
-  const found = find(model);
-  if (found !== null) return found;
-  const undated = /^(.+)-\d{8}$/.exec(model)?.[1];
-  return undated === undefined ? null : find(undated);
+  const entry = summary.matched.find(([id]) => id === model)?.[1];
+  return entry === undefined ? null : (summary.prices.find((each) => each.model === entry) ?? null);
 }
 
 const NO_TOKENS: Tokens = { input: 0, cache_read: 0, cache_write: 0, output: 0, thinking: null };
