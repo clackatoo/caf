@@ -229,6 +229,16 @@ describe("the agent's sign-in", () => {
     expect(container.querySelector('[data-agent-state]')).toBeNull()
   })
 
+  it('is gone from an archived chat, restored or not, and back once unarchived', async () => {
+    const agent = status({ type: 'Host' }, link('https://claude.ai/x'))
+    const archived = chat({ state: { type: 'Idle' }, archived: 1 })
+    const { container, rerender } = draw(archived, { agent })
+    expect(container.querySelector('[data-agent-state]')).toBeNull()
+    expect(showsAgent(archived)).toBe(false)
+    await rerender({ chat: { ...archived, archived: null } })
+    expect(container.querySelector('[data-agent-state]')?.getAttribute('data-agent-state')).toBe('SigningIn')
+  })
+
   it('does nothing while read-only', async () => {
     const { actions: given } = draw(chat(), {
       agent: status({ type: 'Host' }, link('https://claude.ai/x', null, true)),
