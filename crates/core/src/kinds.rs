@@ -192,7 +192,7 @@ kinds!(Change {
     "ToolChanged" => Change::ToolChanged { .. },
     "ItemEnded" => Change::ItemEnded { .. },
     "Usage" => Change::Usage(_),
-    "TurnUsage" => Change::TurnUsage { .. },
+    "TurnSpent" => Change::TurnSpent { .. },
     "Spend" => Change::Spend(_),
     "QuestionAsked" => Change::QuestionAsked(_),
     "QuestionGone" => Change::QuestionGone(_),
@@ -480,7 +480,7 @@ impl Seen {
             Change::Appended { .. }
             | Change::TurnModel { .. }
             | Change::Usage(_)
-            | Change::TurnUsage { .. }
+            | Change::TurnSpent { .. }
             | Change::Spend(_)
             | Change::QuestionGone(_) => {}
         }

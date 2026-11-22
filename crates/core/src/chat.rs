@@ -302,7 +302,7 @@ pub struct Turn<A: AppItem = NoAppItems> {
     /// What it spent, recorded when it ended, if the agent said. Turns
     /// from before CAF recorded usage, and imported ones, have none.
     #[serde(default)]
-    pub usage: Option<Box<TurnUsage>>,
+    pub spent: Option<Box<TurnUsage>>,
 }
 
 /// What started a turn.

@@ -7,7 +7,9 @@ import type { Tokens } from "./Tokens.ts";
  *
  * It's worked out by the core, with the prices it has now, and sent again
  * ([`Change::Spend`](crate::Change::Spend)) whenever a turn adds to it or
- * the prices change, so every viewer shows the same figure. Turns from
+ * the prices change, so every viewer shows the same figure. It's saved
+ * with the chat, but never trusted: a restored chat's is worked out again
+ * from its turns, so the turns stay the only record. Turns from
  * before CAF recorded usage, and imported ones, have no record: it counts
  * from when recording began.
  */

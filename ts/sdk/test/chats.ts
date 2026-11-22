@@ -45,7 +45,7 @@ export function turn(id: number, items: Item[] = []): Turn {
     items,
     imported: false,
     model: null,
-    usage: null,
+    spent: null,
   };
 }
 

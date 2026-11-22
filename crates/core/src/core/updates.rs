@@ -481,7 +481,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 items: Vec::new(),
                 imported: true,
                 model: None,
-                usage: None,
+                spent: None,
             });
         }
     }

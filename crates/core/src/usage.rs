@@ -97,7 +97,7 @@ pub struct ModelTokens {
     pub tokens: Tokens,
 }
 
-/// What a turn spent: its [`usage`](crate::chat::Turn::usage), recorded
+/// What a turn spent: its [`spent`](crate::chat::Turn::spent), recorded
 /// when it ends, if the agent said.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

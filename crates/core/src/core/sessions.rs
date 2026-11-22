@@ -591,7 +591,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 items: vec![item],
                 imported: false,
                 model: None,
-                usage: None,
+                spent: None,
             },
         );
     }

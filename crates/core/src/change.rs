@@ -106,9 +106,9 @@ pub enum Change<A: AppItem = NoAppItems> {
     },
     /// The agent said how full its memory is.
     Usage(Usage),
-    /// A turn's usage was recorded, as it ended: its
-    /// [`usage`](crate::chat::Turn::usage).
-    TurnUsage {
+    /// What a turn spent was recorded, as it ended: its
+    /// [`spent`](crate::chat::Turn::spent).
+    TurnSpent {
         /// The turn.
         turn: TurnId,
         /// What it spent.
@@ -198,7 +198,7 @@ impl<A: AppItem> Chat<A> {
             },
             Change::ItemEnded { item, end } => self.item_mut(*item)?.window.end = *end,
             Change::Usage(usage) => self.usage = Some(usage.clone()),
-            Change::TurnUsage { turn, usage } => self.turn_mut(*turn)?.usage = Some(usage.clone()),
+            Change::TurnSpent { turn, usage } => self.turn_mut(*turn)?.spent = Some(usage.clone()),
             Change::Spend(spend) => self.spend = spend.clone(),
             Change::QuestionAsked(question) => self.questions.push(question.clone()),
             Change::QuestionGone(question) => {

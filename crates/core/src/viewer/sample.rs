@@ -99,7 +99,7 @@ fn turn(id: u64, starter: Starter, life: TurnLife, window: Window, items: Vec<It
         items,
         imported: false,
         model: None,
-        usage: None,
+        spent: None,
     }
 }
 

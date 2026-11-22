@@ -36,7 +36,7 @@ export function turn(fields: Partial<Turn> = {}): Turn {
     items: [],
     imported: false,
     model: null,
-    usage: null,
+    spent: null,
     ...fields,
   }
 }

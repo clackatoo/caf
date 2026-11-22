@@ -78,7 +78,7 @@ item: ItemId,
 /**
  * When.
  */
-end: End, } } | { "type": "Usage", "value": Usage } | { "type": "TurnUsage", "value": { 
+end: End, } } | { "type": "Usage", "value": Usage } | { "type": "TurnSpent", "value": { 
 /**
  * The turn.
  */

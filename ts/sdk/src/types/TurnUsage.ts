@@ -3,7 +3,7 @@ import type { Cost } from "./Cost.ts";
 import type { ModelTokens } from "./ModelTokens.ts";
 
 /**
- * What a turn spent: its [`usage`](crate::chat::Turn::usage), recorded
+ * What a turn spent: its [`spent`](crate::chat::Turn::spent), recorded
  * when it ends, if the agent said.
  */
 export type TurnUsage = { 
@@ -16,7 +16,10 @@ export type TurnUsage = {
 models: Array<ModelTokens>, 
 /**
  * What it cost, as the agent reported it, if it did: how much its
- * session's cost rose over the turn. Never an estimate.
+ * session's cost rose over the turn. Never an estimate. A cost in a
+ * currency other than US dollars is kept here as reported, but
+ * counted as unreported in [`Spend`] and [`Summary`], which estimate
+ * it instead: CAF converts no currency.
  */
 cost: Cost | null, 
 /**

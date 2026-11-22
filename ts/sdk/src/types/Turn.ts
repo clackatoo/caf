@@ -46,4 +46,4 @@ model: ModelUsed | null,
  * What it spent, recorded when it ended, if the agent said. Turns
  * from before CAF recorded usage, and imported ones, have none.
  */
-usage: TurnUsage | null, };
+spent: TurnUsage | null, };

@@ -214,7 +214,7 @@ pub(crate) fn turn() -> Turn {
             id: "sonnet".into(),
             name: Some("Sonnet 4.6".into()),
         }),
-        usage: None,
+        spent: None,
     }
 }
 
