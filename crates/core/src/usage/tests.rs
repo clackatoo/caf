@@ -417,3 +417,29 @@ fn a_first_party_provider_is_found_before_a_reseller() {
         );
     }
 }
+
+#[test]
+fn a_reseller_never_beats_the_maker_or_a_bare_name() {
+    let table = layered(&[
+        ("bedrock/claude-haiku-5-5-20261001", PriceLayer::Bundled),
+        ("claude-haiku-5-5", PriceLayer::Bundled),
+        ("azure/gpt-6-20261001", PriceLayer::Bundled),
+        ("openai/gpt-6", PriceLayer::Bundled),
+        ("azure/grok-5-20261001", PriceLayer::Bundled),
+        ("bedrock/grok-5", PriceLayer::Bundled),
+    ]);
+    for (model, wanted) in [
+        // The undated bare name, before a reseller's dated one.
+        ("claude-haiku-5-5-20261001", "claude-haiku-5-5"),
+        // The maker's undated, before a reseller's dated.
+        ("gpt-6-20261001", "openai/gpt-6"),
+        // Resellers only: the dated, before the undated.
+        ("grok-5-20261001", "azure/grok-5-20261001"),
+    ] {
+        assert_eq!(
+            found_in(&table, model).map(|(name, _)| name),
+            Some(wanted.into()),
+            "{model}"
+        );
+    }
+}
