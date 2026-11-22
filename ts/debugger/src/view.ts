@@ -1,7 +1,7 @@
 // What the chat view may do, from where the app is.
 
 import type { ChatId, Shelf } from '@clackatoo/caf'
-import { orRestored, restoreOnceFree, type oneAtATime } from './chat/actions.ts'
+import { orRestored, restoreOnceFree, type OneAtATime } from './chat/actions.ts'
 import type { LinkState } from './link.ts'
 
 /**
@@ -33,7 +33,7 @@ export interface ActorParts {
   /** Watches it, again. */
   watch(chat: ChatId): void
   /** The restores under way, one per chat. */
-  restoring: ReturnType<typeof oneAtATime<ChatId>>
+  restoring: OneAtATime<ChatId>
 }
 
 /**

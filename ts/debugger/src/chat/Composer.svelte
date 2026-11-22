@@ -5,7 +5,7 @@
   // app may put something of the chat's: the context ring.
   import type { Snippet } from 'svelte'
   import { attempt } from './actions.ts'
-  import { errorText } from './words.ts'
+  import { couldNotText, errorText } from './words.ts'
 
   let {
     running,
@@ -40,7 +40,7 @@
     const error = await attempt(() => send(message))
     sending = false
     if (error !== null) {
-      problem = errorText(error)
+      problem = couldNotText('send', error)
       // Give it back, unless the user has started another.
       if (text === '') text = message
     }

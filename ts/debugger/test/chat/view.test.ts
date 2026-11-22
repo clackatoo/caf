@@ -593,6 +593,23 @@ describe('an archived chat', () => {
     await waitFor(() => expect(button('Unarchive').disabled).toBe(false))
   })
 
+  it("says why, in CAF SI's words, when a message to it or Unarchive couldn't restore it", async () => {
+    const cannot = (type: string) => new CafError({ type: 'CannotRestore', value: { type } as never })
+    const given = actions()
+    given.send.mockRejectedValue(cannot('NotFound'))
+    given.unarchive.mockRejectedValue(cannot('InUse'))
+    const { container } = draw(archived(), { actions: given })
+    const box = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement
+    await fireEvent.input(box, { target: { value: 'Carry on' } })
+    await fireEvent.click(button('Send'))
+    await waitFor(() => expect(container.querySelector('.composer [role=alert]')?.textContent).toBe("Couldn't send: this chat is gone."))
+    expect(box.value).toBe('Carry on')
+    await fireEvent.click(button('Unarchive'))
+    await waitFor(() =>
+      expect(container.querySelector('.caf-chat > [role=alert]')?.textContent).toBe("Couldn't unarchive: this chat is open somewhere else."),
+    )
+  })
+
   it('says why unarchiving failed', async () => {
     const given = actions()
     given.unarchive.mockRejectedValue(new CafError({ type: 'NotAllowed' }))

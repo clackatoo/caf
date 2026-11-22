@@ -491,6 +491,37 @@ export function cannotRestoreText(why: DeepReadonly<CannotRestore>): string {
 }
 
 /**
+ * Why something done to a chat failed, `verb` being what: as CAF SI's
+ * composer tray words a restore under it that failed, *Couldn't send:* and
+ * the chats page's heading for why, as a clause; anything else as
+ * `errorText` does.
+ */
+export function couldNotText(verb: 'send' | 'unarchive', error: unknown): string {
+  if (!(error instanceof CafError) || error.why.type !== 'CannotRestore') return errorText(error)
+  return `Couldn't ${verb}: ${restoreClause(error.why.value)}`
+}
+
+/** Why a chat can't be restored, as CAF SI's chats page heads it, made a clause. */
+function restoreClause(why: DeepReadonly<CannotRestore>): string {
+  switch (why.type) {
+    case 'NotFound':
+      return 'this chat is gone.'
+    case 'InUse':
+      return 'this chat is open somewhere else.'
+    case 'Newer':
+      return 'it was saved by a newer version.'
+    case 'Damaged':
+      return "this chat's save is damaged."
+    case 'AppData':
+      return "this app can't read its own data on this chat."
+    case 'Store':
+      return "this chat couldn't be read."
+    default:
+      return `it couldn't be restored, for a reason this viewer doesn't know (${tagOf(why)}).`
+  }
+}
+
+/**
  * Whether trying to restore a chat again may help: only once another
  * program has let it go, or the store has recovered, or for a reason this
  * viewer doesn't know. Its save is as it was, whatever the reason.

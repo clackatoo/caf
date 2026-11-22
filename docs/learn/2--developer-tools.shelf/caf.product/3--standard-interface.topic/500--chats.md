@@ -272,6 +272,9 @@ sight, never archives it.
   Until it's put away, wherever the app lists it, it shows its state as
   usual, such as Working or Waiting on you. Opening it again before then
   just shows it: it's still open, and restoring it would be refused.
+  Once it's put away, CAF may still be writing it for a moment, and
+  refuses to restore it meanwhile (`Refused::Loaded`): opening it again
+  then, the app tries again for a moment, until it can.
 - **A chat that isn't saved stays open**, as it is, out of sight. The app
   can show it again, as it was, until the app stops; then it's gone.
 
@@ -307,9 +310,10 @@ open. To send to it or unarchive it, the app restores it first
 [The composer](~caf/standard-interface/composer#what-the-chat-allows)
 says: the user sees nothing of this. Right after it's archived, the
 restore is refused (`Refused::Loaded`) while CAF finishes writing it, for
-moments: the app tries again for a moment meanwhile, as for a chat just
-put away. A chat restored archived is `ChatState::Closed` until it's
-brought back, then `Idle`.
+moments: the app tries again for a moment meanwhile, as
+[Closing a tab](#closing-a-tab) says for any chat just put away. A chat
+restored archived is `ChatState::Closed` until it's brought back, then
+`Idle`.
 
 A chat that isn't saved, once archived, stays in memory, archived, until
 the app stops, and is brought back the same way.

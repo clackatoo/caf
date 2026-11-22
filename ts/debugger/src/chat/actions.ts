@@ -145,12 +145,15 @@ export async function orRestored<T>(
   }
 }
 
+/** Runs `start` for `key`, unless one for it is under way: then gives back that one. */
+export type OneAtATime<K> = <T>(key: K, start: () => Promise<T>) => Promise<T>
+
 /**
  * Runs one at a time, by key: while one started for a key is under way,
  * starting another for it gives back the same, so two actions on one
  * chat, such as sending and unarchiving it, restore it once.
  */
-export function oneAtATime<K>(): <T>(key: K, start: () => Promise<T>) => Promise<T> {
+export function oneAtATime<K>(): OneAtATime<K> {
   const running = new Map<K, Promise<unknown>>()
   return <T>(key: K, start: () => Promise<T>): Promise<T> => {
     const under = running.get(key)

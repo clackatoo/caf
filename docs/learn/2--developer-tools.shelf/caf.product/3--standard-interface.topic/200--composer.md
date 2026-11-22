@@ -367,7 +367,9 @@ sends or unarchives: the user sees nothing of this, and never *Couldn't
 send: this chat isn't open any more.* Right after it's archived, CAF may
 still be writing it, and refuses to restore it (`Refused::Loaded`) until
 it's done, which takes moments: the app tries again for a moment while it
-does, as it would restoring a chat just put away.
+does, as
+[Closing a tab](~caf/standard-interface/chats#closing-a-tab) says for any
+chat just put away.
 
 If restoring it fails, the message stays in the box, and the tray says
 *Couldn't send:* and why, in the words

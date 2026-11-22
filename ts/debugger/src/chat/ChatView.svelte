@@ -18,7 +18,7 @@
   import StateBanner from './StateBanner.svelte'
   import Ring from './Ring.svelte'
   import Turn from './Turn.svelte'
-  import { errorText, shortId, stateLabel } from './words.ts'
+  import { couldNotText, errorText, shortId, stateLabel } from './words.ts'
   import './theme.css'
 
   let {
@@ -113,7 +113,7 @@
     problem = null
     const error = await attempt(actions.unarchive)
     unarchiving = false
-    if (error !== null) problem = errorText(error)
+    if (error !== null) problem = couldNotText('unarchive', error)
   }
 </script>
 

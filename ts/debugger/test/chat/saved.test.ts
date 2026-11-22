@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CafError, type SavedChat, type ToViewer } from '@clackatoo/caf'
 import SavedList from '../../src/chat/SavedList.svelte'
 import { oneAtATime, orRestored, restoreOnceFree } from '../../src/chat/actions.ts'
-import { errorText, refusedText } from '../../src/chat/words.ts'
+import { couldNotText, errorText, refusedText } from '../../src/chat/words.ts'
 import { chatId, NOON } from './build.ts'
 
 afterEach(cleanup)
@@ -276,6 +276,25 @@ describe('the words for restoring', () => {
   ])('says %s', (reason, says) => {
     expect(refusedText({ type: reason } as never)).toBe(says)
     expect(errorText(new CafError({ type: 'Refused', value: { type: reason } as never }))).toBe(says)
+  })
+
+  it.each([
+    ['NotFound', 'this chat is gone.'],
+    ['InUse', 'this chat is open somewhere else.'],
+    ['Newer', 'it was saved by a newer version.'],
+    ['Damaged', "this chat's save is damaged."],
+    ['AppData', "this app can't read its own data on this chat."],
+    ['Store', "this chat couldn't be read."],
+    ['Lost', "it couldn't be restored, for a reason this viewer doesn't know (Lost)."],
+  ])("words a restore under another action that failed, %s, as CAF SI's tray does", (type, clause) => {
+    const error = new CafError({ type: 'CannotRestore', value: { type, value: 'x' } as never })
+    expect(couldNotText('send', error)).toBe(`Couldn't send: ${clause}`)
+    expect(couldNotText('unarchive', error)).toBe(`Couldn't unarchive: ${clause}`)
+  })
+
+  it('words any other failure as errorText does', () => {
+    const error = new CafError({ type: 'NotAllowed' })
+    expect(couldNotText('send', error)).toBe(errorText(error))
   })
 
   it('says why a chat could not be restored', () => {

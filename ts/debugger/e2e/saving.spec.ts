@@ -173,7 +173,7 @@ test("a message to an archived chat that can't be brought back stays, and says w
   await written(chats)
   for (const shelf of readdirSync(chats)) rmSync(join(chats, shelf), { recursive: true })
   await send(page, 'and again')
-  await expect(page.locator('.composer [role=alert]')).toContainText("isn't on its shelf any more")
+  await expect(page.locator('.composer [role=alert]')).toHaveText("Couldn't send: this chat is gone.")
   await expect(page.getByRole('textbox', { name: 'Message' })).toHaveValue('and again')
   await expect(page.locator('.caf-chat > header .state')).toHaveText('Archived')
 })

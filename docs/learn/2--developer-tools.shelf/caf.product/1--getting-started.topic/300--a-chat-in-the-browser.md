@@ -559,9 +559,11 @@ import { oneAtATime, orRestored, restoreOnceFree } from "./chat";
 const restoring = oneAtATime<ChatId>();
 
 // Sends to, or unarchives, the chat shown, restoring it first if it was put
-// away; `shelf` is where `saved` lists it.
+// away; `shelf` is where `saved` lists it, if it's saved: a chat that isn't
+// is never put away.
 async function toChat<T>(act: () => Promise<T>): Promise<T> {
-  const restore = () => restoring(chat.id, () => restoreOnceFree(() => caf.restore(chat.id, shelf)));
+  const restore =
+    shelf === undefined ? undefined : () => restoring(chat.id, () => restoreOnceFree(() => caf.restore(chat.id, shelf)));
   try {
     return await orRestored(act, restore);
   } finally {

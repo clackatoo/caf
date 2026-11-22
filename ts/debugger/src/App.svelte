@@ -204,8 +204,9 @@
       await restoring(chat, () => restoreOnceFree(() => caf.restore(chat, shelf)))
       selected = chat
       // Under the same id as when it was put away, whose watch has ended:
-      // choosing it again doesn't watch it again by itself.
-      live.watch(chat)
+      // choosing it again doesn't watch it again by itself. The link may
+      // have been made anew meanwhile, which watches it itself.
+      live?.watch(chat)
     },
   }
 
