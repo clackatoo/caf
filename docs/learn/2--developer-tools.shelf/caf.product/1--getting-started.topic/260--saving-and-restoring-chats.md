@@ -1,7 +1,7 @@
 ---
 title: Saving and Restoring Chats
 type: how
-description: Keep chats from one run of your program to the next. Give CAF a store, keep chats on shelves, list and restore them, put them away, close, delete and move them, keep your own data on each, and write a store of your own, with what CAF saves, when, and its promise that a save stays readable.
+description: Keep chats from one run of your program to the next. Give CAF a store, keep chats on shelves, list and restore them, put them away, close (archive), unarchive, delete and move them, keep your own data on each, and write a store of your own, with what CAF saves, when, and its promise that a save stays readable.
 related:
   - caf/getting-started/a-chat-on-tokio
   - caf/getting-started/a-chat-in-the-browser
@@ -141,7 +141,7 @@ A chat that can't be restored is left as it was, and `restore` fails with
 Trying again may help after `InUse` or `Store`. The core may also refuse it:
 `Refused::Loaded` for a chat that's loaded or being restored already.
 
-## Put away, close, delete and move
+## Put away, close, unarchive, delete and move
 
 **Put away** a chat to save it whole and let it go from memory, such as when
 the user hasn't looked at it for a while:
@@ -158,18 +158,30 @@ and ends. Until it's written, which is at once unless a move of its shelf is
 under way, restoring it is refused as `Loaded`, though it's listed as
 saved: try again in a moment.
 
-**Close** a chat when the user is done with it: it's archived, as of then
-(`Chat::archived`). A saved chat is then put away, marked closed, and can
-still be restored: archived, as it was left, with no agent started. One
-that isn't saved stays, archived, until CAF stops. An archived chat's
-settings can't be chosen (`Refused::Closed`). Unarchive it
-(`Core::unarchive`) and it's idle again, its agent started when a message
-is sent, as a restored chat's is. Sending a message to an archived chat
-unarchives it first, and the message goes as to any other; one refused,
-such as an empty message, leaves it archived. Putting an archived chat
-away, or closing it again, keeps when it was archived. A chat saved
-closed by a CAF from before archiving is restored archived as of when it's
-restored.
+**Close** a chat when the user is done with it: it's **archived**, as of
+then (`Chat::archived`), and a watch of it sees it archived. Its session is
+closed, and its adapter stopped if nothing else uses it. A saved chat is
+then put away, marked closed, with when it was archived in its header
+(`Header::archived`), and can still be restored. One that isn't saved
+stays, archived, until CAF stops, and its watches go on. An archived
+chat's settings can't be chosen (`Refused::Closed`).
+
+**Archiving sticks.** A closed chat restored is still archived, as it was
+left, with no agent started, however many times it's put away and
+restored, so your program can keep it in an archive rather than among the
+user's chats. Putting it away, or closing it again, keeps when it was
+archived. It's unarchived only when your program says so, or when the user
+sends it a message:
+
+```rust
+chat.unarchive().await?; // or send to it: that unarchives it first
+```
+
+Unarchived, it's `Idle`, and its agent starts when a message is sent, as a
+restored chat's does. Unarchiving a chat that isn't archived does nothing.
+A message sent to an archived chat goes as to any other; one refused, such
+as an empty message, leaves it archived. A chat saved closed by a CAF from
+before archiving is restored archived, as of when it's restored.
 
 **Delete** a chat for good, loaded or not: one that's loaded is closed and
 let go first.
@@ -246,10 +258,16 @@ bytes.
 A viewer, such as a page using the
 [TypeScript caf-sdk](~caf/getting-started/a-chat-in-the-browser#saved-chats),
 gets the saved chats on every shelf you've listed, right after the agents,
-and again whenever they change. Each open chat in its list says its label
-and shelf. A viewer's request to restore a chat goes to
-`ViewerRules::restore`, which gives it its tools, or refuses it; by default
-it refuses every one:
+and again whenever they change. Each chat in its list of chats loaded, in
+the order they were made, says its label and shelf, and when it was
+archived if it is: an archived chat restored, or closed and not saved, is
+listed, marked. A viewer may close and unarchive chats
+(`FromViewer::Close`, `FromViewer::Unarchive`) as it may act on them
+(`ViewerRules::act`). Closing a chat that isn't saved ends no watch of it,
+as it may be unarchived, so a viewer should unwatch an archived chat it
+stops showing: each watch counts against `ViewerRules::max_watches`. Its
+request to restore a chat goes to `ViewerRules::restore`, which gives it
+its tools, or refuses it; by default it refuses every one:
 
 ```rust
 let mut rules = ViewerRules::default();

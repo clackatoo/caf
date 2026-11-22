@@ -9,13 +9,14 @@
 export type Rights = { 
 /**
  * Whether it may send, stop, answer, choose a chat's settings
- * ([`FromViewer::Set`]) and close.
+ * ([`FromViewer::Set`]), close and unarchive.
  */
 act: boolean, 
 /**
- * Whether it may install agents, sign in and out of them, and learn
- * their settings. A viewer that may not gets no sign-in's link or
- * code.
+ * Whether it may install agents, sign in and out of them, learn
+ * their settings, and have CAF look at the machine again
+ * ([`AgentAction::CheckAgain`]). A viewer that may not gets no
+ * sign-in's link or code.
  */
 agents: boolean, 
 /**

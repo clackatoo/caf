@@ -74,7 +74,9 @@ It also says whether CAF can turn off the agent's own tools
 [Agents and profiles](~caf/concepts/agents-and-profiles#an-agent-has-only-your-tools).
 
 CAF looks as it starts. Call `caf.check_agents()` to look again, such as
-after the user installs Node.
+after the user installs Node: it looks at every agent, and at what the
+machine has. A viewer can ask the same, with a **Check again** button
+([below](#let-viewers-do-it)).
 
 ## Install it
 
@@ -216,7 +218,10 @@ let mut rules = ViewerRules::default();
 rules.agents = true;
 ```
 
-With it off, a viewer's `FromViewer::Agent` request is answered
+It covers every `FromViewer::Agent` request: installing, signing in or out,
+learning an agent's settings, and checking again (`AgentAction::CheckAgain`),
+which is `caf.check_agents()`, for every agent, whichever the request
+names. With it off, each is answered
 `NotAllowed`, and it sees a sign-in under way without its link or code.
 Whoever opens the link and approves it, or types the code on the
 provider's site, chooses whose account the agent signs in to: a viewer

@@ -76,7 +76,7 @@ use caf_core::Shelf;
 use caf_core::acp::{Frame, Message};
 use caf_core::agent::AgentStatus;
 use caf_core::agent::{AgentSpec, EnvChange, Launch, McpServer};
-use caf_core::chat::{ChatState, UserMessage};
+use caf_core::chat::UserMessage;
 use caf_core::directive::{
     Level, PolicyDirective, StorageDirective, TimerDirective, UsageDirective, ViewerDirective,
 };
@@ -282,7 +282,8 @@ struct Common<A: AppItem> {
     ended: watch::Receiver<()>,
     /// The agents' names, in order.
     agents: Arc<[AgentName]>,
-    /// The open chats, in the order they were opened.
+    /// The chats loaded, archived ones included, in the order they were
+    /// made.
     chats: watch::Receiver<Vec<ChatSummary>>,
     /// Where every agent stands, in the order they were offered.
     statuses: watch::Receiver<Vec<AgentStatus>>,
@@ -798,7 +799,8 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
         self.about(agent, AgentCall::LearnSettings).await
     }
 
-    /// Follows which chats are open, with each one's agent and folder.
+    /// Follows which chats are loaded, with each one's agent and folder,
+    /// and when it was archived if it is.
     #[must_use]
     pub fn watch_chats(&self) -> ChatsWatch {
         self.downgrade().watch_chats()
@@ -1040,6 +1042,19 @@ impl<A: AppItem, D: AppData> ChatHandle<A, D> {
         self.caf.ask(|reply| Command::Close { chat, reply }).await
     }
 
+    /// Unarchives the chat: it's no longer archived, and its agent starts
+    /// when a message is sent. See [`caf_core::Core::unarchive`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] with the core's reason, or [`Error::Gone`].
+    pub async fn unarchive(&self) -> Result<(), Error> {
+        let chat = self.id;
+        self.caf
+            .ask(|reply| Command::Unarchive { chat, reply })
+            .await
+    }
+
     /// Chooses a setting of the chat's agent, such as its model. See
     /// [`caf_core::Core::set_setting`]; the chat's settings show it
     /// waiting until the agent answers.
@@ -1218,8 +1233,12 @@ impl SavedWatch {
     }
 }
 
-/// Follows which chats are open: opened by the host, by any viewer, or
-/// closed. Like [`Watch`], it doesn't keep CAF running.
+/// Follows which chats are loaded: opened or restored by the host or by
+/// any viewer, closed, which archives them, unarchived, put away or
+/// deleted. An archived chat still loaded, such as one closed that isn't
+/// saved, or one restored archived, is listed, marked
+/// ([`ChatSummary::archived`]). Like [`Watch`], it doesn't keep CAF
+/// running.
 pub struct ChatsWatch {
     list: watch::Receiver<Vec<ChatSummary>>,
     /// It hasn't given the list yet.
@@ -1233,7 +1252,8 @@ impl ChatsWatch {
         self.list.mark_changed();
     }
 
-    /// The open chats, in the order they were opened: at once the first
+    /// The chats loaded, in the order they were made (a chat's id says
+    /// when), each marked if it's archived: at once the first
     /// time, then each time the list changes. `None` once CAF has shut
     /// down.
     ///
@@ -1267,8 +1287,11 @@ pub enum Update<A: AppItem = NoAppItems> {
 }
 
 impl<A: AppItem> Watch<A> {
-    /// The next update, or `None` once the chat is closed, put away or
-    /// deleted, or CAF has shut down.
+    /// The next update, or `None` once the chat is put away or deleted,
+    /// a saved chat closed and so put away included, or CAF has shut
+    /// down. Closing a chat that isn't saved archives it, and its watch
+    /// goes on, as it may be unarchived ([`ChatHandle::unarchive`]); so
+    /// does a watch of an archived chat restored.
     ///
     /// When CAF shuts down, a watch that hasn't seen how it left the chat
     /// gets that as one last [`Update::Picture`], even if it never read
@@ -1312,10 +1335,10 @@ impl<A: AppItem> Watch<A> {
             if self.ended {
                 return None;
             }
-            // A read of a chat that's open always gives a way to wait.
+            // A read of a chat the core has always gives a way to wait.
             let wake = self.wake.as_mut()?;
             if wake.changed().await.is_err() {
-                // The chat was closed or CAF has ended: the next read says
+                // The chat is gone or CAF has ended: the next read says
                 // which.
                 self.wake = None;
             }
@@ -1400,6 +1423,10 @@ enum Command<D: AppData> {
         reply: oneshot::Sender<Result<(), Refused>>,
     },
     Close {
+        chat: ChatId,
+        reply: oneshot::Sender<Result<(), Refused>>,
+    },
+    Unarchive {
         chat: ChatId,
         reply: oneshot::Sender<Result<(), Refused>>,
     },
@@ -1512,9 +1539,9 @@ struct Seen<A: AppItem> {
     update: Option<Update<A>>,
     /// The last change it has now seen.
     latest: Option<ChangeNo>,
-    /// The chat is closed: nothing more will change.
+    /// The chat is gone from the core: nothing more will change.
     closed: bool,
-    /// How to hear of changes, if it asked and the chat is open.
+    /// How to hear of changes, if it asked and the core has the chat.
     wake: Option<watch::Receiver<()>>,
 }
 
@@ -1710,7 +1737,7 @@ struct Task<A: AppItem, D: AppData> {
     recorder: Option<Recorder>,
     /// Who sees every step, if anyone.
     steps: Option<Box<dyn Steps<A, D>>>,
-    /// The open chats, for [`ChatsWatch`]es. Dropped as the task ends.
+    /// The chats loaded, for [`ChatsWatch`]es. Dropped as the task ends.
     open: watch::Sender<Vec<ChatSummary>>,
     /// Every agent's status, for [`AgentsWatch`]es. Dropped as the task
     /// ends.
@@ -1905,6 +1932,13 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 let result = self.host(
                     |core, now, out| core.close_chat(now, chat, out),
                     |()| Some(HostCommand::CloseChat { chat }),
+                );
+                let _ = reply.send(result);
+            }
+            Command::Unarchive { chat, reply } => {
+                let result = self.host(
+                    |core, now, out| core.unarchive(now, chat, out),
+                    |()| Some(HostCommand::Unarchive { chat }),
                 );
                 let _ = reply.send(result);
             }
@@ -2353,12 +2387,10 @@ impl<A: AppItem, D: AppData> Task<A, D> {
         });
     }
 
-    /// Tells the [`ChatsWatch`]es which chats are open, with each one's
-    /// label and shelf, if that changed.
+    /// Tells the [`ChatsWatch`]es which chats are loaded, with each one's
+    /// label and shelf, and when it was archived if it is, if that changed.
     fn tell_chats(&self) {
-        let open: Vec<ChatSummary> = (self.core.summaries().into_iter())
-            .filter(|summary| !self.closed(summary.id))
-            .collect();
+        let open = self.core.summaries();
         self.open.send_if_modified(|was| {
             let changed = *was != open;
             if changed {
@@ -2435,9 +2467,10 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                     if let Some(feed) = self.feeds.get(&chat) {
                         feed.send_replace(());
                     }
-                    // A closed chat changes no more: its watches read the
-                    // last of it and end.
-                    if self.closed(chat) {
+                    // A chat gone from the core changes no more: its
+                    // watches read the last of it and end. An archived one
+                    // goes on, as it may be unarchived.
+                    if self.core.chat(chat).is_none() {
                         self.feeds.remove(&chat);
                     }
                 }
@@ -2486,13 +2519,6 @@ impl<A: AppItem, D: AppData> Task<A, D> {
         });
     }
 
-    /// Whether `chat` is closed, or was never there.
-    fn closed(&self, chat: ChatId) -> bool {
-        self.core
-            .chat(chat)
-            .is_none_or(|whole| whole.state == ChatState::Closed)
-    }
-
     /// What a watch that has seen up to `since` hasn't seen of `chat`.
     fn read(
         &mut self,
@@ -2501,7 +2527,6 @@ impl<A: AppItem, D: AppData> Task<A, D> {
         since: Option<ChangeNo>,
         subscribe: bool,
     ) -> Option<Seen<A>> {
-        let closed = self.closed(chat);
         let Some(read) = self.core.read(chat, since) else {
             // Put away while it was watched: as it was left, and nothing
             // more.
@@ -2524,14 +2549,16 @@ impl<A: AppItem, D: AppData> Task<A, D> {
             // handling here, or its watches end.
             _ => return None,
         };
-        let wake = (subscribe && !closed).then(|| {
+        // A chat the core has may change, even archived: it may be
+        // unarchived.
+        let wake = subscribe.then(|| {
             let feed = (self.feeds.entry(chat)).or_insert_with(|| watch::Sender::new(()));
             feed.subscribe()
         });
         Some(Seen {
             update,
             latest,
-            closed,
+            closed: false,
             wake,
         })
     }

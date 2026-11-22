@@ -13,7 +13,7 @@
 //! 1. The viewer sends [`FromViewer::Hello`] with the versions it speaks.
 //!    Anything else first ends the link.
 //! 2. CAF answers [`ToViewer::Welcome`] with the newest version both
-//!    speak, the agents on offer, the open chats, and which run of CAF
+//!    speak, the agents on offer, the chats loaded, and which run of CAF
 //!    this is; or [`ToViewer::NoCommonVersion`], and ends the link.
 //!    Right after the welcome, before anything else, comes
 //!    [`ToViewer::Agents`], where every agent stands, so a viewer knows
@@ -79,6 +79,7 @@ use crate::ids::{AgentName, ChangeNo, ChatId, QuestionId, Shelf, TurnId};
 use crate::question::Answer;
 use crate::save::{CannotRestore, SavedChat};
 use crate::settings::SettingChoice;
+use crate::time::Wall;
 use crate::usage::{BadQuery, ModelPrice, Summary, UsageQuery};
 
 /// The versions of the viewer wire this CAF speaks.
@@ -262,7 +263,8 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
         version: u32,
         /// The agents a viewer may ask to open a chat with.
         agents: Vec<AgentName>,
-        /// The open chats, in the order they were opened.
+        /// The chats CAF has loaded, in the order they were made (a chat's
+        /// id says when), archived ones included and marked.
         chats: Vec<ChatSummary>,
         /// Different every time CAF starts, so a viewer can tell a
         /// restarted CAF from the one it was watching. A `since` holds
@@ -278,8 +280,10 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
         /// The newest CAF speaks.
         max: u32,
     },
-    /// The open chats changed, because a chat was opened or closed by any
-    /// viewer or by the host. The whole list, each time.
+    /// The chats CAF has loaded changed, because a chat was opened,
+    /// restored, closed (archived), unarchived, put away or deleted, by any
+    /// viewer or by the host, or its label changed. The whole list, each
+    /// time, archived chats included and marked.
     Chats(Vec<ChatSummary>),
     /// A watched chat, whole: the first answer to [`FromViewer::Watch`],
     /// and again whenever the viewer has fallen behind. It may come at any
@@ -297,9 +301,13 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
         /// The changes.
         changes: Vec<Numbered<A>>,
     },
-    /// A watched chat is closed, there's no such chat, CAF has shut
+    /// A watched chat is gone: put away, a saved chat closed and so put
+    /// away included, or deleted. Or there's no such chat, CAF has shut
     /// down, or the viewer already watches as many chats as the host
-    /// allows: nothing more comes for it.
+    /// allows: nothing more comes for it. A chat archived but still loaded,
+    /// such as one closed that isn't saved, goes on being watched, as it
+    /// may be unarchived: closing it ends no watch, so a viewer should
+    /// [unwatch](FromViewer::Unwatch) an archived chat it stops showing.
     Ended {
         /// The chat.
         chat: ChatId,
@@ -339,8 +347,10 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
     },
 }
 
-/// An open chat, as the list of chats shows it: enough to draw the list
-/// without watching every chat. Names and the like are the app's own.
+/// A chat CAF has loaded, as the list of chats shows it: enough to draw
+/// the list without watching every chat. Names and the like are the app's
+/// own. Archived chats loaded, such as one closed that isn't saved, or one
+/// restored archived, are listed too, marked ([`ChatSummary::archived`]).
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -358,6 +368,10 @@ pub struct ChatSummary {
     /// Where it's kept, if it's saved.
     #[serde(default)]
     pub shelf: Option<Shelf>,
+    /// When it was archived, while it is ([`Chat::archived`]): `None` for
+    /// a chat that isn't.
+    #[serde(default)]
+    pub archived: Option<Wall>,
 }
 
 /// What the host lets a viewer do, as [`ToViewer::Welcome`] says it, so
@@ -369,11 +383,12 @@ pub struct ChatSummary {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Rights {
     /// Whether it may send, stop, answer, choose a chat's settings
-    /// ([`FromViewer::Set`]) and close.
+    /// ([`FromViewer::Set`]), close and unarchive.
     pub act: bool,
-    /// Whether it may install agents, sign in and out of them, and learn
-    /// their settings. A viewer that may not gets no sign-in's link or
-    /// code.
+    /// Whether it may install agents, sign in and out of them, learn
+    /// their settings, and have CAF look at the machine again
+    /// ([`AgentAction::CheckAgain`]). A viewer that may not gets no
+    /// sign-in's link or code.
     pub agents: bool,
     /// Whether it may read usage summaries and set prices. A summary
     /// covers every CAF app on the machine, not just this one, so it's a
@@ -414,6 +429,7 @@ impl ChatSummary {
             cwd: chat.cwd.clone(),
             label: None,
             shelf: None,
+            archived: chat.archived,
         }
     }
 }

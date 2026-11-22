@@ -228,7 +228,7 @@ describe('states', () => {
 describe('the chats as they were', () => {
   const fixture = fixtures().find((each) => each.steps.length >= 6)!
   const id = fixture.picture.chat.id
-  const summary = { id, agent: fixture.picture.chat.agent, cwd: fixture.picture.chat.cwd, label: null, shelf: null }
+  const summary = { id, agent: fixture.picture.chat.agent, cwd: fixture.picture.chat.cwd, label: null, shelf: null, archived: null }
   /** Another chat's id. */
   const otherId = '00000000-0000-0000-0000-00000000ffff'
 

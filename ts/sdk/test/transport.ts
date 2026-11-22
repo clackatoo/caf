@@ -62,7 +62,7 @@ export const welcome = {
   value: {
     version: 1,
     agents: ["claude", "fake"],
-    chats: [{ id: CHAT, agent: "claude", cwd: "/home/me/project", label: null, shelf: null }],
+    chats: [{ id: CHAT, agent: "claude", cwd: "/home/me/project", label: null, shelf: null, archived: null }],
     run: "run-1",
     may: { act: true, agents: true, usage: true },
   },

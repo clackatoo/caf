@@ -740,6 +740,181 @@ fn only_the_apps_and_agents_asked_for() {
     assert_eq!(named.buckets[0].agent, "claude");
 }
 
+/// `line`'s JSON, on `model`, named `name` as it was recorded, if at
+/// all, by an agent of `profile`, if any.
+fn on(mut line: Value, model: &str, name: Option<&str>, profile: Option<&str>) -> Value {
+    line["usage"]["models"][0]["model"] = json!(model);
+    if let Some(name) = name {
+        line["usage"]["models"][0]["name"] = json!(name);
+    }
+    line["profile"] = json!(profile);
+    line
+}
+
+#[test]
+fn models_are_named_as_their_lines_were_recorded_or_as_their_profile_names_them() {
+    let folder = Folder::new("names");
+    const ACP: Option<&str> = Some("claude-agent-acp");
+    let at = |time: &str| format!("2026-11-22T{time}:00Z");
+    record(
+        folder.path(),
+        APP,
+        [
+            // Named again since: the latest line's name counts, though
+            // eyespy's earlier line is read after this one.
+            on(
+                line(&at("12:00"), 1, 1),
+                "claude-haiku-5-5",
+                Some("Haiku 5.5"),
+                None,
+            ),
+            // Recorded before CAF named models: named by its profile now.
+            on(line(&at("10:00"), 1, 2), "claude-opus-5-5", None, ACP),
+            // Recorded with a name, which beats the profile's, whichever
+            // comes first.
+            on(line(&at("09:00"), 1, 3), "claude-sonnet-5-5", None, ACP),
+            on(
+                line(&at("08:00"), 1, 4),
+                "claude-sonnet-5-5",
+                Some("Sonnet"),
+                None,
+            ),
+            // Neither a name nor a profile.
+            on(line(&at("10:00"), 1, 5), "gpt-9", None, None),
+            // A profile CAF doesn't know, or an id its profile can't name.
+            on(
+                line(&at("10:00"), 1, 6),
+                "claude-fable-5-1",
+                None,
+                Some("not-a-profile"),
+            ),
+            on(line(&at("10:00"), 1, 7), "mystery", None, ACP),
+        ],
+    );
+    let mut theirs = on(
+        line(&at("11:00"), 2, 1),
+        "claude-haiku-5-5",
+        Some("Old Haiku"),
+        None,
+    );
+    theirs["app"] = json!("eyespy");
+    // An old line of another app's, on a model only it used.
+    let mut old = on(line(&at("11:00"), 2, 2), "claude-haiku-4-5", None, ACP);
+    old["app"] = json!("eyespy");
+    record(folder.path(), "eyespy", [theirs, old]);
+
+    let summary = november(folder.path());
+    let named = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+        (pairs.iter())
+            .map(|(id, name)| ((*id).to_owned(), (*name).to_owned()))
+            .collect()
+    };
+    assert_eq!(
+        summary.names,
+        named(&[
+            ("claude-haiku-4-5", "Haiku 4.5"),
+            ("claude-haiku-5-5", "Haiku 5.5"),
+            ("claude-opus-5-5", "Opus 5.5"),
+            ("claude-sonnet-5-5", "Sonnet"),
+        ]),
+        "sorted by id, one name each, and none for a model with neither"
+    );
+
+    // Only the models in the summary: not those of lines it leaves out.
+    let mut query = UsageQuery::new(wall(&at("11:30")), wall("2026-12-01T00:00:00Z"), "UTC");
+    let later = summarise(folder.path(), &query, &prices()).expect("it's good");
+    assert_eq!(later.names, named(&[("claude-haiku-5-5", "Haiku 5.5")]));
+    query.since = wall("2026-11-01T00:00:00Z");
+    query.apps = vec!["eyespy".into()];
+    let eyespy = summarise(folder.path(), &query, &prices()).expect("it's good");
+    assert_eq!(
+        eyespy.names,
+        named(&[
+            ("claude-haiku-4-5", "Haiku 4.5"),
+            ("claude-haiku-5-5", "Old Haiku"),
+        ]),
+        "the name eyespy's own line was recorded with"
+    );
+}
+
+#[test]
+fn of_lines_ending_at_once_the_later_in_the_ledger_names_the_model() {
+    let folder = Folder::new("ties");
+    let at = "2026-11-22T10:00:00Z";
+    let haiku = |chat, turn, name| on(line(at, chat, turn), "claude-haiku-5-5", Some(name), None);
+    // In one app's file, the line written last.
+    record(
+        folder.path(),
+        APP,
+        [haiku(1, 1, "First"), haiku(1, 2, "Second")],
+    );
+    let summary = november(folder.path());
+    assert_eq!(
+        summary.names,
+        [("claude-haiku-5-5".to_owned(), "Second".to_owned())]
+    );
+    // Across apps, the app last by name, as apps are read in that order.
+    let mut theirs = haiku(2, 1, "Eyespy's");
+    theirs["app"] = json!("eyespy");
+    record(folder.path(), "eyespy", [theirs]);
+    let summary = november(folder.path());
+    assert_eq!(
+        summary.names,
+        [("claude-haiku-5-5".to_owned(), "Eyespy's".to_owned())]
+    );
+}
+
+#[test]
+fn an_empty_name_recorded_is_no_name() {
+    let folder = Folder::new("empty-names");
+    let acp = Some("claude-agent-acp");
+    record(
+        folder.path(),
+        APP,
+        [
+            // Named by its profile, as if it had been recorded with none.
+            on(
+                line("2026-11-22T10:00:00Z", 1, 1),
+                "claude-opus-5-5",
+                Some(""),
+                acp,
+            ),
+            // An empty name later doesn't hide an earlier one, kept trimmed.
+            on(
+                line("2026-11-22T09:00:00Z", 1, 2),
+                "claude-haiku-5-5",
+                Some(" Haiku\n"),
+                None,
+            ),
+            on(
+                line("2026-11-22T11:00:00Z", 1, 3),
+                "claude-haiku-5-5",
+                Some("  "),
+                None,
+            ),
+            // Nor is one with neither named.
+            on(line("2026-11-22T10:00:00Z", 1, 4), "gpt-9", Some(""), None),
+        ],
+    );
+    let summary = november(folder.path());
+    assert_eq!(
+        summary.names,
+        [
+            ("claude-haiku-5-5".to_owned(), "Haiku".to_owned()),
+            ("claude-opus-5-5".to_owned(), "Opus 5.5".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn a_summary_with_no_names_says_none() {
+    let folder = Folder::new("unnamed");
+    record(folder.path(), APP, [line("2026-11-22T10:00:00Z", 1, 1)]);
+    let summary = november(folder.path());
+    assert_eq!(turns(&summary), 1);
+    assert!(summary.names.is_empty(), "{:?}", summary.names);
+}
+
 #[test]
 fn turns_with_no_reported_cost_are_estimated() {
     let folder = Folder::new("estimated");

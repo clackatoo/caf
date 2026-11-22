@@ -10,8 +10,8 @@ afterEach(cleanup)
 const one = '00000000-0000-0000-0000-000000000001'
 const two = '00000000-0000-0000-0000-000000000002'
 const chats = [
-  { id: one, agent: 'claude', cwd: '/home/me/app', label: null, shelf: null },
-  { id: two, agent: 'fake', cwd: '/home/me/lib', label: null, shelf: null },
+  { id: one, agent: 'claude', cwd: '/home/me/app', label: null, shelf: null, archived: null },
+  { id: two, agent: 'fake', cwd: '/home/me/lib', label: null, shelf: null, archived: null },
 ]
 
 function draw(options: { readOnly?: boolean; open?: () => Promise<unknown> } = {}) {

@@ -537,6 +537,13 @@ fn version_1() -> Sample {
         cwd: "/work".into(),
         label: Some("Fix the tests".into()),
         shelf: Some(Shelf("work".into())),
+        archived: None,
+    };
+    // Closed and still loaded: archived, and listed so.
+    let archived = ChatSummary {
+        id: ChatId::from_number(2),
+        archived: Some(Wall(1_700_000_000_000)),
+        ..summary.clone()
     };
     let open = |request, session| FromViewer::Open {
         request: RequestNo(request),
@@ -682,7 +689,7 @@ fn version_1() -> Sample {
             may: Rights::new(true, false),
         },
         ToViewer::NoCommonVersion { min: 1, max: 1 },
-        ToViewer::Chats(vec![summary]),
+        ToViewer::Chats(vec![summary, archived]),
         ToViewer::Picture {
             chat: chat(),
             latest: ChangeNo(5),

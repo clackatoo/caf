@@ -29,7 +29,7 @@ function transport(first: unknown[] = []): Transport & { drop(): void; deliver(m
       const message = JSON.parse(text) as { type: string }
       sent.push(message)
       if (message.type === 'Hello') {
-        const welcome = { type: 'Welcome', value: { version: 1, agents: ['fake'], chats: [{ id: one, agent: 'fake', cwd: '/a', label: null, shelf: null }], run: 'r', may: { act: true, agents: false } } }
+        const welcome = { type: 'Welcome', value: { version: 1, agents: ['fake'], chats: [{ id: one, agent: 'fake', cwd: '/a', label: null, shelf: null, archived: null }], run: 'r', may: { act: true, agents: false } } }
         const agents = { type: 'Agents', value: [{ name: 'fake', install: { type: 'Host' }, sign_in: { type: 'Unknown' }, can_sign_in: false }] }
         queueMicrotask(() => {
           for (const message of [welcome, agents, ...first]) messages.forEach((listener) => listener(JSON.stringify(message)))

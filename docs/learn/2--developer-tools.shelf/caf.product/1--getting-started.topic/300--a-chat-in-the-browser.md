@@ -127,7 +127,7 @@ import { Connection, webSocket } from "@clackatoo/caf";
 
 const caf = await Connection.open(await webSocket("ws://127.0.0.1:7320/viewer"));
 caf.agents; // every agent on offer: its name, whether it's installed and signed in
-caf.chats; // the open chats: id, agent, folder, and the app's label and shelf, if any
+caf.chats; // the chats loaded: id, agent, folder, the app's label and shelf, and when archived, if any
 caf.onChats((chats) => drawList(chats));
 caf.onAgents((agents) => drawAgents(agents));
 ```
@@ -176,7 +176,9 @@ CAF first sends a watched chat whole, then its numbered changes. The SDK
 applies them itself. If one is missing, doesn't fit, or is of a kind this
 version of the SDK doesn't know, it asks CAF for the chat whole again, and
 the listener only ever sees the right chat. The listener hears `Ended` once
-the chat is closed, or CAF has shut down.
+the chat is gone, put away or deleted (closing a saved chat puts it away),
+or CAF has shut down. A chat closed and still loaded is archived, and its
+watch goes on, as it may be unarchived.
 
 ### Act
 

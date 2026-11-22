@@ -634,6 +634,10 @@ async fn a_viewer_that_may_not_act_only_watches() {
             chat: chat.id,
             choice: SettingChoice::model("large"),
         },
+        FromViewer::Unarchive {
+            request: RequestNo(6),
+            chat: chat.id,
+        },
     ];
     for (request, ask) in (1..).zip(asks) {
         viewer.send(ask).await;
@@ -643,14 +647,27 @@ async fn a_viewer_that_may_not_act_only_watches() {
     assert!(now.turns.is_empty());
     assert_ne!(now.state, ChatState::Closed);
     assert!(now.settings.chosen.is_empty(), "nothing chosen");
+    assert_eq!(now.archived, None, "nor archived");
+    // Archived by the host, it stays so.
+    caf.chat(chat.id).close().await.unwrap();
+    let archived = picture(&chat).await.archived;
+    assert!(archived.is_some());
+    viewer
+        .send(FromViewer::Unarchive {
+            request: RequestNo(7),
+            chat: chat.id,
+        })
+        .await;
+    assert_eq!(viewer.done(7).await, Outcome::NotAllowed);
+    assert_eq!(picture(&chat).await.archived, archived, "still archived");
     // Opening is the host's rule's to decide, not `act`'s.
     viewer
         .send(FromViewer::Open {
-            request: RequestNo(6),
+            request: RequestNo(8),
             open: OpenRequest::new("fake", &dir.0),
         })
         .await;
-    assert!(matches!(viewer.done(6).await, Outcome::Opened(_)));
+    assert!(matches!(viewer.done(8).await, Outcome::Opened(_)));
     shut_down(&caf, running).await;
     viewer.ends().await;
 }
@@ -689,59 +706,150 @@ async fn a_viewer_hears_of_chats_others_open_and_close() {
         })
         .await;
     assert_eq!(opener.done(2).await, Outcome::Done);
+    // Closed, a chat that isn't saved stays, archived: listed, and marked.
+    let archived = |chats: &[ChatSummary]| {
+        (chats.iter())
+            .map(|chat| chat.archived.is_some())
+            .collect::<Vec<_>>()
+    };
     match other.next().await {
-        Some(ToViewer::Chats(chats)) => assert_eq!(ids(&chats), [second.id]),
-        other => panic!("the list without the closed chat, not {other:?}"),
+        Some(ToViewer::Chats(chats)) => {
+            assert_eq!(ids(&chats), [first, second.id]);
+            assert_eq!(archived(&chats), [true, false]);
+        }
+        other => panic!("the list with the closed chat archived, not {other:?}"),
     }
     // The kit's own watch on the list agrees.
     let mut list = caf.watch_chats();
     let now = list.next().await.unwrap();
-    assert_eq!(ids(&now), [second.id]);
+    assert_eq!(ids(&now), [first, second.id]);
+    assert_eq!(archived(&now), [true, false]);
     shut_down(&caf, running).await;
     assert_eq!(list.next().await, None, "the list ends with CAF");
     opener.ends().await;
     other.ends().await;
 }
 
+impl Viewer {
+    /// Reads `chat`'s changes until `done` holds for the copy kept of it,
+    /// giving the copy. Its watch mustn't end meanwhile. What else came
+    /// comes next.
+    async fn until_chat(
+        &mut self,
+        mut copy: Chat,
+        what: &str,
+        done: impl Fn(&Chat) -> bool,
+    ) -> Chat {
+        let id = copy.id;
+        let mut others = VecDeque::new();
+        while !done(&copy) {
+            match self.next().await {
+                Some(ToViewer::Changes { chat, changes }) if chat == id => {
+                    for numbered in &changes {
+                        copy.apply(&numbered.change).expect("the change fits");
+                    }
+                }
+                Some(ToViewer::Picture { chat: whole, .. }) if whole.id == id => copy = whole,
+                Some(ToViewer::Ended { chat }) if chat == id => {
+                    panic!("the watch ended waiting for {what}: {copy:#?}")
+                }
+                Some(other) => others.push_back(other),
+                None => panic!("the link ended waiting for {what}"),
+            }
+        }
+        others.append(&mut self.skipped);
+        self.skipped = others;
+        copy
+    }
+}
+
+/// An adapter that opens session `s1`, and answers one prompt: each
+/// process started for it runs it from the start.
+fn answering_once(dir: &Dir) -> std::path::PathBuf {
+    let mut steps = handshake("s1");
+    steps[2] = json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {}, "agentInfo": {"name": "caf-fake-agent", "version": "1.0.0"}}}});
+    steps.extend([prompt(), say("s1", "Hello again"), end_turn()]);
+    dir.script("script.jsonl", &steps)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_watched_chat_ends_when_it_closes() {
+async fn a_watched_chat_goes_on_through_being_archived_and_unarchived() {
     let dir = Dir::new();
-    let (caf, running, chat) = started(&dir, &[]).await;
+    let (caf, running) = Caf::start(config_for(host(), vec![fake(&dir, &answering_once(&dir))]));
+    let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
+    let mut watch = chat.watch();
+    until(&chat, &mut watch, "the session", |chat| {
+        matches!(chat.state, ChatState::Open { .. })
+    })
+    .await;
     let (mut viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
-    viewer.watch(chat.id).await;
-    viewer
-        .send(FromViewer::Close {
-            request: RequestNo(9),
-            chat: chat.id,
+    let (copy, _) = viewer.watch(chat.id).await;
+    let close = |request| FromViewer::Close {
+        request: RequestNo(request),
+        chat: chat.id,
+    };
+    viewer.send(close(1)).await;
+    assert_eq!(viewer.done(1).await, Outcome::Done);
+    // Closed, a chat that isn't saved is archived, and still watched.
+    let copy = viewer
+        .until_chat(copy, "it archived", |chat| {
+            chat.archived.is_some() && chat.state == ChatState::Closed
         })
         .await;
-    assert_eq!(viewer.done(9).await, Outcome::Done);
+    // It's listed, archived as of when the copy says.
+    let listed = |message: &ToViewer| {
+        matches!(message, ToViewer::Chats(chats)
+            if chats.len() == 1 && chats[0].archived == copy.archived)
+    };
     let mut heard = Vec::new();
-    while !heard
-        .iter()
-        .any(|message| *message == ToViewer::Ended { chat: chat.id })
-    {
-        heard.push(viewer.next().await.expect("the chat's end"));
+    while !heard.iter().any(listed) {
+        heard.push(viewer.next().await.expect("the list with it archived"));
     }
     assert!(
-        heard
-            .iter()
-            .any(|message| matches!(message, ToViewer::Chats(chats) if chats.is_empty())),
+        !heard.contains(&ToViewer::Ended { chat: chat.id }),
         "{heard:?}"
     );
-    // Watching it again gives how it was left, and its end.
+
+    // Unarchived by the viewer, the watch hears it.
     viewer
-        .send(FromViewer::Watch {
+        .send(FromViewer::Unarchive {
+            request: RequestNo(2),
             chat: chat.id,
-            since: None,
         })
         .await;
-    match viewer.next().await {
-        Some(ToViewer::Picture { chat: whole, .. }) => assert_eq!(whole.state, ChatState::Closed),
-        other => panic!("the closed chat, not {other:?}"),
-    }
-    assert_eq!(viewer.next().await, Some(ToViewer::Ended { chat: chat.id }));
-    // So does a chat that was never there.
+    assert_eq!(viewer.done(2).await, Outcome::Done);
+    let copy = viewer
+        .until_chat(copy, "it unarchived", |chat| {
+            chat.archived.is_none() && chat.state == ChatState::Idle
+        })
+        .await;
+
+    // Archived again, and unarchived by a message, which is answered.
+    viewer.send(close(3)).await;
+    assert_eq!(viewer.done(3).await, Outcome::Done);
+    let copy = viewer
+        .until_chat(copy, "it archived again", |chat| chat.archived.is_some())
+        .await;
+    viewer
+        .send(FromViewer::Send {
+            request: RequestNo(4),
+            chat: chat.id,
+            message: UserMessage::text("Hi"),
+        })
+        .await;
+    assert!(matches!(viewer.done(4).await, Outcome::Sent(_)));
+    let copy = viewer
+        .until_chat(copy, "the answer", |chat| {
+            chat.archived.is_none() && finished(chat)
+        })
+        .await;
+    // After a note that its session couldn't be carried on, as the agent
+    // can't.
+    let answer = copy.turns.last().expect("the turn sent");
+    assert_eq!(words(answer), "Hello again");
+    assert_eq!(copy, picture(&chat).await, "the copy is the chat");
+
+    // A chat that was never there ends at once.
     let never = ChatId::from_number(999_999);
     viewer
         .send(FromViewer::Watch {
@@ -749,7 +857,59 @@ async fn a_watched_chat_ends_when_it_closes() {
             since: None,
         })
         .await;
-    assert_eq!(viewer.next().await, Some(ToViewer::Ended { chat: never }));
+    loop {
+        match viewer.next().await {
+            Some(ToViewer::Ended { chat }) => {
+                assert_eq!(chat, never);
+                break;
+            }
+            Some(ToViewer::Picture { chat: whole, .. }) => assert_ne!(whole.id, never),
+            Some(_) => {}
+            None => panic!("the link ended"),
+        }
+    }
+    shut_down(&caf, running).await;
+    viewer.ends().await;
+    assert!(
+        !dir.record().iter().any(|line| line.get("failed").is_some()),
+        "{:#?}",
+        dir.record()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_viewer_watching_an_archived_chat_hears_it_unarchived() {
+    let dir = Dir::new();
+    let (caf, running, chat) = started(&dir, &[]).await;
+    caf.chat(chat.id).close().await.unwrap();
+    let (mut viewer, _, listed) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
+    let (copy, _) = viewer.watch(chat.id).await;
+    assert!(copy.archived.is_some());
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        (listed[0].id, listed[0].archived),
+        (chat.id, copy.archived),
+        "the welcome lists it, archived"
+    );
+    assert_eq!(copy.state, ChatState::Closed);
+    // The watch goes on: the host unarchives it, and the viewer hears.
+    chat.unarchive().await.unwrap();
+    let copy = viewer
+        .until_chat(copy, "it unarchived", |chat| {
+            chat.archived.is_none() && chat.state == ChatState::Idle
+        })
+        .await;
+    assert_eq!(copy, picture(&chat).await);
+    loop {
+        match viewer.next().await {
+            Some(ToViewer::Chats(chats)) => {
+                assert_eq!((chats[0].id, chats[0].archived), (chat.id, None));
+                break;
+            }
+            Some(ToViewer::Ended { .. }) | None => panic!("the watch goes on"),
+            Some(_) => {}
+        }
+    }
     shut_down(&caf, running).await;
     viewer.ends().await;
 }
@@ -1574,6 +1734,84 @@ async fn a_viewer_chooses_a_setting_and_learns_an_agents_as_the_host_allows() {
         "{:#?}",
         dir.record()
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_viewer_unarchives_a_chat_it_closed() {
+    let dir = Dir::new();
+    let (caf, running, chat) = started(&dir, &[]).await;
+    let (mut viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
+    viewer
+        .send(FromViewer::Close {
+            request: RequestNo(1),
+            chat: chat.id,
+        })
+        .await;
+    assert_eq!(viewer.done(1).await, Outcome::Done);
+    let closed = picture(&chat).await;
+    assert!(closed.archived.is_some(), "closing archives it");
+
+    viewer
+        .send(FromViewer::Unarchive {
+            request: RequestNo(2),
+            chat: chat.id,
+        })
+        .await;
+    assert_eq!(viewer.done(2).await, Outcome::Done);
+    let now = picture(&chat).await;
+    assert_eq!(now.archived, None);
+    assert_eq!(now.state, ChatState::Idle, "its agent starts when sent to");
+    // Once more, it's left as it is.
+    viewer
+        .send(FromViewer::Unarchive {
+            request: RequestNo(3),
+            chat: chat.id,
+        })
+        .await;
+    assert_eq!(viewer.done(3).await, Outcome::Done);
+    assert_eq!(picture(&chat).await, now);
+    viewer
+        .send(FromViewer::Unarchive {
+            request: RequestNo(4),
+            chat: ChatId::from_number(999_999),
+        })
+        .await;
+    assert_eq!(viewer.done(4).await, Outcome::Refused(Refused::NoSuchChat));
+    shut_down(&caf, running).await;
+    viewer.ends().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_viewer_has_caf_check_its_agents_again_as_the_host_allows() {
+    let dir = Dir::new();
+    let script = dir.script("script.jsonl", &handshake("s1"));
+    let recording = dir.path("run.jsonl");
+    let mut config = config_for(host(), vec![fake(&dir, &script)]);
+    config.record = Some(recording.clone());
+    let (caf, running) = Caf::start(config);
+    let check_again = |request| FromViewer::Agent {
+        request: RequestNo(request),
+        agent: AgentName("fake".into()),
+        action: AgentAction::CheckAgain,
+    };
+    let (mut viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
+    viewer.send(check_again(1)).await;
+    assert_eq!(viewer.done(1).await, Outcome::NotAllowed);
+    let mut rules = ViewerRules::default();
+    rules.agents = true;
+    let (mut checker, ..) = Viewer::welcomed(&caf, rules, 8).await;
+    checker.send(check_again(1)).await;
+    assert_eq!(checker.done(1).await, Outcome::Done);
+    shut_down(&caf, running).await;
+    viewer.ends().await;
+    checker.ends().await;
+
+    let text = std::fs::read_to_string(&recording).unwrap();
+    let checks = (text.lines().skip(1))
+        .map(|line| serde_json::from_str::<Value>(line).unwrap()["event"].clone())
+        .filter(|event| *event == json!({"type": "Host", "value": {"type": "CheckAgents"}}))
+        .count();
+    assert_eq!(checks, 2, "once as CAF starts, and once more when asked");
 }
 
 /// Rules that let viewers read usage and set prices.

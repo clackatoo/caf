@@ -409,6 +409,143 @@ async fn a_watch_of_a_saved_chat_closed_sees_it_closed_then_ends() {
     assert!(header.closed, "saved, closed");
 }
 
+/// Closes `id`, and waits until it's listed as saved closed: the list as
+/// it is then.
+async fn closed_and_listed<D: AppData>(
+    caf: &Caf<NoAppItems, D>,
+    saved: &mut SavedWatch,
+    id: ChatId,
+) -> Vec<SavedChat> {
+    caf.chat(id).close().await.unwrap();
+    listed(saved, "the chat, closed", |saved| {
+        (saved.iter()).any(|each| {
+            each.header.chat == id && each.state == SavedState::Saved && each.header.closed
+        })
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_closed_chat_is_restored_archived_until_a_message_unarchives_it() {
+    let dir = Dir::new();
+    let id = a_chat_saved_by_another_run(&dir).await;
+    let (caf, running) = start::<NoAppData>(&dir, &resuming_script(&dir));
+    let mut saved = caf.watch_saved();
+    caf.list_saved(shelf(SHELF)).await.unwrap();
+    let chat = restore_once_written(&caf, id).await;
+    assert_eq!(picture(&chat).await.archived, None, "it wasn't closed");
+    let list = closed_and_listed(&caf, &mut saved, id).await;
+    let archived = list[0].header.archived.expect("saved archived");
+    assert!(list[0].header.closed);
+
+    // Restored, it's as it was left: archived, as of when it was closed.
+    let chat = restore_once_written(&caf, id).await;
+    let restored = picture(&chat).await;
+    assert_eq!(restored.archived, Some(archived));
+    assert_eq!(restored.turns.len(), 1);
+    assert!(
+        !methods(&dir).contains(&"session/resume".to_owned()),
+        "no agent starts until a message is sent"
+    );
+
+    // Sent to, it's unarchived, and carries on.
+    let mut watch = chat.watch();
+    chat.send(UserMessage::text("Again")).await.unwrap();
+    let now = until(&chat, &mut watch, "the second answer", |chat| {
+        chat.turns.len() == 2 && finished(chat)
+    })
+    .await;
+    assert_eq!(now.archived, None);
+    assert_eq!(words(&now.turns[1]), "Again");
+    assert!(!any_failed(&dir), "the fakes got what they expected");
+    stop(&caf, running).await;
+    let mut store = FileStore::new(root(&dir));
+    let header = store.list(&shelf(SHELF)).unwrap();
+    let header = caf_save::decode_header(&header[0].1).unwrap();
+    assert_eq!(header.archived, None, "saved unarchived");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_chat_unarchived_by_the_host_is_saved_so() {
+    let dir = Dir::new();
+    let id = a_chat_saved_by_another_run(&dir).await;
+    let script = dir.script("idle.jsonl", &handshake("s1"));
+    let (caf, running) = start::<NoAppData>(&dir, &script);
+    let mut saved = caf.watch_saved();
+    caf.list_saved(shelf(SHELF)).await.unwrap();
+    restore_once_written(&caf, id).await;
+    let list = closed_and_listed(&caf, &mut saved, id).await;
+    let archived = list[0].header.archived;
+    assert!(archived.is_some());
+
+    // Restored by a viewer, it's listed with the open chats, archived.
+    let mut rules = ViewerRules::default();
+    rules.restore = Box::new(|chat, on| Some(RestoreChat::new(chat, on.clone())));
+    let (to, mut from) = viewer(&caf, rules).await;
+    // Refused as loaded until it's written, as `restore_once_written` is.
+    let opened = tokio::time::timeout(PATIENCE, async {
+        for request in 1.. {
+            to.send(FromViewer::Restore {
+                request: RequestNo(request),
+                chat: id,
+                shelf: shelf(SHELF),
+            })
+            .await
+            .unwrap();
+            match outcome(&mut from, request).await {
+                Outcome::Refused(Refused::Loaded) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                other => return other,
+            }
+        }
+        unreachable!()
+    })
+    .await;
+    assert_eq!(opened.expect("written in good time"), Outcome::Opened(id));
+    let summary = heard(&mut from, |message| match message {
+        ToViewer::Chats(chats) => chats.into_iter().find(|each| each.id == id),
+        _ => None,
+    })
+    .await;
+    assert_eq!(summary.archived, archived, "as of when it was closed");
+    let chat = caf.chat(id);
+    assert_eq!(picture(&chat).await.archived, archived);
+
+    chat.unarchive().await.unwrap();
+    let now = picture(&chat).await;
+    assert_eq!(now.archived, None);
+    assert_eq!(now.state, ChatState::Idle);
+    let summary = heard(&mut from, |message| match message {
+        ToViewer::Chats(chats) => chats.into_iter().find(|each| each.id == id),
+        _ => None,
+    })
+    .await;
+    assert_eq!(summary.archived, None, "unarchived, it's listed so");
+    let open = caf.watch_chats().next().await.unwrap();
+    assert_eq!((open[0].id, open[0].archived), (id, None));
+    // Put away and restored, it stays unarchived.
+    chat.put_away().await.unwrap();
+    let list = listed(&mut saved, "the chat, put away", |saved| {
+        state_of(saved, id) == Some(&SavedState::Saved)
+    })
+    .await;
+    assert_eq!(list[0].header.archived, None);
+    assert!(!list[0].header.closed);
+    let chat = restore_once_written(&caf, id).await;
+    assert_eq!(picture(&chat).await.archived, None);
+    assert_eq!(
+        caf.chat(ChatId::from_number(999_999)).unarchive().await,
+        Err(Error::Refused(Refused::NoSuchChat))
+    );
+    let started = (methods(&dir).iter())
+        .filter(|method| *method == "initialize")
+        .count();
+    assert_eq!(started, 1, "only the first run started an agent");
+    stop(&caf, running).await;
+    assert_eq!(chat.unarchive().await, Err(Error::Gone));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_shelf_moves_with_its_chats_loaded_or_not() {
     let dir = Dir::new();
