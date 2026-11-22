@@ -10,7 +10,16 @@
 //!
 //! npm installs run `npm ci --ignore-scripts --no-audit --no-fund` from the
 //! profile's lockfile. Downloads are fetched by the driver itself, not by
-//! `curl`. Sign-in commands that open a browser are given a `BROWSER` of
+//! `curl`. An install with a [`Patch`] is patched in its hidden folder, as
+//! the last step before it's renamed into place: each file written whole
+//! and renamed over the original, which is kept as `<file>.caf-original`.
+//! A `Prepare` builds its hidden folder of hard links to the earlier
+//! install's files instead (copies where a link can't be made, and never
+//! its `.used`), renames each original back over its patched copy there,
+//! and patches that: only names in the new folder change, so the earlier
+//! install never does. Its folders stay writable by the user until it's
+//! patched, so a failed one can always be removed. It makes the agent's
+//! private folder as an install does. Sign-in commands that open a browser are given a `BROWSER` of
 //! the driver's own, which hands their link back instead of opening
 //! anything.
 //!
@@ -78,10 +87,12 @@
 //! taken out of lines first, and lines longer than 64 KiB are skipped.
 //!
 //! [`AgentDirective::Start`]: caf_core::directive::AgentDirective::Start
+//! [`Patch`]: caf_core::install::Patch
 //! [`LinkFrom`]: caf_core::install::LinkFrom
 
 mod command;
 mod install;
+mod patch;
 #[cfg(test)]
 mod tests;
 
@@ -225,6 +236,13 @@ pub(crate) struct Options {
     /// test can stop it meanwhile.
     #[cfg(test)]
     pub(crate) sync_pause: Option<std::time::Duration>,
+    /// How long linking each entry of an earlier install takes, as well,
+    /// so a test can stop a prepare meanwhile.
+    #[cfg(test)]
+    pub(crate) link_pause: Option<std::time::Duration>,
+    /// A prepare copies every file, as where hard links can't be made.
+    #[cfg(test)]
+    pub(crate) copy_only: bool,
 }
 
 impl Options {
@@ -313,8 +331,6 @@ impl SetupDriver {
                 private,
                 size,
             } => {
-                // Drafted: the builder patches the install as its last step.
-                let _ = patch;
                 let (reporter, stop) = self.stoppable(ticket);
                 tokio::spawn(install::install(
                     self.root.clone(),
@@ -322,6 +338,7 @@ impl SetupDriver {
                         folder,
                         private,
                         size,
+                        patch,
                     },
                     install,
                     self.options.clone(),
@@ -334,9 +351,21 @@ impl SetupDriver {
                 folder,
                 from,
                 patch,
+                private,
             } => {
-                let _ = (ticket, folder, from, patch);
-                todo!("prepare a patch level from an earlier install")
+                let (reporter, stop) = self.stoppable(ticket);
+                tokio::spawn(install::prepare(
+                    self.root.clone(),
+                    install::Prepared {
+                        folder,
+                        from,
+                        private,
+                    },
+                    patch,
+                    self.options.clone(),
+                    reporter,
+                    stop,
+                ));
             }
             SetupDirective::Remove {
                 ticket,

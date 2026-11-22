@@ -791,8 +791,9 @@ fn render_setup(setup: &SetupDirective) -> Value {
             folder,
             from,
             patch,
+            private,
         } => {
-            json!({ "prepare": ticket.0, "folder": folder, "from": from, "level": patch.level })
+            json!({ "prepare": ticket.0, "folder": folder, "from": from, "level": patch.level, "private": private })
         }
         SetupDirective::Remove {
             ticket,

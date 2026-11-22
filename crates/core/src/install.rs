@@ -14,14 +14,17 @@
 //! Each agent's adapter is installed at the version its profile was checked
 //! at, in a folder of its own, named after its profile, never after what a
 //! host calls the agent: `<profile>-<version>`, such as
-//! `claude-agent-acp-0.98.0`. They live under one folder every
+//! `claude-agent-acp-0.98.0`, or, patched ([`Patch`]),
+//! `claude-agent-acp-0.98.0+caf.1`. They live under one folder every
 //! CAF program on the machine shares: `$XDG_DATA_HOME/caf/agents/` (by
 //! default `~/.local/share/caf/agents/`), so every CAF program that offers
 //! an agent shares one install of it. A version stays while any process
 //! runs from it, in any CAF program. One older than the version a program
 //! pins is removed once that pinned version has started, and only once no
 //! process has started from it for 14 days, so two programs pinning
-//! different versions don't remove each other's.
+//! different versions don't remove each other's. A lower patch level of
+//! the pinned upstream version counts as older; a higher one, or one
+//! patched some way CAF doesn't know, never does.
 
 use std::path::PathBuf;
 
@@ -34,7 +37,10 @@ use serde::{Deserialize, Serialize};
 pub struct Recipe {
     /// The upstream version installed: the one the profile was checked at.
     /// With [`patch`](Recipe::patch), the install is of a version of its
-    /// own ([`Recipe::installed_version`]).
+    /// own ([`Recipe::installed_version`]). What's installed (`install`,
+    /// such as its lockfile) changes only with it: a new patch level of
+    /// the same version is made from an earlier level's install, keeping
+    /// all of it ([`Patch`]).
     pub version: String,
     /// How to install it.
     pub install: Install,
@@ -173,8 +179,8 @@ pub enum Unpack {
 }
 
 /// How CAF changes an adapter once it's installed, to fix what upstream
-/// hasn't yet: exact edits to files npm installed, kept in CAF's
-/// repository and compiled in, never downloaded.
+/// hasn't yet: exact edits to files npm installed, or a download
+/// unpacked, kept in CAF's repository and compiled in, never downloaded.
 ///
 /// # Patching
 ///
@@ -188,7 +194,9 @@ pub enum Unpack {
 /// into place; only then is the install complete. One that stops on the
 /// way fails ([`InstallFailure::Patch`](crate::agent::InstallFailure::Patch))
 /// and is removed, as a failed download is: CAF never runs a half-patched
-/// adapter.
+/// adapter. So is one whose patch names a file twice, or a file whose
+/// name holds `.caf-`, as CAF names the files it keeps beside one, or
+/// that already has a file named as its original beside it.
 ///
 /// # A new patch level
 ///
@@ -200,6 +208,13 @@ pub enum Unpack {
 /// in place of its patched copy, and the new patch made as above. Nothing
 /// is ever changed in place, so the earlier install, and anything running
 /// from it, is untouched.
+///
+/// Everything else in it is the earlier install's: its whole
+/// `node_modules`, whatever the recipe's lockfile now says. So what a
+/// recipe installs (its lockfile, or its downloads) changes only with a
+/// new upstream [`version`](Recipe::version), never between patch levels
+/// of one; a test pins what each built-in recipe installs to its version,
+/// for every version CAF has shipped.
 ///
 /// # Guarantees
 ///
@@ -242,7 +257,7 @@ pub struct FilePatch {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Edit {
     /// The text to find: it must appear exactly once, as the edits before
-    /// it left the file.
+    /// it left the file, and so can't be empty.
     pub find: String,
     /// What it becomes.
     pub replace: String,
@@ -266,6 +281,12 @@ pub enum PatchError {
     },
     /// The edits were made, but the result isn't the one tested.
     NotAsTested,
+    /// An edit's text, by its place in the list, from 0, is empty: it
+    /// would be found everywhere, and in an empty file exactly once.
+    NothingToFind {
+        /// The edit.
+        edit: usize,
+    },
 }
 
 /// What the original of a patched file is named with, beside it:
@@ -278,7 +299,10 @@ impl Recipe {
     /// [`patch`](Recipe::patch), `+caf.` and its level: `0.98.0+caf.1`.
     #[must_use]
     pub fn installed_version(&self) -> String {
-        todo!()
+        match &self.patch {
+            Some(patch) => format!("{}+caf.{}", self.version, patch.level),
+            None => self.version.clone(),
+        }
     }
 }
 
@@ -316,9 +340,55 @@ impl FilePatch {
     /// If `original` isn't as pinned, an edit's text isn't there exactly
     /// once, or the result isn't as tested.
     pub fn apply(&self, original: &[u8]) -> Result<Vec<u8>, PatchError> {
-        let _ = original;
-        todo!()
+        if !hashes_to(original, &self.before) {
+            return Err(PatchError::NotAsPinned);
+        }
+        let mut text = original.to_vec();
+        for (edit, Edit { find, replace }) in self.edits.iter().enumerate() {
+            let find = find.as_bytes();
+            if find.is_empty() {
+                return Err(PatchError::NothingToFind { edit });
+            }
+            let at = memchr::memmem::find(&text, find);
+            let times = at.map_or(0, |at| times_in(&text[at..], find));
+            let (Some(at), 1) = (at, times) else {
+                return Err(PatchError::Found { edit, times });
+            };
+            text.splice(at..at + find.len(), replace.bytes());
+        }
+        if !hashes_to(&text, &self.after) {
+            return Err(PatchError::NotAsTested);
+        }
+        Ok(text)
     }
+}
+
+/// Whether `bytes`' SHA-256 is `sha256`, in hex.
+fn hashes_to(bytes: &[u8], sha256: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    let hex = Sha256::digest(bytes)
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
+    hex.eq_ignore_ascii_case(sha256.trim())
+}
+
+/// How many times `find` appears in `text`, overlaps counted: `aa` is
+/// twice in `aaa`, so an edit can't pick one of them.
+fn times_in(text: &[u8], find: &[u8]) -> usize {
+    let mut times = 0;
+    let mut from = 0;
+    while let Some(at) = text
+        .get(from..)
+        .and_then(|rest| memchr::memmem::find(rest, find))
+    {
+        times += 1;
+        from += at + 1;
+    }
+    times
 }
 
 impl Edit {
@@ -477,3 +547,6 @@ pub enum SignedInAs {
     /// Signed in, but the agent didn't say how.
     Unknown,
 }
+
+#[cfg(test)]
+mod tests;

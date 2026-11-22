@@ -32,6 +32,15 @@
 //! > files, run commands or browse the web, except through tools
 //! > framewright gives you. Answer in Markdown.
 //!
+//! A recipe's `install`, such as an npm lockfile, changes only with its
+//! upstream `version`. A patch fixed or added at the same version is a
+//! new patch level, and a machine with an earlier level installed makes
+//! it from that, keeping its `node_modules` and all: a changed lockfile
+//! would never reach it (see [`Patch`](crate::install::Patch)). Nor
+//! would a changed download. A test pins what each recipe installs, its
+//! manifest and lockfile or its downloads, to its version, for every
+//! version CAF has shipped.
+//!
 //! Profiles are CAF's own. Apps choose one for each agent but never
 //! change one. Users will be able to add profiles as data in CAF's shared
 //! folder (*later*).
@@ -273,8 +282,12 @@ impl Builtin {
     /// The profile with this [slug](Builtin::slug), if any.
     #[must_use]
     pub fn from_slug(slug: &str) -> Option<Self> {
-        // Every profile in this build: one added is added here too.
-        let every = [
+        Self::every().into_iter().find(|each| each.slug() == slug)
+    }
+
+    /// Every profile in this build: one added is added here too.
+    pub(crate) fn every() -> Vec<Self> {
+        vec![
             Self::ClaudeAgentAcp,
             #[cfg(test)]
             Self::TestNpm,
@@ -286,8 +299,7 @@ impl Builtin {
             Self::TestModels,
             #[cfg(feature = "fake")]
             Self::Fake,
-        ];
-        every.into_iter().find(|each| each.slug() == slug)
+        ]
     }
 
     /// The name its adapter gives in `initialize`.
@@ -1247,13 +1259,21 @@ pub(crate) mod tests {
         }
     }
 
+    thread_local! {
+        /// The patch the npm agent's recipe has, on this thread: none, but
+        /// in tests of patching, which set it before they make a core.
+        pub(crate) static NPM_PATCH: std::cell::RefCell<Option<crate::install::Patch>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
     /// The test agent installed with npm: it signs in through its adapter,
     /// whose link opens a browser, and says by itself whether it's signed
-    /// in. It has no status command, and takes no paste.
+    /// in. It has no status command, and takes no paste. It's patched as
+    /// [`NPM_PATCH`] says.
     pub(crate) fn npm_recipe() -> Recipe {
         Recipe {
             version: "2.0.0".to_owned(),
-            patch: None,
+            patch: NPM_PATCH.with_borrow(Clone::clone),
             install: Install::Npm(NpmPackage {
                 manifest: r#"{"dependencies":{"test-npm-acp":"2.0.0"}}"#.to_owned(),
                 lockfile: r#"{"name":"test","lockfileVersion":3,"packages":{}}"#.to_owned(),
@@ -2090,6 +2110,174 @@ pub(crate) mod tests {
         assert_eq!(
             fake.spent(&answered(split)).0,
             Reported::Rows(vec![reckoned(Some("small"), [3, 0, 0, 4], None)])
+        );
+    }
+
+    /// The SHA-256, in hex, of what a recipe installs from: an npm
+    /// package's manifest, a NUL, and its lockfile, or each download's
+    /// platform, URL, SHA-256 and how it's unpacked, a line each.
+    fn install_pin(install: &Install) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        match install {
+            Install::Npm(package) => {
+                hash.update(package.manifest.as_bytes());
+                hash.update([0]);
+                hash.update(package.lockfile.as_bytes());
+            }
+            Install::Download(artifacts) => {
+                for artifact in artifacts {
+                    let Artifact {
+                        platform,
+                        url,
+                        sha256,
+                        unpack,
+                    } = artifact;
+                    // Named here, not by `Debug`, which may change: a pin
+                    // never does.
+                    let unpack = match unpack {
+                        Unpack::No => "No",
+                        Unpack::Zip => "Zip",
+                        Unpack::TarGz => "TarGz",
+                    };
+                    hash.update(
+                        format!(
+                            "{} {} {url} {sha256} {unpack}\n",
+                            platform.os, platform.arch
+                        )
+                        .as_bytes(),
+                    );
+                }
+            }
+        }
+        hash.finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    /// What every recipe CAF has shipped installs, by profile and upstream
+    /// version ([`install_pin`]). An entry is never changed or removed: a
+    /// version's install is what it was when it shipped.
+    const PINNED: &[(&str, &str, &str)] = &[
+        (
+            "claude-agent-acp",
+            "0.98.0",
+            "343c4766583f92f868d10739cb474f50aeeb81c905f55109e7a87e9afea86263",
+        ),
+        (
+            "test-npm",
+            "2.0.0",
+            "38d97fcbe7dbbb02a4a8894ca67f215ea7ed19d67df17d114eac604017bb11f6",
+        ),
+        (
+            "test-download",
+            "1.4.0",
+            "7f0b5ce29111f3e84e5699f0ced2efeb3323eaa9549cf5bdc707df31d93b4da5",
+        ),
+        // Nothing: an empty list of downloads.
+        (
+            "test-plain",
+            "1.0.0",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+        (
+            "test-models",
+            "1.0.0",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+        (
+            "caf-fake-agent",
+            "0.0.0",
+            "dbbbc7e0ddbf0e3b68bd88f926d18affb96447f7a73e1322ec50ff49c7bdca49",
+        ),
+    ];
+
+    #[test]
+    fn what_a_recipe_installs_changes_only_with_its_upstream_version() {
+        // A new patch level is prepared from an earlier level's install,
+        // its `node_modules` and all, with nothing downloaded: so what's
+        // installed can't change while the upstream version stays, or go
+        // back to an old version with something new.
+        for builtin in Builtin::every() {
+            let recipe = builtin.recipe();
+            let (slug, version) = (builtin.slug(), recipe.version.as_str());
+            let found = install_pin(&recipe.install);
+            let Some(&(_, _, pin)) =
+                (PINNED.iter()).find(|&&(each, at, _)| each == slug && at == version)
+            else {
+                panic!("{slug} {version} is new: pin what it installs, {found}, in PINNED")
+            };
+            assert_eq!(
+                pin, found,
+                "what {slug} {version} installs changed. That's allowed only with a new upstream \
+                 version (Recipe::version): a new patch level of the same version is prepared \
+                 from an earlier level's install, node_modules and all, so a machine that has \
+                 one would never install the change. Move to a new version, and pin that in \
+                 PINNED beside this one, which stays."
+            );
+        }
+    }
+
+    /// What's wrong with `patch`, for CAF to make it: nothing, if it can.
+    fn problems(patch: &crate::install::Patch) -> Vec<String> {
+        let mut problems = Vec::new();
+        if patch.level == 0 {
+            problems.push("patch levels start at 1".to_owned());
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for file in &patch.files {
+            let path = file.path.as_str();
+            if !seen.insert(path) {
+                problems.push(format!("{path} is patched twice"));
+            }
+            if !(path.split('/')).all(|part| !part.is_empty() && part != "." && part != "..") {
+                problems.push(format!("{path} isn't a plain path inside the install"));
+            }
+            // Names CAF keeps for the original beside it, and the patched
+            // file as it's written.
+            if path.rsplit('/').next().unwrap_or(path).contains(".caf-") {
+                problems.push(format!("{path} is named as CAF names its own files"));
+            }
+            if file.edits.iter().any(|edit| edit.find.is_empty()) {
+                problems.push(format!("an edit of {path} has no text to find"));
+            }
+        }
+        problems
+    }
+
+    #[test]
+    fn every_patch_is_one_caf_can_make() {
+        for builtin in Builtin::every() {
+            if let Some(patch) = builtin.recipe().patch {
+                assert_eq!(problems(&patch), Vec::<String>::new(), "{}", builtin.slug());
+            }
+        }
+        // What the check finds.
+        let file = |path: &str, find: &str| {
+            crate::install::FilePatch::new(path, "", "", vec![crate::install::Edit::new(find, "x")])
+        };
+        let bad = crate::install::Patch::new(
+            0,
+            vec![
+                file("dist/a.js", "a"),
+                file("dist/a.js", "a"),
+                file("dist/../a.js", "a"),
+                file("/a.js", "a"),
+                file("dist/a.js.caf-original", "a"),
+                file("b.js", ""),
+            ],
+        );
+        assert_eq!(
+            problems(&bad),
+            [
+                "patch levels start at 1",
+                "dist/a.js is patched twice",
+                "dist/../a.js isn't a plain path inside the install",
+                "/a.js isn't a plain path inside the install",
+                "dist/a.js.caf-original is named as CAF names its own files",
+                "an edit of b.js has no text to find",
+            ]
         );
     }
 }

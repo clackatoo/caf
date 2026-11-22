@@ -45,7 +45,7 @@ folder: string,
 install: Install, 
 /**
  * How to patch it once installed, as the last step: see
- * [`Patch`](crate::install::Patch).
+ * [`crate::install::Patch`].
  */
 patch: Patch | null, 
 /**
@@ -79,7 +79,12 @@ from: string,
 /**
  * The patch to make.
  */
-patch: Patch, } } | { "type": "Remove", "value": { 
+patch: Patch, 
+/**
+ * The agent's private folder, if its recipe gives it one: made
+ * as [`Install`](SetupDirective::Install) makes it.
+ */
+private: string | null, } } | { "type": "Remove", "value": { 
 /**
  * Its ticket.
  */

@@ -447,6 +447,16 @@ pub(super) struct Setup {
     pub(super) fresh: BTreeSet<String>,
     /// Work the setup driver is doing, by ticket.
     pub(super) jobs: BTreeMap<Ticket, Job>,
+    /// Folders preparing failed for: they're installed as any other, and
+    /// never prepared again, so a failure can't repeat itself.
+    pub(super) unprepared: BTreeSet<String>,
+    /// Agents the host asked to install before any survey answered, whose
+    /// recipe patches them: whether they're prepared from an earlier level
+    /// or downloaded waits for the survey.
+    pub(super) deferred: BTreeSet<AgentName>,
+    /// Folders the user stopped installing this run: a survey never
+    /// prepares one by itself, until the host asks to install it again.
+    pub(super) declined: BTreeSet<String>,
 }
 
 /// Where one agent stands.
@@ -511,6 +521,12 @@ pub(super) enum Work {
     Install {
         /// The folder.
         folder: String,
+        /// The earlier patch level it's prepared from, with nothing
+        /// downloaded, if it is.
+        from: Option<String>,
+        /// The host asked for it: a prepare it asked for that fails is
+        /// downloaded at once, as the user agreed to install it.
+        asked: bool,
     },
     /// Removing this folder.
     Remove {

@@ -6,7 +6,7 @@
 export type Edit = { 
 /**
  * The text to find: it must appear exactly once, as the edits before
- * it left the file.
+ * it left the file, and so can't be empty.
  */
 find: string, 
 /**

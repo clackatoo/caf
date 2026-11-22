@@ -11,6 +11,7 @@ mod guarantees;
 mod holding;
 mod limits;
 mod own_tools;
+mod patching;
 mod permissions;
 mod process;
 mod saving;

@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use caf_core::agent::InstallFailure;
 use caf_core::event::SetupEvent;
-use caf_core::install::{Artifact, Install, NpmPackage, Platform, Unpack};
+use caf_core::install::{Artifact, Install, NpmPackage, Patch, Platform, Unpack};
 use caf_core::time::Wall;
 use rustix::fs::FlockOperation;
 use sha2::{Digest, Sha256};
@@ -99,6 +99,8 @@ pub(super) struct Folders {
     pub(super) private: Option<String>,
     /// About how many bytes the agent takes once installed.
     pub(super) size: u64,
+    /// How it's patched once installed, if it is.
+    pub(super) patch: Option<Patch>,
 }
 
 /// Installs `install` as `root/folder`, making the agent's private folder
@@ -180,6 +182,14 @@ async fn installing(
         // No other kind is given yet.
         _ => Err(other("CAF doesn't know this kind of install".into())),
     };
+    // Patched last, so an install is never complete unpatched.
+    let built = match (built, folders.patch.clone()) {
+        (Ok(()), Some(patch)) => {
+            let build = build.clone();
+            blocking_patch(move || super::patch::patch_install(&build, &patch)).await
+        }
+        (built, _) => built,
+    };
     let done = match built {
         Ok(()) => placed(&build, &place, files, options, stop).await,
         Err(failure) => Err(failure),
@@ -189,6 +199,154 @@ async fn installing(
     }
     drop(lock);
     done
+}
+
+/// What a prepare makes: the install's folder, from the earlier one, and
+/// the agent's private folder if it has one.
+pub(super) struct Prepared {
+    pub(super) folder: String,
+    pub(super) from: String,
+    pub(super) private: Option<String>,
+}
+
+/// Makes `root/folder` from the complete install `root/from`, an earlier
+/// patch level of the same upstream version, with nothing downloaded: its
+/// files linked into a new folder, those it patched put back, and that
+/// patched with `patch`. The agent's private folder is made as an
+/// install makes it.
+pub(super) async fn prepare(
+    root: PathBuf,
+    folders: Prepared,
+    patch: Patch,
+    options: Options,
+    reporter: Reporter,
+    mut stop: oneshot::Receiver<()>,
+) {
+    let outcome = preparing(&root, &folders, patch, &options, &mut stop).await;
+    reporter.last(match outcome {
+        Ok(()) => SetupEvent::Installed,
+        Err(failure) => SetupEvent::InstallFailed(failure),
+    });
+}
+
+/// Prepares, holding `.lock` throughout as an install does, and removes
+/// what it built if it fails. `from` is only ever read.
+async fn preparing(
+    root: &Path,
+    folders: &Prepared,
+    patch: Patch,
+    options: &Options,
+    stop: &mut oneshot::Receiver<()>,
+) -> Result<(), InstallFailure> {
+    let (folder, from) = (folders.folder.as_str(), folders.from.as_str());
+    for name in [folder, from] {
+        if !is_install_name(name) {
+            return Err(other(format!("{name:?} can't be an install's name")));
+        }
+    }
+    if folder == from {
+        return Err(other(format!("{folder} can't be prepared from itself")));
+    }
+    if let Some(private) = &folders.private
+        && !is_private_name(private)
+    {
+        return Err(other(format!(
+            "{private:?} can't be a private folder's name"
+        )));
+    }
+    let lock = wait_for_lock(root, stop).await?;
+    let place = root.join(folder);
+    let earlier = root.join(from);
+    let build = root.join(hidden_name(BUILD, folder));
+    let made = {
+        let (place, earlier, build, root) = (
+            place.clone(),
+            earlier.clone(),
+            build.clone(),
+            root.to_owned(),
+        );
+        let private = folders.private.as_ref().map(|private| root.join(private));
+        blocking(move || {
+            if let Some(private) = &private {
+                make_private(private)?;
+            }
+            // Under the lock, so it's complete if it's there.
+            if place.is_dir() {
+                return Ok(None);
+            }
+            let complete = fs::symlink_metadata(&earlier).is_ok_and(|found| found.is_dir());
+            if !complete {
+                return Ok(Some(false));
+            }
+            clean(&root);
+            fs::DirBuilder::new().mode(0o755).create(&build)?;
+            Ok(Some(true))
+        })
+        .await
+        .map_err(failure)?
+    };
+    match made {
+        None => return Ok(()),
+        Some(false) => return Err(other(format!("{from} isn't installed"))),
+        Some(true) => {}
+    }
+    let stopped = Arc::new(AtomicBool::new(false));
+    let making = {
+        let (earlier, build, stopped) = (earlier, build.clone(), Arc::clone(&stopped));
+        let (from, linking) = (from.to_owned(), linking(options));
+        tokio::task::spawn_blocking(move || {
+            let linked = match super::patch::link_earlier(&earlier, &build, linking, &stopped) {
+                Ok(Some(linked)) => linked,
+                Ok(None) => return Err(InstallFailure::Stopped),
+                Err(error) => {
+                    return Err(match failure(error) {
+                        InstallFailure::Other(why) => {
+                            other(format!("preparing it from {from} failed: {why}"))
+                        }
+                        failed => failed,
+                    });
+                }
+            };
+            super::patch::patch_install(&build, &patch)?;
+            linked.finish().map_err(failure)
+        })
+    };
+    tokio::pin!(making);
+    let made = tokio::select! {
+        made = &mut making => made,
+        _ = &mut *stop => {
+            // It sees that between entries, and ends.
+            stopped.store(true, Ordering::Relaxed);
+            let _ = making.await;
+            Ok(Err(InstallFailure::Stopped))
+        }
+    };
+    let made = made.unwrap_or_else(|_| Err(other("preparing it panicked".into())));
+    // What was linked is on the disk already: only folders, copies and
+    // the patched files are new, and those were synced as written.
+    let done = match made {
+        Ok(()) => placed(&build, &place, false, options, stop).await,
+        Err(failure) => Err(failure),
+    };
+    if done.is_err() {
+        blocking(move || remove_all(&build)).await.ok();
+    }
+    drop(lock);
+    done
+}
+
+/// How an earlier install is linked: only tests change it.
+fn linking(options: &Options) -> super::patch::Linking {
+    #[cfg(test)]
+    return super::patch::Linking {
+        pause: options.link_pause.unwrap_or_default(),
+        copy: options.copy_only,
+    };
+    #[cfg(not(test))]
+    {
+        let _ = options;
+        super::patch::Linking::default()
+    }
 }
 
 /// Removes `root/folder`, unless something runs from it.
@@ -448,8 +606,30 @@ fn clean(root: &Path) {
     }
 }
 
-/// Removes a folder and all in it, if it's there.
+/// Removes a folder and all in it, if it's there: an install's, built or
+/// whole, whose folders may be any permissions, so each is first made the
+/// user's to change, as far as it can be. What can't be is left for the
+/// removal itself to fail on, saying why.
 fn remove_all(path: &Path) -> io::Result<()> {
+    let mut folders = vec![path.to_owned()];
+    while let Some(folder) = folders.pop() {
+        let Ok(found) = fs::symlink_metadata(&folder) else {
+            continue;
+        };
+        if !found.is_dir() {
+            continue;
+        }
+        let mode = found.permissions().mode() | 0o700;
+        let _ = fs::set_permissions(&folder, fs::Permissions::from_mode(mode));
+        let Ok(entries) = fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                folders.push(entry.path());
+            }
+        }
+    }
     match fs::remove_dir_all(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         removed => removed,
@@ -1412,6 +1592,15 @@ async fn blocking<T: Send + 'static>(
         .unwrap_or_else(|_| Err(io::Error::other("the work panicked")))
 }
 
+/// Runs patching work on a blocking thread.
+async fn blocking_patch(
+    work: impl FnOnce() -> Result<(), InstallFailure> + Send + 'static,
+) -> Result<(), InstallFailure> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|_| Err(other("patching panicked".into())))
+}
+
 /// Bytes as lower-case hex.
 pub(super) fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -1427,7 +1616,7 @@ fn other(why: String) -> InstallFailure {
 }
 
 /// An install failure for an error on the disk.
-fn failure(error: io::Error) -> InstallFailure {
+pub(super) fn failure(error: io::Error) -> InstallFailure {
     io_failure(&error, false)
 }
 
@@ -1443,6 +1632,26 @@ fn io_failure(error: &io::Error, network: bool) -> InstallFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_removal_that_cant_be_made_says_why() {
+        // Its permissions are made the user's to change, but not the
+        // folder it's in: it can't be taken out of that, and says so.
+        let at = std::env::temp_dir().join(format!("caf-remove-{}", std::process::id()));
+        let (parent, folder) = (at.join("parent"), at.join("parent/install"));
+        fs::create_dir_all(folder.join("bin")).unwrap();
+        fs::set_permissions(folder.join("bin"), fs::Permissions::from_mode(0o555)).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o555)).unwrap();
+        let removed = remove_all(&folder);
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+        // Root may remove it anyway.
+        if !rustix::process::geteuid().is_root() {
+            let failed = removed.expect_err("its folder can't be written in");
+            assert_eq!(failed.kind(), io::ErrorKind::PermissionDenied);
+        }
+        remove_all(&at).unwrap();
+        assert!(!at.exists());
+    }
 
     #[test]
     fn install_names_are_plain_and_never_private() {
