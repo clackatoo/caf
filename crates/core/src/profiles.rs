@@ -36,7 +36,7 @@
 //! upstream `version`. A patch fixed or added at the same version is a
 //! new patch level, and a machine with an earlier level installed makes
 //! it from that, keeping its `node_modules` and all: a changed lockfile
-//! would never reach it (see [`Patch`](crate::install::Patch)). Nor
+//! would never reach it (see [`Patch`]). Nor
 //! would a changed download. A test pins what each recipe installs, its
 //! manifest and lockfile or its downloads, to its version, for every
 //! version CAF has shipped.
