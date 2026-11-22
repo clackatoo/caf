@@ -17,8 +17,10 @@ is left before they run out.
 
 ## Where they come from
 
-Only Claude says, for now, and only for an account signed in with a
-subscription, not an API key. Its adapter tells a session of them in a
+Only Claude says, for now, and only, as the Claude Agent SDK documents
+its `rate_limit_info`, for "claude.ai subscription users": an account
+signed in with an API key should expect none. Its adapter tells a session
+of them in a
 `usage_update`, whenever a window's whole percent, reset or state
 changes, once the turn has had some of the agent's reply. An agent that
 never says has none.
@@ -45,8 +47,13 @@ the same profile, shares them, as they share one sign-in. They come with
 the agent's status, as `AgentStatus::limits`, the same for every viewer:
 
 ```rust
+use std::time::{SystemTime, UNIX_EPOCH};
+use caf_core::time::Wall;
+
 let mut agents = caf.watch_agents();
 while let Some(statuses) = agents.next().await {
+    let since = SystemTime::now().duration_since(UNIX_EPOCH)?;
+    let now = Wall(i64::try_from(since.as_millis())?); // milliseconds since the epoch
     for status in &statuses {
         for window in &status.limits.windows {
             draw_limit(&status.name, window, window.pace(now)); // see "Showing them"
@@ -113,6 +120,10 @@ for (const agent of caf.agents) {
   or `null` with none.
 - `pace` and `length` match caf-core's `LimitWindow::pace` and
   `WindowKind::length` exactly.
+
+Each takes an agent's status as a watch gives it, read-only. A kind of
+window newer than the SDK has no length and no pace, and is named by its
+type.
 
 Pace and resets move with the clock, not with news, so draw them again as
 time passes: a viewer has no other word that a window is nearer its
