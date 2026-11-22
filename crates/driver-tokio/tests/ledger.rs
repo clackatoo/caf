@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 
 /// Every Rust file under `crates/`.
 fn sources() -> Vec<PathBuf> {
-    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let crates = (Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .canonicalize())
+    .unwrap();
     let mut found = Vec::new();
     let mut folders = vec![crates];
     while let Some(folder) = folders.pop() {
@@ -72,11 +75,11 @@ fn no_test_asks_for_the_users_ledger() {
     for file in sources() {
         let path = file.to_string_lossy().into_owned();
         // caf-usage's own tests check where the folder is.
-        if path.contains("/usage/") || file.ends_with("tests/ledger.rs") {
+        if path.contains("/crates/usage/") || file.ends_with("tests/ledger.rs") {
             continue;
         }
         let text = std::fs::read_to_string(&file).unwrap();
-        let in_tests = path.contains("/tests/");
+        let in_tests = path.contains("/tests/") || file.ends_with("tests.rs");
         // A file's own tests come at its end.
         let from = if in_tests {
             0
