@@ -838,6 +838,75 @@ fn models_are_named_as_their_lines_were_recorded_or_as_their_profile_names_them(
 }
 
 #[test]
+fn of_lines_ending_at_once_the_later_in_the_ledger_names_the_model() {
+    let folder = Folder::new("ties");
+    let at = "2026-11-22T10:00:00Z";
+    let haiku = |chat, turn, name| on(line(at, chat, turn), "claude-haiku-5-5", Some(name), None);
+    // In one app's file, the line written last.
+    record(
+        folder.path(),
+        APP,
+        [haiku(1, 1, "First"), haiku(1, 2, "Second")],
+    );
+    let summary = november(folder.path());
+    assert_eq!(
+        summary.names,
+        [("claude-haiku-5-5".to_owned(), "Second".to_owned())]
+    );
+    // Across apps, the app last by name, as apps are read in that order.
+    let mut theirs = haiku(2, 1, "Eyespy's");
+    theirs["app"] = json!("eyespy");
+    record(folder.path(), "eyespy", [theirs]);
+    let summary = november(folder.path());
+    assert_eq!(
+        summary.names,
+        [("claude-haiku-5-5".to_owned(), "Eyespy's".to_owned())]
+    );
+}
+
+#[test]
+fn an_empty_name_recorded_is_no_name() {
+    let folder = Folder::new("empty-names");
+    let acp = Some("claude-agent-acp");
+    record(
+        folder.path(),
+        APP,
+        [
+            // Named by its profile, as if it had been recorded with none.
+            on(
+                line("2026-11-22T10:00:00Z", 1, 1),
+                "claude-opus-5-5",
+                Some(""),
+                acp,
+            ),
+            // An empty name later doesn't hide an earlier one.
+            on(
+                line("2026-11-22T09:00:00Z", 1, 2),
+                "claude-haiku-5-5",
+                Some("Haiku"),
+                None,
+            ),
+            on(
+                line("2026-11-22T11:00:00Z", 1, 3),
+                "claude-haiku-5-5",
+                Some("  "),
+                None,
+            ),
+            // Nor is one with neither named.
+            on(line("2026-11-22T10:00:00Z", 1, 4), "gpt-9", Some(""), None),
+        ],
+    );
+    let summary = november(folder.path());
+    assert_eq!(
+        summary.names,
+        [
+            ("claude-haiku-5-5".to_owned(), "Haiku".to_owned()),
+            ("claude-opus-5-5".to_owned(), "Opus 5.5".to_owned()),
+        ]
+    );
+}
+
+#[test]
 fn a_summary_with_no_names_says_none() {
     let folder = Folder::new("unnamed");
     record(folder.path(), APP, [line("2026-11-22T10:00:00Z", 1, 1)]);
