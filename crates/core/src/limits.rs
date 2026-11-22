@@ -13,6 +13,9 @@
 //! - **the limit itself** (`rateLimitType`, `utilization`, `resetsAt`,
 //!   `status`) is the one that matters most just then, and fills in any
 //!   window `unifiedWindows` doesn't hold, such as a model's own week.
+//!   Claude may leave its `utilization` out: then the threshold of it
+//!   the account has passed (`surpassedThreshold`), if it says, is read
+//!   as its share, though at least that much may be used.
 //!   For a window both hold, `unifiedWindows`' share, reset and status
 //!   win, and the limit's stand in for any it doesn't say; but the limit
 //!   refused is never hidden: the window is refused, and all used.

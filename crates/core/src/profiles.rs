@@ -828,6 +828,7 @@ const MOST_REPORTED: usize = 16;
 fn claude_limits(update: &Value, now: Wall) -> Option<AccountLimits> {
     let info = update.pointer("/_meta/_claude~1rateLimit")?;
     let limit = (info.get("rateLimitType").and_then(Value::as_str)).and_then(claude_window_kind);
+    let own = limits_own(info);
     let mut windows: BTreeMap<WindowKind, LimitWindow> = BTreeMap::new();
     let unified = (info.get("unifiedWindows").and_then(Value::as_object))
         .into_iter()
@@ -837,7 +838,7 @@ fn claude_limits(update: &Value, now: Wall) -> Option<AccountLimits> {
             continue;
         };
         let fields = if limit.as_ref() == Some(&kind) {
-            with_limits_own(fields, info)
+            with_limits_own(fields, &own)
         } else {
             fields.clone()
         };
@@ -853,7 +854,7 @@ fn claude_limits(update: &Value, now: Wall) -> Option<AccountLimits> {
     }
     if let Some(kind) = limit.clone()
         && !windows.contains_key(&kind)
-        && let Some(window) = claude_window(kind, info, now)
+        && let Some(window) = claude_window(kind, &own, now)
     {
         windows.insert(window.kind.clone(), window);
     }
@@ -872,6 +873,27 @@ fn claude_limits(update: &Value, now: Wall) -> Option<AccountLimits> {
         extra_usage,
         cleared: None,
     })
+}
+
+/// What the limit itself says of its window, in `info`: its share, reset
+/// and status. With no share, the threshold of it the account has passed
+/// (`surpassedThreshold`, 0 to 1), if it says, stands in: at least that
+/// much is used.
+fn limits_own(info: &Value) -> Value {
+    let mut own = serde_json::Map::new();
+    for key in ["utilization", "resetsAt", "status"] {
+        if let Some(value) = info.get(key) {
+            own.insert(key.to_owned(), value.clone());
+        }
+    }
+    if own.get("utilization").and_then(Value::as_f64).is_none()
+        && let Some(passed) = info
+            .get("surpassedThreshold")
+            .filter(|passed| passed.is_number())
+    {
+        own.insert("utilization".to_owned(), passed.clone());
+    }
+    Value::Object(own)
 }
 
 /// A unified window's `fields`, with what the limit itself, `limit`, of
@@ -1930,6 +1952,47 @@ pub(crate) mod tests {
         assert_eq!(kinds[1], WindowKind::ModelWeek("zz".into()));
         assert_eq!(kinds[2], WindowKind::Other("w0000".into()));
         assert_eq!(kinds[15], WindowKind::Other("w0013".into()));
+    }
+
+    #[test]
+    fn a_limit_with_no_share_but_a_threshold_passed_reads_as_at_least_that() {
+        let info = json!({ "status": "allowed_warning", "rateLimitType": "seven_day_opus",
+            "surpassedThreshold": 0.75, "resetsAt": 1_795_400_000_i64 });
+        assert_eq!(
+            claude_reads(info).expect("they read").windows,
+            [read(
+                WindowKind::ModelWeek("opus".into()),
+                75,
+                Some(1_795_400_000),
+                LimitState::Warning
+            )]
+        );
+        // A share said wins over it, and a unified window of its kind
+        // with none takes it.
+        let info =
+            json!({ "rateLimitType": "five_hour", "utilization": 0.8, "surpassedThreshold": 0.5 });
+        assert_eq!(claude_reads(info).expect("they read").windows[0].used, 80);
+        let info = json!({ "rateLimitType": "seven_day", "surpassedThreshold": 0.9,
+            "unifiedWindows": { "seven_day": { "resetsAt": 1_795_300_000_i64 } } });
+        assert_eq!(
+            claude_reads(info).expect("they read").windows,
+            [read(
+                WindowKind::Week,
+                90,
+                Some(1_795_300_000),
+                LimitState::Fine
+            )]
+        );
+        // Refused is still all used.
+        let info = json!({ "status": "rejected", "rateLimitType": "five_hour", "surpassedThreshold": 0.9 });
+        assert_eq!(claude_reads(info).expect("they read").windows[0].used, 100);
+        // A unified window's own threshold isn't read as its share: it
+        // says less than it has.
+        let info = json!({ "unifiedWindows": { "five_hour": { "surpassedThreshold": 0.5 } } });
+        assert_eq!(claude_reads(info), None);
+        // Nor is a threshold that isn't a number.
+        let info = json!({ "rateLimitType": "five_hour", "surpassedThreshold": "0.5" });
+        assert_eq!(claude_reads(info), None);
     }
 
     #[test]
