@@ -204,6 +204,18 @@
 //! {"respond": {"to": "prompt", "result": {"stopReason": "end_turn"}}}
 //! ```
 //!
+//! What a turn spent, as Claude's adapter says it: the session's cost so
+//! far in a `usage_update`, just before the prompt's answer, and the
+//! turn's tokens in the answer, as ACP's `usage` and split by model in
+//! `_meta.quota.model_usage`. CAF's fake profile reads both as it reads
+//! Claude's; any other profile reads only `usage`. Counts are whole
+//! tokens, input uncached, thinking part of output.
+//!
+//! ```text
+//! {"update": {"session": "s1", "update": {"sessionUpdate": "usage_update", "used": 24928, "size": 200000, "cost": {"amount": 0.0125, "currency": "USD"}}}}
+//! {"respond": {"to": "prompt", "result": {"stopReason": "end_turn", "usage": {"inputTokens": 2, "cachedReadTokens": 12799, "cachedWriteTokens": 12123, "outputTokens": 4, "totalTokens": 24928}, "_meta": {"quota": {"model_usage": [{"model": "small", "token_count": {"totalTokens": 24928, "inputTokens": 2, "cachedInputTokens": 12799, "cachedWriteTokens": 12123, "outputTokens": 4, "reasoningOutputTokens": 0}}]}}}}}
+//! ```
+//!
 //! Asking permission, and checking the client allowed it:
 //!
 //! ```text

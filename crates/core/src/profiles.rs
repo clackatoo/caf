@@ -112,6 +112,14 @@
 //! chat's choice itself once a session opens. A model the agent changes
 //! by itself, such as on a refusal, it reports in `config_option_update`.
 //!
+//! What a turn **spent** ([`usage`](crate::usage)) it says in its answer
+//! to the prompt: ACP's `usage`, and the same split by model in
+//! `_meta.quota.model_usage`, which counts the subagents and compaction
+//! the turn set off too, and so is what CAF keeps; it's empty on a turn
+//! stopped, whose `usage` CAF keeps instead. Both count input uncached,
+//! and thinking as part of output. What the session has cost so far it
+//! says in `usage_update`, just before the answer.
+//!
 //! It declares **nothing of JetBrains AIR**. Any AIR key switches the
 //! adapter into AIR's shapes for the whole connection: reads and searches
 //! arrive without their text, subagents' words stop, failures move into
@@ -140,6 +148,10 @@
 //! version, keeps it: its scripts may say any version they like. One
 //! that names itself otherwise falls to the cautious profile, and its
 //! chats get no session, as any other adapter's.
+//!
+//! The fake reads what a turn spent as the Claude profile does, so a
+//! script can send a split by model; the test agents read only ACP's
+//! `usage`, as any agent might send.
 //!
 //! The fake, and the test agents but one, list their settings as Claude
 //! does, as ACP's session config options, with fast mode the option
