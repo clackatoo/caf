@@ -84,6 +84,9 @@ mod tests {
         Artifact, Bundled, EnvValue, Install, LinkFrom, Needs, NpmPackage, Platform, Program,
         Recipe, SignIn, SignedInAs, Status, StatusCommand, Unpack,
     };
+    use crate::limits::{
+        AccountLimits, ExtraUsage, LimitState, LimitWindow, ProfileLimits, WindowKind,
+    };
     use crate::profiles::{AdapterInfo, Builtin, Checked, ProfileChoice, ProfileReport};
     use crate::question::{
         Answer, OptionId, OptionKind, Permission, PermissionOption, Question, QuestionKind,
@@ -268,6 +271,13 @@ mod tests {
             QuestionKind,
             SlowChoice,
             SlowToOpen,
+            // limits
+            AccountLimits,
+            ExtraUsage,
+            LimitState,
+            LimitWindow,
+            ProfileLimits,
+            WindowKind,
             // time
             End,
             Mono,

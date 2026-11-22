@@ -13,6 +13,7 @@ use crate::chat::{AppData, AppItem, NoAppData, NoAppItems, UserMessage};
 use crate::core::OpenChat;
 use crate::ids::{AgentName, ChatId, QuestionId, Shelf, Ticket, TurnId};
 use crate::install::{Platform, SignedInAs};
+use crate::limits::ProfileLimits;
 use crate::question::Answer;
 use crate::save::{CannotRestore, Header, RestoreChat, Saved};
 use crate::settings::SettingChoice;
@@ -71,6 +72,12 @@ pub enum Event<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     /// as it starts and whenever they change. Every chat's spend is worked
     /// out again with them.
     Prices(PriceTable),
+    /// What the usage driver keeps of profiles' account limits: every
+    /// profile's it holds, as it starts, and one's again whenever saving
+    /// it found news another app had kept. The core merges them into what
+    /// it has, window by window, the latest heard winning, and never saves
+    /// them back.
+    Limits(Vec<ProfileLimits>),
 }
 
 /// What the host asked for.

@@ -6,6 +6,7 @@
 mod asks;
 mod clean;
 mod frames;
+mod limits;
 mod procs;
 mod record;
 mod saving;
@@ -366,6 +367,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Event::Storage { ticket, event } => self.storage_event(now, ticket, event, out),
             Event::Setup { ticket, event } => self.setup_event(now, ticket, event, out),
             Event::Prices(prices) => self.prices_given(prices),
+            Event::Limits(limits) => self.limits_given(limits, out),
         }
         self.finish(now, out);
     }

@@ -242,8 +242,10 @@ pub enum Builtin {
 
 impl Builtin {
     /// A name for it that never changes, whatever a host calls the agent:
-    /// what its install folders are named after.
-    pub(crate) fn slug(self) -> &'static str {
+    /// what its install folders, and the file its account's
+    /// [limits](crate::limits) are kept in, are named after.
+    #[must_use]
+    pub fn slug(self) -> &'static str {
         match self {
             Self::ClaudeAgentAcp => "claude-agent-acp",
             #[cfg(test)]
@@ -257,6 +259,13 @@ impl Builtin {
             #[cfg(feature = "fake")]
             Self::Fake => "caf-fake-agent",
         }
+    }
+
+    /// The profile with this [slug](Builtin::slug), if any.
+    #[must_use]
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        let _ = slug;
+        todo!()
     }
 
     /// The name its adapter gives in `initialize`.
@@ -757,6 +766,20 @@ impl ProfileChoice {
             Self::Builtin(Builtin::Fake) => claude(),
             Self::Cautious => None,
         }
+    }
+
+    /// What an adapter with this profile says of its account's limits in
+    /// a `usage_update`, `update`, heard at `now`: Claude's adapter, and
+    /// the fake, say it in `_meta._claude/rateLimit` ([`crate::limits`]
+    /// says how it's read). `None` if it says nothing that reads.
+    #[allow(dead_code, reason = "drafted: the builder wires it in")]
+    pub(crate) fn limits(
+        &self,
+        update: &Value,
+        now: crate::time::Wall,
+    ) -> Option<crate::limits::AccountLimits> {
+        let _ = (update, now);
+        todo!()
     }
 }
 

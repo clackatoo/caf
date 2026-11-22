@@ -12,6 +12,7 @@ use crate::agent::SpawnCommand;
 use crate::chat::{AppData, AppItem, NoAppData, NoAppItems};
 use crate::ids::{ChangeNo, ChatId, Shelf, Ticket};
 use crate::install::{Install, LinkFrom, SignedInAs};
+use crate::limits::ProfileLimits;
 use crate::save::{Entry, Header, Saved};
 use crate::time::{Mono, Wall};
 use crate::usage::LedgerLine;
@@ -485,8 +486,19 @@ pub enum SetupDirective {
 ///   because LiteLLM's table was fetched or the user set a price of their
 ///   own.
 ///
+/// - **It keeps each profile's account limits** in a file of their own
+///   beside the ledger, every CAF app's to share
+///   (`limits/claude-agent-acp.json`, after the profile's
+///   [slug](crate::profiles::Builtin::slug)), and merges each save into
+///   what's there under the folder's lock, replacing the file in one
+///   step, so two apps never undo each other's later news. It tells the
+///   core what it holds as it starts, after the prices, and again
+///   whenever a save took in news the core didn't send
+///   ([`Event::Limits`](crate::Event::Limits)). A file it can't read or
+///   write is reported, and costs only keeping them across restarts.
+///
 /// A host that keeps no ledger drops these: its chats still record their
-/// usage and spend.
+/// usage and spend, and its agents' limits are kept while it runs.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -494,4 +506,10 @@ pub enum SetupDirective {
 pub enum UsageDirective {
     /// Add a turn's line to the ledger.
     Record(Box<LedgerLine>),
+    /// Keep a profile's account limits: merge them with those kept,
+    /// window by window, the latest heard winning, and dropping what was
+    /// heard before the later `cleared`. If what was kept had news of its
+    /// own, tell the core the merged limits
+    /// ([`Event::Limits`](crate::Event::Limits)).
+    SaveLimits(Box<ProfileLimits>),
 }

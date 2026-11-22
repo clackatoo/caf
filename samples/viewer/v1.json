@@ -2343,6 +2343,72 @@
           "own_tools_off": false,
           "settings": {
             "type": "Unknown"
+          },
+          "limits": {
+            "windows": [
+              {
+                "kind": {
+                  "type": "FiveHours"
+                },
+                "used": 42,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Week"
+                },
+                "used": 81,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Warning"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ModelWeek",
+                  "value": "opus"
+                },
+                "used": 100,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Refused"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ExtraWeek"
+                },
+                "used": 12,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Other",
+                  "value": "thirty_day"
+                },
+                "used": 3,
+                "resets": null,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              }
+            ],
+            "extra_usage": {
+              "in_use": false,
+              "heard": 1795000000000
+            },
+            "cleared": 1794000000000
           }
         },
         {
@@ -2357,6 +2423,11 @@
           "own_tools_off": true,
           "settings": {
             "type": "Learning"
+          },
+          "limits": {
+            "windows": [],
+            "extra_usage": null,
+            "cleared": null
           }
         },
         {
@@ -2454,6 +2525,72 @@
                 }
               }
             ]
+          },
+          "limits": {
+            "windows": [
+              {
+                "kind": {
+                  "type": "FiveHours"
+                },
+                "used": 42,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Week"
+                },
+                "used": 81,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Warning"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ModelWeek",
+                  "value": "opus"
+                },
+                "used": 100,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Refused"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ExtraWeek"
+                },
+                "used": 12,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Other",
+                  "value": "thirty_day"
+                },
+                "used": 3,
+                "resets": null,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              }
+            ],
+            "extra_usage": {
+              "in_use": false,
+              "heard": 1795000000000
+            },
+            "cleared": 1794000000000
           }
         },
         {
@@ -2478,6 +2615,11 @@
           "settings": {
             "type": "Failed",
             "value": "the agent didn't start"
+          },
+          "limits": {
+            "windows": [],
+            "extra_usage": null,
+            "cleared": null
           }
         },
         {
@@ -2498,6 +2640,72 @@
           "own_tools_off": true,
           "settings": {
             "type": "Unknown"
+          },
+          "limits": {
+            "windows": [
+              {
+                "kind": {
+                  "type": "FiveHours"
+                },
+                "used": 42,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Week"
+                },
+                "used": 81,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Warning"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ModelWeek",
+                  "value": "opus"
+                },
+                "used": 100,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Refused"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ExtraWeek"
+                },
+                "used": 12,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Other",
+                  "value": "thirty_day"
+                },
+                "used": 3,
+                "resets": null,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              }
+            ],
+            "extra_usage": {
+              "in_use": false,
+              "heard": 1795000000000
+            },
+            "cleared": 1794000000000
           }
         },
         {
@@ -2522,6 +2730,11 @@
           "own_tools_off": true,
           "settings": {
             "type": "Learning"
+          },
+          "limits": {
+            "windows": [],
+            "extra_usage": null,
+            "cleared": null
           }
         },
         {
@@ -2621,6 +2834,72 @@
                 }
               }
             ]
+          },
+          "limits": {
+            "windows": [
+              {
+                "kind": {
+                  "type": "FiveHours"
+                },
+                "used": 42,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Week"
+                },
+                "used": 81,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Warning"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ModelWeek",
+                  "value": "opus"
+                },
+                "used": 100,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Refused"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ExtraWeek"
+                },
+                "used": 12,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Other",
+                  "value": "thirty_day"
+                },
+                "used": 3,
+                "resets": null,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              }
+            ],
+            "extra_usage": {
+              "in_use": false,
+              "heard": 1795000000000
+            },
+            "cleared": 1794000000000
           }
         },
         {
@@ -2642,6 +2921,11 @@
           "settings": {
             "type": "Failed",
             "value": "the agent didn't start"
+          },
+          "limits": {
+            "windows": [],
+            "extra_usage": null,
+            "cleared": null
           }
         },
         {
@@ -2659,6 +2943,72 @@
           "own_tools_off": true,
           "settings": {
             "type": "Unknown"
+          },
+          "limits": {
+            "windows": [
+              {
+                "kind": {
+                  "type": "FiveHours"
+                },
+                "used": 42,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Week"
+                },
+                "used": 81,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Warning"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ModelWeek",
+                  "value": "opus"
+                },
+                "used": 100,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Refused"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ExtraWeek"
+                },
+                "used": 12,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Other",
+                  "value": "thirty_day"
+                },
+                "used": 3,
+                "resets": null,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              }
+            ],
+            "extra_usage": {
+              "in_use": false,
+              "heard": 1795000000000
+            },
+            "cleared": 1794000000000
           }
         },
         {
@@ -2676,6 +3026,11 @@
           "own_tools_off": false,
           "settings": {
             "type": "Learning"
+          },
+          "limits": {
+            "windows": [],
+            "extra_usage": null,
+            "cleared": null
           }
         },
         {
@@ -2776,6 +3131,72 @@
                 }
               }
             ]
+          },
+          "limits": {
+            "windows": [
+              {
+                "kind": {
+                  "type": "FiveHours"
+                },
+                "used": 42,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Week"
+                },
+                "used": 81,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Warning"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ModelWeek",
+                  "value": "opus"
+                },
+                "used": 100,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Refused"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ExtraWeek"
+                },
+                "used": 12,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Other",
+                  "value": "thirty_day"
+                },
+                "used": 3,
+                "resets": null,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              }
+            ],
+            "extra_usage": {
+              "in_use": false,
+              "heard": 1795000000000
+            },
+            "cleared": 1794000000000
           }
         },
         {
@@ -2802,6 +3223,11 @@
           "settings": {
             "type": "Failed",
             "value": "the agent didn't start"
+          },
+          "limits": {
+            "windows": [],
+            "extra_usage": null,
+            "cleared": null
           }
         },
         {
@@ -2825,6 +3251,72 @@
           "own_tools_off": false,
           "settings": {
             "type": "Unknown"
+          },
+          "limits": {
+            "windows": [
+              {
+                "kind": {
+                  "type": "FiveHours"
+                },
+                "used": 42,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Week"
+                },
+                "used": 81,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Warning"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ModelWeek",
+                  "value": "opus"
+                },
+                "used": 100,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Refused"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ExtraWeek"
+                },
+                "used": 12,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Other",
+                  "value": "thirty_day"
+                },
+                "used": 3,
+                "resets": null,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              }
+            ],
+            "extra_usage": {
+              "in_use": false,
+              "heard": 1795000000000
+            },
+            "cleared": 1794000000000
           }
         },
         {
@@ -2848,6 +3340,11 @@
           "own_tools_off": true,
           "settings": {
             "type": "Learning"
+          },
+          "limits": {
+            "windows": [],
+            "extra_usage": null,
+            "cleared": null
           }
         },
         {
@@ -2947,6 +3444,72 @@
                 }
               }
             ]
+          },
+          "limits": {
+            "windows": [
+              {
+                "kind": {
+                  "type": "FiveHours"
+                },
+                "used": 42,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Week"
+                },
+                "used": 81,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Warning"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ModelWeek",
+                  "value": "opus"
+                },
+                "used": 100,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Refused"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "ExtraWeek"
+                },
+                "used": 12,
+                "resets": 1795010000000,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              },
+              {
+                "kind": {
+                  "type": "Other",
+                  "value": "thirty_day"
+                },
+                "used": 3,
+                "resets": null,
+                "state": {
+                  "type": "Fine"
+                },
+                "heard": 1795000000000
+              }
+            ],
+            "extra_usage": {
+              "in_use": false,
+              "heard": 1795000000000
+            },
+            "cleared": 1794000000000
           }
         }
       ]

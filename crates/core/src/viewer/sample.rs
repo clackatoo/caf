@@ -33,7 +33,7 @@ use crate::question::{
 };
 use crate::save::{CannotRestore, Header, SavedChat, SavedState};
 use crate::settings::{KnownSettings, ModelUsed, SettingChoice};
-use crate::shape::{model_price, settings, spend, turn_usage};
+use crate::shape::{account_limits, model_price, settings, spend, turn_usage};
 use crate::time::{End, Wall, Window};
 use crate::usage::{BadQuery, ModelPrice, PriceLayer, PricedModel, UsageQuery};
 use crate::viewer::{
@@ -501,6 +501,11 @@ fn agents() -> Vec<AgentStatus> {
         // Both ways, and always while signing in, as the core says it.
         can_sign_in: matches!(sign_in, SignInState::SigningIn(_)) || at % 2 == 0,
         own_tools_off: at % 3 != 0,
+        limits: if at % 2 == 0 {
+            account_limits()
+        } else {
+            Default::default()
+        },
         install,
         sign_in,
     })

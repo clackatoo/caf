@@ -265,6 +265,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     sign_in: standing.sign_in.clone(),
                     can_sign_in: self.signing_in(name).is_some() || self.can_sign_in(name),
                     settings: standing.settings.clone(),
+                    limits: self.agent_limits(name),
                     own_tools_off: standing.strips.unwrap_or_else(|| {
                         (self.agents.get(name)).is_some_and(|agent| agent.profile.strips())
                     }),

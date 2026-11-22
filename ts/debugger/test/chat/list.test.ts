@@ -63,7 +63,7 @@ describe('the chat list', () => {
         install: { type: 'Host' },
         sign_in: { type: 'Unknown' },
         can_sign_in: false,
-        own_tools_off: true,
+        own_tools_off: true, limits: { windows: [], extra_usage: null, cleared: null },
         settings: {
           type: 'Known',
           value: [
@@ -76,7 +76,7 @@ describe('the chat list', () => {
           ],
         },
       },
-      { name: 'fake', install: { type: 'Host' }, sign_in: { type: 'Unknown' }, can_sign_in: false, own_tools_off: true, settings: { type: 'Unknown' } },
+      { name: 'fake', install: { type: 'Host' }, sign_in: { type: 'Unknown' }, can_sign_in: false, own_tools_off: true, limits: { windows: [], extra_usage: null, cleared: null }, settings: { type: 'Unknown' } },
     ]
 
     async function form() {

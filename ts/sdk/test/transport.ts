@@ -79,6 +79,7 @@ export const agents = {
       can_sign_in: false,
       own_tools_off: true,
       settings: { type: "Unknown" },
+      limits: { windows: [], extra_usage: null, cleared: null },
     },
     {
       name: "fake",
@@ -87,6 +88,7 @@ export const agents = {
       can_sign_in: true,
       own_tools_off: true,
       settings: { type: "Unknown" },
+      limits: { windows: [], extra_usage: null, cleared: null },
     },
   ],
 } satisfies ToViewer;

@@ -185,6 +185,7 @@ pub mod ids;
 pub mod install;
 #[cfg(test)]
 mod kinds;
+pub mod limits;
 pub mod profiles;
 pub mod question;
 pub mod save;

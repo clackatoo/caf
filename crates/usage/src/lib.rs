@@ -22,6 +22,7 @@
 //!   eyespy/2026-11.jsonl
 //!   prices/own.json                the user's own prices
 //!   prices/litellm.json            LiteLLM's table, as last fetched
+//!   limits/claude-agent-acp.json   a profile's account limits
 //! ```
 //!
 //! Each line is one [`LedgerLine`], as JSON in CAF's one shape (see
@@ -89,6 +90,7 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 
 mod files;
+pub mod limits;
 pub mod prices;
 
 #[cfg(test)]

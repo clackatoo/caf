@@ -36,6 +36,9 @@ use crate::install::{
     Artifact, Bundled, EnvValue, Install, LinkFrom, Needs, NpmPackage, Platform, Program, Recipe,
     SignIn, SignedInAs, Status, StatusCommand, Unpack,
 };
+use crate::limits::{
+    AccountLimits, ExtraUsage, LimitState, LimitWindow, ProfileLimits, WindowKind,
+};
 use crate::profiles::{AdapterInfo, Builtin, Checked, ProfileChoice, ProfileReport};
 use crate::question::{
     Answer, OptionId, OptionKind, Permission, PermissionOption, Question, QuestionKind, SlowChoice,
@@ -524,6 +527,40 @@ fn agent_status() -> AgentStatus {
         }),
         can_sign_in: true,
         own_tools_off: true,
+        limits: account_limits(),
+    }
+}
+
+/// An account's limits, with a window of every kind.
+pub(crate) fn account_limits() -> AccountLimits {
+    let heard = Wall(1_795_000_000_000);
+    let window = |kind, used, state| LimitWindow {
+        kind,
+        used,
+        resets: Some(Wall(1_795_010_000_000)),
+        state,
+        heard,
+    };
+    AccountLimits {
+        windows: vec![
+            window(WindowKind::FiveHours, 42, LimitState::Fine),
+            window(WindowKind::Week, 81, LimitState::Warning),
+            window(
+                WindowKind::ModelWeek("opus".into()),
+                100,
+                LimitState::Refused,
+            ),
+            window(WindowKind::ExtraWeek, 12, LimitState::Fine),
+            LimitWindow {
+                resets: None,
+                ..window(WindowKind::Other("thirty_day".into()), 3, LimitState::Fine)
+            },
+        ],
+        extra_usage: Some(ExtraUsage {
+            in_use: false,
+            heard,
+        }),
+        cleared: Some(Wall(1_794_000_000_000)),
     }
 }
 
@@ -856,6 +893,24 @@ pub(crate) fn every_type(s: &mut Samples) {
         &Event::<crate::chat::NoAppItems>::Prices(price_table()),
         true,
     );
+    // limits
+    let kept = ProfileLimits {
+        profile: Builtin::ClaudeAgentAcp,
+        limits: account_limits(),
+    };
+    s.both(&account_limits());
+    for window in &account_limits().windows {
+        s.both(window);
+        s.both(&window.kind);
+        s.both(&window.state);
+    }
+    s.both(&ExtraUsage {
+        in_use: true,
+        heard: Wall(1_795_000_000_000),
+    });
+    s.both(&kept);
+    s.written(&UsageDirective::SaveLimits(Box::new(kept.clone())), true);
+    s.written(&Event::<crate::chat::NoAppItems>::Limits(vec![kept]), true);
     // save
     s.both(&Shelf("work".into()));
     s.both(&NoAppData);

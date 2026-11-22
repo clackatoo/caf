@@ -123,5 +123,5 @@ export function status(
   canSignIn = signIn.type === 'SigningIn',
   settings: AgentStatus['settings'] = { type: 'Unknown' },
 ): AgentStatus {
-  return { name: 'claude', install, sign_in: signIn, can_sign_in: canSignIn, own_tools_off: true, settings }
+  return { name: 'claude', install, sign_in: signIn, can_sign_in: canSignIn, own_tools_off: true, limits: { windows: [], extra_usage: null, cleared: null }, settings }
 }

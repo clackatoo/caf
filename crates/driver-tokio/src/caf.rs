@@ -2452,6 +2452,9 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 }
                 Directive::Report(report) => log_report(&report),
                 Directive::Usage(UsageDirective::Record(line)) => self.usage.record(line),
+                Directive::Usage(UsageDirective::SaveLimits(limits)) => {
+                    self.usage.save_limits(limits)
+                }
                 // No other kind is given yet.
                 Directive::Usage(_) => {}
                 // No other kind is given yet. One added later needs a

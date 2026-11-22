@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::AgentName;
 use crate::install::SignedInAs;
+use crate::limits::AccountLimits;
 use crate::profiles::{Builtin, ProfileChoice};
 use crate::settings::{KnownSettings, SettingChoice};
 
@@ -206,6 +207,12 @@ pub struct AgentStatus {
     /// ([`Core::learn_settings`](crate::Core::learn_settings)).
     #[serde(default)]
     pub settings: KnownSettings,
+    /// Its account's limits, as it last said them
+    /// ([`limits`](crate::limits)): the same for every agent with its
+    /// profile, as they share one account.
+    /// Statuses written before it was added read as none.
+    #[serde(default)]
+    pub limits: AccountLimits,
 }
 
 /// Whether an agent is installed.

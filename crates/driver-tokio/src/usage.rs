@@ -43,8 +43,14 @@
 //! - finishing waits for it for at most [`FINISH_WITHIN`], then reports
 //!   how many lines may be lost, and leaves it.
 //!
-//! With no ledger, the prices are the bundled snapshot's, and lines are
-//! dropped.
+//! Account limits are kept on the ledger's thread too
+//! ([`caf_usage::limits`]): read as it starts, after the prices, and
+//! reported, for the core; each save merged with the file, the merged
+//! limits reported if the file had news. A save that fails is reported,
+//! and not tried again: the next has news as fresh.
+//!
+//! With no ledger, the prices are the bundled snapshot's, and lines and
+//! limits are dropped.
 
 use std::collections::VecDeque;
 use std::panic::AssertUnwindSafe;
@@ -55,6 +61,7 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
+use caf_core::limits::ProfileLimits;
 use caf_core::time::Wall;
 use caf_core::usage::{LedgerLine, ModelPrice, PriceTable};
 use caf_usage::{Ledger, prices};
@@ -295,6 +302,17 @@ impl UsageDriver {
     /// The ledger's folder, if there is one.
     pub(crate) fn folder(&self) -> Option<&PathBuf> {
         self.folder.as_ref()
+    }
+
+    /// Keeps a profile's account limits beside the ledger, merged with
+    /// what's there, or drops them with none. If what was kept had news,
+    /// the merged limits are reported, for the core
+    /// ([`Event::Limits`](caf_core::Event::Limits)). Not tried again: the
+    /// next save has news as fresh.
+    #[allow(clippy::boxed_local, reason = "drafted: the builder sends it on to the thread")]
+    pub(crate) fn save_limits(&mut self, limits: Box<ProfileLimits>) {
+        let _ = limits;
+        todo!()
     }
 
     /// Writes a turn's line to the ledger, or drops it with none.
