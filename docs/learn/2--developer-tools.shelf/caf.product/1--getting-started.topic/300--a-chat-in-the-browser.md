@@ -87,8 +87,8 @@ makes CAF hold more than one picture of each chat for it.
   use chats the host opened.
 - **`restore`** does the same for a request to restore a saved chat: it
   gives the chat its tools, or refuses. The default refuses every one.
-- **`act`** says whether viewers may send, stop, answer and close. It's
-  `true` by default.
+- **`act`** says whether viewers may send, stop, answer, choose a chat's
+  settings, close and unarchive. It's `true` by default.
 
 Opening is always the host's decision, because a chat's MCP servers are
 programs to run. A viewer only asks for an agent CAF offered, a folder, and
@@ -144,8 +144,9 @@ once it has, so `agents` is right from the start. `onChats` and `onAgents`
 each return a function that stops them.
 
 `caf.may` says what the host lets this page do: `act` on chats (send,
-stop, answer, choose their settings and close), and on `agents` (install
-them, sign in and out, and learn their settings). Offer only what it may: anything else is answered `NotAllowed`. A
+stop, answer, choose their settings, close and unarchive), and on `agents`
+(install them, sign in and out, learn their settings, and check again what
+the machine has). Offer only what it may: anything else is answered `NotAllowed`. A
 page that may not act on agents gets no sign-in's link or code. Whether it
 may open chats, or restore saved ones, isn't said, as the host decides each
 request.
@@ -187,7 +188,8 @@ const chat = await caf.open({ agent: "claude", cwd: "/home/me/projects/app", ses
 const turn = await caf.send(chat, { parts: [{ type: "Text", value: "Fix the tests" }] });
 await caf.stop(chat);
 await caf.answer(question.id, { type: "Permission", value: option.id });
-await caf.close(chat);
+await caf.close(chat); // archives it
+await caf.unarchive(chat); // or send to it: that unarchives it too
 ```
 
 `open` resolves once the chat is open, and `send` once the core has taken
@@ -518,6 +520,7 @@ care where the chat came from:
     answer: (question, answer) => caf.answer(question, answer),
     sendAgain: (message) => caf.send(chat.id, structuredClone(message)),
     close: () => caf.close(chat.id),
+    unarchive: () => caf.unarchive(chat.id),
     install: () => caf.install(chat.agent),
     stopInstall: () => caf.stopInstall(chat.agent),
     signIn: () => caf.signIn(chat.agent),
@@ -525,13 +528,18 @@ care where the chat came from:
     stopSignIn: () => caf.stopSignIn(chat.agent),
     setSetting: (choice) => caf.setSetting(chat.id, choice),
     learnSettings: () => caf.learnSettings(chat.agent),
+    checkAgain: () => caf.checkAgain(chat.agent),
   }}
 />
 ```
 
 It offers only what `may` lets it: without `act`, the chat can be watched,
 not acted in; without `agents`, it says what's happening to the agent but
-offers no Install or sign-in.
+offers no Install, sign-in or Check again. An archived chat's composer is
+locked, saying so, and offers Unarchive, if `unarchive` is given. A saved
+chat is put away as it's archived, so CAF refuses to unarchive it until
+it's restored: `unarchiveOrRestore`, from the same folder, restores it
+first, archived still, then unarchives it, as the debugger does.
 
 Given its agent's status, the view also shows what the agent needs before
 the chat can go on. While the chat waits for an agent that isn't

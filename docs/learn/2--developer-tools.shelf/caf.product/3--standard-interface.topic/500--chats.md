@@ -126,6 +126,15 @@ minimal on clackatoo's workspaces with compact in its pane headers. They show
 it fitting in; they're not layouts to copy. Put chats wherever the app
 already puts its things.
 
+**An archived chat in a list. Required.** Wherever a list shows an
+archived chat, open or not, saved or not, it shows it in the identity's
+**Archived** state, at whatever size the list uses: the title muted, and
+at full size the *Archived* badge and when it was archived. It's never
+shown as idle, nor left out because it's still open: an archived chat
+the user has open is listed as archived until it's unarchived, then as any
+other at once. Whether a list keeps archived chats apart, such as under an
+*Archived* heading, last, or behind a filter, is **up to the app**.
+
 ## The rules
 
 **Required.**
@@ -404,7 +413,7 @@ viewer offers no Delete.
 | Failed | That turn's `TurnLife::Failed`, with its `Failure.reason`. |
 | Lost its agent | `ChatState::Lost`, with its `Lost` reason, in the transcript's words; but `Lost { reason: Stopped }` follows the banner while it shows. |
 | Restoring | `SavedState::Restoring`, or `Core::restoring`. |
-| Archived | `Chat.archived`, when it was archived, while it is: for a chat that's open, and kept in its save. For a saved chat that isn't open, `Header.archived`, or, for a chat saved before CAF kept when, `Header.closed`. A chat's `Change::Archived` says when it's archived or unarchived. |
+| Archived | `Chat.archived`, when it was archived, while it is: for a chat that's open, and kept in its save. In a viewer's list of open chats, `ChatSummary.archived`. For a saved chat that isn't open, `Header.archived`, or, for a chat saved before CAF kept when, `Header.closed`. A chat's `Change::Archived` says when it's archived or unarchived. |
 | Can't restore | `SavedState::Failed`, with its `CannotRestore` reason: `NotFound`, `InUse`, `Newer`, `Damaged`, `AppData` or `Store`. Restoring answers with it too: `Error::CannotRestore`, or a viewer's `Outcome::CannotRestore`. |
 | Agent gone | The chat's agent isn't among those the app offers (`Core::agents`, or a viewer's `Welcome.agents`): sending is refused with `Refused::NoSuchAgent`. A renamed agent is found by `Header.profile`. |
 | Agent can't be used | Its `AgentStatus.own_tools_off` is false. With the cautious profile, sending is refused with `Refused::OwnTools`. With an agent that isn't the one its profile is for, sending isn't refused, but each open ends `Lost { reason: Incompatible(OwnTools) }`, and the lock is the app's own rule. |
