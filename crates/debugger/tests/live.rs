@@ -3,10 +3,11 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use caf_core::Chat;
-use caf_core::agent::{AgentSpec, SpawnCommand};
+use caf_core::agent::{AgentSpec, AgentStatus, SpawnCommand};
+use caf_core::limits::{AccountLimits, LimitState, WindowKind};
 use caf_core::profiles::{Builtin, ProfileChoice};
 use caf_core::viewer::{ChatCopy, ToViewer};
 use caf_debugger::inspector::{FromInspector, Mode, ToInspector};
@@ -93,6 +94,24 @@ async fn send(socket: &mut Socket, message: Value) {
 async fn viewer_until(socket: &mut Socket, until: impl Fn(&Value) -> bool) -> Value {
     loop {
         let message = next(socket).await.expect("the viewer is open");
+        if until(&message) {
+            return message;
+        }
+    }
+}
+
+/// [`viewer_until`], keeping in `agents` the agents' statuses last told
+/// on the way.
+async fn viewer_until_noting(
+    socket: &mut Socket,
+    agents: &mut Vec<AgentStatus>,
+    until: impl Fn(&Value) -> bool,
+) -> Value {
+    loop {
+        let message = next(socket).await.expect("the viewer is open");
+        if message["type"] == "Agents" {
+            *agents = serde_json::from_value(message["value"].clone()).unwrap();
+        }
         if until(&message) {
             return message;
         }
@@ -188,8 +207,14 @@ impl Debugger {
 
     /// The debugger, keeping chats in `store` if given.
     async fn start_with(name: &str, store: Option<PathBuf>) -> Self {
+        Self::start_fake(name, store, None).await
+    }
+
+    /// The debugger, its fake saying its account's limits, made up from
+    /// `limits`, if given, as `--fake-limits` asks.
+    async fn start_fake(name: &str, store: Option<PathBuf>, limits: Option<SystemTime>) -> Self {
         let dir = Dir::new(name);
-        let script = fake::write(&dir.0, false).unwrap();
+        let script = fake::write(&dir.0, false, limits).unwrap();
         let mut command = SpawnCommand::new(caf_fake_agent::binary());
         command.args = vec![script.into_os_string()];
         let agents = vec![AgentSpec::command(
@@ -247,7 +272,11 @@ impl Debugger {
         assert_eq!(welcome["value"]["agents"], json!(["fake"]));
         let cwd = self.dir.0.display().to_string();
         send(&mut socket, json!({"type": "Open", "value": {"request": 1, "open": {"agent": "fake", "cwd": cwd, "session": {"type": "New"}}}})).await;
-        let done = viewer_until(&mut socket, |message| message["type"] == "Done").await;
+        let mut agents = Vec::new();
+        let done = viewer_until_noting(&mut socket, &mut agents, |message| {
+            message["type"] == "Done"
+        })
+        .await;
         assert_eq!(done["value"]["outcome"]["type"], "Opened", "{done}");
         let chat = done["value"]["outcome"]["value"].clone();
         send(
@@ -255,7 +284,10 @@ impl Debugger {
             json!({"type": "Watch", "value": {"chat": chat, "since": null}}),
         )
         .await;
-        let picture = viewer_until(&mut socket, |message| message["type"] == "Picture").await;
+        let picture = viewer_until_noting(&mut socket, &mut agents, |message| {
+            message["type"] == "Picture"
+        })
+        .await;
         let ToViewer::Picture {
             chat: whole,
             latest,
@@ -268,6 +300,7 @@ impl Debugger {
             chat,
             copy: ChatCopy::new(whole, latest),
             requests: 1,
+            agents,
         }
     }
 }
@@ -278,6 +311,8 @@ struct Viewer {
     chat: Value,
     copy: ChatCopy,
     requests: u64,
+    /// The agents' statuses, as last told.
+    agents: Vec<AgentStatus>,
 }
 
 impl Viewer {
@@ -306,6 +341,30 @@ impl Viewer {
                 ToViewer::Changes { changes, .. } => {
                     self.copy.take(&changes).expect("the changes follow on");
                 }
+                ToViewer::Agents(agents) => self.agents = agents,
+                _ => {}
+            }
+        }
+    }
+
+    /// Follows the chat until `until` holds of the fake's limits.
+    async fn until_limits(&mut self, until: impl Fn(&AccountLimits) -> bool) {
+        let started = Instant::now();
+        let fakes = |agents: &[AgentStatus]| {
+            (agents.iter())
+                .find(|agent| agent.name.0 == "fake")
+                .map(|agent| agent.limits.clone())
+                .unwrap_or_default()
+        };
+        while !until(&fakes(&self.agents)) {
+            assert!(started.elapsed() < PATIENCE, "{:#?}", fakes(&self.agents));
+            let message = next(&mut self.socket).await.expect("the viewer is open");
+            match serde_json::from_value(message).unwrap() {
+                ToViewer::Picture { chat, latest } => self.copy = ChatCopy::new(chat, latest),
+                ToViewer::Changes { changes, .. } => {
+                    self.copy.take(&changes).expect("the changes follow on");
+                }
+                ToViewer::Agents(agents) => self.agents = agents,
                 _ => {}
             }
         }
@@ -587,6 +646,109 @@ async fn the_fake_fails_a_turn_once_and_answers_it_sent_again() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn with_fake_limits_the_fakes_climb_turn_by_turn_and_limit_refuses_one() {
+    let now = SystemTime::now();
+    let debugger = Debugger::start_fake("limits", None, Some(now)).await;
+    let kept = debugger.dir.0.join("usage/limits/caf-fake-agent.json");
+    let mut viewer = debugger.chat().await;
+    let share =
+        |limits: &AccountLimits, kind: &WindowKind| limits.window(kind).map(|window| window.used);
+    viewer.say("hello").await;
+    viewer.until(|chat| lives(chat) == ["Finished"]).await;
+    viewer
+        .until_limits(|limits| share(limits, &WindowKind::FiveHours) == Some(60))
+        .await;
+    viewer.say("hello").await;
+    viewer
+        .until_limits(|limits| share(limits, &WindowKind::FiveHours) == Some(67))
+        .await;
+    viewer.until(|chat| lives(chat) == ["Finished"; 2]).await;
+    let limits = viewer
+        .agents
+        .iter()
+        .find(|agent| agent.name.0 == "fake")
+        .unwrap()
+        .limits
+        .clone();
+    assert_eq!(share(&limits, &WindowKind::Week), Some(32));
+    assert_eq!(
+        share(&limits, &WindowKind::ModelWeek("opus".into())),
+        Some(21)
+    );
+    let five_hours = limits.window(&WindowKind::FiveHours).unwrap();
+    // Its reset, in seconds, three hours on.
+    let resets = five_hours.resets.unwrap().0;
+    let expected = i64::try_from(
+        (now + Duration::from_secs(3 * 3600))
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    )
+    .unwrap()
+        * 1000;
+    assert_eq!(resets, expected);
+    // `limit`: the five hours refused, and the turn failed.
+    viewer.say(fake::LIMIT).await;
+    viewer
+        .until_limits(|limits| {
+            limits
+                .window(&WindowKind::FiveHours)
+                .is_some_and(|window| window.state == LimitState::Refused && window.used == 100)
+        })
+        .await;
+    viewer
+        .until(|chat| lives(chat) == ["Finished", "Finished", "Failed"])
+        .await;
+    let life = serde_json::to_value(&viewer.copy.chat().turns[2].life).unwrap();
+    assert_eq!(life["value"]["reason"]["type"], "UsageLimit", "{life:#}");
+    assert_eq!(life["value"]["remedy"]["type"], "SendAgain", "{life:#}");
+    // Only the five hours changed: the week isn't taken back.
+    let limits = &viewer
+        .agents
+        .iter()
+        .find(|agent| agent.name.0 == "fake")
+        .unwrap()
+        .limits;
+    assert_eq!(share(limits, &WindowKind::Week), Some(32));
+    // Sent again, answered, and fine again.
+    viewer.say(fake::LIMIT).await;
+    viewer
+        .until_limits(|limits| {
+            limits
+                .window(&WindowKind::FiveHours)
+                .is_some_and(|window| window.state != LimitState::Refused)
+        })
+        .await;
+    viewer
+        .until(|chat| lives(chat) == ["Finished", "Finished", "Failed", "Finished"])
+        .await;
+    assert!(debugger.live.book.diverged().is_empty());
+    debugger.live.caf.shutdown().await;
+    // Kept where every CAF app reads them, under the fake's profile.
+    assert!(kept.exists(), "{}", kept.display());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_fake_limits_the_fake_says_none() {
+    let debugger = Debugger::start("no-limits").await;
+    let kept = debugger.dir.0.join("usage/limits/caf-fake-agent.json");
+    let mut viewer = debugger.chat().await;
+    viewer.say(fake::LIMIT).await;
+    // `limit` is any message without them.
+    viewer.until(|chat| lives(chat) == ["Finished"]).await;
+    viewer.say("hello").await;
+    viewer.until(|chat| lives(chat) == ["Finished"; 2]).await;
+    let fake = (viewer.agents.iter())
+        .find(|agent| agent.name.0 == "fake")
+        .expect("the fake's status");
+    assert_eq!(fake.limits, AccountLimits::default());
+    assert!(debugger.live.book.diverged().is_empty());
+    debugger.live.caf.shutdown().await;
+    // None kept, even as the made-up ones are.
+    assert!(!kept.exists(), "{}", kept.display());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_fake_wants_a_sign_in_once_and_answers_it_sent_again() {
     let debugger = Debugger::start("sign-in").await;
     let mut viewer = debugger.chat().await;
@@ -733,7 +895,7 @@ async fn the_recording_check_passes_with_secrets_the_recording_hides() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_recording_that_couldnt_be_made_is_none() {
     let dir = Dir::new("no-recording");
-    let script = fake::write(&dir.0, false).unwrap();
+    let script = fake::write(&dir.0, false, None).unwrap();
     let mut command = SpawnCommand::new(caf_fake_agent::binary());
     command.args = vec![script.into_os_string()];
     let agents = vec![AgentSpec::command(
@@ -824,6 +986,7 @@ async fn a_chat_saved_live_is_restored_by_the_next_debugger_and_carries_on() {
         chat,
         copy: ChatCopy::new(whole, latest),
         requests: 2,
+        agents: Vec::new(),
     };
     viewer.say("again").await;
     viewer

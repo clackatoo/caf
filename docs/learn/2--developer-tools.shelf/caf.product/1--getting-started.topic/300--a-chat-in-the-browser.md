@@ -293,6 +293,10 @@ no session, so don't offer one. It's false for an agent with the cautious
 profile, turns false once an adapter answers that isn't the one its
 profile is for, and true again once one that is answers. See
 [Agents and profiles](~caf/concepts/agents-and-profiles#an-agent-has-only-your-tools).
+`limits` are its account's limits, as the agent last said them: how much
+of each window of its subscription is used, and when it resets, shared by
+every agent with its profile. See [Account
+limits](~caf/getting-started/account-limits).
 
 ```ts
 await caf.install("claude");

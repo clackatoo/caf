@@ -248,6 +248,28 @@ cargo run -p caf-debugger -- --usage /tmp/usage --no-fetch-prices --fake-usage
 
 See [Usage](~caf/getting-started/usage).
 
+The Agents panel shows each agent's [account
+limits](~caf/getting-started/account-limits) under it, once the agent has
+said them: one line with the window that has least left, with a dot and
+a word, amber and `low` at 20% left or less, red and `out` at 10% or
+less, and, opened, each window with a bar of what's left, a tick where an
+even pace would have it, its state, when it resets and when CAF heard.
+
+The fake agent says limits only with `--fake-limits`, in the shape
+Claude's adapter says them in: its five hours climb from 60% used, a few
+percent a turn, its week, its week with extra usage and Opus's week more
+slowly, until the sixth turn's, each chat's fake starting the climb
+again. Send it exactly `limit`, and its five hours are refused and the
+turn fails for a usage limit, the first time in each chat. Its resets
+are made up as the debugger starts, as its script can't say the time:
+they're forgotten, the five hours after three hours, the weeks after four
+days, until the debugger starts again. They're made up, and kept in the usage
+folder under the fake's own profile, so give it one of its own:
+
+```sh
+cargo run -p caf-debugger -- --usage /tmp/usage --no-fetch-prices --fake-limits
+```
+
 ## The token
 
 The debugger starts agents in your folders, and any web page you visit can

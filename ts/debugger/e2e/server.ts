@@ -30,7 +30,8 @@ export interface Setup {
   /**
    * An `agents.toml`, passed with `--agents`. `{fake}` in it becomes the
    * fake agent's program, and `{script}` the script the debugger writes
-   * for it: the one saying what turns spent, as `--fake-usage` asks.
+   * for it: the one saying what turns spent, as `--fake-usage` asks, and
+   * its limits too if the test's arguments have `--fake-limits`.
    */
   agents?: string
   /** What the fake agent's `auth` commands do (see caf-fake-agent's `Auth`), with `{state}` as the test's folder. */
@@ -48,10 +49,11 @@ export function start(args: string[], setup: Setup = {}): Promise<Server & { pro
   // Live runs are recorded under $XDG_STATE_HOME, and their chats kept
   // under $XDG_DATA_HOME: a folder of the test's own.
   const state = setup.state ?? mkdtempSync(join(tmpdir(), 'caf-e2e-'))
+  const script = args.includes('--fake-limits') ? 'fake-agent-usage-limits.jsonl' : 'fake-agent-usage.jsonl'
   const fill = (text: string) =>
     text
       .replaceAll('{fake}', fake)
-      .replaceAll('{script}', join(state, 'caf', 'debugger', 'fake-agent-usage.jsonl'))
+      .replaceAll('{script}', join(state, 'caf', 'debugger', script))
       .replaceAll('{state}', state)
   // Live, its usage ledger is under $XDG_DATA_HOME too, and never fetches
   // prices: a test never reaches the network. The fake agent says what its

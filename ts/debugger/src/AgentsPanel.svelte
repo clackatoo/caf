@@ -1,10 +1,12 @@
 <script lang="ts">
   // The agents CAF offers, beside the list of chats: whether each is
   // installed and signed in, with Install or Stop, Sign in or Sign out,
-  // and, while one is being signed in to, its link, code and paste box.
+  // and, while one is being signed in to, its link, code and paste box;
+  // and its account's limits, as it last said them.
   import type { AgentName, AgentStatus, DeepReadonly } from '@clackatoo/caf'
   import { attempt } from './chat/actions.ts'
   import SignIn from './chat/SignIn.svelte'
+  import Limits from './Limits.svelte'
   import { bytes, cannotText, canRetry, errorText, installed, installLabel, signInLabel } from './chat/words.ts'
 
   /** What the user can do about an agent. */
@@ -32,6 +34,13 @@
     /** The agent of the chat shown beside, whose sign-in, link and paste box and all, the chat already shows. */
     inChat?: AgentName | null
   } = $props()
+
+  /** The time limits are measured from: ticked, so what's left of a window until it resets counts down. */
+  let now = $state(Date.now())
+  $effect(() => {
+    const tick = setInterval(() => (now = Date.now()), 15_000)
+    return () => clearInterval(tick)
+  })
 
   /** Agents with something being done to them now, and why something failed. */
   let busy = $state<ReadonlySet<AgentName>>(new Set())
@@ -74,6 +83,7 @@
           <div class="detail">It can't be installed: {cannotText(install.value)}</div>
         {/if}
         {#if ready(agent)}<div class="state">{signInLabel(signIn)}</div>{/if}
+        <Limits name={agent.name} limits={agent.limits} {now} />
         {#if may}
           <div class="buttons">
             {#if install.type === 'Missing'}
