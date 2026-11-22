@@ -9,13 +9,15 @@
 //!   agent that splits them by model says so too (`_meta.quota.model_usage`,
 //!   which Claude's and Codex's adapters both send). The split is the
 //!   fuller count, with subagents and compaction in it, so it's what CAF
-//!   keeps when there is one; otherwise one row, against the turn's model
+//!   keeps when there is one; otherwise one row, against the model the
+//!   agent said it used during the turn, or the turn's own
 //!   ([`TurnUsage::models`]). An agent that says nothing gives no record.
 //! - **Cost, as the agent reports it.** Claude says what its session has
 //!   cost so far ([`Usage::cost`](crate::chat::Usage::cost)); a turn's cost
-//!   is how much that rose between the turn's start and end. If it went
-//!   down, the session was replaced, and the turn's cost is what it says
-//!   at the end ([`TurnUsage::cost`]).
+//!   is how much that rose between the turn's start and end, if the agent
+//!   said it during the turn, and otherwise unreported. If it went down,
+//!   the session was replaced, and the turn's cost is what it says at the
+//!   end ([`TurnUsage::cost`]).
 //! - **Cost, estimated.** A turn with no reported cost is priced from a
 //!   [`PriceTable`]: the user's own prices, then the table fetched from
 //!   LiteLLM, then the snapshot bundled with CAF. Estimates are never
@@ -117,11 +119,12 @@ pub struct ModelTokens {
 pub struct TurnUsage {
     /// Its tokens, one row per model. They're the agent's split by model,
     /// if it gave one, which counts the subagents and compaction the turn
-    /// set off; otherwise one row, of its totals, against the turn's model
-    /// (or `unknown`, if the agent never said which). Never empty.
+    /// set off; otherwise one row, of its totals, against the model the
+    /// agent said it used during the turn, else the turn's model (or
+    /// `unknown`, if the agent never said which). Never empty.
     pub models: Vec<ModelTokens>,
-    /// What it cost, as the agent reported it, if it did: how much its
-    /// session's cost rose over the turn. Never an estimate. A cost in a
+    /// What it cost, as the agent reported it, if it did during the turn:
+    /// how much its session's cost rose over the turn. Never an estimate. A cost in a
     /// currency other than US dollars is kept here as reported, but
     /// counted as unreported in [`Spend`] and [`Summary`], which estimate
     /// it instead: CAF converts no currency.

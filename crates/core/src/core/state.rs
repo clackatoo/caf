@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use super::clean::Tail;
 use super::settings::Choosing;
-use super::spending::Sent;
+use super::spending::{Heard, Sent};
 use crate::acp::RequestId;
 use crate::agent::{InstallState, McpServer, SignInState};
 use crate::chat::{AppItem, Cost, Note, Turn};
@@ -426,6 +426,8 @@ pub(super) struct Running {
     pub(super) stop_by: Option<Mono>,
     /// What was so as it was sent, that what it spent is worked out from.
     pub(super) sent: Sent,
+    /// What the agent said of its usage while it ran.
+    pub(super) heard: Heard,
 }
 
 /// Where the core is with installing agents and signing in to them.

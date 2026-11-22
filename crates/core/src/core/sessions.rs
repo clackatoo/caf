@@ -443,6 +443,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         run.open = Open::Live { proc };
         run.session = Some(session.clone());
+        // A session opened, new or again, says its cost afresh.
+        run.cost = None;
         if let Some(each) = self.procs.get_mut(&proc) {
             each.sessions.insert(session.0.clone());
         }

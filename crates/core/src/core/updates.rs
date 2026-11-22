@@ -23,6 +23,7 @@ use crate::chat::{
 };
 use crate::directive::{Directive, Level};
 use crate::ids::{ChatId, ItemId, Ticket, TurnId};
+use crate::profiles::ProfileChoice;
 use crate::time::{End, Now, Window};
 
 /// The longest tool title kept, in bytes.
@@ -38,8 +39,9 @@ enum Said {
     Text { text: String, thinking: bool },
     /// A tool call, new or changed, by the agent's id for it.
     Tool { id: String, change: ToolChange },
-    /// How full the agent's memory is.
-    Usage(Usage),
+    /// How full the agent's memory is, and the model the agent says it's
+    /// using, if it says.
+    Usage { usage: Usage, model: Option<String> },
     /// The user's own message, as the agent tells it.
     User(String),
     /// What the agent offers of its settings, as ACP's session config
@@ -81,7 +83,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return;
         };
         let update = params.get("update").cloned().unwrap_or(Value::Null);
-        let said = self.read_update(update);
+        let said = self.read_update(&self.profile_of_chat(chat), update);
         if self.runs.get(&chat).is_some_and(|run| run.replaying) {
             self.replayed(now, chat, said, out);
         } else {
@@ -100,7 +102,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// What `update` says, read by its tag.
-    fn read_update(&self, update: Value) -> Said {
+    fn read_update(&self, profile: &ProfileChoice, update: Value) -> Said {
         let tag = update
             .get("sessionUpdate")
             .and_then(Value::as_str)
@@ -137,15 +139,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             "usage_update" => serde_json::from_value::<acp::UsageUpdate>(update.clone())
                 .ok()
                 .filter(|usage| usage.used <= MOST_EXACT && usage.size <= MOST_EXACT)
-                .map(|usage| {
-                    Said::Usage(Usage {
+                .map(|usage| Said::Usage {
+                    usage: Usage {
                         used: usage.used,
                         size: usage.size,
                         cost: usage.cost.map(|cost| Cost {
                             amount: cost.amount,
                             currency: agent_text(&cost.currency, 16),
                         }),
-                    })
+                    },
+                    model: profile.model_in_usage(&update),
                 }),
             "config_option_update" => Some(Said::Options(
                 update
@@ -217,7 +220,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 }
             }
             Said::Tool { id, change } => self.live_tool(now, chat, id, change, out),
-            Said::Usage(usage) => self.set_usage(chat, usage),
+            Said::Usage { usage, model } => {
+                self.heard_usage(chat, &usage, model);
+                self.set_usage(chat, usage);
+            }
             Said::User(_) => report(
                 out,
                 Level::Debug,
@@ -268,7 +274,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         let mut update = call.clone();
         update["sessionUpdate"] = Value::from("tool_call_update");
-        let Said::Tool { id, change } = self.read_update(update) else {
+        let Said::Tool { id, change } = self.read_update(&self.profile_of_chat(chat), update)
+        else {
             return None;
         };
         self.live_tool(now, chat, id.clone(), change, out);
@@ -414,7 +421,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 }
                 return;
             }
-            Said::Usage(usage) => return self.set_usage(chat, usage),
+            Said::Usage { usage, .. } => return self.set_usage(chat, usage),
             // What the session offers is in the answer that opens it.
             Said::Options(_) => {
                 return report(

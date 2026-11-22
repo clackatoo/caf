@@ -2,8 +2,10 @@
 //! has spent, priced with the table the usage driver last gave.
 //!
 //! A turn's record is made from the agent's answer to its prompt, as the
-//! profile reads it, and the session's cost as the agent last said it
-//! before the turn was sent and as it ended. Nothing estimated is kept on
+//! profile reads it, what the agent said of its usage as the turn ran,
+//! and the session's cost as the agent last said it before the turn was
+//! sent and as it ended. A session opened, new or again, counts its cost
+//! from nothing. Nothing estimated is kept on
 //! a turn: a chat's spend is worked out from its turns, again whenever the
 //! prices change and whenever a chat is restored.
 
@@ -13,7 +15,7 @@ use super::clean::agent_text;
 use super::updates::MOST_EXACT;
 use super::{Core, report};
 use crate::change::Change;
-use crate::chat::{AppData, AppItem, Chat, Cost};
+use crate::chat::{AppData, AppItem, Chat, Cost, Usage};
 use crate::directive::{Directive, Level, UsageDirective};
 use crate::ids::{ChatId, TurnId};
 use crate::profiles::{Reckoned, Reported};
@@ -37,7 +39,33 @@ pub(super) struct Sent {
     pub(super) fast: bool,
 }
 
+/// What the agent said of its usage while a turn ran.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(super) struct Heard {
+    /// It said what its session has cost.
+    pub(super) cost: bool,
+    /// The model it last said it was using.
+    pub(super) model: Option<String>,
+}
+
 impl<A: AppItem, D: AppData> Core<A, D> {
+    /// The agent said, live, how full its memory is, `usage`, and perhaps
+    /// which model it's using, `model`: noted for the turn running, if
+    /// one is.
+    pub(super) fn heard_usage(&mut self, chat: ChatId, usage: &Usage, model: Option<String>) {
+        let Some(running) = self
+            .runs
+            .get_mut(&chat)
+            .and_then(|run| run.running.as_mut())
+        else {
+            return;
+        };
+        running.heard.cost |= usage.cost.is_some();
+        if model.is_some() {
+            running.heard.model = model;
+        }
+    }
+
     /// What's so of `chat` as a turn of it is sent.
     pub(super) fn as_sent(&self, chat: ChatId) -> Sent {
         Sent {
@@ -50,16 +78,17 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// `chat`'s turn `turn` ended at `now` with the agent's answer to its
-    /// prompt, `result`, having been sent as `sent`: what it spent is
-    /// recorded, if the agent said, on the turn, in the chat's spend, and
-    /// as a line of the usage ledger.
+    /// prompt, `result`, having been sent as `sent`, the agent having said
+    /// what `heard` holds as it ran: what it spent is recorded, if the
+    /// agent said, on the turn, in the chat's spend, and as a line of the
+    /// usage ledger.
     pub(super) fn turn_spent(
         &mut self,
         now: Now,
         chat: ChatId,
         turn: TurnId,
         result: &Value,
-        sent: Sent,
+        (sent, heard): (Sent, Heard),
         out: &mut Vec<Directive<A, D>>,
     ) {
         let rows = match self.profile_of_chat(chat).spent(result) {
@@ -109,7 +138,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(each) = whole.turns.iter().find(|each| each.id == turn) else {
             return;
         };
-        let turn_model = each.model.as_ref().map(|model| model.id.clone());
+        // A row the agent didn't say the model of is the one it said it
+        // used during the turn, else the one the turn was sent on.
+        let turn_model = (heard.model.map(|model| agent_text(&model, MOST_MODEL)))
+            .filter(|model| !model.is_empty())
+            .or_else(|| each.model.as_ref().map(|model| model.id.clone()));
         let models = (rows.into_iter())
             .map(|row| {
                 let model = (row.model.map(|model| agent_text(&model, MOST_MODEL)))
@@ -125,7 +158,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let after = self.runs.get(&chat).and_then(|run| run.cost.as_ref());
         let usage = TurnUsage {
             models,
-            cost: cost_over(sent.cost.as_ref(), after),
+            // Only if the agent said its cost during the turn.
+            cost: heard
+                .cost
+                .then(|| cost_over(sent.cost.as_ref(), after))
+                .flatten(),
             fast: sent.fast,
         };
         let line = LedgerLine {
@@ -198,6 +235,7 @@ const USD: &str = "USD";
 /// turn was sent, `before`, and as it ended, `after`: how much it rose. If
 /// it went down, or changed currency, the session was replaced, and the
 /// turn cost what it says at the end. `None` if the agent never said.
+/// Asked only of a turn the agent said its cost during.
 fn cost_over(before: Option<&Cost>, after: Option<&Cost>) -> Option<Cost> {
     let after = after?;
     let amount = match before {
