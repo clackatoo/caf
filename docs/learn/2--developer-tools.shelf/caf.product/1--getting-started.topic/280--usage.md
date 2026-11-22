@@ -109,8 +109,9 @@ caf.set_price("claude-haiku-5-5".into(), None).await?; // the next layer prices 
 `ModelPrice::new` gives input and output prices, with the cache prices the
 same as input's; set its fields for the rest. A price set is in force for
 every chat once `set_price` returns. Another app sharing the folder takes
-it when it next reads its prices: as it starts, sets a price of its own,
-or fetches.
+it within the hour, as each app reads its prices again every hour, and
+before every summary it reads, so a summary is always priced as the
+prices are now.
 
 ## Summaries
 
@@ -146,7 +147,9 @@ the rest of the chat. Summaries and prices cover every app on the machine,
 so they're for viewers the host lets: `ViewerRules::usage`, off by default.
 The welcome says if it's on (`Rights::usage`). A viewer asks for a summary
 with `FromViewer::Usage`, answered with `ToViewer::Usage`, and sets a price
-with `FromViewer::SetPrice`. One that isn't let is answered `NotAllowed`.
+with `FromViewer::SetPrice`, answered `Done`, or `PriceNotSet` with the
+system's words if it couldn't be written. One that isn't let is answered
+`NotAllowed`.
 The link goes on while a summary is read.
 
 ## Turning it off

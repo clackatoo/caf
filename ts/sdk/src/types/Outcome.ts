@@ -8,4 +8,4 @@ import type { TurnId } from "./TurnId.ts";
 /**
  * How a viewer's request went.
  */
-export type Outcome = { "type": "Opened", "value": ChatId } | { "type": "Sent", "value": TurnId } | { "type": "Done" } | { "type": "Refused", "value": Refused } | { "type": "NotAllowed" } | { "type": "Gone" } | { "type": "CannotRestore", "value": CannotRestore } | { "type": "NoLedger" } | { "type": "BadQuery", "value": BadQuery };
+export type Outcome = { "type": "Opened", "value": ChatId } | { "type": "Sent", "value": TurnId } | { "type": "Done" } | { "type": "Refused", "value": Refused } | { "type": "NotAllowed" } | { "type": "Gone" } | { "type": "CannotRestore", "value": CannotRestore } | { "type": "NoLedger" } | { "type": "PriceNotSet", "value": string } | { "type": "BadQuery", "value": BadQuery };

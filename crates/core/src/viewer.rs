@@ -462,6 +462,9 @@ pub enum Outcome {
     /// This CAF keeps no usage ledger, so there's no summary, and no price
     /// of the user's own can be set.
     NoLedger,
+    /// The price couldn't be written beside the usage ledger, as the
+    /// system said: the prices are as they were.
+    PriceNotSet(String),
     /// The usage summary can't be made for this query.
     BadQuery(BadQuery),
 }

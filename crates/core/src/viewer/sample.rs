@@ -640,6 +640,7 @@ fn version_1() -> Sample {
         Outcome::Gone,
         Outcome::CannotRestore(CannotRestore::InUse),
         Outcome::NoLedger,
+        Outcome::PriceNotSet("Permission denied (os error 13)".into()),
         Outcome::BadQuery(BadQuery::Zone("Mars/Olympus".into())),
         Outcome::BadQuery(BadQuery::Period),
     ]

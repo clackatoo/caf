@@ -137,6 +137,7 @@ kinds!(Outcome {
     "Gone" => Outcome::Gone,
     "CannotRestore" => Outcome::CannotRestore(_),
     "NoLedger" => Outcome::NoLedger,
+    "PriceNotSet" => Outcome::PriceNotSet(_),
     "BadQuery" => Outcome::BadQuery(_),
 });
 
