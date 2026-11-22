@@ -176,8 +176,8 @@ impl Ledger {
     /// can't be a folder's (empty, `prices`, starting with a dot, or with
     /// a slash, backslash or nothing character in it; `prices` in any
     /// case); if the line is another app's, has no models, a count of 2^53
-    /// or more, or a cost that isn't a number; or if the turn ended outside the years
-    /// 0 to 9999.
+    /// or more, or a cost that isn't a number; or if the turn ended outside
+    /// the years 0 to 9999.
     pub fn record(&self, line: &LedgerLine) -> io::Result<()> {
         if !is_app(&self.app) {
             return Err(io::Error::new(
@@ -710,6 +710,7 @@ impl<'a> Sum<'a> {
             .collect();
         for model in models {
             if let Some(priced) = self.price(&model) {
+                summary.matched.push((model, priced.model.clone()));
                 prices
                     .entry(priced.model.clone())
                     .or_insert_with(|| priced.clone());

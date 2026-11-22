@@ -299,8 +299,9 @@ pub struct Turn<A: AppItem = NoAppItems> {
     /// shows as a note in it.
     #[serde(default)]
     pub model: Option<ModelUsed>,
-    /// What it spent, recorded when it ended, if the agent said. Turns
-    /// from before CAF recorded usage, and imported ones, have none.
+    /// What it spent, recorded when its prompt was answered, however it
+    /// ended, if the agent said. Turns from before CAF recorded usage, and
+    /// imported ones, have none.
     #[serde(default)]
     pub spent: Option<Box<TurnUsage>>,
 }

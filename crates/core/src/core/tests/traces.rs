@@ -210,7 +210,7 @@ fn every_count_claude_gave_of_what_a_turn_spent_adds_up_to_its_total() {
         let Some(result) = response.and_then(|response| response.pointer("/outcome/Ok")) else {
             continue;
         };
-        let Reported::Rows(each) = claude.spent(result) else {
+        let (Reported::Rows(each), _) = claude.spent(result) else {
             continue;
         };
         for row in each {

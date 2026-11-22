@@ -326,6 +326,7 @@ fn a_new_summary_is_of_nothing() {
             buckets: Vec::new(),
             chats: ChatCounts::default(),
             prices: Vec::new(),
+            matched: Vec::new(),
             fetched: None,
             unreadable: Vec::new(),
         }

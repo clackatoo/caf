@@ -370,6 +370,10 @@ pub(crate) fn summary() -> Summary {
         by_agent: vec![("claude-agent-acp".into(), 1)],
     };
     summary.prices = price_table().models;
+    summary.matched = vec![(
+        "claude-sonnet-5-5".into(),
+        "anthropic/claude-sonnet-5-5".into(),
+    )];
     summary.fetched = Some(Wall(1_800_000_000_000));
     summary.unreadable = vec!["eyespy/2026-10.jsonl.zst".into()];
     summary

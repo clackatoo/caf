@@ -670,3 +670,158 @@ fn with_no_split_the_row_is_the_model_claude_said_during_the_turn_else_the_turns
         ]
     );
 }
+
+#[test]
+fn a_first_turn_stopped_whose_fresh_session_says_it_cost_nothing_is_estimated() {
+    let mut script = Script::with_claude();
+    script.event(Event::Prices(prices()));
+    let prompt = script.prompt(CHAT, "Tell me a long story");
+    script.stop(CHAT).0.expect("stopping");
+    script.update(PROC, SESSION, &costing(0.0));
+    let split = json!([row("claude-haiku-5-5", 1_000_000, 0, 0, 0, 0)]);
+    script.answers(
+        PROC,
+        prompt,
+        &answer("cancelled", usage(1_000_000, 0, 0, 0), split),
+    );
+    let chat = script.chat(CHAT);
+    assert_eq!(chat["turns"][0]["spent"]["cost"], Value::Null);
+    assert_has(
+        &chat,
+        &json!({ "spend": { "reported": 0.0, "estimated": 1.0 } }),
+    );
+}
+
+#[test]
+fn a_reported_cost_is_never_replaced_by_an_estimate() {
+    let mut script = Script::with_claude();
+    script.event(Event::Prices(prices()));
+    let prompt = script.prompt(CHAT, "Hello");
+    script.update(PROC, SESSION, &costing(0.25));
+    let split = json!([row("claude-haiku-5-5", 1_000_000, 0, 0, 1_000_000, 0)]);
+    script.answers(
+        PROC,
+        prompt,
+        &answer("end_turn", usage(1_000_000, 0, 0, 1_000_000), split),
+    );
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "spend": { "reported": 0.25, "estimated": 0.0, "unpriced": 0, "turns": 1 } }),
+    );
+    // Nor when the prices change.
+    script.event(Event::Prices(PriceTable::default()));
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "spend": { "reported": 0.25, "estimated": 0.0, "unpriced": 0 } }),
+    );
+}
+
+#[test]
+fn chats_sharing_a_process_each_count_their_own_sessions_cost() {
+    let mut script = Script::with_claude();
+    let (other, out) = script.open(OpenChat::new("claude", "/elsewhere"));
+    let other = other.expect("opened");
+    let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
+    script.answers(PROC, new, &json!({ "sessionId": "sess-2" }));
+    let first = script.prompt(CHAT, "One");
+    let second = script.prompt(other, "Two");
+    script.update(PROC, SESSION, &costing(0.5));
+    script.update(PROC, "sess-2", &costing(0.125));
+    script.update(PROC, SESSION, &costing(0.75));
+    script.answers(
+        PROC,
+        first,
+        &answer("end_turn", usage(1, 0, 0, 1), json!([])),
+    );
+    script.update(PROC, "sess-2", &costing(0.25));
+    script.answers(
+        PROC,
+        second,
+        &answer("end_turn", usage(1, 0, 0, 1), json!([])),
+    );
+    let cost = |chat| script.chat(chat)["turns"][0]["spent"]["cost"]["amount"].clone();
+    assert_eq!((cost(CHAT), cost(other)), (json!(0.75), json!(0.25)));
+}
+
+#[test]
+fn a_turn_the_agent_ended_as_failed_records_what_it_spent() {
+    let mut script = Script::with_claude();
+    for (at, stop) in ["max_tokens", "refusal", "max_turn_requests"]
+        .into_iter()
+        .enumerate()
+    {
+        let prompt = script.prompt(CHAT, "Go");
+        let out = script.answers(PROC, prompt, &answer(stop, usage(1, 0, 0, 1), json!([])));
+        assert_eq!(ledger(&out).len(), 1, "{stop}");
+        assert_has(
+            &script.chat(CHAT)["turns"][at],
+            &json!({ "life": { "type": "Failed" }, "spent": { "models": [{ "model": "unknown" }] } }),
+        );
+    }
+    // Even with no stop reason at all.
+    let prompt = script.prompt(CHAT, "Go");
+    script.answers(PROC, prompt, &json!({ "usage": usage(1, 0, 0, 1) }));
+    assert_has(
+        &script.chat(CHAT)["turns"][3],
+        &json!({ "life": { "type": "Failed" }, "spent": { "models": [{ "model": "unknown" }] } }),
+    );
+}
+
+#[test]
+fn a_split_that_cant_be_read_gives_way_to_the_usage_and_says_so() {
+    let mut script = Script::with_claude();
+    let prompt = script.prompt(CHAT, "Hello");
+    let out = script.answers(
+        PROC,
+        prompt,
+        &answer("end_turn", usage(1, 2, 3, 4), json!([{ "model": 5 }])),
+    );
+    assert_eq!(ledger(&out).len(), 1);
+    assert!(
+        with(&out, "report")
+            .iter()
+            .any(|report| report["report"] == "Warn"),
+        "{out:#?}"
+    );
+    assert_eq!(
+        script.chat(CHAT)["turns"][0]["spent"]["models"],
+        json!([tokens("unknown", 1, 2, 3, 4, Value::Null)])
+    );
+}
+
+#[test]
+fn a_split_of_more_than_64_models_gives_no_record_and_says_so() {
+    let mut script = Script::with_claude();
+    let rows = |count: usize| {
+        let rows: Vec<Value> = (0..count)
+            .map(|at| row(&format!("model-{at}"), 1, 0, 0, 1, 0))
+            .collect();
+        json!(rows)
+    };
+    let prompt = script.prompt(CHAT, "Many");
+    let out = script.answers(
+        PROC,
+        prompt,
+        &answer("end_turn", usage(1, 0, 0, 1), rows(65)),
+    );
+    assert!(ledger(&out).is_empty());
+    assert!(
+        with(&out, "report")
+            .iter()
+            .any(|report| report["report"] == "Warn"),
+        "{out:#?}"
+    );
+    let prompt = script.prompt(CHAT, "Enough");
+    let out = script.answers(
+        PROC,
+        prompt,
+        &answer("end_turn", usage(1, 0, 0, 1), rows(64)),
+    );
+    assert_eq!(ledger(&out).len(), 1);
+    let chat = script.chat(CHAT);
+    assert_eq!(chat["turns"][0]["spent"], Value::Null);
+    assert_eq!(
+        chat["turns"][1]["spent"]["models"].as_array().map(Vec::len),
+        Some(64)
+    );
+}

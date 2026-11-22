@@ -26,7 +26,7 @@ use serde::Serialize;
 use super::record::Log;
 use super::sessions::{check_instructions, mcp_server};
 use super::settings::Choosing;
-use super::spending::spend_of;
+use super::spending::{counted_within_bounds, spend_of};
 use super::state::{Open, Run};
 use super::{Core, Refused, report};
 use crate::change::Change;
@@ -967,6 +967,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Err(format!("it holds chat {} instead", whole.id))
         } else if !numbered_within_bounds(&whole) {
             Err("a turn or item in it is numbered too near 2^53".to_owned())
+        } else if !(whole.turns.iter())
+            .filter_map(|turn| turn.spent.as_deref())
+            .all(|usage| counted_within_bounds(usage.models.iter().map(|row| &row.tokens)))
+        {
+            Err("what a turn in it spent counts past 2^53".to_owned())
         } else {
             match whole.cwd.to_str() {
                 None => Err("its folder isn't UTF-8".to_owned()),
