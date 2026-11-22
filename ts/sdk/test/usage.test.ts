@@ -306,6 +306,11 @@ describe("price", () => {
     expect(find("claude-haiku-5-5-20261001")).toBe("anthropic/claude-haiku-5-5");
   });
 
+  test("only with one provider before it, as the core finds it", () => {
+    const nested = summary([], {}, [priced("bedrock/us/claude-sonnet-5-5"), priced("/claude-sonnet-5-5")]);
+    expect(price(nested, "claude-sonnet-5-5")).toBeNull();
+  });
+
   test("is null for a model with none", () => {
     expect(find("gpt-9")).toBeNull();
     expect(find("haiku-5-5")).toBeNull();
