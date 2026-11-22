@@ -75,10 +75,9 @@ test('a chat saved in one run is restored in the next, and carries on', async ({
   }
 })
 
-// FIXME: caf-driver-tokio ends the watch of a chat that's Closed, as an
-// archived chat is, so a viewer never hears it unarchived. Unfix once a
-// watch outlives archiving.
-test.fixme('an archived chat, unarchived, is an ordinary chat again, and carries on', async ({ page, server }) => {
+// Closed, a saved chat is put away too: Unarchive restores it, archived
+// still, then unarchives it.
+test('an archived chat, unarchived, is an ordinary chat again, and carries on', async ({ page, server }) => {
   await page.goto(server.url)
   await expect(page.locator('.link')).toHaveText('Connected')
   await openChat(page, process.cwd())

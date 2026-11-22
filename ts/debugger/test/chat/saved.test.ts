@@ -7,7 +7,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/sv
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CafError, type SavedChat, type ToViewer } from '@clackatoo/caf'
 import SavedList from '../../src/chat/SavedList.svelte'
-import { restoreOnceFree } from '../../src/chat/actions.ts'
+import { restoreOnceFree, unarchiveOrRestore } from '../../src/chat/actions.ts'
 import { errorText, refusedText } from '../../src/chat/words.ts'
 import { chatId, NOON } from './build.ts'
 
@@ -281,6 +281,38 @@ describe('the words for restoring', () => {
   it('says why a chat could not be restored', () => {
     const error = new CafError({ type: 'CannotRestore', value: { type: 'NotFound' } })
     expect(errorText(error)).toBe("It can't be restored: it isn't on its shelf any more.")
+  })
+})
+
+describe('unarchiving a chat', () => {
+  const gone = () => new CafError({ type: 'Refused', value: { type: 'NoSuchChat' } })
+
+  it('unarchives one CAF has, restoring nothing', async () => {
+    const unarchive = vi.fn().mockResolvedValue(undefined)
+    const restore = vi.fn()
+    await unarchiveOrRestore(unarchive, restore)
+    expect(unarchive).toHaveBeenCalledOnce()
+    expect(restore).not.toHaveBeenCalled()
+  })
+
+  it('restores one put away as it was archived, then unarchives it', async () => {
+    const order: string[] = []
+    const unarchive = vi.fn(async () => {
+      order.push('unarchive')
+      if (order.length === 1) throw gone()
+    })
+    await unarchiveOrRestore(unarchive, async () => void order.push('restore'))
+    expect(order).toEqual(['unarchive', 'restore', 'unarchive'])
+  })
+
+  it("leaves the refusal to the caller with nothing to restore, or for any other failure, or if restoring fails", async () => {
+    await expect(unarchiveOrRestore(vi.fn().mockRejectedValue(gone()))).rejects.toEqual(gone())
+    const notAllowed = new CafError({ type: 'NotAllowed' })
+    const restore = vi.fn()
+    await expect(unarchiveOrRestore(vi.fn().mockRejectedValue(notAllowed), restore)).rejects.toBe(notAllowed)
+    expect(restore).not.toHaveBeenCalled()
+    const inUse = new CafError({ type: 'CannotRestore', value: { type: 'InUse' } })
+    await expect(unarchiveOrRestore(vi.fn().mockRejectedValue(gone()), vi.fn().mockRejectedValue(inUse))).rejects.toBe(inUse)
   })
 })
 

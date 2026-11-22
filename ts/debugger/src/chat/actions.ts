@@ -112,6 +112,27 @@ export async function restoreOnceFree<T>(
 }
 
 /**
+ * Unarchives a chat with `unarchive`, as a host's `ChatActions.unarchive`
+ * does. A saved chat is put away as it's archived, so CAF no longer has it
+ * and refuses with `NoSuchChat`: then, given `restore`, it's restored
+ * first, archived still, and unarchived. Without `restore`, or for any
+ * other failure, the refusal is the caller's.
+ */
+export async function unarchiveOrRestore(
+  unarchive: () => Promise<unknown>,
+  restore?: (() => Promise<unknown>) | undefined,
+): Promise<void> {
+  try {
+    await unarchive()
+  } catch (error) {
+    const gone = error instanceof CafError && error.why.type === 'Refused' && error.why.value.type === 'NoSuchChat'
+    if (!gone || restore === undefined) throw error
+    await restore()
+    await unarchive()
+  }
+}
+
+/**
  * Opens a chat with `open`, then chooses `settings` for it with `choose`,
  * as a host's `ListActions.open` does: opening can't carry them. It
  * tries every choice, one after another, and resolves once the chat is

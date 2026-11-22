@@ -15,6 +15,7 @@
     openThenChoose,
     restoreOnceFree,
     showsAgent,
+    unarchiveOrRestore,
     type ChatActions,
     type ListActions,
     type SavedActions,
@@ -102,7 +103,16 @@
     answer: (question: QuestionId, answer: Answer) => live?.caf.answer(question, answer),
     sendAgain: (message: DeepReadonly<UserMessage>) => live?.caf.send(need(selected), structuredClone(message) as UserMessage),
     close: () => live?.caf.close(need(selected)),
-    unarchive: () => live?.caf.unarchive(need(selected)),
+    unarchive: async () => {
+      if (live === null) throw new Error('Not live.')
+      const caf = live.caf
+      const chat = need(selected)
+      // Saved, it was put away as it was archived: restored, archived
+      // still, it's unarchived then.
+      const at = saved.find((each) => each.header.chat === chat)
+      const restore = at === undefined ? undefined : () => restoreOnceFree(() => caf.restore(chat, at.shelf)).then(() => live?.watch(chat))
+      await unarchiveOrRestore(() => caf.unarchive(chat), restore)
+    },
     install: () => live?.caf.install(agentOf(chat)),
     stopInstall: () => live?.caf.stopInstall(agentOf(chat)),
     signIn: () => live?.caf.signIn(agentOf(chat)),
