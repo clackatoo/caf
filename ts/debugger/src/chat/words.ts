@@ -707,7 +707,7 @@ export function learnFailureText(why: DeepReadonly<LearnFailure>, agent: string)
     case 'Unreadable':
       return `${agent}'s answer made no sense.`
     case 'Restarted':
-      return `${agent} was restarted meanwhile.`
+      return `${agent} was restarted.`
     case 'Stopped':
       return `${agent} stopped.`
     case 'ShutDown':

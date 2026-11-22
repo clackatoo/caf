@@ -508,7 +508,8 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
         assert_ne!(message["type"], "Ended", "the watch goes on");
         message["type"] == "Changes"
             && message["value"]["chat"] == chat
-            && message.to_string().contains(r#""Archived""#)
+            && (message["value"]["changes"].as_array().unwrap().iter())
+                .any(|each| each["change"]["type"] == "Archived")
     })
     .await;
     assert_eq!(archived["value"]["chat"], chat);

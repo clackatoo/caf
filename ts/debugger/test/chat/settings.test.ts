@@ -320,7 +320,7 @@ describe('before the session opens', () => {
     [{ type: 'StartTimedOut' }, "claude didn't start in time.", true],
     [{ type: 'OpenTimedOut' }, "claude didn't open a chat in time.", true],
     [{ type: 'Unreadable' }, "claude's answer made no sense.", true],
-    [{ type: 'Restarted' }, 'claude was restarted meanwhile.', true],
+    [{ type: 'Restarted' }, 'claude was restarted.', true],
     [{ type: 'Stopped' }, 'claude stopped.', true],
     [{ type: 'ShutDown' }, 'The app was closing.', false],
     [{ type: 'Incompatible' }, "This version of claude can't talk to this app.", false],

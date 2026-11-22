@@ -194,7 +194,8 @@ await caf.unarchive(chat); // or send to it: that unarchives it too
 
 `open` resolves once the chat is open, and `send` once the core has taken
 the message, with the turn it will be: not once the turn has run, which
-the watch shows. `stop`, `answer` and `close` resolve once they're done.
+the watch shows. `stop`, `answer`, `close` and `unarchive` resolve once
+they're done.
 Questions waiting for an answer are on the chat, in `chat.questions`. When
 something isn't done, the promise rejects with a `CafError`, whose `why`
 says why:
@@ -248,14 +249,18 @@ lists no shelves never sends it, and `saved` stays empty.
 Each chat's `header` is what to show without loading it: its `chat` id,
 `agent`, `cwd`, when it was `made` and last `changed`, the app's `label`
 for it, the `first` line of its first message, how many `turns` it has,
-and whether it was `closed`. Its `state` is `Saved`, `Restoring`, `Loaded`,
-or `Failed`, with why the last restore failed.
+whether it was `closed`, and when it was `archived`, if it is (null for a
+chat saved closed by a CAF from before archiving: `closed` says it's
+archived). Its `state` is `Saved`, `Restoring`, `Loaded`, or `Failed`, with
+why the last restore failed.
 
 `restore` resolves with the chat's id once it's loaded. It's then in the
 next `Chats`, so in `chats` once `onChats` hears it, and watched like any
-other. A chat keeps its id when it's saved and
-restored. A restored chat is `Idle`: no session is open until a message is
-sent, which opens one, continuing the agent's session where the agent can.
+other. A chat keeps its id when it's saved and restored. A restored chat is
+`Idle`: no session is open until a message is sent, which opens one,
+continuing the agent's session where the agent can. One saved archived is
+restored archived, and `Closed` until it's unarchived, or sent to, which
+makes it `Idle`.
 
 The host decides each restore, as it does each open, so `may` doesn't say
 whether this page may: one it doesn't allow rejects with `NotAllowed`. One

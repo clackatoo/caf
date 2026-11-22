@@ -280,15 +280,24 @@ app's, with the agent's name in place of *Claude*:
 | `StartTimedOut` | *Claude didn't start in time.* | Yes |
 | `OpenTimedOut` | *Claude didn't open a chat in time.* | Yes |
 | `Unreadable` | *Claude's answer made no sense.* | Yes |
-| `Restarted` | *Claude was restarted meanwhile.* | Yes |
+| `Restarted` | *Claude was restarted.* | Yes |
 | `Stopped` | *Claude stopped.* | Yes |
 | `ShutDown` | *The app was closing.* | No |
 | `Incompatible` | *This version of Claude can't talk to this app.* | No |
 | `OwnTools` | *Claude can't be used: its own tools can't be turned off.* | No |
 
-They're the transcript's words for a chat that lost its agent the same
-way, so the user meets one sentence for one cause. A reason newer than the
-app knows has no sentence: the menu says the rest, with the button.
+Where [the transcript](~caf/standard-interface/transcript) words a chat
+losing its agent for the same cause, the menu uses its sentence, so the
+user meets one sentence for one cause: `CouldNotStart`, `SignInNeeded`,
+`Restarted`, `Stopped` (its `AgentStopped`), `Unreadable` (its
+`BadAnswer`) and `Incompatible` (its `Protocol`). Three are adapted, as
+learning them opens no chat of the user's: `Refused` says *a chat*, not
+*this chat*; `ShutDown` says the app *was closing*, not that it closed
+while this chat was open; and `OwnTools` is the sentence for an agent CAF
+won't run, as [A chat's identity and lifecycle](~caf/standard-interface/chats)
+has it. The others, which no chat meets, are the menu's own. A reason
+newer than the app knows has no sentence: the menu says its first and
+last sentences, with the button.
 
 **Where trying again can't help**, the menu ends with why, and has no
 button and no *It tries again…*: the app is closing (`ShutDown`), or CAF
@@ -350,6 +359,14 @@ and offers **Unarchive**, plain, at its other end, which brings it back
 without sending (`Core::unarchive`; a viewer's `Unarchive`, with the `act`
 right). Either way the note goes at once, and the chat is an ordinary one,
 its agent started when a message is sent, as for a restored chat.
+
+A saved chat is put away as it's archived, so CAF no longer has it, and
+refuses to send to it or unarchive it (`Refused::NoSuchChat`). An app that
+still shows it restores it first (`Core::restore`), archived still, then
+sends or unarchives: the user sees nothing of this, and never *Couldn't
+send: this chat isn't open any more.* If restoring it fails, the message
+stays in the box, and the tray says why, as for any message that couldn't
+be sent.
 
 While it's archived, only its settings can't be chosen, as CAF refuses to
 change them (`Refused::Closed`): the control shows the model and effort,

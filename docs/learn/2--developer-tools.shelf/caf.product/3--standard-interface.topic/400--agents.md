@@ -438,8 +438,8 @@ can't tell whether the link has come. The banner has a spinner:
 **Not now** needs only the right to act (`Rights.act`), as it drops the
 viewer's own chat's messages, so this viewer keeps it wherever a message
 waits. A viewer without `act` can't write, so has no Not now, and its tray
-has no note. The failure states show their words with no Try again or Check again, and
-the signed-out banner isn't shown at all.
+has no note. The failure states show their words with no Try again or
+Check again, and the signed-out banner isn't shown at all.
 
 ## The agents panel
 
