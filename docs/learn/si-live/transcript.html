@@ -1,0 +1,853 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAF SI · The transcript</title>
+<style>
+/* CAF SI's shared styles: the default theme, and the composer every page
+   draws. One copy, so the pages can't drift apart.
+
+   The theme is clackatoo's colours (crates/gui/src/colors.rs), with a light
+   mode made to match: white-over-dark tints there are dark-over-light here.
+   Apps keep the roles (see index.html), not these values. */
+
+[data-theme='dark'] {
+  --window: #121416;      /* behind everything */
+  --pane: #0c0e10;        /* a chat's background */
+  --bar: #121416;
+  --raised: rgba(255, 255, 255, .07);      /* the box a message is typed in, a sent message */
+  --raised-edge: rgba(255, 255, 255, .09);
+  --code: rgba(255, 255, 255, .05);
+  --card: rgba(255, 255, 255, .025);
+  --card-edge: rgba(255, 255, 255, .07);
+  --hover: rgba(255, 255, 255, .035);
+  --chat-chosen: rgba(255, 255, 255, .08);
+  --palette: #16181c;     /* menus raised over a chat */
+  --palette-edge: #2e2f36;
+  --chosen: #2f333d;      /* the row picked in a menu; Send unlit */
+  --track: rgba(255, 255, 255, .12);
+  --text: #dde1e6;
+  --muted: #8a9099;
+  --faint: #6b717a;
+  --accent: #d9b24a;      /* act here */
+  --accent-text: #d9b24a;
+  --accent-faint: rgba(217, 178, 74, .1);
+  --accent-edge: rgba(217, 178, 74, .32);
+  --on-accent: #121416;
+  --link: #7cb7f5;
+  --warning: #e06c75;     /* it went wrong */
+  --warning-bg: rgba(224, 108, 117, .1);
+  --warning-edge: rgba(224, 108, 117, .35);
+  --caution: #e89a3c;     /* held, or getting close */
+  --caution-bg: rgba(232, 154, 60, .09);
+  --ok: #8fd18a;
+  --caf: #6fd3c9;         /* CAF's own voice */
+  --added: rgba(185, 202, 74, .13); --added-text: #b9ca4a;
+  --removed: rgba(213, 78, 83, .13); --removed-text: #d54e53;
+  --claude: #d97757; --codex: #b8bec8; --gemini: #8aabee;
+  --app-clackatoo: #f8cd5a; --app-eyespy: #d59cf1; --app-framewright: #b7d36b;
+  --ws1: #f8cd5a; --ws2: #7cb7f5;
+  --tag-caf: #8fd18a; --tag-need: #e89a3c;
+  --shadow: 0 12px 40px rgba(0, 0, 0, .5), 0 1px 3px rgba(0, 0, 0, .35);
+  color-scheme: dark;
+}
+[data-theme='light'] {
+  --window: #eeece7;
+  --pane: #faf9f6;
+  --bar: #f2f0eb;
+  --raised: rgba(20, 22, 26, .04);
+  --raised-edge: rgba(20, 22, 26, .11);
+  --code: rgba(20, 22, 26, .035);
+  --card: rgba(20, 22, 26, .02);
+  --card-edge: rgba(20, 22, 26, .09);
+  --hover: rgba(20, 22, 26, .045);
+  --chat-chosen: rgba(20, 22, 26, .08);
+  --palette: #ffffff;
+  --palette-edge: #dad7d0;
+  --chosen: #e7e4dd;
+  --track: rgba(20, 22, 26, .14);
+  --text: #1d2024;
+  --muted: #666c75;
+  --faint: #8b9098;
+  --accent: #d9b24a;
+  --accent-text: #8a6a12;
+  --accent-faint: rgba(217, 178, 74, .12);
+  --accent-edge: rgba(176, 134, 30, .4);
+  --on-accent: #1d2024;
+  --link: #2d6db5;
+  --warning: #c0404b;
+  --warning-bg: rgba(192, 64, 75, .07);
+  --warning-edge: rgba(192, 64, 75, .3);
+  --caution: #b0660f;
+  --caution-bg: rgba(176, 102, 15, .08);
+  --ok: #2f7a3a;
+  --caf: #1f9488;
+  --added: rgba(60, 140, 50, .12); --added-text: #2f7a3a;
+  --removed: rgba(192, 64, 75, .1); --removed-text: #b0343f;
+  --claude: #c96442; --codex: #5d6470; --gemini: #4f78c9;
+  --app-clackatoo: #b5891c; --app-eyespy: #b06fd4; --app-framewright: #5f7a1a;
+  --ws1: #d9a72a; --ws2: #2d6db5;
+  --tag-caf: #2f7a3a; --tag-need: #a35a08;
+  --shadow: 0 12px 40px rgba(40, 35, 25, .18), 0 1px 3px rgba(40, 35, 25, .1);
+  color-scheme: light;
+}
+
+@keyframes si-spin { to { transform: rotate(360deg); } }
+@keyframes si-blink { 50% { opacity: 0; } }
+
+/* ---- The composer ---- */
+.si-foot { padding-bottom: 14px; }
+.si-column { width: 100%; max-width: var(--si-column, 760px); margin: 0 auto; padding: 0 var(--si-gutter, 22px); position: relative; }
+.si-i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; vertical-align: -3px; }
+.si-i.si-fill { fill: currentColor; stroke: none; }
+.si-spin { animation: si-spin 1s linear infinite; }
+
+/* Messages waiting, and a refused send: shelves just above the box. */
+.si-tray { margin: 0 10px 7px; background: var(--raised); border: 1px solid var(--raised-edge); border-radius: 13px; padding: 6px 12px 4px; font-size: 14px; }
+.si-tray .si-head { font-size: 12.5px; color: var(--muted); display: flex; justify-content: space-between; padding: 1px 0 3px; }
+.si-tray .si-item { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--raised-edge); }
+.si-tray .si-item:first-of-type { border-top: 0; }
+.si-tray .si-item .si-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.si-tray.si-problem { background: var(--warning-bg); border-color: var(--warning-edge); color: var(--warning); display: flex; gap: 8px; align-items: center; padding: 8px 12px; }
+
+/* What attaches on top of the box: questions, the agent banner, refusals.
+   Pages bring their own content; this is its frame. */
+.si-attached { margin: 0 12px; border: 1px solid var(--accent-edge); border-bottom: 0; background: var(--accent-faint); border-radius: 16px 16px 0 0; padding: 12px 16px 14px; font-size: 14px; }
+.si-attached.si-warning { border-color: var(--warning-edge); background: var(--warning-bg); }
+.si-attached.si-calm { border-color: var(--palette-edge); background: var(--card); }
+
+.si-box { background: var(--raised); border: 1px solid var(--raised-edge); border-radius: 22px; padding: 14px 14px 10px 20px; display: flex; flex-direction: column; gap: 14px; }
+.si-box.si-joined { border-color: var(--accent-edge); }
+.si-box.si-joined.si-warning { border-color: var(--warning-edge); }
+.si-box.si-joined.si-calm { border-color: var(--palette-edge); }
+.si-draft { min-height: 50px; max-height: 240px; overflow: hidden; font-size: 15.5px; }
+.si-draft.si-ph { color: var(--muted); }
+.si-caret { display: inline-block; width: 2px; height: 1.15em; background: var(--accent); vertical-align: -3px; margin-left: 1px; animation: si-blink 1s steps(1) infinite; }
+.si-locked { display: flex; gap: 8px; align-items: center; color: var(--muted); min-height: 50px; font-size: 14.5px; }
+.si-locked b { color: var(--text); font-weight: 600; }
+.si-controls { display: flex; align-items: center; gap: 4px; margin-left: -8px; }
+.si-control { display: inline-flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 9px; font-size: 15px; white-space: nowrap; min-width: 0; color: var(--text); }
+.si-control:hover { background: var(--hover); }
+.si-control.si-open { background: var(--chat-chosen); }
+.si-control.si-quiet { color: var(--muted); }
+.si-control .si-label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
+.si-control .si-part { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.si-control .si-sep { color: var(--muted); }
+.si-control .si-chev { color: var(--muted); }
+.si-control .si-mono { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 13.5px; }
+.si-held { color: var(--caution); }
+.si-spacer { flex: 1; }
+.si-ring { width: 37px; height: 37px; position: relative; flex: none; display: grid; place-items: center; font-size: 10.5px; color: var(--muted); border-radius: 50%; }
+.si-ring svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+.si-ring.si-filling { color: var(--caution); }
+.si-ring.si-full { color: var(--warning); }
+.si-ring.si-open { background: var(--chat-chosen); }
+.si-ring .si-dot { position: absolute; right: 1px; top: 1px; width: 8px; height: 8px; border-radius: 50%; background: var(--caution); box-shadow: 0 0 0 2px var(--pane); }
+.si-ring .si-dot.si-out { background: var(--warning); }
+.si-round { width: 33px; height: 33px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--chosen); color: var(--muted); margin-left: 4px; }
+.si-round.si-lit { background: var(--accent); color: var(--on-accent); }
+.si-round.si-small { width: 29px; height: 29px; color: var(--text); }
+.si-waits { font-size: 12.5px; color: var(--muted); margin-right: 4px; }
+
+/* ---- The settings menu: as clackatoo's model menu, opening upward ---- */
+.si-menu { position: absolute; bottom: 58px; left: var(--si-gutter, 22px); width: min(500px, calc(100% - 2 * var(--si-gutter, 22px))); background: var(--palette); border: 1px solid var(--palette-edge); border-radius: 12px; box-shadow: var(--shadow); font-size: 14px; overflow: hidden; z-index: 6; display: flex; color: var(--text); }
+.si-rail { width: 52px; flex: none; border-right: 1px solid var(--palette-edge); display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 0; }
+.si-rail .si-r { width: 38px; height: 38px; border-radius: 8px; display: grid; place-items: center; color: var(--muted); position: relative; }
+.si-rail .si-r.si-on { background: var(--chat-chosen); }
+.si-rail .si-r.si-on::before { content: ''; position: absolute; left: -7px; top: 9px; bottom: 9px; width: 3px; border-radius: 2px; background: var(--accent); }
+.si-rail .si-r.si-lit { color: var(--accent-text); background: var(--chat-chosen); }
+.si-rail .si-r .si-need { position: absolute; right: 4px; bottom: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--caution); box-shadow: 0 0 0 2px var(--palette); }
+.si-rail .si-grow { flex: 1; }
+.si-rail .si-r .si-i { width: 20px; height: 20px; }
+.si-main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 8px 10px 10px; }
+.si-search { display: flex; gap: 9px; align-items: center; padding: 6px 4px 8px; border-bottom: 2px solid var(--accent); color: var(--muted); font-size: 15px; margin-bottom: 8px; }
+.si-list { display: flex; flex-direction: column; gap: 2px; min-height: 150px; }
+.si-row { display: grid; grid-template-columns: 1fr auto auto; gap: 0 12px; padding: 6px 10px; border-radius: 8px; align-items: center; }
+.si-row.si-chosen { background: var(--chosen); }
+.si-row .si-name { font-size: 15px; }
+.si-row .si-sub { grid-column: 1; display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.si-row .si-sub .si-i { width: 13px; height: 13px; }
+.si-row .si-tick { grid-row: 1 / span 2; grid-column: 2; color: var(--muted); }
+.si-row .si-star { grid-row: 1 / span 2; grid-column: 3; color: var(--muted); }
+.si-row .si-star.si-fav { color: var(--accent); }
+.si-row .si-when { font-size: 12px; color: var(--caution); display: inline-flex; gap: 4px; align-items: center; }
+.si-menu .si-note { padding: 6px 6px 4px; color: var(--muted); font-size: 13.5px; }
+.si-menu .si-note b { color: var(--text); }
+.si-menu .si-note .si-act { display: inline-flex; margin-top: 10px; }
+.si-learn { color: var(--link); }
+.si-effort { border-top: 1px solid var(--palette-edge); margin-top: 10px; padding-top: 8px; }
+.si-heading { display: flex; justify-content: space-between; padding: 0 8px; font-size: 13px; color: var(--muted); }
+.si-heading .si-aside { color: var(--text); }
+.si-heading .si-aside.si-held { color: var(--caution); display: inline-flex; gap: 4px; align-items: center; }
+.si-slider { padding: 2px 12px 0; }
+.si-slider .si-track { position: relative; height: 4px; background: var(--track); border-radius: 2px; margin: 12px 4px 10px; }
+.si-slider .si-fill-bar { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 2px; }
+.si-slider .si-knob { position: absolute; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--palette); }
+.si-slider .si-stop { position: absolute; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: var(--muted); }
+.si-slider .si-names { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.si-slider .si-names .si-on { color: var(--text); font-weight: 600; }
+.si-btn { font-size: 13px; border-radius: 999px; padding: 4px 13px; border: 1px solid var(--raised-edge); background: var(--raised); color: var(--text); display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.si-btn.si-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+/* What can't be changed while a model change is held. */
+.si-effort.si-off, .si-r.si-off { opacity: .45; }
+</style>
+<style>
+  /* The theme and the composer are in si.css. */
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--window); color: var(--text); font: 15px/1.55 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  code, .mono { font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace; }
+  code { font-size: .87em; background: var(--raised); padding: .05em .35em; border-radius: 5px; }
+  p { margin: 0 0 8px; }
+  p:last-child { margin-bottom: 0; }
+  ul { margin: 4px 0 8px; padding-left: 20px; }
+  .page { max-width: 1240px; margin: 0 auto; padding: 22px 26px 60px; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 26px; }
+
+  /* The page's own controls: plain, off to the side. */
+  nav { position: sticky; top: 18px; align-self: start; font-size: 13px; max-height: calc(100vh - 36px); overflow: auto; }
+  nav h1 { font-size: 15px; margin: 0 0 2px; }
+  nav .sub { color: var(--muted); margin: 0 0 14px; }
+  nav .group { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin: 14px 0 4px; }
+  nav button { display: block; width: 100%; text-align: left; font: inherit; color: var(--text); background: none; border: 0; border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+  nav button:hover { background: var(--hover); }
+  nav button[aria-pressed='true'] { background: var(--chat-chosen); }
+  nav button[aria-pressed='true']::before { content: ''; display: inline-block; width: 3px; height: 12px; background: var(--accent); border-radius: 2px; margin: 0 7px -1px -4px; }
+  nav .themes { display: flex; gap: 4px; }
+  nav .themes button { width: auto; flex: 1; text-align: center; }
+
+  main { min-width: 0; }
+  .about { background: var(--pane); border: 1px solid var(--raised-edge); border-radius: 12px; padding: 12px 16px; margin-bottom: 18px; font-size: 14px; }
+  .about .what { margin: 0; }
+  .about .how { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+  /* A pane, as clackatoo's chat is drawn in: the transcript's column,
+     and the composer at its foot. */
+  .pane { --si-column: 780px; --si-gutter: 26px; background: var(--pane); border: 1px solid var(--raised-edge); border-radius: 12px; height: 760px; display: flex; overflow: hidden; }
+  .convo { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .scroll { flex: 1; overflow: auto; padding: 22px 0 10px; }
+  .column { max-width: 780px; margin: 0 auto; padding: 0 26px; }
+  .notes { margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 26px; font-size: 13.5px; }
+  .notes h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 4px; }
+  .notes ul { margin: 0; padding-left: 18px; }
+  .notes li { margin: 2px 0; }
+
+  svg.i { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; vertical-align: -2px; }
+  svg.i.fill { fill: currentColor; stroke: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .caret::after { content: '▍'; color: var(--accent); animation: pulse 1s steps(1) infinite; margin-left: 1px; }
+
+  /* ---- A turn ---- */
+  .sent { margin: 0 0 14px auto; max-width: 78%; width: fit-content; background: var(--raised); border: 1px solid var(--raised-edge); border-radius: 14px; padding: 8px 13px; }
+  .turn { margin-bottom: 26px; }
+  .meta { color: var(--faint); font-size: 12px; display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .meta .sep::before { content: '·'; }
+  .line-div { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); margin: 6px 0 22px; }
+  .line-div::before, .line-div::after { content: ''; flex: 1; height: 1px; background: var(--raised-edge); }
+  .turn .line-div { margin: 2px 0 12px; }
+  .imported { opacity: .72; }
+  .answer { font-size: 15px; }
+  .on-own { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+
+  .fail { border: 1px solid var(--warning-edge); background: var(--warning-bg); border-radius: 12px; padding: 11px 14px; margin-top: 10px; font-size: 14px; }
+  .fail .why { display: flex; gap: 9px; color: var(--text); }
+  .fail .why svg { color: var(--warning); margin-top: 3px; }
+  .fail .said { margin: 8px 0 0 24px; padding-left: 10px; border-left: 2px solid var(--warning-edge); color: var(--muted); font-size: 13px; }
+  .fail .said b { font-weight: 600; color: var(--muted); }
+  .fail .acts { margin: 10px 0 0 24px; display: flex; gap: 8px; align-items: center; }
+  .btn { font-size: 13px; border-radius: 999px; padding: 4px 13px; border: 1px solid var(--raised-edge); background: var(--raised); color: var(--text); display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+  .btn.quiet { background: none; border-color: transparent; color: var(--muted); }
+  .caf-badge { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; color: var(--caf); border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; margin-right: 6px; vertical-align: 1px; }
+
+  .note { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; color: var(--muted); margin: 0 0 22px; padding: 9px 12px; border-radius: 10px; background: var(--card); border: 1px solid var(--card-edge); }
+  .note svg { color: var(--muted); margin-top: 3px; }
+  .note.caution { background: var(--caution-bg); border-color: transparent; color: var(--text); }
+  .note.caution svg { color: var(--caution); }
+  .turn .note { margin: 0 0 10px; }
+  .unknown { font-size: 13px; color: var(--muted); border: 1px dashed var(--raised-edge); border-radius: 8px; padding: 6px 10px; margin: 6px 0; display: flex; gap: 8px; align-items: center; }
+  .lost { margin: 4px 0 8px; border-radius: 12px; padding: 10px 14px; background: var(--caution-bg); font-size: 14px; display: flex; gap: 10px; align-items: flex-start; }
+  .lost svg { color: var(--caution); margin-top: 3px; }
+  .lost .next { color: var(--muted); font-size: 13px; }
+  .lost .stderr { margin-top: 6px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--muted); white-space: pre-wrap; }
+
+  .diff { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; line-height: 1.6; border-radius: 8px; overflow: hidden; border: 1px solid var(--raised-edge); background: var(--code); }
+  .diff .path { padding: 4px 10px; color: var(--muted); border-bottom: 1px solid var(--raised-edge); display: flex; justify-content: space-between; }
+  .diff .l { padding: 0 10px; white-space: pre; display: flex; gap: 12px; }
+  .diff .l .n { color: var(--faint); width: 22px; text-align: right; flex: none; }
+  .diff .l.add { background: var(--added); }
+  .diff .l.del { background: var(--removed); }
+  .out { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; background: var(--code); border: 1px solid var(--raised-edge); border-radius: 8px; padding: 7px 10px; color: var(--muted); }
+  .out .ok { color: var(--ok); }
+  .out .bad { color: var(--warning); }
+  .plus { color: var(--added-text); }
+  .minus { color: var(--removed-text); }
+  .st-done { color: var(--faint); }
+  .st-run { color: var(--accent-text); }
+  /* Drawn for what CAF doesn't provide yet. */
+  .later { display: inline-block; font-size: 10.5px; font-weight: 600; letter-spacing: .04em; color: var(--muted); border: 1px dashed var(--muted); border-radius: 4px; padding: 0 5px; line-height: 1.5; vertical-align: 1px; font-family: system-ui, sans-serif; }
+
+  /* ---- The summary line: what a turn did, in one line of chips ---- */
+  .summary { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 10px; padding: 4px 6px; margin-left: -6px; border-radius: 10px; cursor: pointer; user-select: none; }
+  .summary:hover { background: var(--hover); }
+  .summary .lead { font-size: 12.5px; color: var(--muted); margin-right: 4px; display: inline-flex; gap: 6px; align-items: center; }
+  .summary .toggle { color: var(--muted); margin-left: 2px; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+  .summary.live { cursor: default; }
+  .summary.live:hover { background: none; }
+  .chip { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; border: 1px solid var(--raised-edge); background: var(--card); border-radius: 999px; padding: 2px 10px; }
+  .chip.run { border-color: var(--accent-edge); color: var(--accent-text); }
+  .chip.fail { border-color: var(--warning-edge); color: var(--warning); }
+
+  /* ---- The timeline: the steps in order, on a rail ---- */
+  .tl { position: relative; margin: 2px 0 10px 2px; }
+  .tl::before { content: ''; position: absolute; left: 10px; top: 10px; bottom: 10px; width: 1.5px; background: var(--raised-edge); }
+  .tl .node { position: relative; padding: 3px 0 3px 32px; font-size: 14px; }
+  .tl .node .dot { position: absolute; left: 0; top: 4px; width: 22px; height: 22px; border-radius: 50%; background: var(--pane); border: 1.5px solid var(--raised-edge); display: grid; place-items: center; color: var(--muted); }
+  .tl .node .dot svg { width: 12px; height: 12px; }
+  .tl .node.run .dot { border-color: var(--accent); color: var(--accent-text); }
+  .tl .node.fail .dot { border-color: var(--warning); color: var(--warning); }
+  .tl .node.waiting .dot { border-color: var(--accent); color: var(--accent-text); }
+  .tl .node.waiting .r { color: var(--accent-text); }
+  .tl .node .head { display: flex; gap: 8px; align-items: baseline; min-height: 24px; }
+  .tl .node .head .t { flex: 1; min-width: 0; }
+  .tl .node .head .r { color: var(--faint); font-size: 12px; white-space: nowrap; }
+  .tl .node .body { margin: 6px 0 8px; }
+  .tl .node.words { color: var(--muted); }
+  .tl .node.think .t { color: var(--muted); font-style: italic; }
+  .tl .node .note { margin: 0; }
+
+  /* ---- What attaches to the composer: a question waiting on the user ---- */
+  .si-attached .what { display: flex; gap: 9px; align-items: flex-start; }
+  .si-attached .what svg { color: var(--accent-text); margin-top: 3px; }
+  .si-attached.si-calm .what svg { color: var(--muted); }
+  .si-attached .acts { margin: 10px 0 0 24px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .si-attached .acts .hint { color: var(--muted); font-size: 12px; margin-left: auto; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <h1>The transcript</h1>
+    <p class="sub">CAF SI · <a href="/caf/standard-interface/overview" style="color:var(--link)">all pages</a></p>
+    <div id="states"></div>
+    <div class="group">Theme</div>
+    <div class="themes">
+      <button data-theme-btn="dark">Dark</button>
+      <button data-theme-btn="light">Light</button>
+    </div>
+  </nav>
+  <main>
+    <div class="about">
+      <p class="what" id="what"></p>
+      <p class="how" id="how"></p>
+    </div>
+    <div class="pane" id="pane"></div>
+    <div class="notes">
+      <div>
+        <h3>How it's built</h3>
+        <ul>
+          <li>A finished turn is its message, one summary line of chips saying what the work was, and the agent's answer.</li>
+          <li>Clicking the summary opens the timeline in its place: every step in order, on a rail. Clicking again folds it.</li>
+          <li>A running turn always shows its timeline, live.</li>
+          <li>Failures, CAF's notes and a lost chat are never folded away.</li>
+          <li>A question waiting on the user attaches to the top of the composer, and the step it's about points to it.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>What CAF decides</h3>
+        <ul>
+          <li><b>A chat is turns, a turn is items:</b> words, thinking, tool calls, CAF's notes, the app's own items, and anything CAF couldn't read.</li>
+          <li><b>A failure is in CAF's words</b> (<code>FailureReason</code>), with what the agent said quoted apart, and CAF's remedy (<code>Remedy</code>).</li>
+          <li><b>Questions aren't items:</b> they're a list on the chat (<code>Chat.questions</code>), and come and go.</li>
+          <li><b>Later</b>, marked so in the pictures: an edit's diff and its +/− counts, a command's output as it runs, and the compaction line. CAF doesn't record them yet.</li>
+        </ul>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+// CAF SI's shared composer: the one every page draws, so they can't drift
+// apart. compose.html is where it's designed and explained; the other pages
+// use it as it is. Needs si.css.
+//
+//   SI.composer(state) -> HTML
+//
+// A state says what the chat is doing; anything left out has its default
+// (see DEFAULTS). Pages put what attaches on top of the box (a question, the
+// agent banner, a refusal) in `attached`, with `joined` saying its tone.
+
+(() => {
+  const svg = (d, cls = '', style = '') => `<svg class="si-i ${cls}" viewBox="0 0 24 24"${style ? ` style="${style}"` : ''}>${d}</svg>`
+  const icon = {
+    send: svg('<path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/>', '', 'width:17px;height:17px'),
+    stop: svg('<rect x="3" y="3" width="18" height="18" rx="3"/>', 'si-fill', 'width:12px;height:12px'),
+    chev: svg('<path d="M6 9l6 6 6-6"/>', 'si-chev', 'width:12px;height:12px'),
+    bolt: svg('<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>', 'si-fill', 'width:13px;height:13px;color:var(--accent-text)'),
+    boltLine: svg('<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>'),
+    boltFill: svg('<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>', 'si-fill'),
+    clock: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', '', 'width:14px;height:14px'),
+    tick: svg('<path d="M5 12l5 5 9-11"/>', '', 'width:15px;height:15px'),
+    warn: svg('<path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17.5v.5"/>', '', 'width:15px;height:15px'),
+    lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>', '', 'width:15px;height:15px'),
+    unplug: svg('<path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 01-10 0zM12 16v5M3 3l18 18"/>', '', 'width:15px;height:15px'),
+    search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>', '', 'width:15px;height:15px'),
+    star: svg('<path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8 6.6 19.7l1.1-6.1L3.2 9.4l6.1-.8z"/>', '', 'width:15px;height:15px'),
+    starFill: svg('<path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8 6.6 19.7l1.1-6.1L3.2 9.4l6.1-.8z"/>', 'si-fill', 'width:15px;height:15px'),
+    folder: svg('<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>'),
+    spin: svg('<path d="M12 3a9 9 0 109 9"/>', 'si-spin', 'width:15px;height:15px'),
+    download: svg('<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>', '', 'width:14px;height:14px'),
+  }
+
+  // The agents' marks, in their colours.
+  function mark(agent = 'claude', size = 18) {
+    const st = `width:${size}px;height:${size}px`
+    if (agent === 'codex') return svg('<circle cx="12" cy="12" r="8.5"/><path d="M8 12h8M12 8v8"/>', '', `${st};color:var(--codex)`)
+    if (agent === 'gemini') return svg('<path d="M12 2c.6 5.4 4.6 9.4 10 10-5.4.6-9.4 4.6-10 10-.6-5.4-4.6-9.4-10-10 5.4-.6 9.4-4.6 10-10z"/>', 'si-fill', `${st};color:var(--gemini)`)
+    let rays = ''
+    for (let n = 0; n < 12; n++) {
+      const a = (n * Math.PI) / 6, r = n % 2 ? 7.2 : 10
+      rays += `<line x1="12" y1="12" x2="${(12 + r * Math.cos(a)).toFixed(2)}" y2="${(12 + r * Math.sin(a)).toFixed(2)}"/>`
+    }
+    return svg(rays, '', `${st};color:var(--claude);stroke-width:2.6`)
+  }
+  const AGENT_NAME = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' }
+  const AGENT_FULL = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini' }
+
+  // What Claude offers, as recorded live (claude-0.98.0-live.jsonl).
+  const MODELS = [
+    { name: 'Default (recommended)', d: 'Opus 5.5' },
+    { name: 'Opus 5.5', d: 'For complex work and everyday tasks' },
+    { name: 'Sonnet 5.5', d: 'Most efficient for simpler tasks' },
+    { name: 'Haiku 5.5', d: 'Fastest for quick answers' },
+  ]
+  // What each model offers beside it: the agent says, and it changes with
+  // the model. Opus's are as recorded; Sonnet's are made up, to show a model
+  // offering fewer levels and no fast mode.
+  const OFFERS = {
+    'Opus 5.5': { efforts: ['Low', 'Medium', 'High', 'Xhigh', 'Max'], fast: true },
+    'Sonnet 5.5': { efforts: ['Low', 'Medium', 'High'], fast: false },
+  }
+  // Favourites are the app's to keep, as clackatoo keeps its own.
+  const FAVOURITES = ['Opus 5.5', 'Sonnet 5.5']
+  // The agents a new chat may be with, and what each still needs.
+  const AGENTS = [{ id: 'claude' }, { id: 'codex', needs: 'Not installed' }, { id: 'gemini', needs: 'Signed out' }]
+  const QUEUED = ['Now update the callers in crates/save too, and run its tests.', 'Then write a changelog line for the rename.']
+
+  const DEFAULTS = {
+    agent: 'claude',
+    text: '', running: false, stopping: false, waiting: 0, waitingFor: 'this turn', waitingNote: null, problem: null, gate: false,
+    // A string, or { text, icon: 'lock' | 'unplug', bold }: nothing can be sent.
+    blocked: null,
+    // known | unknown | learning | none
+    settings: 'known', model: 'Opus 5.5', effort: 'High', fast: true, held: {},
+    menu: false, filter: 'agent', menuAgent: null,
+    // Percent of the context used, or null before there's any (a new chat).
+    // The ring's dot for an account limit: false, or the lowest window's lowness, 'low' or 'out'.
+    context: 9, ringOpen: false, ringDot: false,
+    narrow: false,
+    // A new chat: the menu's rail lists every agent. A folder chip only when the app lets users choose one.
+    newChat: false, folder: null,
+    attached: '', joined: null, placeholder: null, after: '',
+  }
+
+  function ring(s) {
+    if (s.context == null) return ''
+    const p = s.context, r = 15.5, c = 2 * Math.PI * r
+    const cls = p > 95 ? ' si-full' : p > 80 ? ' si-filling' : ''
+    return `<span class="si-ring${cls}${s.ringOpen ? ' si-open' : ''}" title="Context: ${p}% used"><svg viewBox="0 0 37 37">` +
+      `<circle cx="18.5" cy="18.5" r="${r}" fill="none" stroke="var(--raised-edge)" stroke-width="2.5"/>` +
+      `<circle cx="18.5" cy="18.5" r="${r}" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="${(c * p / 100).toFixed(1)} ${c.toFixed(1)}"/></svg>${p}%${s.ringDot ? `<span class="si-dot${s.ringDot === 'out' ? ' si-out' : ''}"></span>` : ''}</span>`
+  }
+
+  function control(s) {
+    const m = mark(s.agent), name = AGENT_NAME[s.agent]
+    if (s.settings === 'none') return `<span class="si-control si-quiet">${m}<span class="si-label">${name}</span></span>`
+    if (s.settings === 'learning') return `<span class="si-control si-quiet">${m}<span class="si-label">Learning ${name}'s settings…</span>${icon.spin}</span>`
+    if (s.settings === 'unknown') return `<span class="si-control si-quiet${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${s.narrow ? 'Settings' : s.newChat ? name : 'Settings not known yet'}</span>${icon.chev}</span>`
+    if (s.settings === 'failed') return `<span class="si-control si-quiet${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${s.narrow ? 'Settings' : `Couldn't learn ${name}'s settings`}</span>${icon.chev}</span>`
+    const part = (now, later) => later ? `<span class="si-part si-held" title="${s.running ? 'From the next turn' : 'Not applied yet'}">${icon.clock}${later}</span>` : `<span class="si-part">${now}</span>`
+    const fast = OFFERS[s.model] && OFFERS[s.model].fast && s.fast
+    return `<span class="si-control${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${part(s.model, s.held.model)}<span class="si-sep">·</span>${part(s.effort, s.held.effort)}${fast ? icon.bolt : ''}</span>${icon.chev}</span>`
+  }
+
+  function rail(s, fast) {
+    const off = s.held && s.held.model ? ' si-off' : ''
+    let h = `<div class="si-rail"><span class="si-r${s.filter === 'favs' ? ' si-on' : ''}" title="Favourites">${icon.starFill}</span>`
+    const agents = s.newChat ? AGENTS : [{ id: s.agent }]
+    for (const a of agents) {
+      const on = s.filter !== 'favs' && (s.menuAgent || s.agent) === a.id
+      h += `<span class="si-r${on ? ' si-on' : ''}" title="${AGENT_FULL[a.id]}${a.needs ? ': ' + a.needs.toLowerCase() : ''}">${mark(a.id, 20)}${a.needs ? '<span class="si-need"></span>' : ''}</span>`
+    }
+    h += '<span class="si-grow"></span>'
+    if (fast) h += `<span class="si-r${s.fast ? ' si-lit' : ''}${off}" title="Fast mode ${s.fast ? 'on' : 'off'}: faster answers, may cost more">${s.fast ? icon.boltFill : icon.boltLine}</span>`
+    return h + '</div>'
+  }
+
+  function menu(s) {
+    const name = AGENT_NAME[s.agent]
+    if (s.menuAgent && s.menuAgent !== s.agent) {
+      const a = AGENTS.find(x => x.id === s.menuAgent)
+      const what = a.needs === 'Not installed' ? `${AGENT_FULL[a.id]} isn't installed yet.` : `${AGENT_FULL[a.id]} needs you to sign in.`
+      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note"><b>${what}</b><br>Choose it, and this chat will offer to ${a.needs === 'Not installed' ? 'install it' : 'sign you in'} once you send. Its models show here once it's ready.<br><span class="si-btn si-primary si-act">Use ${AGENT_NAME[a.id]}</span></div></div></div>`
+    }
+    if (s.settings === 'failed') {
+      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF couldn't learn which models and settings ${name} offers. It tries again when the chat opens, or now.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
+    }
+    if (s.settings === 'unknown') {
+      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF doesn't know yet which models and settings ${name} offers. It finds out when the chat opens, or now, without sending a message.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
+    }
+    const offers = OFFERS[s.model]
+    let h = `<div class="si-menu">${rail(s, offers.fast)}<div class="si-main"><div class="si-search">${icon.search}Search models…</div><div class="si-list">`
+    h += MODELS.filter(m => s.filter !== 'favs' || FAVOURITES.includes(m.name)).map(m => {
+      const now = m.name === s.model, later = m.name === s.held.model, fav = FAVOURITES.includes(m.name)
+      return `<div class="si-row${now ? ' si-chosen' : ''}"><span class="si-name">${m.name}</span>` +
+        `<span class="si-tick">${now ? icon.tick : later ? `<span class="si-when">${icon.clock}after this turn</span>` : ''}</span>` +
+        `<span class="si-star${fav ? ' si-fav' : ''}">${fav ? icon.starFill : icon.star}</span><span class="si-sub">${mark(s.agent, 13)}${m.d}</span></div>`
+    }).join('') + '</div>'
+    const E = offers.efforts, at = E.indexOf(s.effort), pct = n => (n / (E.length - 1)) * 100
+    const aside = s.held.effort ? `<span class="si-aside si-held">${icon.clock}${s.held.effort} after this turn</span>` : `<span class="si-aside">${s.effort}</span>`
+    h += `<div class="si-effort${s.held.model ? ' si-off' : ''}"><div class="si-heading"><span>Effort${s.held.model ? ' · ' + s.model + "'s: change it once " + s.held.model + ' applies' : ''}</span>${aside}</div><div class="si-slider"><div class="si-track"><div class="si-fill-bar" style="width:${pct(at)}%"></div>` +
+      E.map((_, n) => `<span class="si-stop" style="left:${pct(n)}%"></span>`).join('') + `<span class="si-knob" style="left:${pct(at)}%"></span></div>` +
+      `<div class="si-names">${E.map((e, n) => `<span class="${n === at ? 'si-on' : ''}">${e}</span>`).join('')}</div></div></div>`
+    return h + '</div></div>'
+  }
+
+  function composer(state) {
+    const s = { ...DEFAULTS, ...state, held: { ...(state.held || {}) } }
+    const name = AGENT_NAME[s.agent]
+    let h = '<div class="si-foot"><div class="si-column">'
+    const waiting = typeof s.waiting === 'number' ? QUEUED.slice(0, s.waiting) : s.waiting
+    if (waiting.length) {
+      h += `<div class="si-tray"><div class="si-head"><span>Waiting for ${s.waitingFor} · ${waiting.length}</span><span>${s.waitingNote || `Stop drops ${waiting.length === 1 ? 'it' : 'these'} too`}</span></div>` +
+        waiting.map(t => `<div class="si-item">${icon.clock}<span class="si-text">${t}</span></div>`).join('') + '</div>'
+    }
+    if (s.problem) h += `<div class="si-tray si-problem">${icon.warn}${s.problem}</div>`
+    h += s.attached
+    const joined = s.attached ? ` si-joined${s.joined ? ' si-' + s.joined : ''}` : ''
+    h += `<div class="si-box${joined}">`
+    if (s.blocked) {
+      const b = typeof s.blocked === 'string' ? { text: s.blocked } : s.blocked
+      h += `<div class="si-locked">${icon[b.icon || 'lock']}<span>${b.bold ? `<b>${b.bold}</b> ` : ''}${b.text}</span></div>`
+      if (b.controls !== false) h += `<div class="si-controls"><span class="si-control si-quiet">${mark(s.agent)}<span class="si-label">${s.settings === 'known' ? s.model + ' · ' + s.effort : name}</span></span><span class="si-spacer"></span>${ring(s)}</div>`
+      return h + `</div>${s.after}</div></div>`
+    }
+    const ph = s.placeholder || (s.newChat ? `Message ${name} to start` : s.gate ? `Message ${name}: it waits until ${name} is ready` : s.running ? `Message ${name}: it waits for this turn` : `Message ${name}`)
+    h += s.text ? `<div class="si-draft">${s.text}<span class="si-caret"></span></div>` : `<div class="si-draft si-ph">${s.narrow ? ph.split(':')[0] : ph}</div>`
+    h += `<div class="si-controls">${control(s)}`
+    if (s.folder) h += `<span class="si-control">${icon.folder}<span class="si-mono">${s.folder}</span>${icon.chev}</span>`
+    h += '<span class="si-spacer"></span>'
+    if (s.running && s.text && !s.narrow) h += '<span class="si-waits">waits for this turn</span>'
+    h += ring(s)
+    if (s.stopping) h += `<span class="si-round" title="Stopping…">${icon.spin}</span>`
+    else if (s.running && !s.text) h += `<span class="si-round si-lit" title="Stop${waiting.length ? ', dropping the waiting messages' : ''}">${icon.stop}</span>`
+    else if (s.running) h += `<span class="si-round si-small" title="Stop">${icon.stop}</span><span class="si-round si-lit" title="Send: it waits for this turn">${icon.send}</span>`
+    else h += `<span class="si-round${s.text ? ' si-lit' : ''}" title="Send">${icon.send}</span>`
+    h += '</div></div>'
+    if (s.menu) h += menu(s)
+    return h + `${s.after}</div></div>`
+  }
+
+  window.SI = { composer, control, menu, ring, mark, icon, MODELS, OFFERS, FAVOURITES, AGENTS, AGENT_NAME }
+})()
+</script>
+<script>
+  // ---- Icons ----
+  const I = (d, extra = '') => `<svg class="i" viewBox="0 0 24 24" ${extra}>${d}</svg>`
+  const icon = {
+    read: I('<path d="M4 4h10l6 6v10H4z"/><path d="M14 4v6h6"/>'),
+    edit: I('<path d="M4 20h4L19 9l-4-4L4 16z"/>'),
+    delete: I('<path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13"/>'),
+    move: I('<path d="M4 12h14M13 6l6 6-6 6"/>'),
+    search: I('<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/>'),
+    execute: I('<path d="M5 7l5 5-5 5M12 18h7"/>'),
+    think: I('<path d="M9 18h6M10 21h4M12 3a6 6 0 00-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0012 3z"/>'),
+    fetch: I('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 6 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-6-3.5-9s1-6.5 3.5-9z"/>'),
+    other: I('<circle cx="12" cy="12" r="3"/>'),
+    words: I('<path d="M4 6h16M4 12h12M4 18h8"/>'),
+    check: I('<path d="M5 12l5 5 9-11"/>'),
+    x: I('<path d="M6 6l12 12M18 6L6 18"/>'),
+    spin: I('<path d="M12 3a9 9 0 109 9"/>', 'style="animation:spin 1s linear infinite"'),
+    warn: I('<path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17.5v.5"/>'),
+    info: I('<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/>'),
+    shield: I('<path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/>'),
+    clock: I('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+    chevR: I('<path d="M9 6l6 6-6 6"/>', 'style="width:12px;height:12px"'),
+    chevD: I('<path d="M6 9l6 6 6-6"/>', 'style="width:12px;height:12px"'),
+    unplug: I('<path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 01-10 0zM12 16v5M3 3l18 18"/>'),
+    restore: I('<path d="M4 12a8 8 0 1 0 2.3-5.7M4 4v5h5"/>'),
+  }
+  const mark = SI.mark('claude', 15)
+
+  // ---- What the agent does ----
+  // A step is its kind, the agent's own title for it, shown as given
+  // (`ToolCall.title`), and its status.
+  const T = {
+    think: (text, took) => ({ k: 'think', text, took }),
+    tool: (kind, title, status, extra = {}) => ({ k: 'tool', kind, title, status, ...extra }),
+    words: (html) => ({ k: 'words', html }),
+    note: (html, tone) => ({ k: 'note', html, tone }),
+    compacted: () => ({ k: 'compacted' }),
+  }
+  // An edit's diff and its counts are drawn as they'll be once CAF records
+  // file changes: later. Until then an edit opens to its output.
+  const DIFF_CODE = [
+    { n: 41, t: 'pub fn parse_header(text: &str) -> Result<Header, ConfigError> {' },
+    { n: 42, t: '    let first = text.lines().next().unwrap();', del: true },
+    { n: 42, t: '    let Some(first) = text.lines().next() else {', add: true },
+    { n: 43, t: '        return Err(ConfigError::Empty);', add: true },
+    { n: 44, t: '    };', add: true },
+    { n: 45, t: '    Header::from_line(first)' },
+  ]
+  const DIFF_TEST = [
+    { n: 88, t: '#[test]', add: true },
+    { n: 89, t: 'fn empty_file_is_an_error() {', add: true },
+    { n: 90, t: '    assert_eq!(parse_header(""), Err(ConfigError::Empty));', add: true },
+    { n: 91, t: '}', add: true },
+  ]
+  const OUT_TEST = 'running 14 tests\n...\n<span class="ok">test result: ok. 14 passed; 0 failed</span>; finished in 0.41s'
+  const OUT_LIVE = 'Compiling caf-core v0.9.0\nrunning 14 tests\ntest config::reads_a_header ... ok\ntest config::empty_file_is_an_error ...'
+  const OUT_FAIL = '<span class="bad">error[E0599]: no variant named `Empty` found for enum `ConfigError`</span>\n  --> crates/core/src/config.rs:43:33\n<span class="bad">error: could not compile `caf-core`</span>'
+
+  const ASK = 'The config loader panics on an empty file. Can you fix it and add a test?'
+  const WORK = [
+    T.think("The panic is likely the unwrap on the first line read: an empty file has no lines, so <code>next()</code> is <code>None</code>…", '8s'),
+    T.tool('read', 'Read crates/core/src/config.rs', 'done'),
+    T.tool('search', 'grep "parse_header(" crates', 'done'),
+    T.words('Found it: <code>parse_header</code> unwraps the first line, which an empty file doesn\'t have.'),
+    T.tool('edit', 'Edit crates/core/src/config.rs', 'done', { path: 'crates/core/src/config.rs', plus: 3, minus: 1, diff: DIFF_CODE }),
+    T.tool('edit', 'Edit crates/core/tests/config.rs', 'done', { path: 'crates/core/tests/config.rs', plus: 4, minus: 0, diff: DIFF_TEST }),
+    T.tool('execute', 'cargo test -p caf-core config', 'done', { out: OUT_TEST, took: '6s' }),
+  ]
+  const ANSWER = T.words('<p>Fixed. An empty file now gives <code>ConfigError::Empty</code> instead of panicking: <code>parse_header</code> checks for a first line before reading it.</p><p>I added <code>empty_file_is_an_error</code> to the config tests, and all 14 pass.</p>')
+  const done = (extra = {}) => ({ t: 'turn', ask: ASK, life: 'finished', took: '42s', at: '14:32', model: 'Opus 5.5', items: [...WORK, ANSWER], ...extra })
+
+  const STATES = [
+    { group: 'Turns' },
+    { id: 'finished', label: 'A finished turn', what: '<b>A turn that read, searched, edited two files and ran the tests, then answered.</b> Its work is one summary line; the answer is in full.',
+      entries: [{ t: 'time', text: 'Today 14:32' }, done()] },
+    { id: 'finished-open', label: 'A finished turn, opened', what: "<b>The same turn with its summary clicked.</b> Each step is the agent's own title for it, in order. An edit opens to its diff, which is Later: CAF doesn't record file changes yet. Click the summary again to fold it.",
+      openFirst: true, entries: [{ t: 'time', text: 'Today 14:32' }, done()] },
+    { id: 'running', label: 'Working now', what: "<b>The same turn while it runs.</b> Its timeline is always open. The tests are running; their output as they run is Later.",
+      entries: [{ t: 'time', text: 'Today 14:32' },
+        { t: 'turn', ask: ASK, life: 'running', took: '31s', at: '14:32', model: 'Opus 5.5', items: [...WORK.slice(0, 6), T.tool('execute', 'cargo test -p caf-core config', 'running', { out: OUT_LIVE, took: '4s', live: true })] }] },
+    { id: 'stopped', label: 'A step failed, then stopped', what: '<b>A build failed partway, the agent started to fix it, and the user pressed Stop.</b> The failed step is a red chip; opened, it shows its output. A message waiting for the turn was dropped by Stop too: it has no steps, so no summary line.',
+      entries: [{ t: 'time', text: 'Today 14:32' },
+        { t: 'turn', ask: ASK, life: 'stopped', took: '23s', at: '14:32', model: 'Opus 5.5', items: [...WORK.slice(0, 5), T.tool('execute', 'cargo build -p caf-core', 'failed', { out: OUT_FAIL, took: '3s' }), T.think('The variant doesn\'t exist yet: I need to add <code>Empty</code> to <code>ConfigError</code> first…', '2s')] },
+        { t: 'turn', ask: 'Then write a changelog line for the fix.', life: 'stopped', at: '14:32', items: [] }] },
+    { id: 'on-own', label: 'The agent, on its own', what: "<b>A turn the agent started by itself,</b> here when a command it left running finished. Nobody sent it, so there's no message.",
+      entries: [done(),
+        { t: 'turn', starter: 'agent', life: 'finished', took: '3s', at: '14:41', model: 'Opus 5.5', items: [T.tool('other', 'Read output of cargo bench', 'done'), T.words('<p>The benchmark you asked for finished: parsing a 1 MB config takes <b>2.1 ms</b>, down from 2.4 ms before the change.</p>')] }] },
+    { group: 'Asking and failing' },
+    { id: 'permission', label: 'Asking permission', what: "<b>The agent asks before running a command.</b> The question attaches to the composer, and the step points to it. The answers are the agent's own; none is chosen beforehand.",
+      entries: [{ t: 'time', text: 'Today 14:50' },
+        { t: 'turn', ask: 'Clear out the build cache and rebuild.', life: 'running', took: '6s', at: '14:50', model: 'Opus 5.5', items: [T.think('Removing <code>target</code> is the simplest way to clear the cache.', '2s'), T.tool('execute', 'rm -rf target', 'pending')],
+          question: { title: 'rm -rf target', options: ['Allow', 'Always allow', 'Reject'] } }] },
+    { id: 'usage-limit', label: 'Failed: usage limit', what: "<b>The turn hit a usage limit partway.</b> CAF's sentence says what happened; what the agent said is quoted apart, never as CAF's advice. The remedy is CAF's: Send again.",
+      entries: [{ t: 'time', text: 'Today 14:32' },
+        { t: 'turn', ask: ASK, life: 'failed', took: '19s', at: '14:32', model: 'Opus 5.5', items: WORK.slice(0, 4),
+          failure: { why: 'Claude hit a usage limit.', said: "You've reached your 5-hour limit. It resets at 23:40.", remedy: 'Send again' } }] },
+    { id: 'sign-in', label: 'Failed: sign in', what: '<b>The agent wanted a sign-in before doing anything.</b> The remedy is Sign in, which signs in with CAF\'s own command for the agent. Once signed in, the user sends the message again: CAF never does it by itself.',
+      entries: [{ t: 'time', text: 'Today 09:05' },
+        { t: 'turn', ask: ASK, life: 'failed', at: '09:05', model: 'Opus 5.5', items: [], failure: { why: 'Claude wants you to sign in.', remedy: 'Sign in' } }] },
+    { id: 'setting', label: 'Failed: setting not applied', what: "<b>A model chosen for this chat isn't offered any more,</b> so CAF dropped the choice, said so, and didn't send the message.",
+      entries: [{ t: 'time', text: 'Today 15:10' },
+        { t: 'note', html: "Claude doesn't offer the model <code>claude-opus-4-8</code>, so that choice was dropped: the app's default, or else Claude's own, applies." },
+        { t: 'turn', ask: 'Summarise what changed today.', life: 'failed', at: '15:10', items: [], failure: { why: "A setting chosen for this chat, such as a model, couldn't be applied, so CAF didn't send the message. The app's default, or else Claude's own, applies now: sending it again uses that.", remedy: 'Send again' } }] },
+    { group: 'CAF and the chat' },
+    { id: 'notes', label: "CAF's notes", model: 'Sonnet 5.5', what: "<b>CAF speaks in its own voice, never as the agent.</b> Here Claude no longer had the conversation, so it remembers nothing from before. Later, during a turn, Claude changed its model by itself.",
+      entries: [done(),
+        { t: 'note', tone: 'caution', html: "Claude no longer had this conversation, so a new one was started: it remembers nothing from before." },
+        { t: 'turn', ask: 'What did we change in the config loader?', life: 'finished', took: '4s', at: '16:02', model: 'Opus 5.5', items: [T.note('Claude changed by itself to the model Sonnet 5.5, and this chat follows it.'), T.words("<p>I don't have the earlier conversation, but the last commit touching <code>config.rs</code> adds an empty-file check to <code>parse_header</code>.</p>")] }] },
+    { id: 'lost', label: 'Lost', what: "<b>The agent's process stopped between turns.</b> CAF says why, and what the next message will do.",
+      entries: [done(), { t: 'lost', why: 'Claude stopped.', next: 'Your next message starts it again, and carries on this chat where Claude can.', stderr: 'Error: connection to api.anthropic.com reset\n    at TLSSocket.onClose (node:_tls_wrap:612:21)' }] },
+    { id: 'slow', label: 'Slow to open', what: "<b>CAF's own question, not the agent's:</b> Claude is taking long to open the chat. The message that started it waits on the composer's tray.",
+      // Waiting for the chat to open, as the composer page draws it.
+      composer: { running: true, waiting: ['Now add a test for a file with only comments.'], waitingFor: 'Claude to open', placeholder: 'Message Claude: it waits for Claude to open' },
+      entries: [done(), { t: 'slow' }] },
+    { id: 'history', label: "Claude's own history", what: "<b>A chat that carries on a conversation Claude already had, such as one started in Claude's own app.</b> What Claude replays of it comes in as history CAF didn't see happen: marked, muted, with no times. One item was something CAF couldn't read. In the next turn, Claude compacted its context: that line is Later, as CAF doesn't record compaction yet.",
+      entries: [
+        { t: 'imported', text: "From Claude's own history" },
+        { t: 'turn', imported: true, ask: 'Sketch a parser for the config format.', life: 'finished', items: [T.tool('read', 'Read docs/config.md', 'done'), T.words('<p>Here\'s a first sketch: a header line, then <code>key = value</code> pairs…</p>')] },
+        { t: 'turn', imported: true, ask: 'Add comments with #.', life: 'finished', items: [{ k: 'unknown' }, T.words('<p>Done: lines starting with <code>#</code> are skipped.</p>')] },
+        { t: 'time', text: 'Today 09:12' },
+        { t: 'turn', ask: 'Where did we leave the parser?', life: 'finished', took: '4s', at: '09:12', model: 'Opus 5.5', items: [T.compacted(), T.words('<p>It reads the header and <code>key = value</code> pairs, and skips <code>#</code> comments. Empty files aren\'t handled yet.</p>')] }] },
+    { id: 'model', label: 'Model changed, cut off', model: 'Sonnet 5.5', what: "<b>The model changed between turns</b> (the divider from the composer page). The next turn was cut off before it finished: here the app shut down while it ran.",
+      entries: [done(),
+        { t: 'model', text: 'Sonnet 5.5', from: 'Opus 5.5' },
+        { t: 'turn', ask: 'Now update the callers in crates/save too.', life: 'cutoff', took: '12s', at: '14:40', model: 'Sonnet 5.5', items: [T.tool('search', 'grep "load_config(" crates/save', 'done'), T.tool('edit', 'Edit crates/save/src/lib.rs', 'done', { path: 'crates/save/src/lib.rs', plus: 1, minus: 1, diff: [{ n: 12, t: 'let config = load_config(path)?;', del: true }, { n: 12, t: 'let config = read_config(path)?;', add: true }] })] }] },
+  ]
+
+  // ---- Pieces ----
+  const LATER = '<span class="later">Later</span>'
+  const counts = (plus, minus) => `<span class="plus">+${plus}</span> <span class="minus">−${minus}</span>`
+  const diffHtml = (tool) => `<div class="diff"><div class="path"><span>${tool.path} ${LATER}</span><span>${counts(tool.plus, tool.minus)}</span></div>` +
+    tool.diff.map(l => `<div class="l${l.add ? ' add' : l.del ? ' del' : ''}"><span class="n">${l.n}</span>${(l.add ? '+ ' : l.del ? '- ' : '  ') + l.t.replace(/</g, '&lt;')}</div>`).join('') + '</div>'
+  const outHtml = (tool) => `<div class="out">${tool.live ? LATER + '\n' : ''}${tool.out}${tool.live ? '<span class="caret"></span>' : ''}</div>`
+  const toolRight = (tool) => tool.took || ''
+  const toolBody = (tool) => tool.diff ? diffHtml(tool) : tool.out ? outHtml(tool) : ''
+
+  function failure(f) {
+    const acts = f.remedy === 'Send again' ? `<span class="btn primary">${icon.restore}Send again</span>`
+      : f.remedy === 'Sign in' ? '<span class="btn primary">Sign in</span><span class="btn quiet">Send again</span>' : ''
+    return `<div class="fail"><div class="why">${icon.warn}<div><span class="caf-badge">CAF</span>${f.why}</div></div>` +
+      (f.said ? `<div class="said"><b>Claude said:</b> “${f.said}”</div>` : '') +
+      (acts ? `<div class="acts">${acts}</div>` : '') + '</div>'
+  }
+  const noteHtml = (n) => `<div class="note${n.tone ? ' ' + n.tone : ''}">${n.tone ? icon.warn : icon.info}<div><span class="caf-badge">CAF</span>${n.html}</div></div>`
+  const compactedHtml = () => `<div class="line-div">Claude compacted its context: it has a summary of everything before this ${LATER}</div>`
+  function chatEntry(e) {
+    if (e.t === 'time') return `<div class="line-div">${e.text}</div>`
+    if (e.t === 'imported') return `<div class="line-div">${icon.restore} ${e.text}</div>`
+    if (e.t === 'model') return `<div class="line-div">${mark}<span>${e.text}</span><span style="opacity:.75">from ${e.from}</span></div>`
+    if (e.t === 'note') return noteHtml(e)
+    if (e.t === 'lost') return `<div class="lost">${icon.unplug}<div><b>${e.why}</b><div class="next">${e.next}</div>${e.stderr ? `<div class="stderr">${e.stderr}</div>` : ''}</div></div>`
+    return null
+  }
+  const lifeText = { finished: '', stopped: 'Stopped', failed: 'Failed', cutoff: 'Cut off before it finished', running: 'Working' }
+  function meta(turn) {
+    if (turn.imported) return ''
+    const bits = [turn.model ? `${mark}${turn.model}` : '', turn.took ? (turn.life === 'running' ? `${turn.took} so far` : turn.took) : '', turn.at || '', lifeText[turn.life] ? `<span style="color:${turn.life === 'failed' ? 'var(--warning)' : 'var(--muted)'}">${lifeText[turn.life]}</span>` : '']
+    return `<div class="meta">${bits.filter(Boolean).join('<span class="sep"></span>')}</div>`
+  }
+  const sent = (turn) => turn.ask ? `<div class="sent">${turn.ask}</div>` : `<div class="on-own">${mark}Claude, on its own</div>`
+  // The answer: the agent's last words, with only CAF's notes after them,
+  // once the turn has finished.
+  function finalAnswer(turn) {
+    if (turn.life !== 'finished') return null
+    for (let n = turn.items.length - 1; n >= 0; n--) {
+      if (turn.items[n].k === 'words') return turn.items[n]
+      if (turn.items[n].k !== 'note') return null
+    }
+    return null
+  }
+  // What CAF says in a turn is never folded away.
+  const pinned = (it) => it.k === 'note' || it.k === 'compacted'
+
+  // The summary line's chips: the steps, counted by kind.
+  const KIND_WORD = { read: ['Read', 'file', 'files'], search: ['Searched', 'time', 'times'], edit: ['Edited', 'file', 'files'], execute: ['Ran', 'command', 'commands'], fetch: ['Fetched', 'page', 'pages'], delete: ['Deleted', 'file', 'files'], move: ['Moved', 'file', 'files'], other: ['Used', 'tool', 'tools'] }
+  function chipsFor(turn) {
+    const tools = turn.items.filter(i => i.k === 'tool')
+    const thinking = turn.items.filter(i => i.k === 'think')
+    let h = ''
+    if (thinking.length) h += `<span class="chip">${icon.think}Thought ${thinking.map(t => t.took).join(' + ')}</span>`
+    for (const kind of ['read', 'search', 'edit', 'execute', 'fetch', 'delete', 'move', 'other']) {
+      const ts = tools.filter(t => (t.kind === 'think' ? 'other' : t.kind) === kind)
+      if (!ts.length) continue
+      const [verb, one, many] = KIND_WORD[kind]
+      const fail = ts.some(t => t.status === 'failed')
+      let label = kind === 'execute' && ts.length === 1 ? ts[0].title : `${verb} ${ts.length} ${ts.length === 1 ? one : many}`
+      if (kind === 'edit') label += ` ${counts(ts.reduce((a, t) => a + (t.plus || 0), 0), ts.reduce((a, t) => a + (t.minus || 0), 0))} ${LATER}`
+      if (kind === 'execute') label += fail ? ` ${icon.x}` : ` <span class="st-done">${icon.check}</span>`
+      h += `<span class="chip${fail ? ' fail' : ''}">${icon[kind]}${label}</span>`
+    }
+    const unknown = turn.items.filter(i => i.k === 'unknown').length
+    if (unknown) h += `<span class="chip">? ${unknown} ${unknown === 1 ? 'item' : 'items'} this app can't show</span>`
+    return h
+  }
+
+  // One step on the timeline.
+  function node(it, turn) {
+    if (it.k === 'think') return `<div class="node think"><span class="dot">${icon.think}</span><div class="head"><span class="t">Thought for ${it.took}</span><span class="r">${icon.chevR}</span></div></div>`
+    if (it.k === 'words') return `<div class="node words"><span class="dot">${icon.words}</span><div>${it.html}</div></div>`
+    if (it.k === 'unknown') return `<div class="node"><span class="dot">?</span><div class="unknown">Something Claude sent that this app can't show.</div></div>`
+    if (it.k === 'note') return `<div class="node caf"><span class="dot">${icon.info}</span>${noteHtml(it)}</div>`
+    if (it.k === 'compacted') return `<div class="node"><span class="dot">${icon.info}</span>${compactedHtml()}</div>`
+    if (it.status === 'pending' && turn.question) return `<div class="node waiting"><span class="dot">${icon[it.kind]}</span><div class="head"><span class="t">${it.title}</span><span class="r">Waiting for you ↓</span></div></div>`
+    const cls = it.status === 'running' ? ' run' : it.status === 'failed' ? ' fail' : ''
+    // An edit opens to its diff, and a running or failed step to its output.
+    const open = it.status === 'running' || it.status === 'failed' || it.kind === 'edit'
+    const body = open && toolBody(it) ? `<div class="body">${toolBody(it)}</div>` : ''
+    return `<div class="node${cls}"><span class="dot">${it.status === 'running' ? icon.spin : icon[it.kind]}</span><div class="head"><span class="t">${it.title}</span><span class="r">${toolRight(it)}</span>${!open ? `<span class="r">${icon.chevR}</span>` : ''}</div>${body}</div>`
+  }
+
+  // A question waiting on the user, attached to the top of the composer.
+  const attachedQuestion = (q) => `<div class="si-attached"><div class="what">${icon.shield}<div><b>Claude asks permission:</b> ${q.title}</div></div>` +
+    `<div class="acts">${q.options.map(o => `<span class="btn">${o}</span>`).join('')}<span class="hint">Stop cancels this and stops the turn</span></div></div>`
+  const attachedSlow = () => `<div class="si-attached si-calm"><div class="what">${icon.clock}<div><span class="caf-badge">CAF</span>Claude is taking a while to open this chat. It may be busy, or stuck.</div></div>` +
+    '<div class="acts"><span class="btn">Keep waiting</span><span class="btn">Try again</span><span class="btn quiet">Stop</span></div></div>'
+
+  const opened = new Set()
+  let current = 'finished'
+  function render(s) {
+    let h = '', attached = '', running = false
+    s.entries.forEach((e, n) => {
+      if (e.t === 'slow') { attached = attachedSlow(); return }
+      const plain = chatEntry(e); if (plain) { h += plain; return }
+      const key = s.id + ':' + n
+      const ans = finalAnswer(e)
+      const items = ans ? e.items.slice(0, -1) : e.items
+      const steps = items.filter(it => !pinned(it))
+      const live = e.life === 'running'
+      if (live) running = true
+      const open = live || opened.has(key) || (s.openFirst && n === s.entries.findIndex(x => x.t === 'turn'))
+      h += `<div class="turn${e.imported ? ' imported' : ''}">${sent(e)}`
+      if (steps.length) {
+        const lead = live ? `<span class="st-run">${icon.spin}</span>Working ${e.took}` : e.took ? 'Worked ' + e.took : 'Work'
+        h += `<div class="summary${live ? ' live' : ''}"${live ? '' : ` onclick="toggleTurn('${key}')"`}><span class="lead">${lead}</span>${live ? '' : chipsFor(e)}` +
+          `${live ? '' : `<span class="toggle">${open ? icon.chevD + 'Hide steps' : icon.chevR + 'Show steps'}</span>`}</div>`
+      }
+      if (open && steps.length) h += `<div class="tl">${items.map(it => node(it, e)).join('')}</div>`
+      else h += items.filter(pinned).map(it => it.k === 'note' ? noteHtml(it) : compactedHtml()).join('')
+      if (ans) h += `<div class="answer">${ans.html}</div>`
+      if (e.question) attached = attachedQuestion(e.question)
+      if (e.failure) h += failure(e.failure)
+      h += meta(e) + '</div>'
+    })
+    const foot = SI.composer({ running, context: 24, model: s.model || 'Opus 5.5', attached, joined: attached.includes('si-calm') ? 'calm' : null, ...s.composer })
+    return `<div class="convo"><div class="scroll"><div class="column">${h}</div></div>${foot}</div>`
+  }
+  function draw(keepScroll) {
+    const s = STATES.find(x => x.id === current)
+    const old = document.querySelector('#pane .scroll'), top = old ? old.scrollTop : 0
+    document.getElementById('pane').innerHTML = render(s)
+    const sc = document.querySelector('#pane .scroll')
+    if (sc) sc.scrollTop = keepScroll ? top : s.openFirst ? 0 : sc.scrollHeight
+  }
+  window.toggleTurn = (key) => {
+    opened.has(key) ? opened.delete(key) : opened.add(key)
+    draw(true)
+  }
+  function show(id) {
+    current = id
+    const st = STATES.find(x => x.id === id)
+    draw(false)
+    document.getElementById('what').innerHTML = st.what
+    document.getElementById('how').textContent = 'Pick a state on the left. Click a summary line to open a turn, and again to fold it.'
+    for (const b of document.querySelectorAll('[data-state]')) b.setAttribute('aria-pressed', b.dataset.state === id)
+    history.replaceState(null, '', '#' + id)
+  }
+  const list = document.getElementById('states')
+  for (const st of STATES) {
+    if (st.group) {
+      const g = document.createElement('div')
+      g.className = 'group'
+      g.textContent = st.group
+      list.appendChild(g)
+      continue
+    }
+    const b = document.createElement('button')
+    b.textContent = st.label
+    b.dataset.state = st.id
+    b.onclick = () => show(st.id)
+    list.appendChild(b)
+  }
+  function theme(name) {
+    document.documentElement.dataset.theme = name
+    for (const o of document.querySelectorAll('[data-theme-btn]')) o.setAttribute('aria-pressed', o.dataset.themeBtn === name)
+  }
+  for (const b of document.querySelectorAll('[data-theme-btn]')) b.onclick = () => theme(b.dataset.themeBtn)
+  theme(matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+  const start = location.hash.slice(1)
+  show(STATES.some(x => x.id === start) ? start : 'finished')
+  // What build.mjs pictures for Learn: the pane, only as tall as what it
+  // draws, and tall enough for a turn opened whole.
+  SI.shots = {
+    target: '#pane',
+    css: '#pane { height: auto; max-height: 1040px } #pane .scroll { flex: 1 1 auto; min-height: 0 }',
+    states: STATES.filter(x => x.id).map(x => x.id),
+    show,
+  }
+</script>
+</body>
+</html>

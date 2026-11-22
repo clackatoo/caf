@@ -1,0 +1,416 @@
+---
+title: The Transcript
+type: reference
+description: What a chat shows above the composer, as every CAF app should draw it. A finished turn as one summary line that opens into a timeline of its steps, a running turn live, questions attached to the composer, failures and their remedies, CAF's notes, a chat that lost its agent, and history from the agent's own record, with the words for each and what CAF tells the app.
+related:
+  - caf/standard-interface/overview
+  - caf/standard-interface/composer
+  - caf/standard-interface/agents
+  - caf/concepts/chats-turns-and-items
+---
+
+The transcript is the chat itself: everything the user sent and everything
+the agent did, in order, above the composer. It's built from CAF's record
+of the chat, a list of turns, each a list of items (see
+[Chats, turns, and items](~caf/concepts/chats-turns-and-items)).
+
+[See the transcript live](~attachments/caf-si-transcript), every state, in
+dark and light.
+
+![A finished turn: the message, one summary line, and the answer](transcript-finished.webp "A finished turn: its message, one line of chips for the work, and the answer in full. Later: the edit chip's +/− counts")
+
+**Required, all of it**, but for the time dividers, which are the app's, and
+what's marked **Later**. The transcript is inside the chat, and a user
+moving between CAF apps should find it the same in each.
+
+## Its parts
+
+A turn is drawn top to bottom, in one column:
+
+| Part | Where | What it is |
+| --- | --- | --- |
+| The message | Right, in a bubble | What the user sent. A turn the agent started by itself has none (see below). |
+| The summary line | Under the message | What the work was, as a line of chips, led by how long it took. Clicking it opens the timeline. A turn with no steps has none. |
+| The timeline | In place of the summary's chips, once opened | Every step in order, on a rail. |
+| The answer | Under the summary | The agent's last words, in full. |
+| What went wrong | Under the answer | A failure, in CAF's words, with its remedy. |
+| The turn's line | At the foot of the turn | The model, how long the agent worked, when the message was sent, and how the turn ended if not finished. All muted. |
+
+Between turns sit dividers (the time, a new model, history from the agent's
+own record) and what CAF says about the chat. Anything waiting on the user
+attaches to the top of the composer, not to the transcript.
+
+Markdown in the agent's words is drawn as Markdown. The agent's titles for
+its steps and questions are shown as plain text, as given.
+
+**Times.** The time on a turn's line is when the user sent the message
+(the start of `Turn.window`), so a message that waited for the turn before
+it shows when it was sent. How long the agent worked counts from the start
+of its first item from the agent (its words, thinking or a tool, never one
+of CAF's notes) to the turn's end, so the wait isn't counted as work. A turn
+with no items from the agent shows no time taken. Where the app doesn't keep
+thinking (`Host.shows.thinking`), the time the agent spent thinking before
+its first words or tool isn't counted.
+
+## Turns
+
+**A finished turn** is its message, one summary line and the answer, as in
+the picture at the top. The summary line is led by *Worked 42s*, then one
+chip for each kind of step, counted:
+
+- *Thought 8s* for thinking. Each stretch of thinking is listed, not
+  summed: *Thought 8s + 2s*.
+- *Read 1 file*, *Searched 1 time*, *Edited 2 files*, *Fetched 1 page*,
+  *Deleted 1 file*, *Moved 1 file*, by the tool's kind, with the plural as it
+  should be. A tool of kind `Think` or `Other` is counted as *Used 1 tool*.
+- A single command is named by the agent's own title for it, here
+  *cargo test -p caf-core config*, with a tick, or a cross in the warning
+  colour if it failed. Two or more are counted: *Ran 2 commands*.
+- *? 1 item this app can't show*, if the turn has any.
+- Then *Show steps*, muted, with a chevron.
+
+A chip with a failed step is in the warning colour, so a failure is seen
+without opening the turn. In history, where the times aren't known, the line
+is led by *Work* alone.
+
+The answer is the turn's last words from the agent (`ItemKind::Words`),
+once the turn has finished, if nothing but CAF's notes comes after them.
+Anything else the agent said along the way is a step.
+
+![The same turn opened](transcript-finished-open.webp "Opened: every step in order, each the agent's own title for it. Later: an edit's diff and its counts")
+
+**Opened.** Clicking anywhere on the summary line opens the timeline in its
+place, and the line's last words become *Hide steps*. Clicking again folds
+it. Each step is one line on a rail, with its kind's icon:
+
+- Thinking: *Thought for 8s*, muted and in italics. It opens to the
+  thinking itself.
+- A tool: the agent's own title for it, exactly as given, such as
+  *Read crates/core/src/config.rs* or *cargo test -p caf-core config*, with
+  how long it ran on the right. Only the icon comes from its kind; the app
+  never rewords the title. It opens to what the tool gave back.
+- What the agent said along the way, muted, in full.
+
+**Later: an edit's diff.** Drawn: an edit opens to its diff, with *+3 −1*
+in its header, and the summary's edit chip adds the counts up:
+*Edited 2 files +7 −1*. CAF doesn't record what an edit changed yet
+(`ToolCall` has its `title`, `input` and `output`). Until it does, an edit
+is a step like any other: it opens to its output, and its chip has no
+counts. The pictures mark it *Later*.
+
+![A turn running](transcript-running.webp "Running: the timeline is always open, the step running now at its foot. Later: a command's output as it runs, and the diffs")
+
+**Running.** A running turn's timeline is always open, and can't be folded,
+so the user can always see what the agent is doing. The summary line says
+*Working 31s*, with a spinner in the accent, and has no chips; before the
+agent's first item it says *Working*, with no time. The step running now has a
+spinning dot in the accent. The turn's line says
+*Opus 5.5 · 31s so far · 14:32 · Working*. The composer's round button is
+Stop (see [The composer](~caf/standard-interface/composer)).
+
+A step shows what the agent has sent of its output, which for many tools is
+nothing until it ends. **Later: a command's output as it runs**, drawn with
+a caret at its end, which CAF doesn't carry yet.
+
+Once Stop is pressed, and until the agent confirms, the summary says
+*Stopping…* in place of *Working* (not pictured).
+
+![A turn stopped after a step failed](transcript-stopped.webp "Stopped: the failed step's chip is red, and a message that was waiting is stopped too. Later: the edit chip's counts")
+
+**Stopped.** A turn the user stopped folds like a finished one, and its line
+ends *Stopped*, muted. A step that failed makes its chip red: here,
+*cargo build -p caf-core* with a cross. Opened, a failed step shows its
+output, and a step that was still running when the turn ended counts as
+failed.
+
+**A message that never went.** Stop also stops the messages waiting for the
+turn, and a message that waited for an agent that wasn't installed is
+stopped too. Each stays in the transcript as a turn of its own: its message,
+no summary line, and a line of *14:32 · Stopped*. CAF doesn't say whether a
+stopped turn reached the agent, so the app doesn't either.
+
+![A turn the agent started by itself](transcript-on-own.webp "Claude, on its own: no message, the rest as any turn")
+
+**The agent, on its own.** An agent can start a turn by itself, such as when
+a command it left running finishes. It has no message: in its place is the
+agent's mark and *Claude, on its own*, muted. The rest is drawn as any turn.
+CAF doesn't say why the agent started it, so neither does the app. Such a
+turn never fails, so it never has a remedy: it ends finished, stopped, or
+cut off.
+
+**Cut off.** A turn that ended before it finished, without failing or being
+stopped, ends *Cut off before it finished*, muted (see the last picture on
+this page). That happens when the app shuts down during it, when the chat is
+put away during it (`Core::put_away`), or when the app stopped unexpectedly
+and the chat was restored.
+
+A message waiting to be sent (CAF queues it while a turn runs or the chat
+opens) isn't drawn in the transcript: it sits on the composer's tray until it
+goes. **Later:** a turn sent by another chat's agent, or by the app.
+
+## Asking
+
+![A permission question, attached to the composer](transcript-permission.webp "The question attaches to the composer, and the step it's about points to it")
+
+**Asking permission.** When the agent asks before doing something, the
+question attaches to the top of the composer, joined to it with an edge in
+the accent. It says *Claude asks permission:* and then the agent's own title
+for what it wants to do, as plain text. Under that are the agent's own
+answers, labelled as it labels them, here *Allow*, *Always allow* and
+*Reject*, all alike: none is chosen or focused beforehand, and Enter answers
+nothing. On the right, muted: *Stop cancels this and stops the turn*.
+
+The step it's about stays in the timeline, its dot in the accent, and says
+*Waiting for you ↓* on the right. The agent may ask before CAF has seen the
+step, so the question never depends on it.
+
+Answering it carries on the turn. Stop answers it as cancelled, and stops
+the turn.
+
+**Only one thing attaches to the composer at a time.** If several questions
+wait, the oldest attaches, and the next takes its place once it's answered.
+A question comes before the agent banner: when both apply, the question
+attaches, and the banner returns once it's answered. Messages waiting on the
+tray sit above whatever is attached.
+
+## Failing
+
+A failed turn folds like any other, and under it is what went wrong, in a
+box in the warning colour: the CAF badge and CAF's sentence; what the agent
+said about it, if anything, quoted apart; and the remedy, if there is one.
+The turn's line ends *Failed*, in the warning colour.
+
+![A turn that hit a usage limit](transcript-usage-limit.webp "CAF's sentence, the agent's words quoted apart, and Send again")
+
+**What the agent said** is introduced as *Claude said:*, in quotation marks,
+muted, with a rule down its left. It's the agent's words, never CAF's
+advice, and never presented as CAF's.
+
+**Send again** (`Remedy::SendAgain`) is the accent button, with a circling
+arrow. It sends the same message again, as a new turn.
+
+![A turn that needed a sign-in](transcript-sign-in.webp "Sign in, and Send again beside it, quiet")
+
+**Sign in** (`Remedy::SignIn`) is the accent button. It signs in with CAF's
+own command for the agent, never one the agent suggested, and doesn't send
+the message again. So, as the one exception to offering only CAF's remedy,
+**Send again** sits beside it, quiet, for once the user has signed in: CAF
+never sends it again by itself.
+
+CAF gives `SignIn` only where it can sign in to the agent now. When the
+reason is `SignInNeeded` but the remedy isn't `SignIn`, the box says
+*Sign in to Claude, then send again.* in place of the button, with any
+remedy CAF gave instead.
+
+![A turn whose setting couldn't be applied](transcript-setting.webp "CAF says the choice was dropped, and the message wasn't sent")
+
+**A setting not applied.** When a setting chosen for the chat can't be
+applied before a message goes, such as a model the agent no longer offers,
+CAF doesn't send the message. CAF's note above it says which choice was
+dropped, and the failure says the message wasn't sent, and that sending it
+again uses what applies now. Such a turn never reached the agent, so its
+line has no model and no time taken.
+
+What CAF says for each reason, with the agent's name in place of *Claude*:
+
+| Reason | CAF says |
+| --- | --- |
+| `TooLong` | The answer hit the model's length limit. |
+| `TooManySteps` | Claude hit its limit of steps for one turn. |
+| `Refused` | The model refused. The message and everything after it are gone from Claude's memory. |
+| `SignInNeeded` | Claude wants you to sign in. |
+| `AccessDenied` | The account or its credentials can't be used: signing in again doesn't fix it. |
+| `BadRequest` | Claude's provider refused the request as it stood. Sending it again won't help. |
+| `UsageLimit` | Claude hit a usage limit. |
+| `ProviderError` | Claude's provider was overloaded or failed. |
+| `AgentStopped` | Claude stopped while working on it. |
+| `DidNotStop` | Claude didn't stop when asked, so CAF ended the turn and reconnected to Claude. |
+| `BadAnswer` | Claude's answer made no sense. |
+| `SettingNotApplied` | A setting chosen for this chat, such as a model, couldn't be applied, so CAF didn't send the message. The app's default, or else Claude's own, applies now: sending it again uses that. |
+| `Other` | Claude reported an error. |
+
+A reason the app doesn't know yet (a later CAF may add one) is shown as
+*It failed, for a reason this app doesn't know.* Apart from Send again
+beside Sign in, an app offers only the remedy CAF gives, never one of its
+own. **Later:** *Start a new chat*, for `Remedy::NewChat`.
+
+## Who may act
+
+A person watching a chat may not have every right (see
+[Viewers](~caf/concepts/viewers)). What they can't do is never offered
+only to be refused:
+
+- Without the `act` right: no Send again, and a question still attaches, so
+  they can see what's waiting, but its answers are disabled, as are
+  *Keep waiting*, *Try again* and *Stop* when a chat is slow to open.
+- Without the `agents` right: no Sign in. The box says
+  *Sign in to Claude, then send again.* in its place, and Send again stays,
+  given `act`.
+
+## CAF and the chat
+
+![CAF's notes](transcript-notes.webp "CAF speaks with its badge: between turns, and inside one")
+
+**CAF's notes.** CAF speaks in its own voice, never as the agent's: a box
+with the CAF badge. Between turns, it says what happened to the chat; inside
+a turn, what happened during it. A note is never folded away: inside a
+folded turn it shows under the summary line, and in an opened one, in its
+place on the timeline.
+
+A note that the agent remembers nothing from before is in the caution colour,
+with a warning sign, because the user's context is gone and they'll need to
+give it again. The others are calm, with an *i*, muted. The words, with the
+agent's name in place of *Claude*:
+
+| Note | Tone | CAF says |
+| --- | --- | --- |
+| `SessionGone` | Caution | Claude no longer had this conversation, so a new one was started: it remembers nothing from before. |
+| `CannotContinue` | Caution | Claude can't carry on earlier conversations, so a new one was started: it remembers nothing from before. |
+| `SessionStuck` | Caution | Claude's conversation was stuck and couldn't be closed, so a new one was started: it remembers nothing from before. |
+| `NotInstalled` | Calm | Claude isn't installed, so the message that waited for it was stopped. |
+| `InstallFailed` | Calm | Claude's install failed, so the message that waited for it was stopped. |
+| `SignedIn` | Calm | You signed in to Claude: send the message again to try it now. |
+| `AgentChanged` | Calm | Claude changed by itself to the model Sonnet 5.5, and this chat follows it. |
+| `NotOffered` | Calm | Claude doesn't offer the model `claude-opus-4-8`, so that choice was dropped: the app's default, or else Claude's own, applies. |
+| `NotApplied` | Calm | Claude refused the model `claude-opus-4-8`, so that choice was dropped: the app's default, or else Claude's own, applies. |
+
+A note about a setting names the choice by the agent's own id, as CAF keeps
+it, since the agent may no longer offer it. Where the agent still offers it,
+the app may show its name instead, as `AgentChanged` does here. A switch
+that's on or off is named *fast mode on* or *fast mode off*; one the agent
+doesn't offer is named *fast mode* alone: *Claude doesn't offer fast mode,
+so that choice was dropped…*
+
+When the agent changes a setting by itself, the composer follows it: after
+the note here, it shows *Sonnet 5.5*. The turn's line still shows the model
+it was sent on.
+
+![A chat whose agent stopped](transcript-lost.webp "The agent stopped: why, what the next message does, and its last words")
+
+**Lost.** Whenever a chat loses its agent, between turns or during one (the
+turn then fails, and the chat is lost), a box in the caution colour at the
+foot of the transcript says why, in bold, and under it, muted, what the
+user's next message will do. Where the agent left its last lines of error
+output, they're under that, in a monospace font. The box goes once a message
+starts opening the chat again. It's the app's own frame for the chat's
+state, not something CAF says, so it has no CAF badge.
+
+While the agent banner shows, it stands in for this box, which isn't drawn:
+a chat lost after the user chose *Not now* in the banner
+(`Lost { reason: Stopped }`) has what to do next in the banner, and why in
+CAF's note (see [Agents](~caf/standard-interface/agents)).
+
+| Why | It says | Under it |
+| --- | --- | --- |
+| `CouldNotStart` | Claude couldn't be started. | Your next message tries to start it again. And what the system said. |
+| `AgentStopped` | Claude stopped. | Your next message starts it again, and carries on this chat where Claude can. And its last lines. |
+| `Restarted` | Claude was restarted. | Your next message carries on this chat where Claude can. |
+| `SignInNeeded` | Claude wants you to sign in first. | Sign in, then send a message to carry on. |
+| `Refused` | Claude refused to open this chat. | Your next message tries again. And what Claude said, quoted apart. |
+| `Stopped` | You stopped it opening. | Your next message tries again. |
+| `InUse` | Another chat already has this conversation open. | Your next message tries again. |
+| `Incompatible` | One of the sentences below. | Nothing, but for `BadAnswer`. |
+| `ShutDown` | The app closed while this chat was open. | Nothing. |
+
+When Claude can't do what the chat needs (`Lost::Incompatible`), the box says
+why:
+
+| `Incompatible` | It says | Under it |
+| --- | --- | --- |
+| `Protocol` | This version of Claude can't talk to this app. | Nothing. |
+| `HttpMcp` | Claude can't reach one of this chat's tools the way it's connected, so this chat can't run. | Nothing. |
+| `BadAnswer` | Claude's answer made no sense. | Your next message tries again. |
+| `OwnTools` | This isn't the Claude this app knows, so the app can't control its tools, and won't run it. | Nothing. |
+
+![Slow to open](transcript-slow.webp "CAF's question, attached to the composer, with the message waiting on the tray above it")
+
+**While a chat opens,** the transcript shows nothing new: the message
+waits on the composer's tray, and the round button is Stop.
+
+**Slow to open.** If a chat takes long to open, CAF asks the user whether to
+keep waiting. It's CAF's own question, never framed as the agent's, so it
+attaches to the composer calm, with the CAF badge, not in the accent:
+*Claude is taking a while to open this chat. It may be busy, or stuck.* If
+the agent hasn't answered at all, it says
+*Claude is taking a while to start: it hasn't answered at all yet.* The
+answers are **Keep waiting** and **Try again**, as buttons, then **Stop**,
+quiet. Escape keeps waiting, as dismissing it does. Stop gives up, and the
+waiting message ends as stopped. The message waiting for the chat to open
+sits on the tray above it, headed *Waiting for Claude to open · 1* and
+*Stop drops it too*; the box says *Message Claude: it waits for Claude to
+open*, and the round button is Stop, as
+[the composer](~caf/standard-interface/composer) draws it.
+
+## History and dividers
+
+![History from the agent's own record](transcript-history.webp "Turns the agent replayed, marked and muted, with no times. Later: the compaction line")
+
+**The agent's own history.** A chat can carry on a conversation the agent
+already had, such as one started in the agent's own app. What the agent
+replays of it comes in as history CAF didn't see happen. It's headed by a
+muted divider, *From Claude's own history*, with a circling arrow, and its
+turns are muted too, with no times, no turn line and no model, since CAF
+doesn't know them. They fold and open as any turn. A chat CAF restores from
+its own save has its whole record already, and shows none of this.
+
+**What the app can't show.** An item the agent sent that CAF couldn't read
+is kept as it came, and drawn as a dashed box:
+*Something Claude sent that this app can't show.* One of the app's own items
+that this version of the app can't read shows the summary it had, if any,
+or *An item of the app's that this version can't read*. The app draws its
+own items (`ItemKind::App`) as it likes, in their place.
+
+**Later: compaction.** Where the agent summarised its context to make room,
+a muted line inside the turn says *Claude compacted its context: it has a
+summary of everything before this*. CAF doesn't record compaction yet.
+
+![A new model, and a turn cut off](transcript-model.webp "The model divider, then a turn cut off before it finished. Later: the edit chip's counts")
+
+**A new model.** A divider marks where the model changed: the agent's mark,
+the new model, and *from* the old one, muted, as on the composer page. The
+app draws it wherever a turn's model differs from the turn before's.
+
+**Time. Up to the app.** A divider with the time, such as *Today 14:32*,
+where a while has passed between turns. When, and how it's worded, is the
+app's.
+
+## Colour
+
+- **Accent:** what's happening now (the *Working* spinner, the running
+  step's dot), the edge of a question waiting on the user and the dot of the
+  step it's about, and the remedy button.
+- **Warning:** a failure's box, a failed chip, *Failed* on the turn's line.
+- **Caution:** a lost chat, and a note that the agent remembers nothing.
+- **CAF's voice:** the CAF badge, on notes, failures and CAF's own questions.
+- **Muted:** times, counts, thinking, what the agent said along the way, the
+  turn's line, the dividers, the icons of calm notes, and the agent's own
+  history.
+
+Everything else is calm.
+
+## What CAF tells the app
+
+| What the transcript shows | Where it comes from |
+| --- | --- |
+| The turns, in order | `Chat.turns`, each a `Turn`, in the order of the list. History and CAF's notes can be inserted before a waiting turn (`Change::TurnInserted`). |
+| The message | `Turn.starter`: `Starter::User` holds the `UserMessage`. `Starter::Agent` is a turn the agent started by itself, and `Starter::Caf` one of CAF's notes. |
+| How the turn ended | `Turn.life`: `TurnLife::Running`, `Stopping`, `Finished`, `Stopped`, `Failed` or `CutOff`. A `Waiting` one is on the composer's tray. |
+| When it was sent | The start of `Turn.window`. |
+| How long the agent worked | From the start of the first `Words`, `Thinking` or `Tool` item's `Item.window` to the end of `Turn.window`. |
+| The turn's model | `Turn.model`, as the agent said when it was sent. |
+| The steps | `Turn.items`: `ItemKind::Words`, `Thinking`, `Tool`, `Note`, `App` and `Unknown`. Thinking is kept only if the app asks for it (`Host.shows.thinking`). |
+| A tool's line | `ToolCall.title`, as given; its `kind` (`ToolKind`) for the icon and the chip; its `status` (`ToolStatus::Pending`, `Running`, `Done` or `Failed`); and its `Item.window`. |
+| A tool, opened | `ToolCall.output`, as text, and `ToolCall.input`. |
+| An edit's diff and counts | **Later:** CAF doesn't record file changes yet. |
+| A command's output as it runs | **Later.** |
+| Compaction | **Later:** `ItemKind::Compacted`. |
+| A question | `Chat.questions`, oldest first: `QuestionKind::Permission` (its `title`, `options` and the `tool` it's about) or `SlowToOpen` (`adapter_answered`). Answered with `Core::answer`, or a viewer's `FromViewer::Answer`. |
+| Stop | `Core::stop`, or `FromViewer::Stop`: it answers the agent's questions as cancelled, and stops the waiting messages. |
+| A failure | `TurnLife::Failed(Failure)`: its `reason` (`FailureReason`), `agent_said`, and `remedy` (`Remedy::SendAgain` or `SignIn`). |
+| Send again | Sending the turn's message again: `Core::send`, or `FromViewer::Send`. |
+| Sign in | `Core::sign_in`, or a viewer's `FromViewer::Agent` with `AgentAction::SignIn`. |
+| Who may act | The viewer's `Rights`: `act` to send, stop and answer; `agents` to sign in. |
+| A note | `ItemKind::Note`, a `Note`. |
+| A lost chat | `ChatState::Lost`, with its `Lost` reason, and `Incompatible`'s. |
+| History | `Turn.imported`, from a chat opened with `SessionChoice::Continue`. |
+| The model divider | `Turn.model` differing from the turn before's. |

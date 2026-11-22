@@ -1,0 +1,186 @@
+/* CAF SI's shared styles: the default theme, and the composer every page
+   draws. One copy, so the pages can't drift apart.
+
+   The theme is clackatoo's colours (crates/gui/src/colors.rs), with a light
+   mode made to match: white-over-dark tints there are dark-over-light here.
+   Apps keep the roles (see index.html), not these values. */
+
+[data-theme='dark'] {
+  --window: #121416;      /* behind everything */
+  --pane: #0c0e10;        /* a chat's background */
+  --bar: #121416;
+  --raised: rgba(255, 255, 255, .07);      /* the box a message is typed in, a sent message */
+  --raised-edge: rgba(255, 255, 255, .09);
+  --code: rgba(255, 255, 255, .05);
+  --card: rgba(255, 255, 255, .025);
+  --card-edge: rgba(255, 255, 255, .07);
+  --hover: rgba(255, 255, 255, .035);
+  --chat-chosen: rgba(255, 255, 255, .08);
+  --palette: #16181c;     /* menus raised over a chat */
+  --palette-edge: #2e2f36;
+  --chosen: #2f333d;      /* the row picked in a menu; Send unlit */
+  --track: rgba(255, 255, 255, .12);
+  --text: #dde1e6;
+  --muted: #8a9099;
+  --faint: #6b717a;
+  --accent: #d9b24a;      /* act here */
+  --accent-text: #d9b24a;
+  --accent-faint: rgba(217, 178, 74, .1);
+  --accent-edge: rgba(217, 178, 74, .32);
+  --on-accent: #121416;
+  --link: #7cb7f5;
+  --warning: #e06c75;     /* it went wrong */
+  --warning-bg: rgba(224, 108, 117, .1);
+  --warning-edge: rgba(224, 108, 117, .35);
+  --caution: #e89a3c;     /* held, or getting close */
+  --caution-bg: rgba(232, 154, 60, .09);
+  --ok: #8fd18a;
+  --caf: #6fd3c9;         /* CAF's own voice */
+  --added: rgba(185, 202, 74, .13); --added-text: #b9ca4a;
+  --removed: rgba(213, 78, 83, .13); --removed-text: #d54e53;
+  --claude: #d97757; --codex: #b8bec8; --gemini: #8aabee;
+  --app-clackatoo: #f8cd5a; --app-eyespy: #d59cf1; --app-framewright: #b7d36b;
+  --ws1: #f8cd5a; --ws2: #7cb7f5;
+  --tag-caf: #8fd18a; --tag-need: #e89a3c;
+  --shadow: 0 12px 40px rgba(0, 0, 0, .5), 0 1px 3px rgba(0, 0, 0, .35);
+  color-scheme: dark;
+}
+[data-theme='light'] {
+  --window: #eeece7;
+  --pane: #faf9f6;
+  --bar: #f2f0eb;
+  --raised: rgba(20, 22, 26, .04);
+  --raised-edge: rgba(20, 22, 26, .11);
+  --code: rgba(20, 22, 26, .035);
+  --card: rgba(20, 22, 26, .02);
+  --card-edge: rgba(20, 22, 26, .09);
+  --hover: rgba(20, 22, 26, .045);
+  --chat-chosen: rgba(20, 22, 26, .08);
+  --palette: #ffffff;
+  --palette-edge: #dad7d0;
+  --chosen: #e7e4dd;
+  --track: rgba(20, 22, 26, .14);
+  --text: #1d2024;
+  --muted: #666c75;
+  --faint: #8b9098;
+  --accent: #d9b24a;
+  --accent-text: #8a6a12;
+  --accent-faint: rgba(217, 178, 74, .12);
+  --accent-edge: rgba(176, 134, 30, .4);
+  --on-accent: #1d2024;
+  --link: #2d6db5;
+  --warning: #c0404b;
+  --warning-bg: rgba(192, 64, 75, .07);
+  --warning-edge: rgba(192, 64, 75, .3);
+  --caution: #b0660f;
+  --caution-bg: rgba(176, 102, 15, .08);
+  --ok: #2f7a3a;
+  --caf: #1f9488;
+  --added: rgba(60, 140, 50, .12); --added-text: #2f7a3a;
+  --removed: rgba(192, 64, 75, .1); --removed-text: #b0343f;
+  --claude: #c96442; --codex: #5d6470; --gemini: #4f78c9;
+  --app-clackatoo: #b5891c; --app-eyespy: #b06fd4; --app-framewright: #5f7a1a;
+  --ws1: #d9a72a; --ws2: #2d6db5;
+  --tag-caf: #2f7a3a; --tag-need: #a35a08;
+  --shadow: 0 12px 40px rgba(40, 35, 25, .18), 0 1px 3px rgba(40, 35, 25, .1);
+  color-scheme: light;
+}
+
+@keyframes si-spin { to { transform: rotate(360deg); } }
+@keyframes si-blink { 50% { opacity: 0; } }
+
+/* ---- The composer ---- */
+.si-foot { padding-bottom: 14px; }
+.si-column { width: 100%; max-width: var(--si-column, 760px); margin: 0 auto; padding: 0 var(--si-gutter, 22px); position: relative; }
+.si-i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; vertical-align: -3px; }
+.si-i.si-fill { fill: currentColor; stroke: none; }
+.si-spin { animation: si-spin 1s linear infinite; }
+
+/* Messages waiting, and a refused send: shelves just above the box. */
+.si-tray { margin: 0 10px 7px; background: var(--raised); border: 1px solid var(--raised-edge); border-radius: 13px; padding: 6px 12px 4px; font-size: 14px; }
+.si-tray .si-head { font-size: 12.5px; color: var(--muted); display: flex; justify-content: space-between; padding: 1px 0 3px; }
+.si-tray .si-item { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--raised-edge); }
+.si-tray .si-item:first-of-type { border-top: 0; }
+.si-tray .si-item .si-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.si-tray.si-problem { background: var(--warning-bg); border-color: var(--warning-edge); color: var(--warning); display: flex; gap: 8px; align-items: center; padding: 8px 12px; }
+
+/* What attaches on top of the box: questions, the agent banner, refusals.
+   Pages bring their own content; this is its frame. */
+.si-attached { margin: 0 12px; border: 1px solid var(--accent-edge); border-bottom: 0; background: var(--accent-faint); border-radius: 16px 16px 0 0; padding: 12px 16px 14px; font-size: 14px; }
+.si-attached.si-warning { border-color: var(--warning-edge); background: var(--warning-bg); }
+.si-attached.si-calm { border-color: var(--palette-edge); background: var(--card); }
+
+.si-box { background: var(--raised); border: 1px solid var(--raised-edge); border-radius: 22px; padding: 14px 14px 10px 20px; display: flex; flex-direction: column; gap: 14px; }
+.si-box.si-joined { border-color: var(--accent-edge); }
+.si-box.si-joined.si-warning { border-color: var(--warning-edge); }
+.si-box.si-joined.si-calm { border-color: var(--palette-edge); }
+.si-draft { min-height: 50px; max-height: 240px; overflow: hidden; font-size: 15.5px; }
+.si-draft.si-ph { color: var(--muted); }
+.si-caret { display: inline-block; width: 2px; height: 1.15em; background: var(--accent); vertical-align: -3px; margin-left: 1px; animation: si-blink 1s steps(1) infinite; }
+.si-locked { display: flex; gap: 8px; align-items: center; color: var(--muted); min-height: 50px; font-size: 14.5px; }
+.si-locked b { color: var(--text); font-weight: 600; }
+.si-controls { display: flex; align-items: center; gap: 4px; margin-left: -8px; }
+.si-control { display: inline-flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 9px; font-size: 15px; white-space: nowrap; min-width: 0; color: var(--text); }
+.si-control:hover { background: var(--hover); }
+.si-control.si-open { background: var(--chat-chosen); }
+.si-control.si-quiet { color: var(--muted); }
+.si-control .si-label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
+.si-control .si-part { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.si-control .si-sep { color: var(--muted); }
+.si-control .si-chev { color: var(--muted); }
+.si-control .si-mono { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 13.5px; }
+.si-held { color: var(--caution); }
+.si-spacer { flex: 1; }
+.si-ring { width: 37px; height: 37px; position: relative; flex: none; display: grid; place-items: center; font-size: 10.5px; color: var(--muted); border-radius: 50%; }
+.si-ring svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+.si-ring.si-filling { color: var(--caution); }
+.si-ring.si-full { color: var(--warning); }
+.si-ring.si-open { background: var(--chat-chosen); }
+.si-ring .si-dot { position: absolute; right: 1px; top: 1px; width: 8px; height: 8px; border-radius: 50%; background: var(--caution); box-shadow: 0 0 0 2px var(--pane); }
+.si-ring .si-dot.si-out { background: var(--warning); }
+.si-round { width: 33px; height: 33px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--chosen); color: var(--muted); margin-left: 4px; }
+.si-round.si-lit { background: var(--accent); color: var(--on-accent); }
+.si-round.si-small { width: 29px; height: 29px; color: var(--text); }
+.si-waits { font-size: 12.5px; color: var(--muted); margin-right: 4px; }
+
+/* ---- The settings menu: as clackatoo's model menu, opening upward ---- */
+.si-menu { position: absolute; bottom: 58px; left: var(--si-gutter, 22px); width: min(500px, calc(100% - 2 * var(--si-gutter, 22px))); background: var(--palette); border: 1px solid var(--palette-edge); border-radius: 12px; box-shadow: var(--shadow); font-size: 14px; overflow: hidden; z-index: 6; display: flex; color: var(--text); }
+.si-rail { width: 52px; flex: none; border-right: 1px solid var(--palette-edge); display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 0; }
+.si-rail .si-r { width: 38px; height: 38px; border-radius: 8px; display: grid; place-items: center; color: var(--muted); position: relative; }
+.si-rail .si-r.si-on { background: var(--chat-chosen); }
+.si-rail .si-r.si-on::before { content: ''; position: absolute; left: -7px; top: 9px; bottom: 9px; width: 3px; border-radius: 2px; background: var(--accent); }
+.si-rail .si-r.si-lit { color: var(--accent-text); background: var(--chat-chosen); }
+.si-rail .si-r .si-need { position: absolute; right: 4px; bottom: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--caution); box-shadow: 0 0 0 2px var(--palette); }
+.si-rail .si-grow { flex: 1; }
+.si-rail .si-r .si-i { width: 20px; height: 20px; }
+.si-main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 8px 10px 10px; }
+.si-search { display: flex; gap: 9px; align-items: center; padding: 6px 4px 8px; border-bottom: 2px solid var(--accent); color: var(--muted); font-size: 15px; margin-bottom: 8px; }
+.si-list { display: flex; flex-direction: column; gap: 2px; min-height: 150px; }
+.si-row { display: grid; grid-template-columns: 1fr auto auto; gap: 0 12px; padding: 6px 10px; border-radius: 8px; align-items: center; }
+.si-row.si-chosen { background: var(--chosen); }
+.si-row .si-name { font-size: 15px; }
+.si-row .si-sub { grid-column: 1; display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.si-row .si-sub .si-i { width: 13px; height: 13px; }
+.si-row .si-tick { grid-row: 1 / span 2; grid-column: 2; color: var(--muted); }
+.si-row .si-star { grid-row: 1 / span 2; grid-column: 3; color: var(--muted); }
+.si-row .si-star.si-fav { color: var(--accent); }
+.si-row .si-when { font-size: 12px; color: var(--caution); display: inline-flex; gap: 4px; align-items: center; }
+.si-menu .si-note { padding: 6px 6px 4px; color: var(--muted); font-size: 13.5px; }
+.si-menu .si-note b { color: var(--text); }
+.si-menu .si-note .si-act { display: inline-flex; margin-top: 10px; }
+.si-learn { color: var(--link); }
+.si-effort { border-top: 1px solid var(--palette-edge); margin-top: 10px; padding-top: 8px; }
+.si-heading { display: flex; justify-content: space-between; padding: 0 8px; font-size: 13px; color: var(--muted); }
+.si-heading .si-aside { color: var(--text); }
+.si-heading .si-aside.si-held { color: var(--caution); display: inline-flex; gap: 4px; align-items: center; }
+.si-slider { padding: 2px 12px 0; }
+.si-slider .si-track { position: relative; height: 4px; background: var(--track); border-radius: 2px; margin: 12px 4px 10px; }
+.si-slider .si-fill-bar { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 2px; }
+.si-slider .si-knob { position: absolute; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--palette); }
+.si-slider .si-stop { position: absolute; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: var(--muted); }
+.si-slider .si-names { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.si-slider .si-names .si-on { color: var(--text); font-weight: 600; }
+.si-btn { font-size: 13px; border-radius: 999px; padding: 4px 13px; border: 1px solid var(--raised-edge); background: var(--raised); color: var(--text); display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.si-btn.si-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+/* What can't be changed while a model change is held. */
+.si-effort.si-off, .si-r.si-off { opacity: .45; }

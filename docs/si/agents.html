@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAF SI · Agents: installing and signing in</title>
+<link rel="stylesheet" href="si.css">
+<style>
+  /* The theme, the composer and the frame of what attaches to it are in si.css. */
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--window); color: var(--text); font: 15px/1.55 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  code, .mono { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+  code { font-size: .87em; background: var(--raised); padding: .05em .35em; border-radius: 5px; }
+  .page { max-width: 1340px; margin: 0 auto; padding: 22px 26px 60px; display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 26px; }
+  nav { position: sticky; top: 18px; align-self: start; font-size: 13px; max-height: calc(100vh - 36px); overflow: auto; }
+  nav h1 { font-size: 15px; margin: 0 0 2px; }
+  nav .sub { color: var(--muted); margin: 0 0 10px; }
+  nav .group { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin: 14px 0 4px; }
+  nav button { display: block; width: 100%; text-align: left; font: inherit; color: var(--text); background: none; border: 0; border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+  nav button:hover { background: var(--hover); }
+  nav button[aria-pressed='true'] { background: var(--chat-chosen); }
+  nav button[aria-pressed='true']::before { content: ''; display: inline-block; width: 3px; height: 12px; background: var(--accent); border-radius: 2px; margin: 0 7px -1px -4px; }
+  nav .pair { display: flex; gap: 4px; }
+  nav .pair button { width: auto; flex: 1; text-align: center; }
+  main { min-width: 0; }
+  .about { background: var(--pane); border: 1px solid var(--raised-edge); border-radius: 12px; padding: 12px 16px; margin-bottom: 14px; font-size: 14px; }
+  .about p { margin: 0; }
+  .pane { --si-column: 780px; --si-gutter: 26px; background: var(--pane); border: 1px solid var(--raised-edge); border-radius: 12px; height: 680px; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+  .scroll { flex: 1; overflow: auto; padding: 22px 0 10px; display: flex; flex-direction: column; justify-content: flex-end; }
+  .column { max-width: 780px; width: 100%; margin: 0 auto; padding: 0 26px; }
+  .notes { margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 26px; font-size: 13.5px; }
+  .notes h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 4px; }
+  .notes ul { margin: 0; padding-left: 18px; }
+  .notes li { margin: 2px 0; }
+
+  svg.i { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .btn { font-size: 13px; border-radius: 999px; padding: 4px 13px; border: 1px solid var(--raised-edge); background: var(--raised); color: var(--text); display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+  .btn.quiet { background: none; border-color: transparent; color: var(--muted); }
+  .btn.small { font-size: 12px; padding: 2px 10px; }
+  .spinning { color: var(--accent-text); display: inline-flex; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12.5px; }
+
+  /* The chat behind. */
+  .sent { margin: 0 0 6px auto; max-width: 78%; width: fit-content; background: var(--raised); border: 1px solid var(--raised-edge); border-radius: 14px; padding: 8px 13px; }
+  .life { font-size: 12px; color: var(--muted); text-align: right; margin: 0 0 14px; }
+  .working { color: var(--muted); margin: 8px 0 4px; }
+  .note { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; color: var(--muted); margin: 0 0 8px; padding: 9px 12px; border-radius: 10px; background: var(--card); border: 1px solid var(--card-edge); }
+  .note svg { color: var(--caf); margin-top: 3px; }
+  .caf-badge { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; color: var(--caf); border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; margin-right: 6px; vertical-align: 1px; }
+  .empty { text-align: center; color: var(--faint); font-size: 13.5px; margin: auto 0 28px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+
+  /* The banner's content; its frame is si.css's .si-attached. */
+  .b-head { display: flex; gap: 10px; align-items: flex-start; }
+  .b-head .mk { margin-top: 2px; display: inline-flex; }
+  .b-head .txt { flex: 1; min-width: 0; }
+  .b-head .txt b { font-weight: 600; }
+  .b-head .txt .sub { color: var(--muted); font-size: 13px; }
+  .b-head .txt .said { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
+  .b-acts { display: flex; gap: 8px; align-items: center; margin: 10px 0 0 27px; flex-wrap: wrap; }
+  .b-acts .btn.quiet:first-child { margin-left: -13px; }
+  .progress { margin: 10px 0 0 27px; }
+  .progress .track { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+  .progress .fill { height: 100%; background: var(--accent); border-radius: 3px; }
+  .progress .fill.moving { width: 30%; margin-left: 35%; }
+  .progress .row { font-size: 12px; color: var(--muted); margin-top: 5px; }
+  .steps { margin: 12px 0 0 27px; display: flex; flex-direction: column; gap: 10px; }
+  .stepn { display: grid; grid-template-columns: 22px 1fr; gap: 0 10px; align-items: start; }
+  .stepn .n { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--accent-edge); color: var(--accent-text); display: grid; place-items: center; font-size: 11.5px; font-weight: 700; margin-top: 1px; }
+  .stepn .n.done { border-color: var(--card-edge); color: var(--faint); }
+  .code { display: inline-flex; gap: 10px; align-items: center; font-family: ui-monospace, Menlo, monospace; font-size: 20px; letter-spacing: .14em; background: var(--code); border: 1px solid var(--raised-edge); border-radius: 10px; padding: 4px 8px 4px 14px; margin-top: 6px; }
+  .code .copy { font-family: system-ui, sans-serif; font-size: 12px; letter-spacing: 0; }
+  .url { display: flex; gap: 10px; align-items: center; margin-top: 6px; font-size: 12.5px; color: var(--muted); }
+  .url .mono { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+  .paste { display: flex; gap: 8px; margin-top: 6px; max-width: 460px; }
+  .paste .field { flex: 1; border: 1px solid var(--raised-edge); background: var(--pane); border-radius: 8px; padding: 5px 10px; color: var(--faint); font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+
+  /* The agents panel, over the chat. */
+  .pane.is-panel { height: 622px; }
+  .scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, .35); }
+  .agents { position: absolute; inset: 24px 60px; background: var(--palette); border: 1px solid var(--palette-edge); border-radius: 14px; box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden; }
+  .agents header { display: flex; align-items: center; gap: 10px; padding: 0 12px 0 20px; min-height: 52px; border-bottom: 1px solid var(--palette-edge); }
+  .agents header h2 { font-size: 15px; margin: 0; }
+  .agents header .spacer { flex: 1; }
+  .agents .list { padding: 12px 14px 16px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+  .agent { border: 1px solid var(--card-edge); background: var(--card); border-radius: 12px; padding: 11px 16px; display: grid; grid-template-columns: 28px 1fr auto; gap: 2px 12px; align-items: center; }
+  .agent .mk { grid-row: span 2; display: grid; place-items: center; }
+  .agent .name { font-size: 15px; font-weight: 600; display: flex; gap: 8px; align-items: baseline; }
+  .agent .name small { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .agent .facts { grid-column: 2; display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+  .agent .facts span { display: inline-flex; gap: 5px; align-items: center; }
+  .agent .facts .warn { color: var(--warning); }
+  .agent .facts .amber { color: var(--caution); }
+  .tile { width: 22px; height: 22px; border-radius: 6px; border: 1.5px solid var(--muted); color: var(--muted); display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+  .agent .acts { grid-row: 1 / span 2; grid-column: 3; display: flex; gap: 6px; }
+  .agent .more { grid-column: 2 / -1; margin-top: 6px; }
+  .agent .more .progress { margin: 0; }
+  .agent.bad { border-color: var(--warning-edge); }
+  .agents .foot { padding: 2px 4px 0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <h1>Agents</h1>
+    <p class="sub">CAF SI · <a href="index.html" style="color:var(--link)">all pages</a></p>
+    <div id="states"></div>
+    <div class="group">Theme</div>
+    <div class="pair">
+      <button data-theme-btn="dark">Dark</button>
+      <button data-theme-btn="light">Light</button>
+    </div>
+  </nav>
+  <main>
+    <div class="about" id="about"></div>
+    <div class="pane" id="pane"></div>
+    <div class="notes">
+      <div>
+        <h3>How it works</h3>
+        <ul>
+          <li>The banner is about the <b>agent</b>, not the chat: every chat with Claude shows the same one, and it changes in all of them at once.</li>
+          <li>It attaches to the composer, as questions do, so whatever needs the user is in one place.</li>
+          <li>It follows the agent's status, in every chat with it but an archived one: while it isn't installed, while a sign-in is under way, and while it's signed out. Once all's well it says so for a moment, and goes.</li>
+          <li>A question waiting on the user attaches first; the banner comes back once it's answered.</li>
+          <li>A message sent while the chat waits waits on the composer's tray. <b>Not now</b>, only while the chat waits, drops this chat's messages; <b>Stop</b> stops the install or sign-in for every chat.</li>
+          <li>Signing out, and every agent at once, are in the <b>agents panel</b>.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>What CAF decides</h3>
+        <ul>
+          <li><b>Install:</b> <code>Unknown</code>, <code>Missing{size}</code>, <code>Installing{done, size}</code>, <code>Installed{version}</code>, <code>Cannot(Node | Npm | Platform | NoRecipe | Failed(Offline | Corrupt | NoSpace | Stopped | Patch | Other))</code>, or <code>Host</code> (the app starts it, so there's no Install).</li>
+          <li><b>Sign-in:</b> <code>Unknown</code>, <code>SignedOut</code>, <code>SigningIn{url?, code?, paste}</code>, or <code>SignedIn(Account | ApiKey | Gateway | Unknown)</code>. Offer Sign in only while <code>can_sign_in</code> is true.</li>
+          <li>A chat waits (<code>WaitingForAgent</code>) for an agent CAF installs until it's installed, and while a sign-in started when it was signed out is under way. Not for an agent that's merely signed out.</li>
+          <li>A viewer without the <code>agents</code> right gets no link or code from CAF, so it can only say what's happening.</li>
+        </ul>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="si.js"></script>
+<script>
+  const I = (d, extra = '') => `<svg class="i" viewBox="0 0 24 24" ${extra}>${d}</svg>`
+  const icon = {
+    download: I('<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>'),
+    key: I('<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/>'),
+    warn: I('<path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17.5v.5"/>'),
+    check: I('<path d="M5 12l5 5 9-11"/>'),
+    x: I('<path d="M6 6l12 12M18 6L6 18"/>'),
+    spin: I('<path d="M12 3a9 9 0 109 9"/>', 'style="animation:spin 1s linear infinite"'),
+    open: I('<path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/>'),
+    copy: I('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/>'),
+    shieldok: I('<path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>'),
+    lock: I('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>'),
+    info: I('<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/>'),
+    gear: I('<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>'),
+  }
+  // An agent the app has no mark for shows its initial.
+  const tile = name => `<span class="tile">${name[0].toUpperCase()}</span>`
+  const spinning = `<span class="spinning">${icon.spin}</span>`
+
+  // Claude's install, as its profile says: about 627 MB on disk, and Node 22.
+  const SIZE = '627 MB'
+  const ASK = 'Rename <code>load_config</code> to <code>read_config</code> and fix its callers.'
+  const ASK_TEXT = 'Rename load_config to read_config and fix its callers.'
+  const NOT_INSTALLED = "Claude isn't installed, so the message that waited for it was stopped."
+  const INSTALL_FAILED = "Claude's install failed, so the message that waited for it was stopped."
+  const WAIT_INSTALL = "Messages wait until it's installed."
+  const WAIT_SIGN_IN = "Messages wait until you've signed in."
+
+  // ---- The banner, per state ----
+  //
+  // tone: accent (waits on the user), calm (in hand, or done; no role
+  // colour), warning (went wrong, or can't go on).
+  // msg: a message waits in this chat, so Not now drops it.
+  // stopped: the chat's message was stopped, with this CAF note.
+  // gate: the chat waits for its agent. locked: no message can ever go.
+  const B = {
+    checking: { tone: 'calm', spin: true, title: '<b>Checking whether Claude is installed…</b>', sub: 'Messages wait until Claude is ready.', msg: true, gate: true },
+    missing: { tone: 'accent', title: "<b>Claude isn't installed yet.</b>", sub: `Installing it takes about ${SIZE} of disk. ${WAIT_INSTALL}`, primary: `Install · ${SIZE}`, msg: true, gate: true },
+    'not-now': { tone: 'accent', title: "<b>Claude isn't installed yet.</b>", sub: `Installing it takes about ${SIZE} of disk. ${WAIT_INSTALL}`, primary: `Install · ${SIZE}`, stopped: NOT_INSTALLED },
+    starting: { tone: 'calm', title: '<b>Installing Claude…</b>', sub: WAIT_INSTALL, progress: { moving: true, row: 'Getting ready' }, stop: true, msg: true, gate: true },
+    installing: { tone: 'calm', title: '<b>Installing Claude…</b>', sub: WAIT_INSTALL, progress: { pct: 44, row: `276 of about ${SIZE}` }, stop: true, msg: true, gate: true },
+    offline: { tone: 'warning', title: "<b>Couldn't install Claude:</b> the network was out of reach.", sub: 'Check the connection, then try again.', primary: 'Try again', stopped: INSTALL_FAILED },
+    corrupt: { tone: 'warning', title: "<b>Couldn't install Claude:</b> what was downloaded wasn't what was expected, so it was thrown away.", sub: 'Trying again usually works.', primary: 'Try again', stopped: INSTALL_FAILED },
+    nospace: { tone: 'warning', title: "<b>Couldn't install Claude:</b> the disk is full.", sub: `It takes about ${SIZE}. Free some space, then try again.`, primary: 'Try again', stopped: INSTALL_FAILED },
+    patch: { tone: 'warning', title: "<b>Couldn't install Claude:</b> it couldn't be finished once downloaded, so it was removed.", said: "node_modules/@agentclientprotocol/claude-agent-acp/dist/acp-agent.js isn't the file this patch was written for", sub: 'Trying again downloads it afresh. If it fails the same way, this app needs updating.', primary: 'Try again', stopped: INSTALL_FAILED },
+    other: { tone: 'warning', title: "<b>Couldn't install Claude.</b> The installer said:", said: 'npm error code E403 · 403 Forbidden - GET https://registry.npmjs.org/@agentclientprotocol%2fclaude-agent-acp', primary: 'Try again', stopped: INSTALL_FAILED },
+    node: { tone: 'warning', title: "<b>Claude can't be installed here:</b> it needs Node 22 or newer, and this machine has Node 18.", sub: `Install a newer Node, then check again. ${WAIT_INSTALL}`, primary: 'Check again', msg: true, gate: true },
+    npm: { tone: 'warning', title: "<b>Claude can't be installed here:</b> it needs npm, and this machine has none.", sub: `Install npm, then check again. ${WAIT_INSTALL}`, primary: 'Check again', msg: true, gate: true },
+    platform: { agent: 'codex', tone: 'warning', title: "<b>Codex can't be installed here:</b> there's no build of it for this machine.", sub: 'Start a new chat with another agent.', locked: "Codex can't run on this machine, so this chat can't go on." },
+    'signed-out': { tone: 'accent', title: '<b>Claude is signed out.</b>', sub: "Sign in with your Claude account to use it. Claude's sign-in page opens in your browser.", primary: 'Sign in', notNow: true },
+    'link-coming': { tone: 'calm', spin: true, title: "<b>Starting Claude's sign-in…</b>", sub: `The page to sign in on will be here in a moment. ${WAIT_SIGN_IN}`, stop: true, msg: true, gate: true },
+    'signing-in': { tone: 'accent', title: '<b>Sign in to Claude</b>', sub: WAIT_SIGN_IN, signin: { host: 'claude.ai', url: 'https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a-e61b…', paste: true }, stop: true, msg: true, gate: true },
+    'signing-in-code': { agent: 'gemini', tone: 'accent', title: '<b>Sign in to Gemini</b>', sub: WAIT_SIGN_IN, signin: { host: 'accounts.google.com', url: 'https://accounts.google.com/o/oauth2/device?user_code=QWRT-8KZP…', code: 'QWRT-8KZP' }, stop: true, msg: true, gate: true },
+    'signed-in': { tone: 'calm', ok: true, title: '<b>Signed in to Claude</b> with your account.', sub: 'Your message is on its way.', sends: true },
+    // A viewer without the agents right: told what's happening, offered nothing it can't do.
+    'viewer-missing': { tone: 'calm', title: "<b>Claude isn't installed yet.</b>", sub: `You can't install agents here. ${WAIT_INSTALL}`, msg: true, gate: true },
+    'viewer-installing': { tone: 'calm', title: '<b>Installing Claude…</b>', sub: WAIT_INSTALL, progress: { pct: 44, row: `276 of about ${SIZE}` }, msg: true, gate: true },
+    'viewer-signing-in': { tone: 'calm', spin: true, title: '<b>Someone is signing in to Claude.</b>', sub: `You can't sign in to agents here. ${WAIT_SIGN_IN.replace("you've", "they've")}`, msg: true, gate: true },
+  }
+
+  const name = b => SI.AGENT_NAME[b.agent || 'claude']
+
+  // The actions, in order: the primary, Stop, then Not now.
+  function actions(b) {
+    const acts = []
+    if (b.primary) {
+      const ic = b.primary.startsWith('Install') ? icon.download : b.primary === 'Sign in' ? icon.key : ''
+      acts.push(`<span class="btn primary">${ic}${b.primary}</span>`)
+    }
+    if (b.stop) acts.push('<span class="btn">Stop</span>')
+    if (b.msg || b.notNow) acts.push('<span class="btn quiet">Not now</span>')
+    return acts.length ? `<div class="b-acts">${acts.join('')}</div>` : ''
+  }
+
+  function banner(b) {
+    const lead = b.ok ? `<span class="muted">${icon.check}</span>` : b.spin ? spinning : SI.mark(b.agent || 'claude', 17)
+    let h = `<div class="si-attached${b.tone === 'accent' ? '' : ' si-' + b.tone}"><div class="b-head"><span class="mk">${lead}</span><div class="txt">${b.title}`
+    if (b.said) h += `<div class="said">${b.said}</div>`
+    if (b.sub) h += `<div class="sub">${b.sub}</div>`
+    h += '</div></div>'
+    if (b.progress) h += progress(b.progress)
+    if (b.signin) h += signIn(b.signin)
+    return h + actions(b) + '</div>'
+  }
+  function progress(p) {
+    return `<div class="progress"><div class="track"><div class="fill${p.moving ? ' moving' : ''}" style="${p.moving ? '' : 'width:' + p.pct + '%'}"></div></div>${p.row ? `<div class="row">${p.row}</div>` : ''}</div>`
+  }
+  function signIn(si) {
+    let n = 1
+    let h = '<div class="steps">'
+    h += `<div class="stepn"><span class="n">${n++}</span><div>Open the sign-in page on ${si.host}, and sign in there. <span class="btn primary" style="margin-left:6px">${icon.open}Open the sign-in page</span>` +
+      `<div class="url"><span class="mono">${si.url}</span><span class="btn small">${icon.copy}Copy link</span></div></div></div>`
+    if (si.code) h += `<div class="stepn"><span class="n">${n++}</span><div>When it asks for a code, enter this one:<div><span class="code">${si.code}<span class="btn quiet copy">${icon.copy}Copy</span></span></div></div></div>`
+    if (si.paste) h += `<div class="stepn"><span class="n">${n++}</span><div>If the page gives you a code instead, paste it here:<div class="paste"><span class="field">Paste the code</span><span class="btn">Send the code</span></div><div class="url">As it does when the browser is on another machine.</div></div></div>`
+    h += `<div class="stepn"><span class="n done">${n}</span><div class="muted small">That's all: this goes on by itself once you've signed in.</div></div>`
+    return h + '</div>'
+  }
+
+  // ---- The chat ----
+  function chat(b, bare = false) {
+    const agent = b.agent || 'claude'
+    let t = ''
+    if (b.stopped) {
+      t += `<div class="sent">${ASK}</div><div class="life">Stopped</div>`
+      t += `<div class="note">${icon.info}<div><span class="caf-badge">CAF</span>${b.stopped}</div></div>`
+    } else if (b.sends) {
+      t += `<div class="sent">${ASK}</div><div class="working">Reading <code>crates/core</code> •••</div>`
+    } else {
+      t += `<div class="empty">${SI.mark(agent, 26)}A new chat with ${name(b)}</div>`
+    }
+    const joined = b.tone === 'accent' ? 'accent' : b.tone
+    return `<div class="scroll"><div class="column">${t}</div></div>` + SI.composer({
+      agent, settings: 'unknown', context: null, running: !!b.sends, gate: b.gate,
+      blocked: b.locked ? { text: b.locked, icon: 'lock' } : null,
+      placeholder: b.gate ? `Message ${name(b)}: it waits until ${name(b)} is ready` : b.sends ? null : `Message ${name(b)}`,
+      waiting: b.msg ? [ASK_TEXT] : 0, waitingFor: name(b), waitingNote: 'Not now drops it',
+      attached: bare ? '' : banner(b), joined,
+    })
+  }
+
+  // ---- The agents panel ----
+  function agentsPanel(may) {
+    const act = (label, kind = '') => may ? `<span class="btn${kind ? ' ' + kind : ''}">${label}</span>` : ''
+    const row = (mk, title, small, facts, acts, more = '', bad = false) =>
+      `<div class="agent${bad ? ' bad' : ''}"><span class="mk">${mk}</span><span class="name">${title}${small ? ` <small>${small}</small>` : ''}</span><span class="acts">${acts}</span><span class="facts">${facts.join('')}</span>${more}</div>`
+    const f = (ic, text, cls = '') => `<span class="${cls}">${ic}${text}</span>`
+    const tools = f(icon.shieldok, "Uses only this app's tools")
+    let h = chat(B['signed-in'], true)
+    h += '<div class="scrim"></div><div class="agents">'
+    h += `<header>${icon.gear}<h2>Agents</h2><span class="spacer"></span><span class="btn quiet">${icon.x}</span></header><div class="list">`
+    h += row(SI.mark('claude', 22), 'Claude', '0.98.0+caf.1',
+      [f(icon.check, 'Installed'), f(icon.check, 'Signed in with your account'), tools],
+      act('Sign out'))
+    h += row(SI.mark('codex', 22), 'Codex', '',
+      [f(icon.download, 'Not installed · about 52 MB', 'amber'), tools],
+      act('Install', 'primary'))
+    h += row(tile('Cursor'), 'Cursor', '',
+      [f(spinning, 'Installing · 31 of about 70 MB'), tools],
+      act('Stop'), `<div class="more">${progress({ pct: 44 })}</div>`)
+    h += row(SI.mark('gemini', 22), 'Gemini', 'started by this app',
+      [f(icon.lock, 'Signed out', 'amber'), tools],
+      act('Sign in', 'primary'))
+    h += row(tile('OpenCode'), 'OpenCode', '',
+      [f(icon.warn, "Couldn't install: the network was out of reach", 'warn'), tools],
+      act('Try again', 'primary'), '', true)
+    h += row(tile('my-agent'), 'my-agent', 'started by this app',
+      [f(icon.warn, "Can't be used: its own tools can't be turned off", 'warn')],
+      '', '', true)
+    if (!may) h += `<div class="muted small foot">You can see the agents here, but not install them or sign in to them.</div>`
+    return h + '</div></div>'
+  }
+
+  const STATES = [
+    { group: 'Installing' },
+    { id: 'checking', label: 'Checking', what: "<b>CAF hasn't looked yet</b> (<code>Unknown</code>), as just after the app starts. The chat waits, and so does its message." },
+    { id: 'missing', label: 'Not installed', what: "<b>The chat's agent isn't installed.</b> A message was sent, so it waits. Install says the size on disk up front. Not now drops the waiting message." },
+    { id: 'not-now', label: 'After Not now', what: "<b>After Not now.</b> The message was stopped, and CAF says why in the chat. The agent still isn't installed, so the banner stays." },
+    { id: 'starting', label: 'Installing, getting ready', what: '<b>Installing, nothing done yet</b> (<code>done</code> is 0). The bar moves.' },
+    { id: 'installing', label: 'Installing', what: '<b>Installing, with progress:</b> bytes done of about the size. Stop stops the install for every chat; Not now drops only this chat\'s message.' },
+    { id: 'offline', label: 'Failed: offline', what: '<b>The install failed: no network.</b> CAF stopped the waiting message and said so in the chat. Try again starts over.' },
+    { id: 'corrupt', label: 'Failed: damaged download', what: "<b>A download didn't match its checksum,</b> so it was thrown away." },
+    { id: 'nospace', label: 'Failed: disk full', what: '<b>There was no room on the disk.</b>' },
+    { id: 'patch', label: 'Failed: not finished', what: "<b>CAF couldn't patch what it installed</b> (<code>Patch</code>), so it removed it. Which file, and which check, are shown as CAF gives them." },
+    { id: 'other', label: 'Failed: anything else', what: "<b>Any other failure</b> (<code>Other</code>), in the installer's own words." },
+    { id: 'node', label: "Can't: Node", what: '<b>The machine has no Node, or one too old.</b> Nothing to try again until that changes; Check again looks again.' },
+    { id: 'npm', label: "Can't: npm", what: '<b>The machine has no npm.</b>' },
+    { id: 'platform', label: "Can't: no build", what: "<b>There's no build of the agent for this machine.</b> <b>Later:</b> only agents CAF downloads can be missing one, and Claude, its only built-in today, comes from npm. No message could ever go, so the box is locked." },
+    { group: 'Signing in' },
+    { id: 'signed-out', label: 'Signed out', what: '<b>The agent is known to be signed out.</b> Nothing waits: a message sent now goes, and fails asking for a sign-in.' },
+    { id: 'link-coming', label: 'Link coming', what: "<b>The sign-in has started, but hasn't given its link yet.</b> The chat waits, as the agent was signed out." },
+    { id: 'signing-in', label: 'Link and paste', what: "<b>Claude's sign-in:</b> a link to open, and a box to paste a code back into, for when the browser is on another machine." },
+    { id: 'signing-in-code', label: 'Link and code', what: '<b>An agent whose sign-in shows a code</b> to type on its site. <b>Later:</b> Claude\'s doesn\'t, and it\'s the only built-in today; Gemini here is for the example.' },
+    { id: 'signed-in', label: 'Signed in', what: '<b>Signed in.</b> It says how (account, API key or gateway), the waiting message goes, and the banner goes after 4 seconds.' },
+    { group: 'Without the agents right' },
+    { id: 'viewer-missing', label: 'Not installed', what: "<b>A viewer without the <code>agents</code> right.</b> It's told what's needed, but has no Install." },
+    { id: 'viewer-installing', label: 'Installing', what: '<b>The same viewer while someone installs the agent.</b> No Stop: Not now drops only its waiting message.' },
+    { id: 'viewer-signing-in', label: 'Signing in', what: "<b>The same viewer while someone signs in.</b> CAF sends it no link or code, so it can only say what's happening." },
+    { group: 'The agents panel' },
+    { id: 'panel', label: 'Agents panel', what: '<b>Every agent at once:</b> its version, install, sign-in and how, and its actions. <b>Later</b>, in part: Codex, Cursor and OpenCode stand for agents CAF may install one day.' },
+    { id: 'viewer-panel', label: 'Without the agents right', what: '<b>The panel for a viewer without the <code>agents</code> right:</b> where each agent stands, and no actions.' },
+  ]
+
+  function show(id) {
+    const st = STATES.find(x => x.id === id)
+    const pane = document.getElementById('pane')
+    document.getElementById('about').innerHTML = `<p>${st.what}</p>`
+    const panel = id === 'panel' || id === 'viewer-panel'
+    pane.classList.toggle('is-panel', panel)
+    pane.innerHTML = panel ? agentsPanel(id === 'panel') : chat(B[id])
+    for (const b of document.querySelectorAll('[data-state]')) b.setAttribute('aria-pressed', b.dataset.state === id)
+    history.replaceState(null, '', '#' + id)
+  }
+
+  const list = document.getElementById('states')
+  for (const st of STATES) {
+    if (st.group) {
+      const g = document.createElement('div')
+      g.className = 'group'
+      g.textContent = st.group
+      list.appendChild(g)
+      continue
+    }
+    const b = document.createElement('button')
+    b.textContent = st.label
+    b.dataset.state = st.id
+    b.onclick = () => show(st.id)
+    list.appendChild(b)
+  }
+  function theme(name) {
+    document.documentElement.dataset.theme = name
+    for (const o of document.querySelectorAll('[data-theme-btn]')) o.setAttribute('aria-pressed', o.dataset.themeBtn === name)
+  }
+  for (const b of document.querySelectorAll('[data-theme-btn]')) b.onclick = () => theme(b.dataset.themeBtn)
+  theme(matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+  const start = location.hash.slice(1)
+  show(STATES.some(x => x.id === start) ? start : 'missing')
+  // What build.mjs pictures for Learn: the pane only as tall as the chat
+  // needs, but for the panel, which sits over it.
+  SI.shots = {
+    target: '#pane',
+    css: '#pane:not(.is-panel) { height: auto } #pane:not(.is-panel) .scroll { flex: none; min-height: 130px }',
+    states: STATES.filter(x => x.id).map(x => x.id),
+    show,
+  }
+</script>
+</body>
+</html>

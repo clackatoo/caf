@@ -1,0 +1,967 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAF SI · Usage</title>
+<style>
+/* CAF SI's shared styles: the default theme, and the composer every page
+   draws. One copy, so the pages can't drift apart.
+
+   The theme is clackatoo's colours (crates/gui/src/colors.rs), with a light
+   mode made to match: white-over-dark tints there are dark-over-light here.
+   Apps keep the roles (see index.html), not these values. */
+
+[data-theme='dark'] {
+  --window: #121416;      /* behind everything */
+  --pane: #0c0e10;        /* a chat's background */
+  --bar: #121416;
+  --raised: rgba(255, 255, 255, .07);      /* the box a message is typed in, a sent message */
+  --raised-edge: rgba(255, 255, 255, .09);
+  --code: rgba(255, 255, 255, .05);
+  --card: rgba(255, 255, 255, .025);
+  --card-edge: rgba(255, 255, 255, .07);
+  --hover: rgba(255, 255, 255, .035);
+  --chat-chosen: rgba(255, 255, 255, .08);
+  --palette: #16181c;     /* menus raised over a chat */
+  --palette-edge: #2e2f36;
+  --chosen: #2f333d;      /* the row picked in a menu; Send unlit */
+  --track: rgba(255, 255, 255, .12);
+  --text: #dde1e6;
+  --muted: #8a9099;
+  --faint: #6b717a;
+  --accent: #d9b24a;      /* act here */
+  --accent-text: #d9b24a;
+  --accent-faint: rgba(217, 178, 74, .1);
+  --accent-edge: rgba(217, 178, 74, .32);
+  --on-accent: #121416;
+  --link: #7cb7f5;
+  --warning: #e06c75;     /* it went wrong */
+  --warning-bg: rgba(224, 108, 117, .1);
+  --warning-edge: rgba(224, 108, 117, .35);
+  --caution: #e89a3c;     /* held, or getting close */
+  --caution-bg: rgba(232, 154, 60, .09);
+  --ok: #8fd18a;
+  --caf: #6fd3c9;         /* CAF's own voice */
+  --added: rgba(185, 202, 74, .13); --added-text: #b9ca4a;
+  --removed: rgba(213, 78, 83, .13); --removed-text: #d54e53;
+  --claude: #d97757; --codex: #b8bec8; --gemini: #8aabee;
+  --app-clackatoo: #f8cd5a; --app-eyespy: #d59cf1; --app-framewright: #b7d36b;
+  --ws1: #f8cd5a; --ws2: #7cb7f5;
+  --tag-caf: #8fd18a; --tag-need: #e89a3c;
+  --shadow: 0 12px 40px rgba(0, 0, 0, .5), 0 1px 3px rgba(0, 0, 0, .35);
+  color-scheme: dark;
+}
+[data-theme='light'] {
+  --window: #eeece7;
+  --pane: #faf9f6;
+  --bar: #f2f0eb;
+  --raised: rgba(20, 22, 26, .04);
+  --raised-edge: rgba(20, 22, 26, .11);
+  --code: rgba(20, 22, 26, .035);
+  --card: rgba(20, 22, 26, .02);
+  --card-edge: rgba(20, 22, 26, .09);
+  --hover: rgba(20, 22, 26, .045);
+  --chat-chosen: rgba(20, 22, 26, .08);
+  --palette: #ffffff;
+  --palette-edge: #dad7d0;
+  --chosen: #e7e4dd;
+  --track: rgba(20, 22, 26, .14);
+  --text: #1d2024;
+  --muted: #666c75;
+  --faint: #8b9098;
+  --accent: #d9b24a;
+  --accent-text: #8a6a12;
+  --accent-faint: rgba(217, 178, 74, .12);
+  --accent-edge: rgba(176, 134, 30, .4);
+  --on-accent: #1d2024;
+  --link: #2d6db5;
+  --warning: #c0404b;
+  --warning-bg: rgba(192, 64, 75, .07);
+  --warning-edge: rgba(192, 64, 75, .3);
+  --caution: #b0660f;
+  --caution-bg: rgba(176, 102, 15, .08);
+  --ok: #2f7a3a;
+  --caf: #1f9488;
+  --added: rgba(60, 140, 50, .12); --added-text: #2f7a3a;
+  --removed: rgba(192, 64, 75, .1); --removed-text: #b0343f;
+  --claude: #c96442; --codex: #5d6470; --gemini: #4f78c9;
+  --app-clackatoo: #b5891c; --app-eyespy: #b06fd4; --app-framewright: #5f7a1a;
+  --ws1: #d9a72a; --ws2: #2d6db5;
+  --tag-caf: #2f7a3a; --tag-need: #a35a08;
+  --shadow: 0 12px 40px rgba(40, 35, 25, .18), 0 1px 3px rgba(40, 35, 25, .1);
+  color-scheme: light;
+}
+
+@keyframes si-spin { to { transform: rotate(360deg); } }
+@keyframes si-blink { 50% { opacity: 0; } }
+
+/* ---- The composer ---- */
+.si-foot { padding-bottom: 14px; }
+.si-column { width: 100%; max-width: var(--si-column, 760px); margin: 0 auto; padding: 0 var(--si-gutter, 22px); position: relative; }
+.si-i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; vertical-align: -3px; }
+.si-i.si-fill { fill: currentColor; stroke: none; }
+.si-spin { animation: si-spin 1s linear infinite; }
+
+/* Messages waiting, and a refused send: shelves just above the box. */
+.si-tray { margin: 0 10px 7px; background: var(--raised); border: 1px solid var(--raised-edge); border-radius: 13px; padding: 6px 12px 4px; font-size: 14px; }
+.si-tray .si-head { font-size: 12.5px; color: var(--muted); display: flex; justify-content: space-between; padding: 1px 0 3px; }
+.si-tray .si-item { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--raised-edge); }
+.si-tray .si-item:first-of-type { border-top: 0; }
+.si-tray .si-item .si-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.si-tray.si-problem { background: var(--warning-bg); border-color: var(--warning-edge); color: var(--warning); display: flex; gap: 8px; align-items: center; padding: 8px 12px; }
+
+/* What attaches on top of the box: questions, the agent banner, refusals.
+   Pages bring their own content; this is its frame. */
+.si-attached { margin: 0 12px; border: 1px solid var(--accent-edge); border-bottom: 0; background: var(--accent-faint); border-radius: 16px 16px 0 0; padding: 12px 16px 14px; font-size: 14px; }
+.si-attached.si-warning { border-color: var(--warning-edge); background: var(--warning-bg); }
+.si-attached.si-calm { border-color: var(--palette-edge); background: var(--card); }
+
+.si-box { background: var(--raised); border: 1px solid var(--raised-edge); border-radius: 22px; padding: 14px 14px 10px 20px; display: flex; flex-direction: column; gap: 14px; }
+.si-box.si-joined { border-color: var(--accent-edge); }
+.si-box.si-joined.si-warning { border-color: var(--warning-edge); }
+.si-box.si-joined.si-calm { border-color: var(--palette-edge); }
+.si-draft { min-height: 50px; max-height: 240px; overflow: hidden; font-size: 15.5px; }
+.si-draft.si-ph { color: var(--muted); }
+.si-caret { display: inline-block; width: 2px; height: 1.15em; background: var(--accent); vertical-align: -3px; margin-left: 1px; animation: si-blink 1s steps(1) infinite; }
+.si-locked { display: flex; gap: 8px; align-items: center; color: var(--muted); min-height: 50px; font-size: 14.5px; }
+.si-locked b { color: var(--text); font-weight: 600; }
+.si-controls { display: flex; align-items: center; gap: 4px; margin-left: -8px; }
+.si-control { display: inline-flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 9px; font-size: 15px; white-space: nowrap; min-width: 0; color: var(--text); }
+.si-control:hover { background: var(--hover); }
+.si-control.si-open { background: var(--chat-chosen); }
+.si-control.si-quiet { color: var(--muted); }
+.si-control .si-label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
+.si-control .si-part { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.si-control .si-sep { color: var(--muted); }
+.si-control .si-chev { color: var(--muted); }
+.si-control .si-mono { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 13.5px; }
+.si-held { color: var(--caution); }
+.si-spacer { flex: 1; }
+.si-ring { width: 37px; height: 37px; position: relative; flex: none; display: grid; place-items: center; font-size: 10.5px; color: var(--muted); border-radius: 50%; }
+.si-ring svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+.si-ring.si-filling { color: var(--caution); }
+.si-ring.si-full { color: var(--warning); }
+.si-ring.si-open { background: var(--chat-chosen); }
+.si-ring .si-dot { position: absolute; right: 1px; top: 1px; width: 8px; height: 8px; border-radius: 50%; background: var(--caution); box-shadow: 0 0 0 2px var(--pane); }
+.si-ring .si-dot.si-out { background: var(--warning); }
+.si-round { width: 33px; height: 33px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--chosen); color: var(--muted); margin-left: 4px; }
+.si-round.si-lit { background: var(--accent); color: var(--on-accent); }
+.si-round.si-small { width: 29px; height: 29px; color: var(--text); }
+.si-waits { font-size: 12.5px; color: var(--muted); margin-right: 4px; }
+
+/* ---- The settings menu: as clackatoo's model menu, opening upward ---- */
+.si-menu { position: absolute; bottom: 58px; left: var(--si-gutter, 22px); width: min(500px, calc(100% - 2 * var(--si-gutter, 22px))); background: var(--palette); border: 1px solid var(--palette-edge); border-radius: 12px; box-shadow: var(--shadow); font-size: 14px; overflow: hidden; z-index: 6; display: flex; color: var(--text); }
+.si-rail { width: 52px; flex: none; border-right: 1px solid var(--palette-edge); display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 0; }
+.si-rail .si-r { width: 38px; height: 38px; border-radius: 8px; display: grid; place-items: center; color: var(--muted); position: relative; }
+.si-rail .si-r.si-on { background: var(--chat-chosen); }
+.si-rail .si-r.si-on::before { content: ''; position: absolute; left: -7px; top: 9px; bottom: 9px; width: 3px; border-radius: 2px; background: var(--accent); }
+.si-rail .si-r.si-lit { color: var(--accent-text); background: var(--chat-chosen); }
+.si-rail .si-r .si-need { position: absolute; right: 4px; bottom: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--caution); box-shadow: 0 0 0 2px var(--palette); }
+.si-rail .si-grow { flex: 1; }
+.si-rail .si-r .si-i { width: 20px; height: 20px; }
+.si-main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 8px 10px 10px; }
+.si-search { display: flex; gap: 9px; align-items: center; padding: 6px 4px 8px; border-bottom: 2px solid var(--accent); color: var(--muted); font-size: 15px; margin-bottom: 8px; }
+.si-list { display: flex; flex-direction: column; gap: 2px; min-height: 150px; }
+.si-row { display: grid; grid-template-columns: 1fr auto auto; gap: 0 12px; padding: 6px 10px; border-radius: 8px; align-items: center; }
+.si-row.si-chosen { background: var(--chosen); }
+.si-row .si-name { font-size: 15px; }
+.si-row .si-sub { grid-column: 1; display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.si-row .si-sub .si-i { width: 13px; height: 13px; }
+.si-row .si-tick { grid-row: 1 / span 2; grid-column: 2; color: var(--muted); }
+.si-row .si-star { grid-row: 1 / span 2; grid-column: 3; color: var(--muted); }
+.si-row .si-star.si-fav { color: var(--accent); }
+.si-row .si-when { font-size: 12px; color: var(--caution); display: inline-flex; gap: 4px; align-items: center; }
+.si-menu .si-note { padding: 6px 6px 4px; color: var(--muted); font-size: 13.5px; }
+.si-menu .si-note b { color: var(--text); }
+.si-menu .si-note .si-act { display: inline-flex; margin-top: 10px; }
+.si-learn { color: var(--link); }
+.si-effort { border-top: 1px solid var(--palette-edge); margin-top: 10px; padding-top: 8px; }
+.si-heading { display: flex; justify-content: space-between; padding: 0 8px; font-size: 13px; color: var(--muted); }
+.si-heading .si-aside { color: var(--text); }
+.si-heading .si-aside.si-held { color: var(--caution); display: inline-flex; gap: 4px; align-items: center; }
+.si-slider { padding: 2px 12px 0; }
+.si-slider .si-track { position: relative; height: 4px; background: var(--track); border-radius: 2px; margin: 12px 4px 10px; }
+.si-slider .si-fill-bar { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 2px; }
+.si-slider .si-knob { position: absolute; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--palette); }
+.si-slider .si-stop { position: absolute; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: var(--muted); }
+.si-slider .si-names { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.si-slider .si-names .si-on { color: var(--text); font-weight: 600; }
+.si-btn { font-size: 13px; border-radius: 999px; padding: 4px 13px; border: 1px solid var(--raised-edge); background: var(--raised); color: var(--text); display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.si-btn.si-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+/* What can't be changed while a model change is held. */
+.si-effort.si-off, .si-r.si-off { opacity: .45; }
+</style>
+<style>
+  /* The theme is in si.css. */
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--window); color: var(--text); font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  code { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: .86em; background: var(--raised); padding: .05em .35em; border-radius: 5px; }
+  .num { font-variant-numeric: tabular-nums; }
+  .page { max-width: 1320px; margin: 0 auto; padding: 22px 26px 60px; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 26px; }
+
+  nav { position: sticky; top: 18px; align-self: start; font-size: 13px; }
+  nav h1 { font-size: 15px; margin: 0 0 2px; }
+  nav .sub { color: var(--muted); margin: 0 0 14px; }
+  nav .group { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin: 14px 0 4px; }
+  nav button { display: block; width: 100%; text-align: left; font: inherit; color: var(--text); background: none; border: 0; border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+  nav button:hover { background: var(--hover); }
+  nav button[aria-pressed='true'] { background: var(--chat-chosen); }
+  nav button[aria-pressed='true']::before { content: ''; display: inline-block; width: 3px; height: 12px; background: var(--accent); border-radius: 2px; margin: 0 7px -1px -4px; }
+  nav .pair { display: flex; gap: 4px; }
+  nav .pair button { width: auto; flex: 1; text-align: center; }
+  nav .legend { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+  main { min-width: 0; }
+  .about { background: var(--pane); border: 1px solid var(--raised-edge); border-radius: 12px; padding: 12px 16px; margin-bottom: 18px; font-size: 14px; }
+  .about p { margin: 0; }
+  .stage { background: var(--pane); border: 1px solid var(--raised-edge); border-radius: 12px; position: relative; min-height: 640px; overflow: hidden; }
+
+  /* Where each figure comes from: shown with the toggle, so the design
+     reads clean without it. CAF's, by the field it's in, or the app's own. */
+  .src { display: none; font-size: 10.5px; font-weight: 600; letter-spacing: .02em; border-radius: 4px; padding: 0 5px; vertical-align: 2px; margin-left: 6px; white-space: nowrap; border: 1px solid currentColor; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+  .src.caf { color: var(--tag-caf); }
+  .src.app { color: var(--tag-need); font-family: inherit; }
+  body.sources .src { display: inline-block; }
+
+  svg.i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  svg.i.fill { fill: currentColor; stroke: none; }
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Tones of one colour, for the parts of one whole (kinds of token,
+     speeds): never an agent's or an app's colour. */
+  .stage { --tone-1: color-mix(in srgb, var(--text) 78%, transparent); --tone-2: color-mix(in srgb, var(--text) 52%, transparent); --tone-3: color-mix(in srgb, var(--text) 32%, transparent); --tone-4: color-mix(in srgb, var(--text) 16%, transparent); }
+
+  /* ---- In the chat ---- */
+  .chat { position: absolute; inset: 0; display: flex; flex-direction: column; }
+  .chat .transcript { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; padding: 0 22px 14px; max-width: 760px; width: 100%; margin: 0 auto; gap: 14px; }
+  .sent { align-self: flex-end; max-width: 80%; background: var(--raised); border: 1px solid var(--raised-edge); border-radius: 14px; padding: 8px 13px; }
+  /* The ring's dot: caution when the chat's agent has a limit low, warning when one is out. */
+
+  /* The popover from the ring: one row per measure. */
+  .pop { position: absolute; right: 22px; bottom: 74px; width: 372px; background: var(--palette); border: 1px solid var(--palette-edge); border-radius: 12px; box-shadow: var(--shadow); font-size: 13px; z-index: 3; }
+  .pop .sec { padding: 10px 14px; }
+  .pop .sec + .sec { border-top: 1px solid var(--palette-edge); }
+  .pop .title { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .pop .title .right { margin-left: auto; }
+  .rows { display: grid; grid-template-columns: auto minmax(60px, 1fr) auto; gap: 9px 12px; align-items: center; }
+  .rows .label { white-space: nowrap; }
+  .rows .value { text-align: right; white-space: nowrap; }
+  .rows .value small { color: var(--muted); }
+  .rows .sub { grid-column: 1 / -1; color: var(--muted); font-size: 12px; margin-top: -6px; }
+  .bar { position: relative; height: 6px; border-radius: 3px; background: var(--track); }
+  .bar .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--muted); }
+  .bar .fill.caution { background: var(--caution); }
+  .bar .fill.warning { background: var(--warning); }
+  .bar .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text); opacity: .55; }
+  .tone-caution { color: var(--caution); }
+  .tone-warning { color: var(--warning); }
+  .pop .facts { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; }
+  .pop .facts .k { color: var(--muted); }
+  .pop .facts > :not(.k):not(.how) { text-align: right; }
+  .pop .facts .how { grid-column: 1 / -1; color: var(--muted); font-size: 12px; margin-top: -2px; }
+  .pop .estimate { color: var(--muted); font-size: 11.5px; margin-left: 4px; }
+  .pop .unknown { color: var(--muted); }
+  .pop .open-usage { display: flex; justify-content: space-between; align-items: center; color: var(--link); }
+  .pop .note { color: var(--muted); font-size: 12px; }
+  .extra { display: flex; gap: 7px; align-items: baseline; margin-top: 10px; font-size: 12.5px; }
+  .extra b { color: var(--caution); font-weight: 600; white-space: nowrap; }
+  .extra span { color: var(--muted); }
+
+  /* ---- The usage page: a large panel over the window ---- */
+  .scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, .35); }
+  .modal { position: absolute; inset: 18px; background: var(--palette); border: 1px solid var(--palette-edge); border-radius: 14px; box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden; }
+  .spacer { flex: 1; }
+  .modal header { display: flex; align-items: center; gap: 10px; padding: 0 12px 0 20px; min-height: 52px; border-bottom: 1px solid var(--palette-edge); font-size: 14px; }
+  .crumbs { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .crumbs h2 { font-size: 15px; margin: 0; font-weight: 600; }
+  .crumbs .sep { color: var(--muted); }
+  .crumbs .pick { display: inline-flex; gap: 6px; align-items: center; padding: 3px 8px; border-radius: 7px; color: var(--text); }
+  .crumbs .pick:hover { background: var(--hover); }
+  .seg { display: inline-flex; background: var(--raised); border: 1px solid var(--raised-edge); border-radius: 8px; padding: 2px; }
+  .seg span { font-size: 13px; padding: 3px 10px; border-radius: 6px; color: var(--muted); white-space: nowrap; }
+  .seg span.on { background: var(--chosen); color: var(--text); }
+  .iconbtn { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 7px; color: var(--muted); }
+  .iconbtn:hover { background: var(--hover); }
+  .modal .body { flex: 1; overflow: auto; padding: 22px 26px 30px; }
+  .modal h3 { font-size: 13px; font-weight: 600; margin: 0 0 10px; }
+  .notice { color: var(--muted); font-size: 13px; margin: 0 0 16px; display: flex; gap: 8px; align-items: center; }
+  .problem { color: var(--warning); background: var(--warning-bg); border: 1px solid var(--warning-edge); border-radius: 8px; padding: 7px 11px; font-size: 13px; margin: 0 0 16px; display: flex; gap: 8px; align-items: baseline; }
+  .problem svg { align-self: center; }
+
+  .overview { display: grid; grid-template-columns: minmax(0, 17rem) minmax(0, 1fr); gap: 28px; margin-bottom: 28px; }
+  .big { font-size: 38px; font-weight: 600; line-height: 1.1; }
+  .bigsub { font-size: 12px; color: var(--muted); margin: 4px 0 18px; }
+  .bigsub .info { vertical-align: -2px; }
+  .prov { margin-bottom: 14px; }
+  .prov dl { display: flex; justify-content: space-between; align-items: baseline; margin: 0; gap: 10px; }
+  .prov dt { display: flex; align-items: center; gap: 8px; font-size: 14px; min-width: 0; }
+  .prov dt .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .prov dt small { color: var(--muted); font-size: 11.5px; }
+  .prov dd { margin: 0; font-weight: 600; font-size: 14px; }
+  .prov p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  .chart { width: 100%; height: 230px; }
+  .chart text { fill: var(--muted); font-size: 11px; }
+  .chart .grid { stroke: var(--card-edge); }
+
+  .metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px 24px; margin-bottom: 26px; }
+  .metrics dt { font-size: 12px; color: var(--muted); }
+  .metrics dd { margin: 2px 0 0; font-size: 18px; font-weight: 600; }
+  .shares { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px 28px; margin-bottom: 28px; }
+  .share .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .sharebar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; gap: 2px; margin-bottom: 8px; }
+  .sharebar i { display: block; height: 100%; }
+  .share .keys { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; }
+  .share .keys span { display: inline-flex; gap: 6px; align-items: center; }
+  .share .keys b { font-weight: 600; }
+  .share .keys i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+  .share .note { color: var(--muted); font-size: 11.5px; margin: 6px 0 0; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { font-weight: 400; color: var(--muted); text-align: right; padding: 8px 0 8px 22px; border-bottom: 1px solid var(--palette-edge); font-size: 12.5px; }
+  th:first-child, td:first-child { padding-left: 8px; text-align: left; }
+  td { padding: 7px 0 7px 22px; text-align: right; border-bottom: 1px solid var(--card-edge); white-space: nowrap; }
+  td.model { text-align: left; width: 100%; }
+  td.model .name { display: flex; align-items: center; gap: 8px; }
+  td.model .mbar { height: 4px; border-radius: 2px; margin-top: 5px; }
+  td .unpriced { color: var(--muted); font-size: 12px; border: 1px dashed var(--raised-edge); border-radius: 4px; padding: 0 5px; margin-left: 4px; }
+  tr:hover td { background: var(--hover); }
+  tr.chosen td { background: var(--hover); }
+  tr.detail td { text-align: left; white-space: normal; background: none; }
+  .splitrow { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .seg.small span { font-size: 12px; padding: 2px 8px; }
+  .appmark { width: 16px; height: 16px; border-radius: 5px; display: inline-grid; place-items: center; font-size: 10px; font-weight: 700; color: #121416; flex: none; }
+  .tabsrow { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+
+  /* A model's price, opened from the breakdown. */
+  .price { background: var(--card); border: 1px solid var(--card-edge); border-radius: 10px; padding: 12px 14px; margin: 4px 0 8px; font-size: 13px; max-width: 560px; }
+  .price p { margin: 0 0 8px; }
+  .price dl { display: grid; grid-template-columns: repeat(5, auto); gap: 2px 22px; margin: 0 0 10px; justify-content: start; }
+  .price dt { color: var(--muted); font-size: 12px; }
+  .price dd { margin: 0; font-weight: 600; }
+  .btn { display: inline-block; font-size: 13px; padding: 4px 11px; border-radius: 7px; border: 1px solid var(--raised-edge); background: var(--raised); color: var(--text); }
+
+  /* Limits. */
+  .provider { margin-bottom: 26px; }
+  .provider .head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; font-size: 15px; }
+  .provider .head .meta { margin-left: auto; color: var(--muted); font-size: 12.5px; display: flex; gap: 14px; align-items: center; }
+  .provider .head .meta .extra-on { color: var(--caution); }
+  .limits { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .limit { background: var(--card); border: 1px solid var(--card-edge); border-radius: 12px; padding: 14px 16px; }
+  .limit .top { display: flex; justify-content: space-between; align-items: baseline; }
+  .limit .name { font-size: 14px; }
+  .limit .left { font-size: 30px; font-weight: 600; line-height: 1.1; }
+  .limit .left small { font-size: 12.5px; font-weight: 400; color: var(--muted); margin-left: 4px; }
+  .limit .bar { height: 10px; border-radius: 5px; margin: 12px 0 8px; }
+  .limit .bar .fill { border-radius: 5px; }
+  .limit .bar .tick { top: -4px; bottom: -4px; }
+  .limit .meta { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); }
+  .limit .meta + .meta { margin-top: 3px; }
+  .limit .meta .state { font-weight: 600; }
+  .unavailable { background: var(--card); border: 1px dashed var(--card-edge); border-radius: 12px; padding: 14px 16px; color: var(--muted); font-size: 13.5px; }
+  .footnote { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .skel { background: var(--raised); border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <h1>Usage</h1>
+    <p class="sub">CAF SI · <a href="/caf/standard-interface/overview" style="color:var(--link)">all pages</a></p>
+    <div id="views"></div>
+    <div class="group">Theme</div>
+    <div class="pair">
+      <button data-theme-btn="dark">Dark</button>
+      <button data-theme-btn="light">Light</button>
+    </div>
+    <div class="group">Data</div>
+    <button id="sources-btn" aria-pressed="false">Show where it comes from</button>
+    <p class="legend">With this on, each figure is tagged with <span style="color:var(--tag-caf)">what CAF gives it</span>, or as <span style="color:var(--tag-need)">the app's</span> own.</p>
+  </nav>
+  <main>
+    <div class="about"><p id="what"></p></div>
+    <div class="stage" id="stage"></div>
+  </main>
+</div>
+
+<script>
+// CAF SI's shared composer: the one every page draws, so they can't drift
+// apart. compose.html is where it's designed and explained; the other pages
+// use it as it is. Needs si.css.
+//
+//   SI.composer(state) -> HTML
+//
+// A state says what the chat is doing; anything left out has its default
+// (see DEFAULTS). Pages put what attaches on top of the box (a question, the
+// agent banner, a refusal) in `attached`, with `joined` saying its tone.
+
+(() => {
+  const svg = (d, cls = '', style = '') => `<svg class="si-i ${cls}" viewBox="0 0 24 24"${style ? ` style="${style}"` : ''}>${d}</svg>`
+  const icon = {
+    send: svg('<path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/>', '', 'width:17px;height:17px'),
+    stop: svg('<rect x="3" y="3" width="18" height="18" rx="3"/>', 'si-fill', 'width:12px;height:12px'),
+    chev: svg('<path d="M6 9l6 6 6-6"/>', 'si-chev', 'width:12px;height:12px'),
+    bolt: svg('<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>', 'si-fill', 'width:13px;height:13px;color:var(--accent-text)'),
+    boltLine: svg('<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>'),
+    boltFill: svg('<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>', 'si-fill'),
+    clock: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', '', 'width:14px;height:14px'),
+    tick: svg('<path d="M5 12l5 5 9-11"/>', '', 'width:15px;height:15px'),
+    warn: svg('<path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17.5v.5"/>', '', 'width:15px;height:15px'),
+    lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>', '', 'width:15px;height:15px'),
+    unplug: svg('<path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 01-10 0zM12 16v5M3 3l18 18"/>', '', 'width:15px;height:15px'),
+    search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>', '', 'width:15px;height:15px'),
+    star: svg('<path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8 6.6 19.7l1.1-6.1L3.2 9.4l6.1-.8z"/>', '', 'width:15px;height:15px'),
+    starFill: svg('<path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8 6.6 19.7l1.1-6.1L3.2 9.4l6.1-.8z"/>', 'si-fill', 'width:15px;height:15px'),
+    folder: svg('<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>'),
+    spin: svg('<path d="M12 3a9 9 0 109 9"/>', 'si-spin', 'width:15px;height:15px'),
+    download: svg('<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>', '', 'width:14px;height:14px'),
+  }
+
+  // The agents' marks, in their colours.
+  function mark(agent = 'claude', size = 18) {
+    const st = `width:${size}px;height:${size}px`
+    if (agent === 'codex') return svg('<circle cx="12" cy="12" r="8.5"/><path d="M8 12h8M12 8v8"/>', '', `${st};color:var(--codex)`)
+    if (agent === 'gemini') return svg('<path d="M12 2c.6 5.4 4.6 9.4 10 10-5.4.6-9.4 4.6-10 10-.6-5.4-4.6-9.4-10-10 5.4-.6 9.4-4.6 10-10z"/>', 'si-fill', `${st};color:var(--gemini)`)
+    let rays = ''
+    for (let n = 0; n < 12; n++) {
+      const a = (n * Math.PI) / 6, r = n % 2 ? 7.2 : 10
+      rays += `<line x1="12" y1="12" x2="${(12 + r * Math.cos(a)).toFixed(2)}" y2="${(12 + r * Math.sin(a)).toFixed(2)}"/>`
+    }
+    return svg(rays, '', `${st};color:var(--claude);stroke-width:2.6`)
+  }
+  const AGENT_NAME = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' }
+  const AGENT_FULL = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini' }
+
+  // What Claude offers, as recorded live (claude-0.98.0-live.jsonl).
+  const MODELS = [
+    { name: 'Default (recommended)', d: 'Opus 5.5' },
+    { name: 'Opus 5.5', d: 'For complex work and everyday tasks' },
+    { name: 'Sonnet 5.5', d: 'Most efficient for simpler tasks' },
+    { name: 'Haiku 5.5', d: 'Fastest for quick answers' },
+  ]
+  // What each model offers beside it: the agent says, and it changes with
+  // the model. Opus's are as recorded; Sonnet's are made up, to show a model
+  // offering fewer levels and no fast mode.
+  const OFFERS = {
+    'Opus 5.5': { efforts: ['Low', 'Medium', 'High', 'Xhigh', 'Max'], fast: true },
+    'Sonnet 5.5': { efforts: ['Low', 'Medium', 'High'], fast: false },
+  }
+  // Favourites are the app's to keep, as clackatoo keeps its own.
+  const FAVOURITES = ['Opus 5.5', 'Sonnet 5.5']
+  // The agents a new chat may be with, and what each still needs.
+  const AGENTS = [{ id: 'claude' }, { id: 'codex', needs: 'Not installed' }, { id: 'gemini', needs: 'Signed out' }]
+  const QUEUED = ['Now update the callers in crates/save too, and run its tests.', 'Then write a changelog line for the rename.']
+
+  const DEFAULTS = {
+    agent: 'claude',
+    text: '', running: false, stopping: false, waiting: 0, waitingFor: 'this turn', waitingNote: null, problem: null, gate: false,
+    // A string, or { text, icon: 'lock' | 'unplug', bold }: nothing can be sent.
+    blocked: null,
+    // known | unknown | learning | none
+    settings: 'known', model: 'Opus 5.5', effort: 'High', fast: true, held: {},
+    menu: false, filter: 'agent', menuAgent: null,
+    // Percent of the context used, or null before there's any (a new chat).
+    // The ring's dot for an account limit: false, or the lowest window's lowness, 'low' or 'out'.
+    context: 9, ringOpen: false, ringDot: false,
+    narrow: false,
+    // A new chat: the menu's rail lists every agent. A folder chip only when the app lets users choose one.
+    newChat: false, folder: null,
+    attached: '', joined: null, placeholder: null, after: '',
+  }
+
+  function ring(s) {
+    if (s.context == null) return ''
+    const p = s.context, r = 15.5, c = 2 * Math.PI * r
+    const cls = p > 95 ? ' si-full' : p > 80 ? ' si-filling' : ''
+    return `<span class="si-ring${cls}${s.ringOpen ? ' si-open' : ''}" title="Context: ${p}% used"><svg viewBox="0 0 37 37">` +
+      `<circle cx="18.5" cy="18.5" r="${r}" fill="none" stroke="var(--raised-edge)" stroke-width="2.5"/>` +
+      `<circle cx="18.5" cy="18.5" r="${r}" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="${(c * p / 100).toFixed(1)} ${c.toFixed(1)}"/></svg>${p}%${s.ringDot ? `<span class="si-dot${s.ringDot === 'out' ? ' si-out' : ''}"></span>` : ''}</span>`
+  }
+
+  function control(s) {
+    const m = mark(s.agent), name = AGENT_NAME[s.agent]
+    if (s.settings === 'none') return `<span class="si-control si-quiet">${m}<span class="si-label">${name}</span></span>`
+    if (s.settings === 'learning') return `<span class="si-control si-quiet">${m}<span class="si-label">Learning ${name}'s settings…</span>${icon.spin}</span>`
+    if (s.settings === 'unknown') return `<span class="si-control si-quiet${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${s.narrow ? 'Settings' : s.newChat ? name : 'Settings not known yet'}</span>${icon.chev}</span>`
+    if (s.settings === 'failed') return `<span class="si-control si-quiet${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${s.narrow ? 'Settings' : `Couldn't learn ${name}'s settings`}</span>${icon.chev}</span>`
+    const part = (now, later) => later ? `<span class="si-part si-held" title="${s.running ? 'From the next turn' : 'Not applied yet'}">${icon.clock}${later}</span>` : `<span class="si-part">${now}</span>`
+    const fast = OFFERS[s.model] && OFFERS[s.model].fast && s.fast
+    return `<span class="si-control${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${part(s.model, s.held.model)}<span class="si-sep">·</span>${part(s.effort, s.held.effort)}${fast ? icon.bolt : ''}</span>${icon.chev}</span>`
+  }
+
+  function rail(s, fast) {
+    const off = s.held && s.held.model ? ' si-off' : ''
+    let h = `<div class="si-rail"><span class="si-r${s.filter === 'favs' ? ' si-on' : ''}" title="Favourites">${icon.starFill}</span>`
+    const agents = s.newChat ? AGENTS : [{ id: s.agent }]
+    for (const a of agents) {
+      const on = s.filter !== 'favs' && (s.menuAgent || s.agent) === a.id
+      h += `<span class="si-r${on ? ' si-on' : ''}" title="${AGENT_FULL[a.id]}${a.needs ? ': ' + a.needs.toLowerCase() : ''}">${mark(a.id, 20)}${a.needs ? '<span class="si-need"></span>' : ''}</span>`
+    }
+    h += '<span class="si-grow"></span>'
+    if (fast) h += `<span class="si-r${s.fast ? ' si-lit' : ''}${off}" title="Fast mode ${s.fast ? 'on' : 'off'}: faster answers, may cost more">${s.fast ? icon.boltFill : icon.boltLine}</span>`
+    return h + '</div>'
+  }
+
+  function menu(s) {
+    const name = AGENT_NAME[s.agent]
+    if (s.menuAgent && s.menuAgent !== s.agent) {
+      const a = AGENTS.find(x => x.id === s.menuAgent)
+      const what = a.needs === 'Not installed' ? `${AGENT_FULL[a.id]} isn't installed yet.` : `${AGENT_FULL[a.id]} needs you to sign in.`
+      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note"><b>${what}</b><br>Choose it, and this chat will offer to ${a.needs === 'Not installed' ? 'install it' : 'sign you in'} once you send. Its models show here once it's ready.<br><span class="si-btn si-primary si-act">Use ${AGENT_NAME[a.id]}</span></div></div></div>`
+    }
+    if (s.settings === 'failed') {
+      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF couldn't learn which models and settings ${name} offers. It tries again when the chat opens, or now.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
+    }
+    if (s.settings === 'unknown') {
+      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF doesn't know yet which models and settings ${name} offers. It finds out when the chat opens, or now, without sending a message.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
+    }
+    const offers = OFFERS[s.model]
+    let h = `<div class="si-menu">${rail(s, offers.fast)}<div class="si-main"><div class="si-search">${icon.search}Search models…</div><div class="si-list">`
+    h += MODELS.filter(m => s.filter !== 'favs' || FAVOURITES.includes(m.name)).map(m => {
+      const now = m.name === s.model, later = m.name === s.held.model, fav = FAVOURITES.includes(m.name)
+      return `<div class="si-row${now ? ' si-chosen' : ''}"><span class="si-name">${m.name}</span>` +
+        `<span class="si-tick">${now ? icon.tick : later ? `<span class="si-when">${icon.clock}after this turn</span>` : ''}</span>` +
+        `<span class="si-star${fav ? ' si-fav' : ''}">${fav ? icon.starFill : icon.star}</span><span class="si-sub">${mark(s.agent, 13)}${m.d}</span></div>`
+    }).join('') + '</div>'
+    const E = offers.efforts, at = E.indexOf(s.effort), pct = n => (n / (E.length - 1)) * 100
+    const aside = s.held.effort ? `<span class="si-aside si-held">${icon.clock}${s.held.effort} after this turn</span>` : `<span class="si-aside">${s.effort}</span>`
+    h += `<div class="si-effort${s.held.model ? ' si-off' : ''}"><div class="si-heading"><span>Effort${s.held.model ? ' · ' + s.model + "'s: change it once " + s.held.model + ' applies' : ''}</span>${aside}</div><div class="si-slider"><div class="si-track"><div class="si-fill-bar" style="width:${pct(at)}%"></div>` +
+      E.map((_, n) => `<span class="si-stop" style="left:${pct(n)}%"></span>`).join('') + `<span class="si-knob" style="left:${pct(at)}%"></span></div>` +
+      `<div class="si-names">${E.map((e, n) => `<span class="${n === at ? 'si-on' : ''}">${e}</span>`).join('')}</div></div></div>`
+    return h + '</div></div>'
+  }
+
+  function composer(state) {
+    const s = { ...DEFAULTS, ...state, held: { ...(state.held || {}) } }
+    const name = AGENT_NAME[s.agent]
+    let h = '<div class="si-foot"><div class="si-column">'
+    const waiting = typeof s.waiting === 'number' ? QUEUED.slice(0, s.waiting) : s.waiting
+    if (waiting.length) {
+      h += `<div class="si-tray"><div class="si-head"><span>Waiting for ${s.waitingFor} · ${waiting.length}</span><span>${s.waitingNote || `Stop drops ${waiting.length === 1 ? 'it' : 'these'} too`}</span></div>` +
+        waiting.map(t => `<div class="si-item">${icon.clock}<span class="si-text">${t}</span></div>`).join('') + '</div>'
+    }
+    if (s.problem) h += `<div class="si-tray si-problem">${icon.warn}${s.problem}</div>`
+    h += s.attached
+    const joined = s.attached ? ` si-joined${s.joined ? ' si-' + s.joined : ''}` : ''
+    h += `<div class="si-box${joined}">`
+    if (s.blocked) {
+      const b = typeof s.blocked === 'string' ? { text: s.blocked } : s.blocked
+      h += `<div class="si-locked">${icon[b.icon || 'lock']}<span>${b.bold ? `<b>${b.bold}</b> ` : ''}${b.text}</span></div>`
+      if (b.controls !== false) h += `<div class="si-controls"><span class="si-control si-quiet">${mark(s.agent)}<span class="si-label">${s.settings === 'known' ? s.model + ' · ' + s.effort : name}</span></span><span class="si-spacer"></span>${ring(s)}</div>`
+      return h + `</div>${s.after}</div></div>`
+    }
+    const ph = s.placeholder || (s.newChat ? `Message ${name} to start` : s.gate ? `Message ${name}: it waits until ${name} is ready` : s.running ? `Message ${name}: it waits for this turn` : `Message ${name}`)
+    h += s.text ? `<div class="si-draft">${s.text}<span class="si-caret"></span></div>` : `<div class="si-draft si-ph">${s.narrow ? ph.split(':')[0] : ph}</div>`
+    h += `<div class="si-controls">${control(s)}`
+    if (s.folder) h += `<span class="si-control">${icon.folder}<span class="si-mono">${s.folder}</span>${icon.chev}</span>`
+    h += '<span class="si-spacer"></span>'
+    if (s.running && s.text && !s.narrow) h += '<span class="si-waits">waits for this turn</span>'
+    h += ring(s)
+    if (s.stopping) h += `<span class="si-round" title="Stopping…">${icon.spin}</span>`
+    else if (s.running && !s.text) h += `<span class="si-round si-lit" title="Stop${waiting.length ? ', dropping the waiting messages' : ''}">${icon.stop}</span>`
+    else if (s.running) h += `<span class="si-round si-small" title="Stop">${icon.stop}</span><span class="si-round si-lit" title="Send: it waits for this turn">${icon.send}</span>`
+    else h += `<span class="si-round${s.text ? ' si-lit' : ''}" title="Send">${icon.send}</span>`
+    h += '</div></div>'
+    if (s.menu) h += menu(s)
+    return h + `${s.after}</div></div>`
+  }
+
+  window.SI = { composer, control, menu, ring, mark, icon, MODELS, OFFERS, FAVOURITES, AGENTS, AGENT_NAME }
+})()
+</script>
+<script>
+  const icon = {
+    chev: '<svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px;color:var(--muted)"><path d="M6 9l6 6 6-6"/></svg>',
+    refresh: '<svg class="i" viewBox="0 0 24 24"><path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/></svg>',
+    close: '<svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+    arrow: '<svg class="i" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+    info: '<svg class="i info" viewBox="0 0 24 24" style="width:13px;height:13px"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg>',
+    reset: '<svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px;vertical-align:-1px"><path d="M4 12a8 8 0 1 0 2.3-5.7M4 4v5h5"/></svg>',
+    spin: '<svg class="i spin" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M12 3a9 9 0 109 9"/></svg>',
+    warn: '<svg class="i" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17.5v.5"/></svg>',
+  }
+  const MARK = { claude: SI.mark('claude', 16), codex: SI.mark('codex', 16), gemini: SI.mark('gemini', 16) }
+  // Agents as the app names them. CAF names an agent in a summary by its
+  // profile (claude-agent-acp), or by the app's name for it without one:
+  // the app turns that into the agent's name and mark.
+  const PROVIDERS = {
+    claude: { label: 'Claude', colour: 'var(--claude)' },
+    codex: { label: 'Codex', colour: 'var(--codex)' },
+    gemini: { label: 'Gemini', colour: 'var(--gemini)' },
+  }
+  const tag = (kind, text) => `<span class="src ${kind}">${text}</span>`
+  const caf = text => tag('caf', text)
+  const app = text => tag('app', text || "the app's")
+
+  // ---- Made-up figures: the last 7 days, by day, and the past 24 hours, by hour ----
+  const PERIODS = {
+    '7d': {
+      labels: ['Sun 15', 'Mon 16', 'Tue 17', 'Wed 18', 'Thu 19', 'Fri 20', 'Sat 21'],
+      long: ['Sun, 15 Nov', 'Mon, 16 Nov', 'Tue, 17 Nov', 'Wed, 18 Nov', 'Thu, 19 Nov', 'Fri, 20 Nov', 'Sat, 21 Nov'],
+      cost: {
+        claude: [4.12, 6.84, 2.21, 9.47, 7.30, 3.08, 5.62],
+        codex: [1.20, 0.84, 2.61, 1.93, 0.42, 2.18, 1.51],
+        gemini: [0, 0.31, 0.62, 0, 0.18, 0, 0.44],
+      },
+      chats: { claude: 38, codex: 12, gemini: 4 },
+      appChats: { clackatoo: 37, eyespy: 9, framewright: 8 },
+      scale: 1,
+    },
+    '24h': {
+      labels: Array.from({ length: 24 }, (_, n) => String((n + 23) % 24).padStart(2, '0') + ':00'),
+      cost: {
+        claude: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0.31, 0.92, 0.74, 1.12, 0.48, 0.16, 0.66, 1.21, 0.83, 0.52, 0.21, 0, 0.38, 0.71, 0.44],
+        codex: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.12, 0.28, 0.06, 0, 0, 0.19, 0.34, 0.11, 0, 0, 0, 0.08, 0.13, 0],
+        gemini: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.09, 0.05, 0, 0, 0, 0, 0.12, 0, 0, 0, 0, 0],
+      },
+      chats: { claude: 7, codex: 3, gemini: 1 },
+      appChats: { clackatoo: 7, eyespy: 2, framewright: 2 },
+      scale: 0.162,
+    },
+  }
+  PERIODS['24h'].long = PERIODS['24h'].labels.map((l, n) => (n === 0 ? 'Fri ' : 'Sat ') + l)
+  const PER_DOLLAR = { claude: 1.15e6, codex: 1.6e6, gemini: 2.1e6 }
+  const sum = a => a.reduce((x, y) => x + y, 0)
+  const usd = v => v > 0 && v < 0.005 ? '<$0.01' : '$' + v.toFixed(2)
+  const tok = v => v >= 1e9 ? (v / 1e9).toFixed(1) + 'B' : v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1e3 ? Math.round(v / 1e3) + 'K' : String(Math.round(v))
+  const pct = v => v > 0 && v < .0005 ? '<0.1%' : (v * 100).toFixed(v > 0 && Math.round(v * 1000) < 100 ? 1 : 0) + '%'
+
+  // The CAF apps on this machine, by the names their lines in the shared ledger give.
+  const APPS = {
+    clackatoo: { label: 'clackatoo', colour: 'var(--app-clackatoo)', letter: 'c' },
+    eyespy: { label: 'eyespy', colour: 'var(--app-eyespy)', letter: 'e' },
+    framewright: { label: 'framewright', colour: 'var(--app-framewright)', letter: 'f' },
+  }
+  const APP_WEIGHTS = {
+    clackatoo: [.72, .64, .55, .81, .70, .52, .60],
+    eyespy: [.18, .11, .30, .06, .21, .33, .12],
+    framewright: [.10, .25, .15, .13, .09, .15, .28],
+  }
+  const appMark = a => `<span class="appmark" style="background:${APPS[a].colour}">${APPS[a].letter}</span>`
+
+  // Models, by the agent's id for each, as CAF gives them. The last has no price.
+  const MODELS = [
+    { p: 'claude', id: 'claude-opus-5-5', cost: 30.1, tokens: 33.2e6, unpriced: 0 },
+    { p: 'codex', id: 'gpt-6.1-sol', cost: 8.3, tokens: 13.1e6, unpriced: 0 },
+    { p: 'claude', id: 'claude-sonnet-5-5', cost: 7.4, tokens: 9.6e6, unpriced: 0 },
+    { p: 'codex', id: 'gpt-6-astra', cost: 2.39, tokens: 3.0e6, unpriced: 0 },
+    { p: 'gemini', id: 'gemini-3-pro', cost: 1.55, tokens: 3.3e6, unpriced: 0 },
+    { p: 'claude', id: 'claude-haiku-5-5', cost: 1.14, tokens: 2.7e6, unpriced: 0 },
+    { p: 'claude', id: 'claude-opus-4-8', cost: 0, tokens: 0.6e6, unpriced: 0.6e6 },
+  ]
+  // What priced claude-opus-5-5, as the summary's `prices` and `matched` say.
+  const PRICE = { entry: 'anthropic/claude-opus-5-5', rates: [['Input', '$5'], ['Cache read', '$0.50'], ['Cache write', '$6.25'], ['Output', '$25']], fast: '×2' }
+
+  const groups = split => split === 'app' ? APPS : PROVIDERS
+  function series(per, split, key, metric) {
+    const P = PERIODS[per]
+    const raw = p => metric === 'cost' ? P.cost[p] : P.cost[p].map(c => c * PER_DOLLAR[p])
+    if (split !== 'app') return raw(key)
+    return P.labels.map((_, d) => sum(Object.keys(PROVIDERS).map(p => raw(p)[d])) * APP_WEIGHTS[key][d % 7])
+  }
+  const groupMark = (split, key) => split === 'app' ? appMark(key) : MARK[key]
+  const chatsOf = (per, split, key) => split === 'app' ? PERIODS[per].appChats[key] : PERIODS[per].chats[key]
+
+  // ---- Account limits, as Claude last said them ----
+  // used: whole percent; pace: how much of the window has gone by (SDK `pace`);
+  // state: Fine | Warning | Refused.
+  const WINDOWS = {
+    fine: [
+      { label: '5-hour', used: 28, pace: 62, state: 'Fine', resets: ['1 h 52 min', '23:40'] },
+      { label: 'Weekly', used: 59, pace: 78, state: 'Fine', resets: ['1 d 10 h', 'Mon 09:00'] },
+      { label: 'Weekly · Opus', used: 7, pace: 78, state: 'Fine', resets: ['1 d 10 h', 'Mon 09:00'] },
+    ],
+    low: [
+      { label: '5-hour', used: 86, pace: 62, state: 'Fine', resets: ['1 h 52 min', '23:40'] },
+      { label: 'Weekly', used: 59, pace: 78, state: 'Fine', resets: ['1 d 10 h', 'Mon 09:00'] },
+      { label: 'Weekly · Opus', used: 7, pace: 78, state: 'Fine', resets: ['1 d 10 h', 'Mon 09:00'] },
+    ],
+    out: [
+      { label: '5-hour', used: 86, pace: 62, state: 'Fine', resets: ['1 h 52 min', '23:40'] },
+      { label: 'Weekly', used: 50, pace: 78, state: 'Warning', resets: ['1 d 10 h', 'Mon 09:00'] },
+      { label: 'Weekly · Opus', used: 100, pace: 78, state: 'Refused', resets: ['1 d 10 h', 'Mon 09:00'] },
+    ],
+    extra: [
+      { label: '5-hour', used: 100, pace: 62, state: 'Fine', resets: ['1 h 52 min', '23:40'] },
+      { label: 'Weekly', used: 59, pace: 78, state: 'Fine', resets: ['1 d 10 h', 'Mon 09:00'] },
+      { label: 'Weekly · Opus', used: 7, pace: 78, state: 'Fine', resets: ['1 d 10 h', 'Mon 09:00'] },
+      { label: 'Weekly · extra included', used: 64, pace: 78, state: 'Fine', resets: ['1 d 10 h', 'Mon 09:00'] },
+    ],
+  }
+  const HEARD = '22:42'
+  // The SDK's helpers, as the page uses them.
+  const left = w => w.state === 'Refused' ? 0 : 100 - w.used
+  const lowness = w => left(w) <= 10 ? 'out' : left(w) <= 20 ? 'low' : 'fine'
+  const toneOf = w => ({ out: 'warning', low: 'caution', fine: '' })[lowness(w)]
+  const lowest = ws => ws.reduce((least, w) => least === null || left(w) < left(least) ? w : least, null)
+  const paceWords = w => w.pace == null ? null : w.used > w.pace ? 'Ahead of pace' : w.used < w.pace ? 'Under pace' : 'On pace'
+  const stateWords = w => w.state === 'Refused' ? '<span class="tone-warning">Refused until it resets</span>' : w.state === 'Warning' ? '<span class="tone-caution">Near the limit</span>' : null
+
+  // ---- In the chat ----
+  function row(label, fill, value, opts = {}) {
+    const tone = opts.tone ? ' ' + opts.tone : ''
+    const tick = opts.tick != null ? `<span class="tick" style="left:${opts.tick}%" title="At an even pace, ${opts.tick}% would be left"></span>` : ''
+    return `<span class="label">${label}</span><span class="bar"><span class="fill${tone}" style="width:${fill}%"></span>${tick}</span><span class="value num ${opts.tone ? 'tone-' + opts.tone : ''}">${value}</span>` +
+      (opts.sub ? `<span class="sub">${opts.sub}</span>` : '')
+  }
+  function chat(s) {
+    const ws = s.limits ? WINDOWS[s.limits] : []
+    const least = lowest(ws)
+    const low = least ? lowness(least) : 'fine'
+    return `<div class="chat"><div class="transcript">
+      <div class="sent">Rename <code>load_config</code> to <code>read_config</code> and fix its callers.</div>
+      <div>Done. I renamed it in four files under <code>crates/core</code>, and its tests pass.</div></div>` +
+      SI.composer({ context: 19, ringOpen: !!s.pop, ringDot: low !== 'fine' && low, after: s.pop ? popover(s, ws) : '' }) + '</div>'
+  }
+  function popover(s, ws) {
+    let h = '<div class="pop">'
+    h += `<div class="sec"><div class="title">This chat</div><div class="rows">` +
+      row(`Context${caf('Usage.used / size')}`, 19, '195K <small>/ 1M</small>') + '</div>'
+    if (s.norecord) {
+      h += `<div class="facts" style="margin-top:10px"><span class="k">Cost so far${caf('Spend.turns = 0')}</span><span class="unknown">Nothing yet</span>` +
+        `<span class="k">Tokens processed</span><span class="num">0</span></div></div>`
+    } else {
+      h += `<div class="facts" style="margin-top:10px"><span class="k">Cost so far${caf('Spend.cost()')}</span><span class="num">$1.84<span class="estimate">API estimate</span></span>` +
+        `<span class="how">$1.62 as the agent reported it, $0.22 estimated at API prices.${caf('reported, estimated')}</span>` +
+        `<span class="k">Tokens processed${caf('Spend.tokens')}</span><span class="num">2.1M</span></div></div>`
+    }
+    if (ws.length) {
+      h += `<div class="sec"><div class="title">${MARK.claude}Claude's limits${caf('AgentStatus.limits')}<span class="right">as of ${HEARD}${caf('heard')}</span></div><div class="rows">`
+      for (const w of ws) {
+        const tone = toneOf(w), even = paceWords(w), st = stateWords(w)
+        const sub = [st, even && !st ? even : null, `resets in ${w.resets[0]}`].filter(Boolean).join(' · ')
+        h += row(w.label, left(w), `${left(w)}%`, { tone, tick: w.pace == null ? null : 100 - w.pace, sub })
+      }
+      h += '</div>'
+      if (s.limits === 'extra') h += `<div class="extra"><b>Extra usage in use</b><span>Beyond your plan, paid for as you go.</span>${caf('extra_usage.in_use')}</div>`
+      h += `<p class="note" style="margin:10px 0 0">Bars show what's left. The line is where even use would have it now.</p></div>`
+    }
+    if (s.mayUsage !== false) h += `<div class="sec"><span class="open-usage">Open usage ${icon.arrow}</span></div>`
+    return h + '</div>'
+  }
+
+  // ---- The usage page ----
+  function header(s) {
+    const limits = s.metric === 'limits'
+    const periods = [['24h', 'Past 24h'], ['7d', '7 days'], ['30d', '30 days'], ['90d', '90 days']]
+    const period = limits ? '' : `<span class="seg">${periods.map(([k, l]) => `<span class="${k === (s.period || '7d') ? 'on' : ''}">${l}</span>`).join('')}</span>`
+    return `<header><div class="crumbs"><h2>Usage</h2><span class="sep">›</span><span class="pick">All agents ${icon.chev}</span>${limits ? '' : caf('UsageQuery.agents')}` +
+      `${limits ? '' : `<span class="sep">›</span><span class="pick">All apps ${icon.chev}</span>${caf('UsageQuery.apps')}`}</div><span class="spacer"></span>` +
+      `${period}<span class="seg">${['Cost', 'Tokens', 'Limits'].map(m => `<span class="${m.toLowerCase() === s.metric ? 'on' : ''}">${m}</span>`).join('')}</span>` +
+      `${limits ? '' : `<span class="iconbtn" title="Refresh">${s.refreshing ? icon.spin : icon.refresh}</span>`}<span class="iconbtn" title="Close">${icon.close}</span></header>`
+  }
+
+  function chart(per, metric, split) {
+    const P = PERIODS[per]
+    const W = 640, H = 230, L = 44, B = 24, T = 8
+    const keys = Object.keys(groups(split))
+    const data = keys.map(k => series(per, split, k, metric))
+    const totals = P.labels.map((_, d) => sum(data.map(s => s[d])))
+    // Gridlines at a round step: 1, 2 or 5 times a power of ten.
+    const raw = Math.max(...totals) * 1.05 / 4, mag = 10 ** Math.floor(Math.log10(raw))
+    const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= raw), max = step * 4
+    const bw = (W - L) / P.labels.length
+    const every = P.labels.length > 12 ? 3 : 1
+    let g = ''
+    for (let n = 0; n <= 4; n++) {
+      const v = max * n / 4, y = H - B - (H - B - T) * n / 4
+      g += `<line class="grid" x1="${L}" x2="${W}" y1="${y}" y2="${y}"/><text x="${L - 8}" y="${y + 4}" text-anchor="end">${metric === 'cost' ? '$' + (Number.isInteger(v) ? v : v.toFixed(2)) : tok(v)}</text>`
+    }
+    P.labels.forEach((label, d) => {
+      let y = H - B
+      const x = L + d * bw + bw * 0.2, w = bw * 0.6
+      keys.forEach((k, i) => {
+        const h = (H - B - T) * data[i][d] / max
+        if (h > 0) { g += `<rect x="${x}" y="${y - h}" width="${w}" height="${Math.max(h - 1.5, 0.5)}" rx="2" fill="${groups(split)[k].colour}"/>`; y -= h }
+      })
+      if (d % every === 0) g += `<text x="${x + w / 2}" y="${H - 6}" text-anchor="middle">${label}</text>`
+    })
+    return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${g}</svg>`
+  }
+
+  function overview(s) {
+    const per = s.period || '7d', P = PERIODS[per], hourly = per === '24h'
+    const cost = s.metric === 'cost'
+    const allCost = sum(Object.keys(PROVIDERS).map(p => sum(P.cost[p])))
+    const allTok = sum(Object.keys(PROVIDERS).map(p => sum(series(per, 'agent', p, 'tokens'))))
+    const chatsAll = sum(Object.values(P.chats))
+    let h = ''
+    if (s.partial) h += `<p class="problem">${icon.warn}<span>Some of the usage record couldn't be read, so these figures are short: <code>eyespy/2026-10.jsonl.zst</code>.${caf('Summary.unreadable')}</span></p>`
+    if (s.refreshing) h += `<p class="notice">${icon.spin}Reading again… the figures may still change.</p>`
+    h += `<section class="overview"><div><div class="big num">${cost ? usd(allCost) : tok(allTok)}</div>` +
+      `<div class="bigsub">${chatsAll} chats${caf('Summary.chats')}${cost ? ` · API estimate <span title="What agents reported, and for turns they reported nothing, an estimate at the models' API prices. On a plan, it isn't what you pay.">${icon.info}</span> · 0.9% of tokens had no price, and aren't in it${caf('reported, estimated, unpriced')}` : ''}</div>`
+    const split = s.split || 'agent', G = groups(split)
+    h += `<div class="splitrow"><span class="seg small"><span class="${split === 'agent' ? 'on' : ''}">By agent</span><span class="${split === 'app' ? 'on' : ''}">By app</span></span>${split === 'app' ? caf('Bucket.app') : caf('Bucket.agent') + app('name and mark')}</div>`
+    const measure = (k, m) => sum(series(per, split, k, m))
+    const ranked = Object.keys(G).sort((a, b) => measure(b, s.metric) - measure(a, s.metric))
+    for (const k of ranked) {
+      const c = measure(k, 'cost'), t = measure(k, 'tokens'), n = chatsOf(per, split, k)
+      h += `<div class="prov"><dl><dt><span class="dot" style="background:${G[k].colour}"></span>${groupMark(split, k)}${G[k].label} <small>${n} ${n === 1 ? 'chat' : 'chats'}</small></dt><dd class="num">${cost ? usd(c) : tok(t)}</dd></dl>` +
+        `<p>${cost ? pct(c / allCost) + ' of cost · ' + tok(t) + ' tokens' : pct(t / allTok) + ' of tokens · ' + usd(c)}</p></div>`
+    }
+    h += `</div><div><h3>${hourly ? 'Hourly' : 'Daily'} ${cost ? 'cost' : 'processed tokens'}, by ${split}${caf(hourly ? 'Resolution::Hour' : 'Resolution::Day')}</h3>${chart(per, s.metric, split)}</div></section>`
+
+    const t = allTok
+    h += `<h3>Totals${caf('Tokens')}</h3><dl class="metrics">` +
+      [['Processed tokens', tok(t)], ['Cached input', tok(t * .81)], ['Uncached input', tok(t * .09)], ['Cache writes', tok(t * .03)], ['Output', tok(t * .07)],
+        [`Cache savings <span title="What reading input from the cache saved, against reading the same input fresh, at the models' prices.">${icon.info}</span>`, usd(allCost * 2.9)]]
+        .map(([k, v]) => `<div><dt>${k}</dt><dd class="num">${v}</dd></div>`).join('') + '</dl>'
+
+    const shareBar = (label, parts, src, note) => `<div class="share"><div class="label">${label}${src}</div><div class="sharebar">${parts.map(([, v, c]) => `<i style="width:${v * 100}%;background:${c}"></i>`).join('')}</div>` +
+      `<div class="keys">${parts.map(([k, v, c]) => `<span><i style="background:${c}"></i>${k} <b class="num">${pct(v)}</b></span>`).join('')}</div>${note ? `<p class="note">${note}</p>` : ''}</div>`
+    h += '<section class="shares">' +
+      shareBar('Tokens by type', [['Input', .09, 'var(--tone-1)'], ['Cache read', .81, 'var(--tone-2)'], ['Cache write', .03, 'var(--tone-3)'], ['Output', .07, 'var(--tone-4)']], caf('Tokens')) +
+      shareBar('Cost by type', [['Input', .19, 'var(--tone-1)'], ['Cache read', .28, 'var(--tone-2)'], ['Cache write', .16, 'var(--tone-3)'], ['Output', .37, 'var(--tone-4)']], caf('Summary.prices'),
+        "At the prices the models have: an agent's reported cost isn't split by type.") +
+      shareBar('Cost by speed', [['Standard', .78, 'var(--tone-3)'], ['Fast mode', .22, 'var(--tone-1)']], caf('Bucket.fast')) +
+      '</section>'
+
+    const by = s.by || 'model'
+    const tabs = `<span class="seg">${[['model', 'Model'], ['app', 'App'], ['day', hourly ? 'Hour' : 'Day']].map(([k, l]) => `<span class="${by === k ? 'on' : ''}">${l}</span>`).join('')}</span>`
+    if (by === 'day') {
+      const daySplit = s.daySplit || 'agent', DG = groups(daySplit)
+      const cols = Object.keys(DG).sort((a, b) => sum(series(per, daySplit, b, 'cost')) - sum(series(per, daySplit, a, 'cost')))
+      h += `<div class="tabsrow"><h3 style="margin:0">Breakdown</h3><span style="display:flex;gap:8px;align-items:center"><span class="seg small"><span class="${daySplit === 'agent' ? 'on' : ''}">Split by agent</span><span class="${daySplit === 'app' ? 'on' : ''}">Split by app</span></span>${tabs}</span></div>` +
+        `<table><thead><tr><th>${hourly ? 'Hour' : 'Day'}</th>` + cols.map(k => `<th><span style="display:inline-flex;gap:6px;align-items:center">${groupMark(daySplit, k)}${DG[k].label}</span></th>`).join('') + `<th>Total</th><th>${cost ? 'Tokens' : 'Cost'}</th></tr></thead><tbody>` +
+        P.long.map((d, i) => ({ d, i })).reverse().map(({ d, i }) => {
+          const c = sum(Object.keys(PROVIDERS).map(p => P.cost[p][i])), tk = sum(Object.keys(PROVIDERS).map(p => series(per, 'agent', p, 'tokens')[i]))
+          return `<tr><td>${d}</td>` +
+            cols.map(k => { const v = series(per, daySplit, k, s.metric)[i]; return `<td class="num">${v ? (cost ? usd(v) : tok(v)) : '–'}</td>` }).join('') +
+            `<td class="num"><b>${cost ? usd(c) : tok(tk)}</b></td><td class="num">${cost ? tok(tk) : usd(c)}</td></tr>`
+        }).join('') + '</tbody></table>'
+    } else if (by === 'app') {
+      const rows = Object.keys(APPS).map(k => ({ k, c: sum(series(per, 'app', k, 'cost')), t: sum(series(per, 'app', k, 'tokens')) })).sort((x, y) => cost ? y.c - x.c : y.t - x.t)
+      const peak = Math.max(...rows.map(r => cost ? r.c : r.t)), tot = sum(rows.map(r => cost ? r.c : r.t))
+      h += `<div class="tabsrow"><h3 style="margin:0">Breakdown</h3>${tabs}</div><table><thead><tr><th>#</th><th style="text-align:left">App</th><th>Chats${caf('chats.by_app')}</th><th>Cost</th><th>Share</th><th>Tokens</th></tr></thead><tbody>` +
+        rows.map((r, i) => `<tr><td class="num">${i + 1}</td><td class="model"><div class="name">${appMark(r.k)}${APPS[r.k].label}</div><div class="mbar" style="width:${(cost ? r.c : r.t) / peak * 100}%;background:${APPS[r.k].colour}"></div></td>` +
+          `<td class="num">${P.appChats[r.k]}</td><td class="num">${usd(r.c)}</td><td class="num">${pct((cost ? r.c : r.t) / tot)}</td><td class="num">${tok(r.t)}</td></tr>`).join('') +
+        '</tbody></table><p class="footnote">Click an app to see only its usage.</p>'
+    } else {
+      const k = P.scale
+      const models = MODELS.map(m => ({ ...m, cost: m.cost * k, tokens: m.tokens * k, unpriced: m.unpriced * k }))
+      const peak = Math.max(...models.map(m => cost ? m.cost : m.tokens))
+      const tot = sum(models.map(m => cost ? m.cost : m.tokens))
+      h += `<div class="tabsrow"><h3 style="margin:0">Breakdown${caf('Bucket.model')}</h3>${tabs}</div><table><thead><tr><th>#</th><th style="text-align:left">Model</th><th>Cost</th><th>Share</th><th>Tokens</th></tr></thead><tbody>` +
+        models.slice().sort((a, b) => cost ? b.cost - a.cost || b.tokens - a.tokens : b.tokens - a.tokens).map((m, i) => {
+          const v = cost ? m.cost : m.tokens
+          const open = s.price === m.id
+          let r = `<tr class="${open ? 'chosen' : ''}"><td class="num">${i + 1}</td><td class="model"><div class="name">${MARK[m.p]}${m.id}</div>${v ? `<div class="mbar" style="width:${v / peak * 100}%;background:${PROVIDERS[m.p].colour}"></div>` : ''}</td>` +
+            `<td class="num">${m.unpriced >= m.tokens && m.cost === 0 ? '<span class="unpriced">Unpriced</span>' : usd(m.cost)}</td><td class="num">${v ? pct(v / tot) : '–'}</td><td class="num">${tok(m.tokens)}</td></tr>`
+          if (open) r += `<tr class="detail"><td></td><td colspan="4">${priceCard(m.id)}</td></tr>`
+          return r
+        }).join('') + '</tbody></table>' +
+        '<p class="footnote">Unpriced: tokens on a model with no known price, from turns whose agent reported no cost. They aren\'t in the cost.</p>' +
+        '<p class="footnote">Click a model for its price, or to set your own.</p>'
+    }
+    return h
+  }
+
+  function priceCard(model) {
+    return `<div class="price"><p>From LiteLLM's price list, fetched at 09:14, as <code>${PRICE.entry}</code>.${caf('PricedModel.layer, fetched')} In US dollars per million tokens:</p>` +
+      `<dl>${PRICE.rates.map(([k, v]) => `<div><dt>${k}</dt><dd class="num">${v}</dd></div>`).join('')}<div><dt>Fast mode</dt><dd class="num">${PRICE.fast}</dd></div></dl>` +
+      `<span class="btn">Set your own price</span>${caf('FromViewer::SetPrice')}</div>`
+  }
+
+  function limitCard(w) {
+    const tone = toneOf(w), even = paceWords(w), st = stateWords(w)
+    const tick = w.pace == null ? '' : `<span class="tick" style="left:${100 - w.pace}%" title="At an even pace, ${100 - w.pace}% would be left"></span>`
+    return `<div class="limit"><div class="top"><span class="name">${w.label}</span>` +
+      `<span class="left num ${tone ? 'tone-' + tone : ''}">${left(w)}%<small>left</small></span></div>` +
+      `<div class="bar"><span class="fill${tone ? ' ' + tone : ''}" style="width:${left(w)}%"></span>${tick}</div>` +
+      (st ? `<div class="meta"><span class="state">${st}</span></div>` : '') +
+      (even ? `<div class="meta"><span>${even} · ${100 - w.pace}% of the window left</span></div>` : '') +
+      `<div class="meta"><span>${icon.reset} Resets in ${w.resets[0]}, at ${w.resets[1]}</span><span>as of ${HEARD}</span></div></div>`
+  }
+  function limits(s) {
+    const ws = WINDOWS[s.limits || 'fine']
+    let h = `<div class="provider"><div class="head">${MARK.claude}${PROVIDERS.claude.label}${caf('AgentStatus.limits')}<span class="meta">` +
+      `${s.limits === 'extra' ? `<span class="extra-on">Extra usage in use</span>` : ''}<span>Signed in${caf('sign_in')}</span></span></div><div class="limits">` +
+      ws.map(limitCard).join('') + '</div></div>'
+    for (const p of ['codex', 'gemini']) {
+      h += `<div class="provider"><div class="head">${MARK[p]}${PROVIDERS[p].label}<span class="meta"><span>Signed in</span></span></div>` +
+        `<div class="unavailable">${PROVIDERS[p].label} hasn't said what its limits are. Only some agents report them, and only as they work. Its usage is still counted under Cost and Tokens.${caf('windows = []')}</div></div>`
+    }
+    h += "<p class=\"footnote\">Limits are as each agent last said, so they have no period. Bars show what's left; the line on each is where even use would have it now.</p>"
+    return h
+  }
+  function empty() {
+    return `<p class="notice">No chats in the last 7 days.</p><section class="overview"><div><div class="big num">$0.00</div><div class="bigsub">0 chats</div>` +
+      '<div class="skel" style="height:14px;width:70%;margin-bottom:10px;opacity:.5"></div><div class="skel" style="height:14px;width:55%;opacity:.5"></div></div>' +
+      `<div><h3>Daily cost, by agent</h3><div style="height:230px;border:1px dashed var(--card-edge);border-radius:10px;display:grid;place-items:center;color:var(--muted);font-size:13px">Nothing to chart yet</div></div></section>`
+  }
+  function failed() {
+    return `<p class="problem">${icon.warn}<span>Usage couldn't be read: the link to the app dropped before the answer came.${caf('Disconnected')}</span></p>`
+  }
+  function page(s) {
+    const body = s.metric === 'limits' ? limits(s) : s.failed ? failed() : s.empty ? empty() : overview(s)
+    return chat({}) + `<div class="scrim"></div><div class="modal">${header(s)}<div class="body">${body}</div></div>`
+  }
+
+  const VIEWS = [
+    { group: 'In the chat' },
+    { id: 'popover', label: 'Usage popover', what: "<b>Clicking the ring opens this chat's usage.</b> One row per measure: a label, a bar and a value. This chat: how full the context is, what it has cost so far, and the tokens it processed. Then the chat's agent's account limits, each window's bar showing what's left, with a line where even use would have it now. <i>Open usage</i> goes to the usage page.", render: () => chat({ pop: true, limits: 'fine' }) },
+    { id: 'popover-low', label: 'Popover · a limit low', what: '<b>A limit running low:</b> 20% left or less. Its row turns to the caution colour, and the ring gains a caution dot, so it\'s noticed without opening anything.', render: () => chat({ pop: true, limits: 'low' }) },
+    { id: 'popover-out', label: 'Popover · a limit out', what: "<b>A limit out:</b> 10% left or less, or refused. Its row, and the ring's dot, turn to the warning colour. Here Claude refuses Opus until the week resets, and warns the week is near its limit at 50% left: its own word, shown in words.", render: () => chat({ pop: true, limits: 'out' }) },
+    { id: 'popover-extra', label: 'Popover · extra usage', what: "<b>Extra usage in use.</b> The five hours are used up, and the account goes on beyond its plan, paid for as it goes. Claude then reports the week with extra usage counted in, too.", render: () => chat({ pop: true, limits: 'extra' }) },
+    { id: 'popover-none', label: 'Popover · no record yet', what: "<b>A chat with no turns on record,</b> as a chat restored from before usage was recorded: its cost is <i>Nothing yet</i>. The limits are still shown, because they're the account's, not the chat's. And for a viewer without the right to see usage, there's no <i>Open usage</i>.", render: () => chat({ pop: true, limits: 'fine', norecord: true, mayUsage: false }) },
+    { id: 'ring-low', label: 'Ring · a limit low', what: '<b>The ring with a limit low, the popover closed.</b> The caution dot says one of the agent\'s limits has 20% left or less; a warning dot, 10% or less.', render: () => chat({ limits: 'low' }) },
+    { group: 'The usage page' },
+    { id: 'cost', label: 'Cost', what: "<b>The usage page:</b> every CAF app's usage on this computer. (<b>Later:</b> Codex and Gemini show a page with several agents; CAF runs only Claude today.) Pick a period, then Cost, Tokens or Limits. There's a big total, a share per agent and a chart, then totals by kind of token, what the cache saved, the cost split by kind and by speed (fast mode), and a breakdown by model. Cost is what agents reported, and an estimate at API prices where they didn't.", render: () => page({ metric: 'cost' }) },
+    { id: 'tokens', label: 'Tokens', what: '<b>The same page, measured in tokens.</b>', render: () => page({ metric: 'tokens' }) },
+    { id: 'by-app', label: 'By app', what: "<b>Split by app instead of by agent:</b> the shares and the chart's stacks are clackatoo, eyespy and framewright, from the ledger every CAF app on the computer shares.", render: () => page({ metric: 'cost', split: 'app' }) },
+    { id: 'hourly', label: 'Past 24 hours', what: '<b>The past 24 hours, by hour.</b> The chart and the breakdown go by hour instead of by day.', render: () => page({ metric: 'cost', period: '24h' }) },
+    { id: 'price', label: "A model's price", what: "<b>A model opened in the breakdown:</b> the price that priced it, where it came from, and a way to set one of the user's own, which every CAF app on the computer then uses. A model with no price is marked <i>Unpriced</i>.", render: () => page({ metric: 'cost', price: 'claude-opus-5-5', scroll: true }) },
+    { id: 'breakdown-app', label: 'Breakdown by app', what: '<b>The breakdown by app</b>, beside the ones by model and by day.', render: () => page({ metric: 'cost', split: 'app', by: 'app', scroll: true }) },
+    { id: 'by-day', label: 'By day, split by agent', what: "<b>The breakdown by day:</b> one column per agent.", render: () => page({ metric: 'cost', by: 'day', scroll: true }) },
+    { id: 'by-day-app', label: 'By day, split by app', what: "<b>The breakdown by day, split by app:</b> one column per app. Agent or app is a switch on the table.", render: () => page({ metric: 'cost', by: 'day', daySplit: 'app', scroll: true }) },
+    { id: 'limits', label: 'Limits', what: "<b>Each agent's account limits,</b> as it last said them. A card per window: what's left, the even-pace line, ahead of or under pace, when it resets, and when it was heard. An agent that hasn't said has none. <b>Later:</b> Codex and Gemini are here to show a page with several agents, but CAF runs only Claude today.", render: () => page({ metric: 'limits' }) },
+    { id: 'limits-low', label: 'Limits · low and out', what: '<b>Limits low and out,</b> in the caution and warning colours, as in the popover. The agent\'s own word for a window (near the limit, refused) is shown in words.', render: () => page({ metric: 'limits', limits: 'out' }) },
+    { group: 'States' },
+    { id: 'refreshing', label: 'Reading again', what: '<b>Reading again.</b> The last figures stay up, marked as possibly changing.', render: () => page({ metric: 'cost', refreshing: true }) },
+    { id: 'partial', label: 'Partly unreadable', what: "<b>Some of the record couldn't be read.</b> The figures are shown, and said to be short, naming each file.", render: () => page({ metric: 'cost', partial: true }) },
+    { id: 'empty', label: 'Nothing yet', what: '<b>No chats in the period.</b>', render: () => page({ metric: 'cost', empty: true }) },
+    { id: 'failed', label: "Couldn't read", what: "<b>The summary couldn't be read at all,</b> here because the link to the app dropped. Nothing is shown but why.", render: () => page({ metric: 'cost', failed: true }) },
+  ]
+
+  function show(id) {
+    const v = VIEWS.find(x => x.id === id)
+    const stage = document.getElementById('stage')
+    stage.innerHTML = v.render()
+    stage.dataset.kind = id === 'ring-low' ? 'ring' : !stage.querySelector('.modal') ? 'chat' : id === 'failed' ? 'short' : id === 'empty' ? 'half' : 'page'
+    const body = document.querySelector('.modal .body')
+    if (body && /breakdown|by-day|price/.test(id)) {
+      const table = body.querySelector('.tabsrow')
+      body.scrollTop = table ? table.offsetTop - 18 : body.scrollHeight
+    }
+    document.getElementById('what').innerHTML = v.what
+    for (const b of document.querySelectorAll('[data-view]')) b.setAttribute('aria-pressed', b.dataset.view === id)
+    history.replaceState(null, '', '#' + id)
+  }
+  const list = document.getElementById('views')
+  for (const v of VIEWS) {
+    if (v.group) { const g = document.createElement('div'); g.className = 'group'; g.textContent = v.group; list.appendChild(g); continue }
+    const b = document.createElement('button'); b.textContent = v.label; b.dataset.view = v.id; b.onclick = () => show(v.id); list.appendChild(b)
+  }
+  function theme(name) {
+    document.documentElement.dataset.theme = name
+    for (const o of document.querySelectorAll('[data-theme-btn]')) o.setAttribute('aria-pressed', o.dataset.themeBtn === name)
+  }
+  for (const b of document.querySelectorAll('[data-theme-btn]')) b.onclick = () => theme(b.dataset.themeBtn)
+  const sources = document.getElementById('sources-btn')
+  sources.onclick = () => { const on = document.body.classList.toggle('sources'); sources.setAttribute('aria-pressed', on) }
+  theme(matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+  const start = location.hash.slice(1)
+  show(VIEWS.some(x => x.id === start) ? start : 'popover')
+  // What build.mjs pictures for Learn: the in-chat states cropped to the
+  // chat's foot, the page's at the stage's full height.
+  SI.shots = {
+    target: '#stage',
+    css: '#stage[data-kind=chat] { min-height: 0; height: 590px; max-width: 900px } #stage[data-kind=page] { min-height: 0; height: 700px } #stage[data-kind=short] { min-height: 0; height: 250px } #stage[data-kind=half] { min-height: 0; height: 450px } #stage[data-kind=ring] { min-height: 0; height: 250px; max-width: 900px }',
+    states: VIEWS.filter(x => x.id).map(x => x.id),
+    show,
+  }
+</script>
+</body>
+</html>

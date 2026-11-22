@@ -1,0 +1,730 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAF SI · A chat's identity and lifecycle</title>
+<style>
+/* CAF SI's shared styles: the default theme, and the composer every page
+   draws. One copy, so the pages can't drift apart.
+
+   The theme is clackatoo's colours (crates/gui/src/colors.rs), with a light
+   mode made to match: white-over-dark tints there are dark-over-light here.
+   Apps keep the roles (see index.html), not these values. */
+
+[data-theme='dark'] {
+  --window: #121416;      /* behind everything */
+  --pane: #0c0e10;        /* a chat's background */
+  --bar: #121416;
+  --raised: rgba(255, 255, 255, .07);      /* the box a message is typed in, a sent message */
+  --raised-edge: rgba(255, 255, 255, .09);
+  --code: rgba(255, 255, 255, .05);
+  --card: rgba(255, 255, 255, .025);
+  --card-edge: rgba(255, 255, 255, .07);
+  --hover: rgba(255, 255, 255, .035);
+  --chat-chosen: rgba(255, 255, 255, .08);
+  --palette: #16181c;     /* menus raised over a chat */
+  --palette-edge: #2e2f36;
+  --chosen: #2f333d;      /* the row picked in a menu; Send unlit */
+  --track: rgba(255, 255, 255, .12);
+  --text: #dde1e6;
+  --muted: #8a9099;
+  --faint: #6b717a;
+  --accent: #d9b24a;      /* act here */
+  --accent-text: #d9b24a;
+  --accent-faint: rgba(217, 178, 74, .1);
+  --accent-edge: rgba(217, 178, 74, .32);
+  --on-accent: #121416;
+  --link: #7cb7f5;
+  --warning: #e06c75;     /* it went wrong */
+  --warning-bg: rgba(224, 108, 117, .1);
+  --warning-edge: rgba(224, 108, 117, .35);
+  --caution: #e89a3c;     /* held, or getting close */
+  --caution-bg: rgba(232, 154, 60, .09);
+  --ok: #8fd18a;
+  --caf: #6fd3c9;         /* CAF's own voice */
+  --added: rgba(185, 202, 74, .13); --added-text: #b9ca4a;
+  --removed: rgba(213, 78, 83, .13); --removed-text: #d54e53;
+  --claude: #d97757; --codex: #b8bec8; --gemini: #8aabee;
+  --app-clackatoo: #f8cd5a; --app-eyespy: #d59cf1; --app-framewright: #b7d36b;
+  --ws1: #f8cd5a; --ws2: #7cb7f5;
+  --tag-caf: #8fd18a; --tag-need: #e89a3c;
+  --shadow: 0 12px 40px rgba(0, 0, 0, .5), 0 1px 3px rgba(0, 0, 0, .35);
+  color-scheme: dark;
+}
+[data-theme='light'] {
+  --window: #eeece7;
+  --pane: #faf9f6;
+  --bar: #f2f0eb;
+  --raised: rgba(20, 22, 26, .04);
+  --raised-edge: rgba(20, 22, 26, .11);
+  --code: rgba(20, 22, 26, .035);
+  --card: rgba(20, 22, 26, .02);
+  --card-edge: rgba(20, 22, 26, .09);
+  --hover: rgba(20, 22, 26, .045);
+  --chat-chosen: rgba(20, 22, 26, .08);
+  --palette: #ffffff;
+  --palette-edge: #dad7d0;
+  --chosen: #e7e4dd;
+  --track: rgba(20, 22, 26, .14);
+  --text: #1d2024;
+  --muted: #666c75;
+  --faint: #8b9098;
+  --accent: #d9b24a;
+  --accent-text: #8a6a12;
+  --accent-faint: rgba(217, 178, 74, .12);
+  --accent-edge: rgba(176, 134, 30, .4);
+  --on-accent: #1d2024;
+  --link: #2d6db5;
+  --warning: #c0404b;
+  --warning-bg: rgba(192, 64, 75, .07);
+  --warning-edge: rgba(192, 64, 75, .3);
+  --caution: #b0660f;
+  --caution-bg: rgba(176, 102, 15, .08);
+  --ok: #2f7a3a;
+  --caf: #1f9488;
+  --added: rgba(60, 140, 50, .12); --added-text: #2f7a3a;
+  --removed: rgba(192, 64, 75, .1); --removed-text: #b0343f;
+  --claude: #c96442; --codex: #5d6470; --gemini: #4f78c9;
+  --app-clackatoo: #b5891c; --app-eyespy: #b06fd4; --app-framewright: #5f7a1a;
+  --ws1: #d9a72a; --ws2: #2d6db5;
+  --tag-caf: #2f7a3a; --tag-need: #a35a08;
+  --shadow: 0 12px 40px rgba(40, 35, 25, .18), 0 1px 3px rgba(40, 35, 25, .1);
+  color-scheme: light;
+}
+
+@keyframes si-spin { to { transform: rotate(360deg); } }
+@keyframes si-blink { 50% { opacity: 0; } }
+
+/* ---- The composer ---- */
+.si-foot { padding-bottom: 14px; }
+.si-column { width: 100%; max-width: var(--si-column, 760px); margin: 0 auto; padding: 0 var(--si-gutter, 22px); position: relative; }
+.si-i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; vertical-align: -3px; }
+.si-i.si-fill { fill: currentColor; stroke: none; }
+.si-spin { animation: si-spin 1s linear infinite; }
+
+/* Messages waiting, and a refused send: shelves just above the box. */
+.si-tray { margin: 0 10px 7px; background: var(--raised); border: 1px solid var(--raised-edge); border-radius: 13px; padding: 6px 12px 4px; font-size: 14px; }
+.si-tray .si-head { font-size: 12.5px; color: var(--muted); display: flex; justify-content: space-between; padding: 1px 0 3px; }
+.si-tray .si-item { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--raised-edge); }
+.si-tray .si-item:first-of-type { border-top: 0; }
+.si-tray .si-item .si-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.si-tray.si-problem { background: var(--warning-bg); border-color: var(--warning-edge); color: var(--warning); display: flex; gap: 8px; align-items: center; padding: 8px 12px; }
+
+/* What attaches on top of the box: questions, the agent banner, refusals.
+   Pages bring their own content; this is its frame. */
+.si-attached { margin: 0 12px; border: 1px solid var(--accent-edge); border-bottom: 0; background: var(--accent-faint); border-radius: 16px 16px 0 0; padding: 12px 16px 14px; font-size: 14px; }
+.si-attached.si-warning { border-color: var(--warning-edge); background: var(--warning-bg); }
+.si-attached.si-calm { border-color: var(--palette-edge); background: var(--card); }
+
+.si-box { background: var(--raised); border: 1px solid var(--raised-edge); border-radius: 22px; padding: 14px 14px 10px 20px; display: flex; flex-direction: column; gap: 14px; }
+.si-box.si-joined { border-color: var(--accent-edge); }
+.si-box.si-joined.si-warning { border-color: var(--warning-edge); }
+.si-box.si-joined.si-calm { border-color: var(--palette-edge); }
+.si-draft { min-height: 50px; max-height: 240px; overflow: hidden; font-size: 15.5px; }
+.si-draft.si-ph { color: var(--muted); }
+.si-caret { display: inline-block; width: 2px; height: 1.15em; background: var(--accent); vertical-align: -3px; margin-left: 1px; animation: si-blink 1s steps(1) infinite; }
+.si-locked { display: flex; gap: 8px; align-items: center; color: var(--muted); min-height: 50px; font-size: 14.5px; }
+.si-locked b { color: var(--text); font-weight: 600; }
+.si-controls { display: flex; align-items: center; gap: 4px; margin-left: -8px; }
+.si-control { display: inline-flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 9px; font-size: 15px; white-space: nowrap; min-width: 0; color: var(--text); }
+.si-control:hover { background: var(--hover); }
+.si-control.si-open { background: var(--chat-chosen); }
+.si-control.si-quiet { color: var(--muted); }
+.si-control .si-label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
+.si-control .si-part { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.si-control .si-sep { color: var(--muted); }
+.si-control .si-chev { color: var(--muted); }
+.si-control .si-mono { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 13.5px; }
+.si-held { color: var(--caution); }
+.si-spacer { flex: 1; }
+.si-ring { width: 37px; height: 37px; position: relative; flex: none; display: grid; place-items: center; font-size: 10.5px; color: var(--muted); border-radius: 50%; }
+.si-ring svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+.si-ring.si-filling { color: var(--caution); }
+.si-ring.si-full { color: var(--warning); }
+.si-ring.si-open { background: var(--chat-chosen); }
+.si-ring .si-dot { position: absolute; right: 1px; top: 1px; width: 8px; height: 8px; border-radius: 50%; background: var(--caution); box-shadow: 0 0 0 2px var(--pane); }
+.si-ring .si-dot.si-out { background: var(--warning); }
+.si-round { width: 33px; height: 33px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--chosen); color: var(--muted); margin-left: 4px; }
+.si-round.si-lit { background: var(--accent); color: var(--on-accent); }
+.si-round.si-small { width: 29px; height: 29px; color: var(--text); }
+.si-waits { font-size: 12.5px; color: var(--muted); margin-right: 4px; }
+
+/* ---- The settings menu: as clackatoo's model menu, opening upward ---- */
+.si-menu { position: absolute; bottom: 58px; left: var(--si-gutter, 22px); width: min(500px, calc(100% - 2 * var(--si-gutter, 22px))); background: var(--palette); border: 1px solid var(--palette-edge); border-radius: 12px; box-shadow: var(--shadow); font-size: 14px; overflow: hidden; z-index: 6; display: flex; color: var(--text); }
+.si-rail { width: 52px; flex: none; border-right: 1px solid var(--palette-edge); display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 0; }
+.si-rail .si-r { width: 38px; height: 38px; border-radius: 8px; display: grid; place-items: center; color: var(--muted); position: relative; }
+.si-rail .si-r.si-on { background: var(--chat-chosen); }
+.si-rail .si-r.si-on::before { content: ''; position: absolute; left: -7px; top: 9px; bottom: 9px; width: 3px; border-radius: 2px; background: var(--accent); }
+.si-rail .si-r.si-lit { color: var(--accent-text); background: var(--chat-chosen); }
+.si-rail .si-r .si-need { position: absolute; right: 4px; bottom: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--caution); box-shadow: 0 0 0 2px var(--palette); }
+.si-rail .si-grow { flex: 1; }
+.si-rail .si-r .si-i { width: 20px; height: 20px; }
+.si-main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 8px 10px 10px; }
+.si-search { display: flex; gap: 9px; align-items: center; padding: 6px 4px 8px; border-bottom: 2px solid var(--accent); color: var(--muted); font-size: 15px; margin-bottom: 8px; }
+.si-list { display: flex; flex-direction: column; gap: 2px; min-height: 150px; }
+.si-row { display: grid; grid-template-columns: 1fr auto auto; gap: 0 12px; padding: 6px 10px; border-radius: 8px; align-items: center; }
+.si-row.si-chosen { background: var(--chosen); }
+.si-row .si-name { font-size: 15px; }
+.si-row .si-sub { grid-column: 1; display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.si-row .si-sub .si-i { width: 13px; height: 13px; }
+.si-row .si-tick { grid-row: 1 / span 2; grid-column: 2; color: var(--muted); }
+.si-row .si-star { grid-row: 1 / span 2; grid-column: 3; color: var(--muted); }
+.si-row .si-star.si-fav { color: var(--accent); }
+.si-row .si-when { font-size: 12px; color: var(--caution); display: inline-flex; gap: 4px; align-items: center; }
+.si-menu .si-note { padding: 6px 6px 4px; color: var(--muted); font-size: 13.5px; }
+.si-menu .si-note b { color: var(--text); }
+.si-menu .si-note .si-act { display: inline-flex; margin-top: 10px; }
+.si-learn { color: var(--link); }
+.si-effort { border-top: 1px solid var(--palette-edge); margin-top: 10px; padding-top: 8px; }
+.si-heading { display: flex; justify-content: space-between; padding: 0 8px; font-size: 13px; color: var(--muted); }
+.si-heading .si-aside { color: var(--text); }
+.si-heading .si-aside.si-held { color: var(--caution); display: inline-flex; gap: 4px; align-items: center; }
+.si-slider { padding: 2px 12px 0; }
+.si-slider .si-track { position: relative; height: 4px; background: var(--track); border-radius: 2px; margin: 12px 4px 10px; }
+.si-slider .si-fill-bar { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 2px; }
+.si-slider .si-knob { position: absolute; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--palette); }
+.si-slider .si-stop { position: absolute; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: var(--muted); }
+.si-slider .si-names { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.si-slider .si-names .si-on { color: var(--text); font-weight: 600; }
+.si-btn { font-size: 13px; border-radius: 999px; padding: 4px 13px; border: 1px solid var(--raised-edge); background: var(--raised); color: var(--text); display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.si-btn.si-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+/* What can't be changed while a model change is held. */
+.si-effort.si-off, .si-r.si-off { opacity: .45; }
+</style>
+<style>
+  /* The theme is in si.css. */
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--window); color: var(--text); font: 15px/1.55 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  code, .mono { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+  code { font-size: .87em; background: var(--raised); padding: .05em .35em; border-radius: 5px; }
+  .page { max-width: 1340px; margin: 0 auto; padding: 22px 26px 60px; display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 26px; }
+  nav { position: sticky; top: 18px; align-self: start; font-size: 13px; max-height: calc(100vh - 36px); overflow: auto; }
+  nav h1 { font-size: 15px; margin: 0 0 2px; }
+  nav .sub { color: var(--muted); margin: 0 0 10px; }
+  nav .group { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin: 14px 0 4px; }
+  nav a { display: block; color: var(--text); text-decoration: none; border-radius: 6px; padding: 4px 8px; }
+  nav a:hover { background: var(--hover); }
+  nav button { display: block; width: 100%; text-align: left; font: inherit; color: var(--text); background: none; border: 0; border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+  nav button:hover { background: var(--hover); }
+  nav button[aria-pressed='true'] { background: var(--chat-chosen); }
+  nav button[aria-pressed='true']::before { content: ''; display: inline-block; width: 3px; height: 12px; background: var(--accent); border-radius: 2px; margin: 0 7px -1px -4px; }
+  nav .pair { display: flex; gap: 4px; }
+  nav .pair button { width: auto; flex: 1; text-align: center; }
+  main { min-width: 0; }
+  section { margin-bottom: 34px; }
+  h2 { font-size: 19px; margin: 0 0 4px; display: flex; gap: 10px; align-items: center; }
+  .lede { color: var(--muted); margin: 0 0 14px; max-width: 820px; font-size: 14px; }
+  .tag { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; border-radius: 4px; padding: 1px 6px; border: 1px solid currentColor; }
+  .tag.req { color: var(--accent-text); }
+  .tag.ex { color: var(--muted); }
+  .tag.silent { color: var(--faint); }
+  .card { background: var(--pane); border: 1px solid var(--raised-edge); border-radius: 12px; }
+  .state-note { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+
+  svg.i { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .btn { font-size: 13px; border-radius: 999px; padding: 4px 13px; border: 1px solid var(--raised-edge); background: var(--raised); color: var(--text); display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+  .btn.danger { background: var(--warning); border-color: var(--warning); color: var(--on-accent); font-weight: 600; }
+  .btn.quiet { background: none; border-color: transparent; color: var(--muted); }
+  .iconbtn { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: var(--muted); flex: none; }
+  .muted { color: var(--muted); }
+
+  /* ---- The identity component ---- */
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+  .dot.work { background: var(--accent); animation: pulse 1.2s infinite; }
+  .dot.you { background: var(--accent); box-shadow: 0 0 0 2px var(--pane), 0 0 0 3.5px var(--accent); }
+  .dot.lost { background: none; box-shadow: inset 0 0 0 2px var(--caution); }
+  .dot.fail { background: var(--warning); }
+  .id-full { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 0 9px; align-items: center; padding: 6px 10px; border-radius: 8px; font-size: 13.5px; min-width: 0; }
+  .id-full .mk { display: grid; place-items: center; }
+  .id-full .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .first { color: var(--muted); font-style: italic; }
+  .id-full .right { color: var(--faint); font-size: 12px; white-space: nowrap; display: flex; align-items: center; }
+  .id-full .why { grid-column: 2 / -1; font-size: 12px; color: var(--faint); display: flex; gap: 6px; align-items: center; white-space: nowrap; overflow: hidden; }
+  .why.you, .why.work { color: var(--accent-text); }
+  .why.fail { color: var(--warning); }
+  .why.lost { color: var(--caution); }
+  .badge { font-size: 11px; color: var(--muted); border: 1px solid var(--raised-edge); border-radius: 4px; padding: 0 5px; }
+  .badge.bad { color: var(--warning); border-color: var(--warning-edge); }
+  .id-full.archived .title { color: var(--muted); }
+  .id-compact { display: inline-flex; gap: 7px; align-items: center; font-size: 13px; max-width: 220px; min-width: 0; }
+  .id-compact .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .id-min { display: inline-grid; place-items: center; width: 16px; height: 16px; }
+
+  .gallery { overflow: hidden; }
+  .gallery table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .gallery th { text-align: left; font-weight: 400; color: var(--muted); font-size: 12px; padding: 10px 14px; border-bottom: 1px solid var(--raised-edge); }
+  .gallery td { padding: 6px 14px; border-bottom: 1px solid var(--card-edge); vertical-align: middle; }
+  .gallery tr:last-child td { border-bottom: 0; }
+  .gallery td.state { width: 170px; }
+  .gallery td.state b { font-weight: 600; display: block; }
+  .gallery td.state span { color: var(--muted); font-size: 12px; }
+  .gallery td.full { width: 360px; }
+
+  .hosts { display: grid; grid-template-columns: 290px 1fr; gap: 14px; }
+  .host { overflow: hidden; }
+  .host .cap { font-size: 12px; color: var(--muted); padding: 8px 12px; border-bottom: 1px solid var(--raised-edge); display: flex; gap: 8px; align-items: center; }
+  .host.side .list { padding: 6px; background: var(--bar); }
+  .host .tabs { display: flex; gap: 2px; padding: 6px 8px 0; background: var(--bar); border-bottom: 1px solid var(--raised-edge); }
+  .host .tabs .tab { padding: 6px 10px 7px; border-radius: 9px 9px 0 0; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+  .host .tabs .tab.sel { background: var(--pane); color: var(--text); border: 1px solid var(--raised-edge); border-bottom-color: var(--pane); margin-bottom: -1px; }
+  .host .panes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 6px; background: var(--bar); }
+  .host .panes .p { border: 1px solid var(--raised-edge); border-radius: 8px; background: var(--pane); height: 74px; }
+  .host .panes .p.focus { border-color: var(--accent-edge); }
+  .host .panes .ph { display: flex; gap: 8px; align-items: center; padding: 5px 10px; font-size: 12.5px; border-bottom: 1px solid var(--card-edge); color: var(--muted); }
+  .host .panes .p.focus .ph { color: var(--text); }
+  .host .wsbar { display: flex; gap: 14px; padding: 6px 12px; font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--raised-edge); background: var(--bar); }
+  .host .wsbar span { display: inline-flex; gap: 6px; align-items: center; }
+  .host .wsbar .ws { width: 7px; height: 7px; border-radius: 50%; }
+
+  /* ---- Rules ---- */
+  .rules { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .rules .card { padding: 14px 18px; font-size: 14px; }
+  .rules h3 { margin: 0 0 8px; font-size: 14px; display: flex; gap: 8px; align-items: center; }
+  .rules ol, .rules ul { margin: 0; padding-left: 20px; }
+  .rules li { margin: 4px 0; }
+
+  /* ---- The chat view, for the lifecycle ---- */
+  .win { --si-column: 720px; --si-gutter: 24px; height: 600px; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+  .chathead { display: flex; align-items: center; gap: 10px; padding: 0 12px 0 20px; min-height: 48px; border-bottom: 1px solid var(--raised-edge); }
+  .chathead .t { font-weight: 600; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chathead .spacer { flex: 1; }
+  .chathead .slot { font-size: 11.5px; color: var(--faint); border: 1px dashed var(--raised-edge); border-radius: 6px; padding: 2px 8px; }
+  .body { flex: 1; overflow: auto; padding: 20px 0 8px; display: flex; flex-direction: column; justify-content: flex-end; }
+  .column { max-width: 720px; width: 100%; margin: 0 auto; padding: 0 24px; }
+  .sent { margin: 0 0 14px auto; max-width: 78%; width: fit-content; background: var(--raised); border: 1px solid var(--raised-edge); border-radius: 14px; padding: 8px 13px; }
+  .said { margin-bottom: 18px; }
+  .summary { font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+  .centre { margin: auto; text-align: center; max-width: 460px; display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--muted); font-size: 14px; }
+  .centre h3 { color: var(--text); margin: 0; font-size: 16px; }
+  .centre .acts { display: flex; gap: 8px; margin-top: 4px; }
+  .problem { border: 1px solid var(--warning-edge); background: var(--warning-bg); border-radius: 12px; padding: 14px 16px; text-align: left; color: var(--text); width: 100%; }
+  .problem .k { color: var(--muted); font-size: 12.5px; margin-top: 6px; font-family: ui-monospace, Menlo, monospace; }
+  .scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, .35); z-index: 4; }
+  .dialog { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 400px; z-index: 5; background: var(--palette); border: 1px solid var(--palette-edge); border-radius: 14px; box-shadow: var(--shadow); padding: 18px 20px; font-size: 14px; }
+  .dialog h3 { margin: 0 0 6px; font-size: 15.5px; }
+  .dialog .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <h1>A chat's identity and lifecycle</h1>
+    <p class="sub">CAF SI · <a href="/caf/standard-interface/overview" style="display:inline;padding:0;color:var(--link)">all pages</a></p>
+    <div class="group">On this page</div>
+    <a href="#identity">The identity, at three sizes</a>
+    <a href="#hosting">Hosting it: examples</a>
+    <a href="#rules">The rules</a>
+    <a href="#lifecycle">The lifecycle</a>
+    <div class="group">Lifecycle state</div>
+    <div id="states"></div>
+    <div class="group">Theme</div>
+    <div class="pair">
+      <button data-theme-btn="dark">Dark</button>
+      <button data-theme-btn="light">Light</button>
+    </div>
+  </nav>
+  <main>
+    <section>
+      <p class="lede" style="font-size:15px;color:var(--text)">CAF SI covers a <b>single chat</b>: how it's identified wherever it appears, and what happens to it over its life. It says nothing on how an app lists, groups or navigates its chats. Every app already has its own way (a sidebar, tabs, clackatoo's panes and workspaces), and guidance there would only push an app into growing a second one.</p>
+    </section>
+
+    <section id="identity">
+      <h2>The identity, at three sizes <span class="tag req">Required</span></h2>
+      <p class="lede">One component says which chat this is and whether it needs you. Use whichever size fits where the app shows chats: <b>full</b> for list rows, <b>compact</b> for tabs and menus, <b>minimal</b> where there's room only for a mark, such as a pane header or a workspace badge. The states and how they look are fixed. Where the component sits is the app's.</p>
+      <div class="card gallery" id="gallery"></div>
+    </section>
+
+    <section id="hosting">
+      <h2>Hosting it <span class="tag ex">Examples only</span></h2>
+      <p class="lede">Three apps, three ways of listing chats, the same component. These show it fitting in. They're not layouts to copy: put chats wherever your app already puts its things.</p>
+      <div class="hosts" id="hosts"></div>
+    </section>
+
+    <section id="rules">
+      <h2>The rules</h2>
+      <div class="rules">
+        <div class="card">
+          <h3><span class="tag req">Required</span></h3>
+          <ol>
+            <li><b>Title:</b> the app's label for the chat. Without one, its first message in quotes, in italics. Never its id.</li>
+            <li><b>Attention:</b> exactly the states above, looking as they do. The reason line uses CAF's words for what's going on.</li>
+            <li><b>No CAF words in the app's UI.</b> Users never see <i>shelf</i>, <i>loaded</i>, <i>put away</i>, <i>session</i> or <i>adapter</i>. A shelf takes the app's own word (project, workspace) or none.</li>
+            <li><b>Opening a chat just opens it.</b> If it was saved, CAF restores it; that shows only as a brief <i>Restoring</i>. Users never manage what's in memory, so there's no "open" against "saved".</li>
+            <li><b>Closing a tab or pane never archives a chat.</b> A saved chat is put away: saved as it is, and back as it was when opened again. While a turn runs, it's put away once the turn, and any messages queued behind it, are done; a question keeps it until it's answered. A chat waiting for its agent is put away at once, and its waiting messages stop. A chat that isn't saved stays open, out of sight, until the app stops.</li>
+            <li><b>Archive</b> is CAF's <i>close</i>: "I'm done with this one". It's a deliberate action, never a side effect of closing a tab. An archived chat is marked <i>Archived</i> where it's listed. Opening it brings it back: it's an ordinary chat again.</li>
+            <li><b>Delete can't be undone,</b> so it always asks first, naming the chat. Only a saved chat can be deleted.</li>
+            <li><b>A new chat is an empty chat.</b> There's no form. The agent is chosen in the composer's own settings menu, whose rail lists every agent in a new chat. The folder is a control beside it only if the app lets users choose it. Sending opens the chat.</li>
+            <li><b>When it can't be restored,</b> say which of the six reasons it is, in the words below, with only the actions that can help.</li>
+          </ol>
+        </div>
+        <div class="card">
+          <h3><span class="tag silent">Up to the app, deliberately</span></h3>
+          <ul>
+            <li><b>Where chats are listed:</b> sidebar, tabs, a library, a palette, panes. Whatever the app has.</li>
+            <li><b>Shelves in the UI.</b> They follow the app's own projects or workspaces: no shelf pickers. When the app renames a project, it moves the shelf (<code>move_shelf</code>). That's an API matter, not a UI one.</li>
+            <li><b>Search, sorting and grouping.</b></li>
+            <li><b>Where actions live:</b> buttons, context menus, keys. Only what they say and do is fixed.</li>
+            <li><b>Empty states</b>, and apps that keep no chats at all.</li>
+          </ul>
+          <p class="muted" style="font-size:13px;margin:12px 0 0">Saying anything here would encourage the awkward integration: a second sidebar beside clackatoo's panes, a shelf picker beside framewright's projects.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="lifecycle">
+      <h2>The lifecycle <span class="tag req">Required</span></h2>
+      <p class="lede">What a chat goes through, as seen in the chat itself. These look the same wherever the chat is hosted. Pick a state on the left. The chat's header is drawn for context: it's the app's.</p>
+      <p class="state-note" id="state-note"></p>
+      <div class="card win" id="win"></div>
+    </section>
+  </main>
+</div>
+
+<script>
+// CAF SI's shared composer: the one every page draws, so they can't drift
+// apart. compose.html is where it's designed and explained; the other pages
+// use it as it is. Needs si.css.
+//
+//   SI.composer(state) -> HTML
+//
+// A state says what the chat is doing; anything left out has its default
+// (see DEFAULTS). Pages put what attaches on top of the box (a question, the
+// agent banner, a refusal) in `attached`, with `joined` saying its tone.
+
+(() => {
+  const svg = (d, cls = '', style = '') => `<svg class="si-i ${cls}" viewBox="0 0 24 24"${style ? ` style="${style}"` : ''}>${d}</svg>`
+  const icon = {
+    send: svg('<path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/>', '', 'width:17px;height:17px'),
+    stop: svg('<rect x="3" y="3" width="18" height="18" rx="3"/>', 'si-fill', 'width:12px;height:12px'),
+    chev: svg('<path d="M6 9l6 6 6-6"/>', 'si-chev', 'width:12px;height:12px'),
+    bolt: svg('<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>', 'si-fill', 'width:13px;height:13px;color:var(--accent-text)'),
+    boltLine: svg('<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>'),
+    boltFill: svg('<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>', 'si-fill'),
+    clock: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', '', 'width:14px;height:14px'),
+    tick: svg('<path d="M5 12l5 5 9-11"/>', '', 'width:15px;height:15px'),
+    warn: svg('<path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17.5v.5"/>', '', 'width:15px;height:15px'),
+    lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>', '', 'width:15px;height:15px'),
+    unplug: svg('<path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 01-10 0zM12 16v5M3 3l18 18"/>', '', 'width:15px;height:15px'),
+    search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>', '', 'width:15px;height:15px'),
+    star: svg('<path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8 6.6 19.7l1.1-6.1L3.2 9.4l6.1-.8z"/>', '', 'width:15px;height:15px'),
+    starFill: svg('<path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8 6.6 19.7l1.1-6.1L3.2 9.4l6.1-.8z"/>', 'si-fill', 'width:15px;height:15px'),
+    folder: svg('<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>'),
+    spin: svg('<path d="M12 3a9 9 0 109 9"/>', 'si-spin', 'width:15px;height:15px'),
+    download: svg('<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>', '', 'width:14px;height:14px'),
+  }
+
+  // The agents' marks, in their colours.
+  function mark(agent = 'claude', size = 18) {
+    const st = `width:${size}px;height:${size}px`
+    if (agent === 'codex') return svg('<circle cx="12" cy="12" r="8.5"/><path d="M8 12h8M12 8v8"/>', '', `${st};color:var(--codex)`)
+    if (agent === 'gemini') return svg('<path d="M12 2c.6 5.4 4.6 9.4 10 10-5.4.6-9.4 4.6-10 10-.6-5.4-4.6-9.4-10-10 5.4-.6 9.4-4.6 10-10z"/>', 'si-fill', `${st};color:var(--gemini)`)
+    let rays = ''
+    for (let n = 0; n < 12; n++) {
+      const a = (n * Math.PI) / 6, r = n % 2 ? 7.2 : 10
+      rays += `<line x1="12" y1="12" x2="${(12 + r * Math.cos(a)).toFixed(2)}" y2="${(12 + r * Math.sin(a)).toFixed(2)}"/>`
+    }
+    return svg(rays, '', `${st};color:var(--claude);stroke-width:2.6`)
+  }
+  const AGENT_NAME = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' }
+  const AGENT_FULL = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini' }
+
+  // What Claude offers, as recorded live (claude-0.98.0-live.jsonl).
+  const MODELS = [
+    { name: 'Default (recommended)', d: 'Opus 5.5' },
+    { name: 'Opus 5.5', d: 'For complex work and everyday tasks' },
+    { name: 'Sonnet 5.5', d: 'Most efficient for simpler tasks' },
+    { name: 'Haiku 5.5', d: 'Fastest for quick answers' },
+  ]
+  // What each model offers beside it: the agent says, and it changes with
+  // the model. Opus's are as recorded; Sonnet's are made up, to show a model
+  // offering fewer levels and no fast mode.
+  const OFFERS = {
+    'Opus 5.5': { efforts: ['Low', 'Medium', 'High', 'Xhigh', 'Max'], fast: true },
+    'Sonnet 5.5': { efforts: ['Low', 'Medium', 'High'], fast: false },
+  }
+  // Favourites are the app's to keep, as clackatoo keeps its own.
+  const FAVOURITES = ['Opus 5.5', 'Sonnet 5.5']
+  // The agents a new chat may be with, and what each still needs.
+  const AGENTS = [{ id: 'claude' }, { id: 'codex', needs: 'Not installed' }, { id: 'gemini', needs: 'Signed out' }]
+  const QUEUED = ['Now update the callers in crates/save too, and run its tests.', 'Then write a changelog line for the rename.']
+
+  const DEFAULTS = {
+    agent: 'claude',
+    text: '', running: false, stopping: false, waiting: 0, waitingFor: 'this turn', waitingNote: null, problem: null, gate: false,
+    // A string, or { text, icon: 'lock' | 'unplug', bold }: nothing can be sent.
+    blocked: null,
+    // known | unknown | learning | none
+    settings: 'known', model: 'Opus 5.5', effort: 'High', fast: true, held: {},
+    menu: false, filter: 'agent', menuAgent: null,
+    // Percent of the context used, or null before there's any (a new chat).
+    // The ring's dot for an account limit: false, or the lowest window's lowness, 'low' or 'out'.
+    context: 9, ringOpen: false, ringDot: false,
+    narrow: false,
+    // A new chat: the menu's rail lists every agent. A folder chip only when the app lets users choose one.
+    newChat: false, folder: null,
+    attached: '', joined: null, placeholder: null, after: '',
+  }
+
+  function ring(s) {
+    if (s.context == null) return ''
+    const p = s.context, r = 15.5, c = 2 * Math.PI * r
+    const cls = p > 95 ? ' si-full' : p > 80 ? ' si-filling' : ''
+    return `<span class="si-ring${cls}${s.ringOpen ? ' si-open' : ''}" title="Context: ${p}% used"><svg viewBox="0 0 37 37">` +
+      `<circle cx="18.5" cy="18.5" r="${r}" fill="none" stroke="var(--raised-edge)" stroke-width="2.5"/>` +
+      `<circle cx="18.5" cy="18.5" r="${r}" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="${(c * p / 100).toFixed(1)} ${c.toFixed(1)}"/></svg>${p}%${s.ringDot ? `<span class="si-dot${s.ringDot === 'out' ? ' si-out' : ''}"></span>` : ''}</span>`
+  }
+
+  function control(s) {
+    const m = mark(s.agent), name = AGENT_NAME[s.agent]
+    if (s.settings === 'none') return `<span class="si-control si-quiet">${m}<span class="si-label">${name}</span></span>`
+    if (s.settings === 'learning') return `<span class="si-control si-quiet">${m}<span class="si-label">Learning ${name}'s settings…</span>${icon.spin}</span>`
+    if (s.settings === 'unknown') return `<span class="si-control si-quiet${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${s.narrow ? 'Settings' : s.newChat ? name : 'Settings not known yet'}</span>${icon.chev}</span>`
+    if (s.settings === 'failed') return `<span class="si-control si-quiet${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${s.narrow ? 'Settings' : `Couldn't learn ${name}'s settings`}</span>${icon.chev}</span>`
+    const part = (now, later) => later ? `<span class="si-part si-held" title="${s.running ? 'From the next turn' : 'Not applied yet'}">${icon.clock}${later}</span>` : `<span class="si-part">${now}</span>`
+    const fast = OFFERS[s.model] && OFFERS[s.model].fast && s.fast
+    return `<span class="si-control${s.menu ? ' si-open' : ''}">${m}<span class="si-label">${part(s.model, s.held.model)}<span class="si-sep">·</span>${part(s.effort, s.held.effort)}${fast ? icon.bolt : ''}</span>${icon.chev}</span>`
+  }
+
+  function rail(s, fast) {
+    const off = s.held && s.held.model ? ' si-off' : ''
+    let h = `<div class="si-rail"><span class="si-r${s.filter === 'favs' ? ' si-on' : ''}" title="Favourites">${icon.starFill}</span>`
+    const agents = s.newChat ? AGENTS : [{ id: s.agent }]
+    for (const a of agents) {
+      const on = s.filter !== 'favs' && (s.menuAgent || s.agent) === a.id
+      h += `<span class="si-r${on ? ' si-on' : ''}" title="${AGENT_FULL[a.id]}${a.needs ? ': ' + a.needs.toLowerCase() : ''}">${mark(a.id, 20)}${a.needs ? '<span class="si-need"></span>' : ''}</span>`
+    }
+    h += '<span class="si-grow"></span>'
+    if (fast) h += `<span class="si-r${s.fast ? ' si-lit' : ''}${off}" title="Fast mode ${s.fast ? 'on' : 'off'}: faster answers, may cost more">${s.fast ? icon.boltFill : icon.boltLine}</span>`
+    return h + '</div>'
+  }
+
+  function menu(s) {
+    const name = AGENT_NAME[s.agent]
+    if (s.menuAgent && s.menuAgent !== s.agent) {
+      const a = AGENTS.find(x => x.id === s.menuAgent)
+      const what = a.needs === 'Not installed' ? `${AGENT_FULL[a.id]} isn't installed yet.` : `${AGENT_FULL[a.id]} needs you to sign in.`
+      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note"><b>${what}</b><br>Choose it, and this chat will offer to ${a.needs === 'Not installed' ? 'install it' : 'sign you in'} once you send. Its models show here once it's ready.<br><span class="si-btn si-primary si-act">Use ${AGENT_NAME[a.id]}</span></div></div></div>`
+    }
+    if (s.settings === 'failed') {
+      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF couldn't learn which models and settings ${name} offers. It tries again when the chat opens, or now.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
+    }
+    if (s.settings === 'unknown') {
+      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF doesn't know yet which models and settings ${name} offers. It finds out when the chat opens, or now, without sending a message.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
+    }
+    const offers = OFFERS[s.model]
+    let h = `<div class="si-menu">${rail(s, offers.fast)}<div class="si-main"><div class="si-search">${icon.search}Search models…</div><div class="si-list">`
+    h += MODELS.filter(m => s.filter !== 'favs' || FAVOURITES.includes(m.name)).map(m => {
+      const now = m.name === s.model, later = m.name === s.held.model, fav = FAVOURITES.includes(m.name)
+      return `<div class="si-row${now ? ' si-chosen' : ''}"><span class="si-name">${m.name}</span>` +
+        `<span class="si-tick">${now ? icon.tick : later ? `<span class="si-when">${icon.clock}after this turn</span>` : ''}</span>` +
+        `<span class="si-star${fav ? ' si-fav' : ''}">${fav ? icon.starFill : icon.star}</span><span class="si-sub">${mark(s.agent, 13)}${m.d}</span></div>`
+    }).join('') + '</div>'
+    const E = offers.efforts, at = E.indexOf(s.effort), pct = n => (n / (E.length - 1)) * 100
+    const aside = s.held.effort ? `<span class="si-aside si-held">${icon.clock}${s.held.effort} after this turn</span>` : `<span class="si-aside">${s.effort}</span>`
+    h += `<div class="si-effort${s.held.model ? ' si-off' : ''}"><div class="si-heading"><span>Effort${s.held.model ? ' · ' + s.model + "'s: change it once " + s.held.model + ' applies' : ''}</span>${aside}</div><div class="si-slider"><div class="si-track"><div class="si-fill-bar" style="width:${pct(at)}%"></div>` +
+      E.map((_, n) => `<span class="si-stop" style="left:${pct(n)}%"></span>`).join('') + `<span class="si-knob" style="left:${pct(at)}%"></span></div>` +
+      `<div class="si-names">${E.map((e, n) => `<span class="${n === at ? 'si-on' : ''}">${e}</span>`).join('')}</div></div></div>`
+    return h + '</div></div>'
+  }
+
+  function composer(state) {
+    const s = { ...DEFAULTS, ...state, held: { ...(state.held || {}) } }
+    const name = AGENT_NAME[s.agent]
+    let h = '<div class="si-foot"><div class="si-column">'
+    const waiting = typeof s.waiting === 'number' ? QUEUED.slice(0, s.waiting) : s.waiting
+    if (waiting.length) {
+      h += `<div class="si-tray"><div class="si-head"><span>Waiting for ${s.waitingFor} · ${waiting.length}</span><span>${s.waitingNote || `Stop drops ${waiting.length === 1 ? 'it' : 'these'} too`}</span></div>` +
+        waiting.map(t => `<div class="si-item">${icon.clock}<span class="si-text">${t}</span></div>`).join('') + '</div>'
+    }
+    if (s.problem) h += `<div class="si-tray si-problem">${icon.warn}${s.problem}</div>`
+    h += s.attached
+    const joined = s.attached ? ` si-joined${s.joined ? ' si-' + s.joined : ''}` : ''
+    h += `<div class="si-box${joined}">`
+    if (s.blocked) {
+      const b = typeof s.blocked === 'string' ? { text: s.blocked } : s.blocked
+      h += `<div class="si-locked">${icon[b.icon || 'lock']}<span>${b.bold ? `<b>${b.bold}</b> ` : ''}${b.text}</span></div>`
+      if (b.controls !== false) h += `<div class="si-controls"><span class="si-control si-quiet">${mark(s.agent)}<span class="si-label">${s.settings === 'known' ? s.model + ' · ' + s.effort : name}</span></span><span class="si-spacer"></span>${ring(s)}</div>`
+      return h + `</div>${s.after}</div></div>`
+    }
+    const ph = s.placeholder || (s.newChat ? `Message ${name} to start` : s.gate ? `Message ${name}: it waits until ${name} is ready` : s.running ? `Message ${name}: it waits for this turn` : `Message ${name}`)
+    h += s.text ? `<div class="si-draft">${s.text}<span class="si-caret"></span></div>` : `<div class="si-draft si-ph">${s.narrow ? ph.split(':')[0] : ph}</div>`
+    h += `<div class="si-controls">${control(s)}`
+    if (s.folder) h += `<span class="si-control">${icon.folder}<span class="si-mono">${s.folder}</span>${icon.chev}</span>`
+    h += '<span class="si-spacer"></span>'
+    if (s.running && s.text && !s.narrow) h += '<span class="si-waits">waits for this turn</span>'
+    h += ring(s)
+    if (s.stopping) h += `<span class="si-round" title="Stopping…">${icon.spin}</span>`
+    else if (s.running && !s.text) h += `<span class="si-round si-lit" title="Stop${waiting.length ? ', dropping the waiting messages' : ''}">${icon.stop}</span>`
+    else if (s.running) h += `<span class="si-round si-small" title="Stop">${icon.stop}</span><span class="si-round si-lit" title="Send: it waits for this turn">${icon.send}</span>`
+    else h += `<span class="si-round${s.text ? ' si-lit' : ''}" title="Send">${icon.send}</span>`
+    h += '</div></div>'
+    if (s.menu) h += menu(s)
+    return h + `${s.after}</div></div>`
+  }
+
+  window.SI = { composer, control, menu, ring, mark, icon, MODELS, OFFERS, FAVOURITES, AGENTS, AGENT_NAME }
+})()
+</script>
+<script>
+  const I = (d, extra = '') => `<svg class="i" viewBox="0 0 24 24" ${extra}>${d}</svg>`
+  const icon = {
+    plus: I('<path d="M12 5v14M5 12h14"/>'),
+    trash: I('<path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13"/>'),
+    spin: I('<path d="M12 3a9 9 0 109 9"/>', 'style="animation:spin 1s linear infinite"'),
+    warn: I('<path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17.5v.5"/>'),
+    archive: I('<path d="M4 8h16v11H4zM2 4h20v4H2zM10 12h4"/>'),
+    unplug: I('<path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 01-10 0zM12 16v5M3 3l18 18"/>'),
+  }
+  function rays(colour, size = 15) {
+    let r = ''
+    for (let n = 0; n < 12; n++) {
+      const a = (n * Math.PI) / 6, len = n % 2 ? 7.2 : 10
+      r += `<line x1="12" y1="12" x2="${(12 + len * Math.cos(a)).toFixed(2)}" y2="${(12 + len * Math.sin(a)).toFixed(2)}"/>`
+    }
+    return `<svg class="i" viewBox="0 0 24 24" style="width:${size}px;height:${size}px;color:${colour};stroke-width:2.6">${r}</svg>`
+  }
+  const MARK = {
+    claude: rays('var(--claude)'),
+    codex: `<svg class="i" viewBox="0 0 24 24" style="color:var(--codex)"><circle cx="12" cy="12" r="8.5"/><path d="M8 12h8M12 8v8"/></svg>`,
+    gemini: `<svg class="i" viewBox="0 0 24 24" style="color:var(--gemini);fill:currentColor;stroke:none"><path d="M12 2c.6 5.4 4.6 9.4 10 10-5.4.6-9.4 4.6-10 10-.6-5.4-4.6-9.4-10-10 5.4-.6 9.4-4.6 10-10z"/></svg>`,
+  }
+
+  // ---- The identity component ----
+  // state: idle | work | you | fail | lost | restoring | archived | cant | gone | locked
+  function full(c) {
+    const title = c.label ? c.label : `<span class="first">“${c.first}”</span>`
+    let right = `<span>${c.when || ''}</span>`, why = ''
+    if (c.state === 'work') { right = '<span class="dot work"></span>'; why = `<span class="why work">${c.why || 'Working · 31s'}</span>` }
+    if (c.state === 'you') { right = '<span class="dot you"></span>'; why = `<span class="why you">${c.why || 'Wants to run a command'}</span>` }
+    if (c.state === 'fail') { right = '<span class="dot fail"></span>'; why = `<span class="why fail">${c.why || 'Usage limit'}</span>` }
+    if (c.state === 'lost') { right = '<span class="dot lost"></span>'; why = `<span class="why lost">${c.why || 'Claude stopped.'}</span>` }
+    if (c.state === 'restoring') { right = `<span class="muted">${icon.spin}</span>`; why = '<span class="why">Restoring…</span>' }
+    if (c.state === 'archived') why = `<span class="why">${c.turns ? c.turns + ' turns · ' : ''}<span class="badge">Archived</span></span>`
+    if (c.state === 'cant') why = `<span class="why"><span class="badge bad">Can't restore: damaged</span></span>`
+    if (c.state === 'gone') why = `<span class="why">${icon.unplug} Gemini isn't available</span>`
+    if (c.state === 'locked') why = `<span class="why">${SI.icon.lock} Claude can't be used</span>`
+    if (c.state === 'idle' && c.turns) why = `<span class="why">${c.turns} turns</span>`
+    return `<div class="id-full${c.state === 'archived' ? ' archived' : ''}${c.sel ? '" style="background:var(--chat-chosen)' : ''}"><span class="mk">${MARK[c.agent]}</span><span class="title">${title}</span><span class="right">${right}</span>${why}</div>`
+  }
+  function lead(c) {
+    if (c.state === 'work') return '<span class="dot work"></span>'
+    if (c.state === 'you') return '<span class="dot you"></span>'
+    if (c.state === 'fail') return '<span class="dot fail"></span>'
+    if (c.state === 'lost') return '<span class="dot lost"></span>'
+    if (c.state === 'restoring') return `<span class="muted">${icon.spin}</span>`
+    if (c.state === 'cant') return `<span style="color:var(--warning)">${icon.warn}</span>`
+    if (c.state === 'gone') return `<span class="muted">${icon.unplug}</span>`
+    if (c.state === 'locked') return `<span class="muted">${SI.icon.lock}</span>`
+    return MARK[c.agent]
+  }
+  const compact = c => `<span class="id-compact${c.state === 'archived' ? ' muted' : ''}">${lead(c)}<span class="title">${c.label || `<span class="first">“${c.first}”</span>`}</span></span>`
+  const minimal = c => `<span class="id-min" title="${c.label || c.first}">${c.state === 'idle' || c.state === 'archived' ? '' : lead(c)}</span>`
+
+  const GALLERY = [
+    { state: 'idle', name: 'Idle', note: 'Nothing going on.', c: { agent: 'claude', label: 'Docs pass on the getting-started guide', when: '1h', turns: 12 } },
+    { state: 'idle', name: 'Idle, no label', note: 'Titled by its first message.', c: { agent: 'codex', first: 'Why does the file store take a flock before the rename?', when: '09:40', turns: 3 } },
+    { state: 'work', name: 'Working', note: 'A turn is running.', c: { agent: 'claude', label: 'Fix the empty-file panic' } },
+    { state: 'you', name: 'Waiting on you', note: 'A question, or the agent banner.', c: { agent: 'claude', label: 'Rename load_config and its callers' } },
+    { state: 'fail', name: 'Failed', note: 'Its last turn failed.', c: { agent: 'codex', label: 'Benchmark the parser' } },
+    { state: 'lost', name: 'Lost its agent', note: 'Between turns: why, in the transcript\'s words.', c: { agent: 'claude', label: 'Profile the file store' } },
+    { state: 'restoring', name: 'Restoring', note: 'Briefly, as it opens.', c: { agent: 'claude', label: 'Old zstd experiment' } },
+    { state: 'archived', name: 'Archived', note: "Done with, still openable.", c: { agent: 'claude', label: 'Fix the restore race', when: 'Wed', turns: 22 } },
+    { state: 'cant', name: "Can't restore", note: 'One of six reasons.', c: { agent: 'claude', label: 'Old zstd experiment', when: 'Mon' } },
+    { state: 'gone', name: 'Agent gone', note: 'Readable, not continuable.', c: { agent: 'gemini', label: 'Parser fuzzing notes', when: 'Tue' } },
+    { state: 'locked', name: "Agent can't be used", note: "CAF won't run it: readable, not continuable.", c: { agent: 'claude', label: 'Fix the empty-file panic', when: 'Thu' } },
+  ]
+  document.getElementById('gallery').innerHTML = `<table><thead><tr><th>State</th><th>Full</th><th>Compact</th><th>Minimal</th></tr></thead><tbody>` +
+    GALLERY.map(g => { const c = { ...g.c, state: g.state }; return `<tr><td class="state"><b>${g.name}</b><span>${g.note}</span></td><td class="full">${full(c)}</td><td>${compact(c)}</td><td>${minimal(c)}</td></tr>` }).join('') + '</tbody></table>'
+
+  // ---- Hosting examples ----
+  const S = {
+    a: { agent: 'claude', label: 'Fix the empty-file panic', state: 'work' },
+    b: { agent: 'claude', label: 'Rename load_config and its callers', state: 'you' },
+    c: { agent: 'codex', label: 'Benchmark the parser', state: 'fail' },
+    d: { agent: 'claude', label: 'Docs pass on the guide', state: 'idle', when: '1h' },
+    e: { agent: 'codex', first: 'Why does the file store take a flock…', state: 'idle', when: '09:40' },
+  }
+  document.getElementById('hosts').innerHTML =
+    `<div class="card host side"><div class="cap">A simple app's sidebar · <b style="color:var(--text)">full</b></div><div class="list">${full({ ...S.a })}${full({ ...S.b, sel: true })}${full(S.c)}${full(S.d)}${full(S.e)}</div></div>` +
+    `<div style="display:flex;flex-direction:column;gap:14px">` +
+    `<div class="card host"><div class="cap">framewright's tabs · <b style="color:var(--text)">compact</b></div><div class="tabs"><span class="tab">${compact(S.a)}</span><span class="tab sel">${compact(S.b)}</span><span class="tab">${compact(S.c)}</span><span class="tab">${icon.plus}</span></div><div style="height:40px;background:var(--pane)"></div></div>` +
+    `<div class="card host"><div class="cap">clackatoo's workspaces and panes · <b style="color:var(--text)">minimal</b> on the workspaces, <b style="color:var(--text)">compact</b> in the pane headers</div>` +
+    `<div class="wsbar"><span><i class="ws" style="background:var(--ws1)"></i>caf ${minimal(S.b)}</span><span><i class="ws" style="background:var(--ws2)"></i>eyespy ${minimal(S.c)}</span></div>` +
+    `<div class="panes"><div class="p focus"><div class="ph">${compact(S.b)}</div></div><div class="p"><div class="ph">${compact(S.a)}</div></div></div></div></div>`
+
+  // ---- The lifecycle, in the chat view ----
+  const head = (title, opts = {}) => `<div class="chathead">${opts.mark || MARK.claude}<span class="t">${title}</span>${opts.badge || ''}<span class="spacer"></span><span class="slot">the app's header</span></div>`
+  const composer = (opts = {}) => SI.composer(opts)
+  const convo = `<div class="sent">The config loader panics on an empty file. Can you fix it and add a test?</div><div class="summary">Worked 42s · Edited 2 files · Ran cargo test ✓</div><div class="said">Fixed. An empty file now gives <code>ConfigError::Empty</code> instead of panicking.</div>`
+  // Why a chat can't be restored: CAF's six reasons (CannotRestore).
+  // Trying again helps only after InUse or Store.
+  const FUZZ = `<div class="sent">Fuzz the parser for an hour and note any crash.</div><div class="summary">Worked 1h 2m · Ran cargo fuzz ✓ · Edited 1 file</div><div class="said">Two crashes, both on deeply nested arrays. The inputs and notes are in <code>fuzz/NOTES.md</code>.</div>`
+  const FAIL = {
+    damaged: { t: "This chat's save is damaged", b: "It can't be read, so it can't be opened. The save is left exactly as it was.", k: 'chunk 3: zstd frame checksum mismatch', a: ['Delete…'] },
+    inuse: { t: 'This chat is open somewhere else', b: 'A chat is never open in two places at once. Close it there, then try again.', a: ['Try again'] },
+    newer: { t: 'Saved by a newer version', b: "A newer version of this app saved it, in a form this one can't read. It's left untouched until this app is updated.", a: [] },
+    appdata: { t: "This app can't read its own data on this chat", b: "Another version of this app saved it, in a form this one can't read. The chat is left untouched, for a version that can.", k: 'missing field `pinned`', a: [] },
+    store: { t: "This chat couldn't be read", b: 'Reading it failed, and nothing was changed. Try again in a moment.', k: 'Input/output error (os error 5)', a: ['Try again'] },
+    gone: { t: 'This chat is gone', b: 'Nothing is saved under it any more. It may have been deleted elsewhere.', a: ['Remove from list'] },
+  }
+  const LIFE = [
+    { id: 'restoring', label: 'Restoring', note: 'Opening a saved chat. CAF reads it back, then it carries on as it was. This is the only sign that it was saved.', render: () => head('Old zstd experiment') + `<div class="body"><div class="centre">${icon.spin}<h3>Restoring…</h3></div></div>` },
+    { id: 'cant-damaged', label: "Can't restore: damaged", note: "The save can't be read, and trying again won't change that. What the store said is shown, in its words. Delete asks first.", render: () => failure('damaged') },
+    { id: 'cant-inuse', label: "Can't restore: in use", note: 'Another program has it open. Trying again helps once it lets go.', render: () => failure('inuse') },
+    { id: 'cant-newer', label: "Can't restore: newer", note: 'Saved by a newer CAF. Nothing helps but updating, so there are no actions.', render: () => failure('newer') },
+    { id: 'cant-appdata', label: "Can't restore: app's data", note: "The app can't read the data it saved with the chat. Nothing helps but a version of the app that can, so there are no actions.", render: () => failure('appdata') },
+    { id: 'cant-store', label: "Can't restore: couldn't read", note: 'The store failed, such as a disk error. What the system said is shown. Trying again may help.', render: () => failure('store') },
+    { id: 'cant-gone', label: "Can't restore: gone", note: "Its save has gone. Remove from list lists the chats again, and it drops out. A viewer, which can't list them, offers nothing.", render: () => failure('gone') },
+    { id: 'archived', label: 'An archived chat, opened', note: "Opening an archived chat restores it, as any saved chat, and it's an ordinary chat again: no longer archived, and the next message carries it on.", render: () => head('Fix the restore race') + `<div class="body"><div class="column">${convo}</div></div>` + composer() },
+    { id: 'agent-gone', label: 'Agent gone', note: "Its agent isn't offered by this app any more, so it can be read but not carried on. The box says why instead of offering to send.", render: () => head('Parser fuzzing notes', { mark: MARK.gemini }) + `<div class="body"><div class="column">${FUZZ}</div></div>` + composer({ agent: 'gemini', settings: 'none', context: 31, blocked: { icon: 'unplug', bold: "Gemini isn't available in this app any more.", text: 'You can read this chat, but not carry it on.' } }) + `` },
+    { id: 'own-tools', label: 'Own tools on', note: "Its agent is offered, but CAF won't run it, as it can't turn off the agent's own tools: the app chose the cautious profile, or the agent isn't the one its profile is for. Like an agent gone, it can be read but not carried on.", render: () => head('Fix the empty-file panic') + `<div class="body"><div class="column">${convo}</div></div>` + composer({ settings: 'none', context: 18, blocked: { icon: 'lock', bold: "Claude can't be used: its own tools can't be turned off.", text: 'You can read this chat, but not carry it on.' } }) },
+    { id: 'new', label: 'New chat', note: "An empty chat with the usual composer: the settings control picks the agent and its model (the menu's rail lists every agent in a new chat). There's no context yet, so no ring. This app fixes the folder, so there's no folder control.", render: () => head('New chat') + `<div class="body"><div class="centre">${rays('var(--claude)', 30)}<h3>New chat</h3>Send a message to start.</div></div>` + composer({ newChat: true, context: null }) },
+    { id: 'new-folder', label: 'New chat · folder', note: 'An app that lets users choose the folder shows it on the box too.', render: () => head('New chat') + `<div class="body"><div class="centre">${rays('var(--claude)', 30)}<h3>New chat</h3>Send a message to start.</div></div>` + composer({ newChat: true, context: null, folder: '~/projects/caf' }) },
+    { id: 'new-agent', label: 'New chat · agent', note: "Choosing the agent is the same settings menu as any chat's: in a new chat its rail lists every agent, with a dot on any that still needs installing or signing in. The folder, when the app lets users choose it, is a second control beside it.", render: () => head('New chat') + `<div class="body"><div class="centre">${rays('var(--claude)', 30)}<h3>New chat</h3>Send a message to start.</div></div>` +
+      composer({ newChat: true, context: null, menu: true }) },
+    { id: 'new-not-ready', label: 'New chat · agent not ready', note: "Choosing an agent that still needs installing (or signing in). The menu says so; choose it, and the agent banner takes over on the box once you send.", render: () => head('New chat') + `<div class="body"><div class="centre">${rays('var(--claude)', 30)}<h3>New chat</h3>Send a message to start.</div></div>` +
+      composer({ newChat: true, context: null, menu: true, menuAgent: 'codex' }) },
+    { id: 'new-refused', label: 'New chat · refused', note: "The app decides each new chat. When it refuses one, the box says why, in the app's words.", render: () => head('New chat') + `<div class="body"><div class="centre">${rays('var(--claude)', 30)}<h3>New chat</h3>Send a message to start.</div></div>` +
+      composer({ newChat: true, context: null, folder: '/etc', text: 'Tidy up the old config files.', joined: 'warning', attached: `<div class="si-attached si-warning">${icon.warn} <b>Chats can't be started in <span class="mono">/etc</span>.</b> <span class="muted">Choose another folder.</span></div>` }) },
+    { id: 'delete', label: 'Delete', note: "Wherever the app puts Delete, it asks first, naming the chat, and says it can't be undone.", render: () => head('Usage ledger sketch') + `<div class="body"><div class="column">${convo}</div></div>` + composer() +
+      `<div class="scrim"></div><div class="dialog"><h3>Delete “Usage ledger sketch”?</h3><div class="muted">It's gone for good: this can't be undone. To keep it but put it out of the way, archive it instead.</div><div class="acts"><span class="btn quiet">Cancel</span><span class="btn">${icon.archive}Archive</span><span class="btn danger">${icon.trash}Delete</span></div></div>` },
+  ]
+  function failure(k) {
+    const f = FAIL[k]
+    return head('Old zstd experiment') + `<div class="body"><div class="centre"><div class="problem"><b>${icon.warn} ${f.t}</b><div style="margin-top:4px">${f.b}</div>${f.k ? `<div class="k">${f.k}</div>` : ''}</div>` +
+      `<div class="acts">${f.a.map(a => `<span class="btn${a === 'Try again' ? ' primary' : ''}">${a}</span>`).join('')}</div></div></div>`
+  }
+  let life = 'restoring'
+  function show(id = life) {
+    life = id
+    const l = LIFE.find(x => x.id === life)
+    document.getElementById('state-note').innerHTML = `<b>${l.label}.</b> ${l.note}`
+    document.getElementById('win').innerHTML = l.render()
+    for (const b of document.querySelectorAll('[data-state]')) b.setAttribute('aria-pressed', b.dataset.state === life)
+  }
+  for (const l of LIFE) { const b = document.createElement('button'); b.textContent = l.label; b.dataset.state = l.id; b.onclick = () => { life = l.id; show(); document.getElementById('lifecycle').scrollIntoView({ behavior: 'smooth' }) }; document.getElementById('states').appendChild(b) }
+  function theme(name) {
+    document.documentElement.dataset.theme = name
+    for (const o of document.querySelectorAll('[data-theme-btn]')) o.setAttribute('aria-pressed', o.dataset.themeBtn === name)
+  }
+  for (const b of document.querySelectorAll('[data-theme-btn]')) b.onclick = () => theme(b.dataset.themeBtn)
+  theme(matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+  show()
+  // What build.mjs pictures for Learn: each lifecycle state, the identity
+  // at its three sizes, and the hosting examples. The header's "the app's
+  // header" label is the mock-up's, so the pictures leave it out.
+  SI.shots = {
+    target: '#win',
+    css: '#win { height: 540px } .chathead .slot { display: none }',
+    states: LIFE.map(x => x.id),
+    show,
+    extras: [{ id: 'identity', target: '#gallery' }, { id: 'hosting', target: '#hosts' }],
+  }
+</script>
+</body>
+</html>

@@ -20,3 +20,6 @@
 
 # Builders' scratch: TMPDIR for tests and tools
 /tmp/
+
+# Pictures docs/si/build.mjs is taking, if it was killed part-way.
+docs/si/.taking-*/

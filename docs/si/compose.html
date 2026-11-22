@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAF SI · The composer</title>
+<link rel="stylesheet" href="si.css">
+<style>
+  /* The theme and the composer are in si.css. */
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--window); color: var(--text); font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  code { font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace; font-size: .88em; background: var(--raised); padding: .05em .35em; border-radius: 5px; }
+  .page { max-width: 1240px; margin: 0 auto; padding: 22px 26px 60px; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 26px; }
+
+  /* The page's own controls: plain, off to the side. */
+  nav { position: sticky; top: 18px; align-self: start; font-size: 13px; }
+  nav h1 { font-size: 15px; margin: 0 0 2px; }
+  nav .sub { color: var(--muted); margin: 0 0 14px; }
+  nav .group { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin: 14px 0 4px; }
+  nav button { display: block; width: 100%; text-align: left; font: inherit; color: var(--text); background: none; border: 0; border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+  nav button:hover { background: var(--hover); }
+  nav button[aria-pressed='true'] { background: var(--chat-chosen); }
+  nav button[aria-pressed='true']::before { content: ''; display: inline-block; width: 3px; height: 12px; background: var(--accent); border-radius: 2px; margin: 0 7px -1px -4px; }
+  nav .themes { display: flex; gap: 4px; }
+  nav .themes button { width: auto; flex: 1; text-align: center; }
+
+  main { min-width: 0; }
+  .about { background: var(--pane); border: 1px solid var(--raised-edge); border-radius: 12px; padding: 12px 16px; margin-bottom: 18px; font-size: 14px; }
+  .about b { font-weight: 600; }
+  .about .what { margin: 0; }
+  .about .how { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+
+  /* A pane, as clackatoo's chat is drawn in: the transcript's column,
+     and the composer at its foot. */
+  .pane { background: var(--pane); border: 1px solid var(--raised-edge); border-radius: 12px; height: 620px; display: flex; flex-direction: column; overflow: hidden; }
+  .pane.narrow { width: 420px; height: 560px; }
+  .column { width: 100%; max-width: 760px; margin: 0 auto; padding: 0 22px; }
+  .transcript { flex: 1; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; padding-bottom: 14px; }
+  .transcript .column { display: flex; flex-direction: column; gap: 14px; }
+  .sent { align-self: flex-end; max-width: 80%; background: var(--raised); border: 1px solid var(--raised-edge); border-radius: 14px; padding: 8px 13px; }
+  .said { color: var(--text); }
+  .switch-line { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); margin: 4px 0; }
+  .switch-line::before, .switch-line::after { content: ''; flex: 1; height: 1px; background: var(--raised-edge); }
+  .switch-line .from { opacity: .75; }
+  .working { color: var(--muted); display: flex; gap: 8px; align-items: center; }
+  .working .dots::after { content: '•••'; letter-spacing: 2px; animation: pulse 1.2s infinite; }
+  .lead { color: var(--muted); font-size: 13px; display: flex; gap: 6px; align-items: center; margin-bottom: -6px; }
+  .lead .chip { background: var(--raised); border: 1px solid var(--raised-edge); border-radius: 999px; padding: 0 8px; }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  .notes { margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 26px; font-size: 13.5px; }
+  .notes h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 4px; }
+  .notes ul { margin: 0; padding-left: 18px; }
+  .notes li { margin: 2px 0; }
+  .narrow-wrap { margin-top: 22px; }
+  .narrow-wrap h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <h1>The composer</h1>
+    <p class="sub">CAF SI · <a href="index.html" style="color:var(--link)">all pages</a></p>
+    <div id="states"></div>
+    <div class="group">Theme</div>
+    <div class="themes">
+      <button data-theme-btn="dark">Dark</button>
+      <button data-theme-btn="light">Light</button>
+    </div>
+  </nav>
+
+  <main>
+    <div class="about">
+      <p class="what" id="what"></p>
+      <p class="how" id="how"></p>
+    </div>
+    <div class="pane" id="wide"></div>
+
+    <div class="notes">
+      <div>
+        <h3>How it's built</h3>
+        <ul>
+          <li>One rounded box. The message is on top, the controls are along the bottom. Nothing sits above the text.</li>
+          <li>Bottom left: the agent's mark and one control for its settings (<i>Opus 5.5 · High</i>), with a bolt when fast mode is on. It opens one menu that holds them all.</li>
+          <li>Bottom right: the context ring (<code>Usage.used / size</code>; amber past 80%, red past 95%), then one round button: <b>send</b>, or <b>stop</b> while a turn runs and the box is empty.</li>
+          <li>Waiting messages sit on a tray just above the box.</li>
+          <li>Gold is kept for focus and for what to press: the lit button, the caret and the slider.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>What CAF decides</h3>
+        <ul>
+          <li><b>Text only</b> (<code>Part::Text</code>), so there are no attachments yet.</li>
+          <li><b>A message sent during a turn waits.</b> Send stays on, and Stop drops the waiting messages too.</li>
+          <li><b>The menu is built from <code>Setting.form</code>:</b> a list of <code>Choices</code> or a <code>Switch</code>, each present only if the agent offers it.</li>
+          <li><b>A setting changed during a turn is held</b> until the turn ends.</li>
+          <li><b>Rights:</b> without <code>act</code> nothing can be sent or set; without <code>agents</code> there's no <i>Learn them now</i>.</li>
+          <li><b>Keys:</b> Enter sends, Shift+Enter starts a new line, and nothing happens on Enter while an IME is composing.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="narrow-wrap">
+      <h3>Narrow, as in a side pane</h3>
+      <div class="pane narrow" id="narrow" style="--si-gutter:14px"></div>
+    </div>
+  </main>
+</div>
+
+<script src="si.js"></script>
+<script>
+  const mark = SI.mark('claude')
+
+  const DRAFT = 'Now update the callers in crates/save too, and run its tests.'
+  const QUEUED = ['Now update the callers in crates/save too, and run its tests.', 'Then write a changelog line for the rename.']
+
+  const STATES = [
+    { group: 'Writing' },
+    { id: 'empty', label: 'Empty', what: '<b>Idle, nothing typed.</b> Send is unlit.', s: {} },
+    { id: 'typing', label: 'Typing', what: '<b>Text in the box,</b> so Send lights up in the accent.', s: { text: DRAFT } },
+    { id: 'failed', label: "Couldn't send", what: "<b>The message couldn't be sent.</b> The text goes back in the box, and the tray above it says why.", s: { text: DRAFT, problem: "Couldn't send: the connection to the app dropped, so it may not have gone. Your message is still here: check the chat before sending it again." } },
+    { group: 'A turn running' },
+    { id: 'running', label: 'Running', what: '<b>The agent is working and the box is empty,</b> so the button is Stop.', s: { running: true } },
+    { id: 'running-typing', label: 'Running + typing', what: '<b>Typing during a turn.</b> The button is Send again, because the message will wait. Stop moves to a smaller button beside it, so it stays one click away.', s: { running: true, text: DRAFT } },
+    { id: 'waiting', label: 'Messages waiting', what: '<b>Two messages were sent during the turn.</b> They wait on the tray above the box, which says that Stop drops them too.', s: { running: true, waiting: 2 } },
+    { id: 'opening', label: 'Waiting to open', what: "<b>The chat is still opening, and a message waits for it.</b> There's no turn yet, so the tray says what the message waits for. Stop gives up opening and drops the message.", s: { running: true, opening: true, context: null, waiting: 1, waitingFor: 'Claude to open', placeholder: 'Message Claude: it waits for Claude to open' } },
+    { id: 'stopping', label: 'Stopping', what: "<b>Stop was asked for, and the agent hasn't confirmed yet.</b> The button spins and can't be pressed again.", s: { running: true, stopping: true } },
+    { group: 'Settings' },
+    { id: 'menu', label: 'Menu open', what: "<b>The settings menu, as clackatoo's model menu.</b> A rail down the left filters the list: favourites, then the chat's agent, with fast mode at its foot (gold when on, gone when the model doesn't offer it). Then search, the agent's models with their descriptions, a star to favourite one, and effort as a slider.", s: { menu: true } },
+    { id: 'menu-favs', label: 'Menu · favourites', what: '<b>The favourites filter.</b> Starred models only. Favourites belong to the app, which keeps them as clackatoo does; CAF knows nothing of them.', s: { menu: true, filter: 'favs' } },
+    { id: 'held', label: 'Effort held', what: '<b>Effort changed to Max during a turn.</b> CAF holds the change until the turn ends. The control shows what will apply, and the part still waiting is amber with a clock.', s: { running: true, held: { effort: 'Max' } } },
+    { id: 'held-model', label: 'Model held', what: "<b>The model changed to Sonnet 5.5 during a turn.</b> It's the same pattern as effort: the model is amber with a clock until the turn ends. Effort and fast mode stay as they are for now, because what Sonnet offers isn't known until it applies.", s: { running: true, held: { model: 'Sonnet 5.5' } } },
+    { id: 'held-menu', label: 'Model held · menu', what: '<b>The menu while the model change is held.</b> The current model keeps its tick, and the one picked says <i>after this turn</i>. Picking Opus again cancels the change.', s: { running: true, held: { model: 'Sonnet 5.5' }, menu: true } },
+    { id: 'switched', label: 'Model changed', what: "<b>The turn ended and Sonnet 5.5 is now the model.</b> The agent then says what Sonnet offers, and the control follows. Here that means no fast mode, so the bolt goes. (Sonnet's options here are made up for the example.)", s: { model: 'Sonnet 5.5' } },
+    { id: 'switched-turn', label: 'Model changed · next turn', what: "<b>The first turn on Sonnet 5.5.</b> A divider marks where the model changed. The view draws it wherever a turn's model (<code>Turn.model</code>, from <code>Change::TurnModel</code>) differs from the turn before, so it needs nothing new from CAF, shows up in restored chats too, and sits exactly where answers start coming from the new model.", s: { model: 'Sonnet 5.5', nextTurn: true, running: true } },
+    { id: 'switched-menu', label: 'Model changed · menu', what: "<b>The menu after the change.</b> Effort has Sonnet's levels, and the fast mode row is gone because Sonnet doesn't offer it. If the old choice isn't offered any more, CAF falls back and puts a note in the transcript (<code>Note::NotOffered</code>).", s: { model: 'Sonnet 5.5', menu: true } },
+    { id: 'learn-failed', label: "Couldn't learn them", what: "<b>CAF tried to learn the settings and couldn't.</b> The control says so; its menu says why and offers to try again.", s: { settings: 'failed', fresh: true, context: null } },
+    { id: 'learn-failed-menu', label: "Couldn't learn · menu", what: "<b>The menu, after CAF couldn't learn the settings.</b>", s: { settings: 'failed', fresh: true, context: null, menu: true } },
+    { id: 'unknown', label: 'Not known yet', what: "<b>Before a chat opens, CAF may not know what the agent offers.</b> The control says so and nothing more. <i>Learn them now</i> is in its menu, for a viewer with the <code>agents</code> right.", s: { settings: 'unknown', fresh: true, context: null } },
+    { id: 'unknown-menu', label: 'Not known · menu', what: '<b>The menu, opened while the settings are unknown.</b>', s: { settings: 'unknown', menu: true, fresh: true, context: null } },
+    { id: 'learning', label: 'Learning', what: '<b>CAF is learning the settings</b> without sending a message.', s: { settings: 'learning', fresh: true, context: null } },
+    { id: 'none', label: 'None offered', what: "<b>The agent offers no settings</b> (Cursor, for one, can't switch models). Only its mark and name are shown, with nothing to open.", s: { settings: 'none', fresh: true, context: null } },
+    { group: 'The chat' },
+    { id: 'gate', label: 'Agent not ready', what: "<b>The chat is waiting for Claude to be installed.</b> The agent banner attaches to the box, as questions do (see the agents page), and the box says messages will wait.", s: { gate: true } },
+    { id: 'filling', label: 'Context filling', what: '<b>The context is 86% full,</b> so the ring turns amber (red past 95%).', s: { context: 86 } },
+    { id: 'blocked', label: "Can't write", what: "<b>A viewer without the <code>act</code> right, or a closed chat.</b> The box stays in place, says why, and has no controls.", s: { blocked: 'You can follow this chat, but not write in it.' } },
+  ]
+
+  // The agent banner, as agents.html draws it, attached to the box.
+  const GATE = '<div class="si-attached"><div style="display:flex;gap:10px;align-items:flex-start">' + SI.mark('claude', 17) +
+    "<div><b>Claude isn't installed yet.</b><div style=\"color:var(--muted);font-size:13px\">Installing it downloads about 627 MB. Your message waits until it's done.</div>" +
+    '<div style="display:flex;gap:8px;margin-top:10px"><span class="si-btn si-primary">Install · 627 MB</span><span class="si-btn" style="background:none;border-color:transparent;color:var(--muted)">Not now</span></div></div></div></div>'
+
+  function base(s) {
+    return Object.assign({ text: '', running: false, stopping: false, waiting: 0, menu: false, filter: 'agent', held: {},
+      problem: null, gate: false, settings: 'known', blocked: null, model: 'Opus 5.5', effort: 'High', fast: true, context: 9 }, s)
+  }
+
+  function transcript(s) {
+    // A new chat, before its first message: nothing above the composer.
+    if (s.fresh) return '<div class="transcript"></div>'
+    let h = '<div class="sent">Rename <code>load_config</code> to <code>read_config</code> and fix its callers.</div>'
+    // Nothing shows in the transcript while a chat opens: the tray says what waits.
+    if (s.opening) return '<div class="transcript"></div>'
+    // A turn as the transcript page draws it: a summary line led by how long
+    // it took, live with the accent's spinner while it runs.
+    const working = took => `<div class="working"><span style="color:var(--accent);display:inline-flex">${SI.icon.spin}</span>Working ${took}</div>`
+    if (s.running && !s.nextTurn) h += working('12s')
+    else h += '<div class="lead">Worked 42s <span class="chip">Edited 4 files</span> <span class="chip">cargo test</span></div><div class="said">Done. I renamed it in four files under <code>crates/core</code>, and its tests pass.</div>'
+    if (s.nextTurn) {
+      h += '<div class="switch-line">' + mark + '<span>Sonnet 5.5</span><span class="from">from Opus 5.5</span></div>'
+      h += '<div class="sent">Now update the callers in <code>crates/save</code> too.</div>'
+      h += working('4s')
+    }
+    return '<div class="transcript"><div class="column">' + h + '</div></div>'
+  }
+
+  function show(id) {
+    const st = STATES.find(x => x.id === id)
+    const s = base(st.s)
+    document.getElementById('wide').innerHTML = transcript(s) + SI.composer({ ...s, attached: s.gate ? GATE : '', joined: s.gate ? 'accent' : null })
+    document.getElementById('narrow').innerHTML = transcript(s) + SI.composer({ ...s, narrow: true, attached: s.gate ? GATE : '', joined: s.gate ? 'accent' : null })
+    document.getElementById('what').innerHTML = st.what
+    document.getElementById('how').textContent = 'Pick a state on the left. The composer below and the narrow one at the foot of the page both follow it.'
+    for (const b of document.querySelectorAll('[data-state]')) b.setAttribute('aria-pressed', b.dataset.state === id)
+    history.replaceState(null, '', '#' + id)
+  }
+
+  const list = document.getElementById('states')
+  for (const st of STATES) {
+    if (st.group) {
+      const g = document.createElement('div')
+      g.className = 'group'
+      g.textContent = st.group
+      list.appendChild(g)
+      continue
+    }
+    const b = document.createElement('button')
+    b.textContent = st.label
+    b.dataset.state = st.id
+    b.onclick = () => show(st.id)
+    list.appendChild(b)
+  }
+  function theme(name) {
+    document.documentElement.dataset.theme = name
+    for (const o of document.querySelectorAll('[data-theme-btn]')) o.setAttribute('aria-pressed', o.dataset.themeBtn === name)
+  }
+  for (const b of document.querySelectorAll('[data-theme-btn]')) b.onclick = () => theme(b.dataset.themeBtn)
+  theme(matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+  const start = location.hash.slice(1)
+  show(STATES.some(x => x.id === start) ? start : 'typing')
+  // What build.mjs pictures for Learn.
+  SI.shots = {
+    target: '#wide',
+    css: '#wide { height: 470px }',
+    states: STATES.filter(x => x.id).map(x => x.id),
+    show,
+    extras: [{ id: 'narrow', target: '#narrow', state: 'running-typing' }],
+  }
+</script>
+</body>
+</html>

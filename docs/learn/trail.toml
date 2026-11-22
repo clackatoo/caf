@@ -3,3 +3,40 @@ title = "CAF Docs"
 description = "Using and developing CAF, the Clackatoo Agent Framework: a Rust library for robust chats with coding agents."
 footer = "Peios Learn"
 featured = ["caf"]
+
+# CAF SI's mock-ups, each bundled into one page (docs/si/build.mjs), so the
+# Standard Interface's articles can link to them live.
+[[attachments]]
+id = "caf-si-composer"
+title = "CAF SI: the composer, live"
+description = "The composer's mock-up, every state, in dark and light."
+source = "si-live/compose.html"
+filename = "composer.html"
+
+[[attachments]]
+id = "caf-si-transcript"
+title = "CAF SI: the transcript, live"
+description = "The transcript's mock-up, every state, in dark and light."
+source = "si-live/transcript.html"
+filename = "transcript.html"
+
+[[attachments]]
+id = "caf-si-agents"
+title = "CAF SI: agents, live"
+description = "The mock-up of installing and signing in agents, every state, in dark and light."
+source = "si-live/agents.html"
+filename = "agents.html"
+
+[[attachments]]
+id = "caf-si-chats"
+title = "CAF SI: a chat's identity and lifecycle, live"
+description = "The mock-up of how a chat is identified, restored, archived and started, in dark and light."
+source = "si-live/chats.html"
+filename = "chats.html"
+
+[[attachments]]
+id = "caf-si-usage"
+title = "CAF SI: usage, live"
+description = "The usage mock-up, in the chat and on the usage page, in dark and light."
+source = "si-live/usage.html"
+filename = "usage.html"

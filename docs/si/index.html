@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAF SI · The Standard Interface</title>
+<style>
+  [data-theme='dark'] {
+    --window: #121416; --pane: #0c0e10; --raised: rgba(255, 255, 255, .07); --raised-edge: rgba(255, 255, 255, .09);
+    --hover: rgba(255, 255, 255, .035); --text: #dde1e6; --muted: #8a9099; --faint: #6b717a;
+    --accent: #d9b24a; --accent-text: #d9b24a; --link: #7cb7f5; --warning: #e06c75; --caution: #e89a3c; --ok: #8fd18a; --caf: #6fd3c9;
+    color-scheme: dark;
+  }
+  [data-theme='light'] {
+    --window: #eeece7; --pane: #faf9f6; --raised: rgba(20, 22, 26, .04); --raised-edge: rgba(20, 22, 26, .11);
+    --hover: rgba(20, 22, 26, .045); --text: #1d2024; --muted: #666c75; --faint: #8b9098;
+    --accent: #d9b24a; --accent-text: #8a6a12; --link: #2d6db5; --warning: #c0404b; --caution: #b0660f; --ok: #2f7a3a; --caf: #1f9488;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--window); color: var(--text); font: 15px/1.6 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  code { font-family: ui-monospace, Menlo, monospace; font-size: .87em; background: var(--raised); padding: .05em .35em; border-radius: 5px; }
+  .page { max-width: 900px; margin: 0 auto; padding: 40px 28px 80px; }
+  h1 { font-size: 28px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 34px 0 10px; }
+  .lede { color: var(--muted); font-size: 16px; margin: 0 0 8px; }
+  .card { background: var(--pane); border: 1px solid var(--raised-edge); border-radius: 12px; padding: 14px 18px; }
+  .tiers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .tiers .card h3 { margin: 0 0 6px; font-size: 14px; }
+  .tiers .card p { margin: 0; font-size: 13.5px; color: var(--muted); }
+  .tag { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; border-radius: 4px; padding: 1px 6px; border: 1px solid currentColor; }
+  .tag.req { color: var(--accent-text); }
+  .tag.sug { color: var(--link); }
+  .tag.silent { color: var(--faint); }
+  .pages { display: flex; flex-direction: column; gap: 8px; }
+  .pages a { display: grid; grid-template-columns: 1fr auto; gap: 2px 16px; text-decoration: none; color: var(--text); background: var(--pane); border: 1px solid var(--raised-edge); border-radius: 12px; padding: 12px 16px; }
+  .pages a:hover { background: var(--hover); }
+  .pages a b { font-size: 15px; }
+  .pages a span { color: var(--muted); font-size: 13.5px; grid-column: 1; }
+  .pages a i { grid-row: 1 / span 2; grid-column: 2; align-self: center; font-style: normal; font-size: 12px; }
+  .done { color: var(--ok); }
+  .open { color: var(--caution); }
+  .roles { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 14px; align-items: center; }
+  .sw { width: 26px; height: 14px; border-radius: 4px; }
+  ul { margin: 6px 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+  .themes { position: fixed; top: 14px; right: 18px; display: flex; gap: 4px; font-size: 12px; }
+  .themes button { font: inherit; background: var(--pane); color: var(--text); border: 1px solid var(--raised-edge); border-radius: 999px; padding: 2px 10px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="themes"><button data-theme-btn="dark">Dark</button><button data-theme-btn="light">Light</button></div>
+<div class="page">
+  <h1>CAF SI</h1>
+  <p class="lede">The Standard Interface: how a chat with an agent should look and behave in any app built on CAF. Point an agent at it when integrating CAF, and it will build the expected thing, not something novel.</p>
+  <p style="font-size:14px;color:var(--muted)">These pages are mock-ups: nothing on them is connected to CAF. They change over time. Every part is optional, and each says how firm it is.</p>
+
+  <h2>The principle</h2>
+  <div class="card">
+    <p style="margin:0"><b>CAF SI standardises a single chat: what CAF means. It deliberately says nothing about how an app arranges its chats.</b> The test for any part: would a user moving between two CAF apps be confused or misled if it differed? If so, it's standard. Every app already has its own way of navigating its things (a sidebar, tabs, clackatoo's panes and workspaces). Guidance there would only push an app into growing a second one, which is the awkward integration CAF SI exists to prevent.</p>
+  </div>
+
+  <h2>How firm each part is</h2>
+  <div class="tiers">
+    <div class="card"><h3><span class="tag req">Required</span></h3><p>Everything inside a chat; how a chat is identified wherever it appears; the words and actions for what happens to a chat; colour roles. Copy these.</p></div>
+    <div class="card"><h3><span class="tag sug">Suggested</span></h3><p>Where there are a couple of good ways and the app should pick, such as how the usage page is laid out. Pick one; don't invent.</p></div>
+    <div class="card"><h3><span class="tag silent">Up to the app</span></h3><p>The app's own frame: where chats are listed, panes, windows, workspaces, projects (CAF's shelves), search, shortcuts, empty states. Use what the app already has.</p></div>
+  </div>
+
+  <h2>Pages</h2>
+  <div class="pages">
+    <a href="compose.html"><b>The composer</b><span>Where the user writes. The settings menu, the context ring, waiting messages, and the place questions and the agent banner attach.</span><i class="done">Decided</i></a>
+    <a href="transcript.html"><b>The transcript</b><span>Turns as a summary line that opens into a timeline. Failures and their remedies, questions, CAF's notes, a chat that lost its agent, and the agent's own history.</span><i class="done">Decided</i></a>
+    <a href="agents.html"><b>Agents: installing and signing in</b><span>The agent banner on the composer, every install and sign-in state, and the agents panel.</span><i class="done">Decided</i></a>
+    <a href="chats.html"><b>A chat's identity and lifecycle</b><span>The identity component at three sizes, the rules, restoring, archiving, deleting and new chats. Nothing on lists.</span><i class="done">Decided</i></a>
+    <a href="usage.html"><b>Usage</b><span>Context, cost and account limits in the chat; the usage page across agents and apps.</span><i class="done">Decided</i></a>
+  </div>
+
+  <p style="font-size:13.5px;color:var(--muted);margin:10px 0 0">Every page draws the same composer and theme, from <code>si.css</code> and <code>si.js</code>. Where a page shows a composer, it's this one, so the pages can't drift apart.</p>
+
+  <h2>Colour roles <span class="tag req">Required</span></h2>
+  <p style="font-size:14px;color:var(--muted);margin:0 0 10px">The pages use clackatoo's colours as the default theme, in dark and light. An app may use its own palette, but keeps these roles.</p>
+  <div class="card roles">
+    <span class="sw" style="background:var(--accent)"></span><span><b>Accent:</b> act here. The lit Send button, the caret, primary buttons, what's chosen, something waiting on you. Kept to those, so it still means "here".</span>
+    <span class="sw" style="background:var(--warning)"></span><span><b>Warning:</b> it went wrong. Failed turns and steps, refusals, restores that can't happen.</span>
+    <span class="sw" style="background:var(--caution)"></span><span><b>Caution:</b> held or getting close. A setting change waiting for the turn to end, context or limits filling up, a session that was replaced.</span>
+    <span class="sw" style="background:var(--link)"></span><span><b>Link:</b> something to follow, never to act on.</span>
+    <span class="sw" style="background:var(--caf)"></span><span><b>CAF's voice:</b> the CAF badge on what CAF itself says, so it never reads as the agent.</span>
+    <span class="sw" style="background:var(--muted)"></span><span><b>Muted:</b> everything that matters less: times, counts, the agent's thinking, steps once done.</span>
+  </div>
+
+  <h2>Words</h2>
+  <div class="card" style="font-size:14px">
+    <ul style="margin:0">
+      <li>Users never see CAF's own words: <i>shelf</i>, <i>loaded</i>, <i>put away</i>, <i>session</i>, <i>adapter</i>. Use the app's words, or none.</li>
+      <li>CAF's <i>close</i> is shown as <b>Archive</b>. Closing a tab or a pane only puts a chat away.</li>
+      <li>CAF speaks in its own voice, marked as CAF, and the agent's words are quoted as the agent's. Neither is presented as the other.</li>
+    </ul>
+  </div>
+</div>
+<script>
+  function theme(name) { document.documentElement.dataset.theme = name }
+  for (const b of document.querySelectorAll('[data-theme-btn]')) b.onclick = () => theme(b.dataset.themeBtn)
+  theme(matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+</script>
+</body>
+</html>
