@@ -176,8 +176,11 @@ chat.unarchive().await?; // or send to it: that unarchives it first
 
 Unarchived, it's `Idle`, and its agent starts when a message is sent, as a
 restored chat's does. Unarchiving a chat that isn't archived does nothing.
-A chat saved closed by a CAF from before archiving is restored archived, as
-of when it's restored.
+A message sent to an archived chat goes as to any other; one refused, such
+as an empty message, leaves it archived. While it's archived, its settings
+can't be chosen (`Refused::Closed`). Putting an archived chat away, or
+closing it again, keeps when it was archived. A chat saved closed by a CAF
+from before archiving is restored archived, as of when it's restored.
 
 **Delete** a chat for good, loaded or not: one that's loaded is closed and
 let go first.
@@ -344,5 +347,8 @@ what's saved, even a field added. So a CAF meeting a save from a newer one
 always knows, and leaves it untouched (`Newer`), rather than read it, lose
 what it doesn't know, and write it back without it. A newer CAF reads every
 older version's saves, and the first time it writes one, writes it whole in
-its own version. Every version has a sample chat, saved by it, that each
-release of CAF is tested against.
+its own version. A change of shape, rather than an addition, is migrated
+from every older version as a save is read: version 5's notes about
+settings, which name their choice, read from an older save with no name.
+Every version has a sample chat, saved by it, that each release of CAF is
+tested against.
