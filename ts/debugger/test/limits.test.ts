@@ -39,6 +39,11 @@ function draw(limits: AccountLimits, now = HEARD) {
   return render(Limits, { name: 'claude', limits, now })
 }
 
+/** The limits' one line, which opens them. */
+function glance(): HTMLElement {
+  return document.querySelector('summary') as HTMLElement
+}
+
 function shown(name: string): HTMLElement {
   return document.querySelector(`[data-window="${name}"]`) as HTMLElement
 }
@@ -49,7 +54,10 @@ describe('the words for limits', () => {
     expect(until(42 * MINUTE + 59_000)).toBe('42 min')
     expect(until(2 * HOUR + 5 * MINUTE)).toBe('2 h 5 min')
     expect(until(4 * DAY + 3 * HOUR + 59 * MINUTE)).toBe('4 d 3 h')
-    expect(resetsText(HEARD + 2 * HOUR, HEARD)).toBe('resets in 2 h 0 min')
+    // No part that's nothing.
+    expect(until(2 * HOUR + 59_000)).toBe('2 h')
+    expect(until(4 * DAY + 59 * MINUTE)).toBe('4 d')
+    expect(resetsText(HEARD + 2 * HOUR, HEARD)).toBe('resets in 2 h')
     // Due, and not yet forgotten by the core.
     expect(resetsText(HEARD, HEARD)).toBe('resetting')
     expect(resetsText(HEARD - 1, HEARD)).toBe('resetting')
@@ -70,14 +78,34 @@ describe('the words for limits', () => {
 describe('an agent’s limits', () => {
   it('shows the lowest window at a glance, and every window opened', async () => {
     draw(sampled())
-    const summary = screen.getByLabelText("claude's limits")
-    // Opus's week is refused: nothing left, so out.
-    expect(text(summary)).toBe('Weekly · Opus: 0% left')
+    const summary = glance()
+    // Opus's week is refused: nothing left, so out, said in words too, as
+    // colour alone isn't enough. Whose they are is said to a screen
+    // reader, and the line is named by what it says.
+    expect(text(summary)).toBe("claude's limits: Weekly · Opus: 0% left, out")
+    expect(summary.hasAttribute('aria-label')).toBe(false)
+    expect(summary.querySelector('.hidden')!.textContent).toBe("claude's limits: ")
     expect(summary.closest('details')!.dataset.lowness).toBe('out')
     await fireEvent.click(summary)
     const names = [...document.querySelectorAll<HTMLElement>('[data-window]')].map((each) => each.dataset.window)
     expect(names).toEqual(['5-hour', 'Weekly', 'Weekly · Opus', 'Weekly · extra included', 'thirty_day'])
     expect(screen.getAllByRole('meter').map((bar) => bar.getAttribute('aria-valuenow'))).toEqual(['58', '19', '0', '88', '97'])
+  })
+
+  it("says each window's pace to a screen reader, as well as its tick", () => {
+    draw(sampled())
+    const said = (name: string) => within(shown(name)).getByRole('meter').getAttribute('aria-valuetext')
+    expect(said('5-hour')).toBe('58% left; at an even pace, 56% would be left')
+    // No pace for a window CAF doesn't know.
+    expect(said('thirty_day')).toBe('97% left')
+  })
+
+  it('says how low the lowest window is in words, and nothing when it is fine', () => {
+    for (const [used, said] of [[60, '5-hour: 40% left'], [85, '5-hour: 15% left, low'], [95, '5-hour: 5% left, out']] as const) {
+      draw({ windows: [window({ used })], extra_usage: null, cleared: null })
+      expect(text(glance())).toBe(`claude's limits: ${said}`)
+      cleanup()
+    }
   })
 
   it('shows what is left of each window, how low, its state, its reset and when it was heard', () => {
@@ -111,17 +139,18 @@ describe('an agent’s limits', () => {
   it('says when extra usage is in use, and only then', () => {
     const limits = (inUse: boolean): AccountLimits => ({ windows: [window({ used: 100, state: { type: 'Refused' } })], extra_usage: { in_use: inUse, heard: HEARD }, cleared: null })
     draw(limits(true))
-    expect(text(screen.getByLabelText("claude's limits"))).toBe('5-hour: 0% left Extra usage in use')
+    expect(text(glance())).toBe("claude's limits: 5-hour: 0% left, out Extra usage in use")
     cleanup()
     draw(limits(false))
-    expect(text(screen.getByLabelText("claude's limits"))).toBe('5-hour: 0% left')
+    expect(text(glance())).toBe("claude's limits: 5-hour: 0% left, out")
   })
 
   it('shows extra usage in use with no windows', () => {
     draw({ windows: [], extra_usage: { in_use: true, heard: HEARD }, cleared: null })
-    const summary = screen.getByLabelText("claude's limits")
-    expect(text(summary)).toBe('Extra usage in use')
-    expect(summary.closest('details')!.dataset.lowness).toBe('fine')
+    const summary = glance()
+    expect(text(summary)).toBe("claude's limits: Extra usage in use")
+    // No window, so no dot to say how low one is.
+    expect(summary.querySelector('.dot')).toBeNull()
   })
 
   it('shows nothing for an agent that has said nothing of them', () => {
@@ -155,7 +184,7 @@ describe('the Agents panel’s limits', () => {
     vi.useFakeTimers({ now: HEARD, toFake: ['Date', 'setInterval', 'clearInterval'] })
     const agent: AgentStatus = { ...status({ type: 'Host' }), limits: { windows: [window({ resets: HEARD + HOUR })], extra_usage: null, cleared: null } }
     render(AgentsPanel, { agents: [agent], actions: { install() {}, stopInstall() {}, signIn() {}, paste() {}, stopSignIn() {}, signOut() {} } })
-    expect(text(shown('5-hour'))).toContain('resets in 1 h 0 min')
+    expect(text(shown('5-hour'))).toContain('resets in 1 h,')
     await vi.advanceTimersByTimeAsync(20 * MINUTE)
     expect(text(shown('5-hour'))).toContain('resets in 40 min')
     await vi.advanceTimersByTimeAsync(40 * MINUTE)

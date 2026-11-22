@@ -4,7 +4,7 @@
   // with a bar of what's left, where an even pace would have it, when it
   // resets, and when CAF heard. Nothing for an agent that hasn't said.
   import { label, left, lowest, lowness, pace, type AccountLimits, type DeepReadonly, type Wall } from '@clackatoo/caf'
-  import { asOfText, limitStateText, resetsText } from './limits.ts'
+  import { asOfText, limitStateText, meterText, resetsText } from './limits.ts'
 
   let {
     name,
@@ -24,10 +24,14 @@
 
 {#if least !== null || extra}
   <details class="limits" data-lowness={least === null ? 'fine' : lowness(least)}>
-    <summary aria-label="{name}'s limits">
-      <span class="dot" aria-hidden="true"></span>
+    <!-- Named by what it says: whose they are to a screen reader, and how
+         low in words as well as the dot's colour. -->
+    <summary>
+      <span class="hidden">{`${name}'s limits: `}</span>
       {#if least !== null}
-        <span class="glance">{label(least.kind)}: {left(least)}% left</span>
+        {@const low = lowness(least)}
+        <span class="dot" aria-hidden="true"></span>
+        <span class="glance">{label(least.kind)}: {left(least)}% left{#if low !== 'fine'}<span class="low">, {low}</span>{/if}</span>
       {/if}
       {#if extra}<span class="extra">Extra usage in use</span>{/if}
     </summary>
@@ -40,7 +44,15 @@
           <span>{called}</span>
           <span>{remaining}% left</span>
         </div>
-        <div class="bar" role="meter" aria-label="{called} left" aria-valuemin="0" aria-valuemax="100" aria-valuenow={remaining}>
+        <div
+          class="bar"
+          role="meter"
+          aria-label="{called} left"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow={remaining}
+          aria-valuetext={meterText(remaining, even)}
+        >
           <div class="fill" style:width="{remaining}%"></div>
           {#if even !== null}
             <div class="pace" style:left="{100 - even}%" data-left={100 - even} title="At an even pace, {100 - even}% would be left"></div>
@@ -69,6 +81,21 @@
     border-radius: 50%;
     margin-right: 0.2em;
     background: var(--caf-ok);
+  }
+  /* Said to screen readers: the panel's row says whose to the eye. */
+  .hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .limits[data-lowness='low'] .low {
+    color: var(--caf-warn);
+  }
+  .limits[data-lowness='out'] .low {
+    color: var(--caf-error);
   }
   .extra {
     margin-left: 0.4em;

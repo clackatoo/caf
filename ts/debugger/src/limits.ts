@@ -9,13 +9,23 @@ const MINUTE = 60_000
 const HOUR = 60 * MINUTE
 const DAY = 24 * HOUR
 
-/** How long until something, roughly: `under a minute`, `42 min`, `2 h 5 min`, `4 d 3 h`. */
+/** How long until something, roughly: `under a minute`, `42 min`, `2 h 5 min`, `2 h`, `4 d 3 h`, `4 d`. */
 export function until(ms: number): string {
   if (ms < MINUTE) return 'under a minute'
   const min = Math.floor(ms / MINUTE)
   if (ms < HOUR) return `${min} min`
-  if (ms < DAY) return `${Math.floor(min / 60)} h ${min % 60} min`
-  return `${Math.floor(ms / DAY)} d ${Math.floor((ms % DAY) / HOUR)} h`
+  if (ms < DAY) return parts(Math.floor(min / 60), 'h', min % 60, 'min')
+  return parts(Math.floor(ms / DAY), 'd', Math.floor((ms % DAY) / HOUR), 'h')
+}
+
+/** Two parts of a time, the second left out if it's nothing. */
+function parts(big: number, bigUnit: string, small: number, smallUnit: string): string {
+  return small === 0 ? `${big} ${bigUnit}` : `${big} ${bigUnit} ${small} ${smallUnit}`
+}
+
+/** What a window's bar says to a screen reader: what's left, and where an even pace would have it, if known. */
+export function meterText(left: number, pace: number | null): string {
+  return pace === null ? `${left}% left` : `${left}% left; at an even pace, ${100 - pace}% would be left`
 }
 
 /** When a window resets, from `now`: `resets in 2 h 5 min`, or `resetting` once it's due and not yet forgotten. */
