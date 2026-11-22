@@ -342,3 +342,78 @@ fn a_prices_cost_is_its_rates_per_million() {
     assert!((price.cost(&tokens, false) - 2.0).abs() < 1e-9);
     assert!((price.cost(&tokens, true) - 4.0).abs() < 1e-9);
 }
+
+/// A table of these, each from its layer, sorted as a table is.
+fn layered(models: &[(&str, PriceLayer)]) -> PriceTable {
+    let mut models: Vec<PricedModel> = models
+        .iter()
+        .map(|(model, layer)| PricedModel::new(*model, ModelPrice::new(1.0, 1.0), *layer))
+        .collect();
+    models.sort_by(|one, other| one.model.cmp(&other.model));
+    PriceTable {
+        models,
+        fetched: None,
+    }
+}
+
+/// The name and layer the table found `model` by.
+fn found_in(table: &PriceTable, model: &str) -> Option<(String, PriceLayer)> {
+    table
+        .find(model)
+        .map(|priced| (priced.model.clone(), priced.layer))
+}
+
+#[test]
+fn a_higher_layer_wins_whatever_form_its_name_takes() {
+    let table = layered(&[
+        ("claude-haiku-5-5", PriceLayer::Own),
+        ("claude-haiku-5-5-20261001", PriceLayer::Bundled),
+        ("anthropic/claude-opus-5-5", PriceLayer::Own),
+        ("claude-opus-5-5", PriceLayer::Bundled),
+        ("gemini/gemini-3-pro", PriceLayer::Fetched),
+        ("gemini-3-pro", PriceLayer::Bundled),
+    ]);
+    // The user's undated name beats the bundled dated one.
+    assert_eq!(
+        found_in(&table, "claude-haiku-5-5-20261001"),
+        Some(("claude-haiku-5-5".into(), PriceLayer::Own))
+    );
+    // The user's with a provider beats the bundled bare one.
+    assert_eq!(
+        found_in(&table, "claude-opus-5-5"),
+        Some(("anthropic/claude-opus-5-5".into(), PriceLayer::Own))
+    );
+    assert_eq!(
+        found_in(&table, "gemini-3-pro"),
+        Some(("gemini/gemini-3-pro".into(), PriceLayer::Fetched))
+    );
+}
+
+#[test]
+fn a_first_party_provider_is_found_before_a_reseller() {
+    let table = layered(&[
+        ("azure/gpt-6", PriceLayer::Bundled),
+        ("bedrock/claude-haiku-5-5", PriceLayer::Bundled),
+        ("anthropic/claude-haiku-5-5", PriceLayer::Bundled),
+        ("openai/gpt-6", PriceLayer::Bundled),
+        ("azure_ai/grok-5", PriceLayer::Bundled),
+        ("xai/grok-5", PriceLayer::Bundled),
+        ("vertex_ai/gemini-4", PriceLayer::Bundled),
+        ("gemini/gemini-4", PriceLayer::Bundled),
+        ("bedrock/nova", PriceLayer::Bundled),
+        ("azure/nova", PriceLayer::Bundled),
+    ]);
+    for (model, wanted) in [
+        ("claude-haiku-5-5", "anthropic/claude-haiku-5-5"),
+        ("gpt-6", "openai/gpt-6"),
+        ("grok-5", "xai/grok-5"),
+        ("gemini-4", "gemini/gemini-4"),
+        // Resellers only: the first, sorted.
+        ("nova", "azure/nova"),
+    ] {
+        assert_eq!(
+            found_in(&table, model).map(|(name, _)| name),
+            Some(wanted.into())
+        );
+    }
+}
