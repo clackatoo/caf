@@ -1,9 +1,9 @@
 // What the usage page asks for and works out from a summary, beyond the
 // SDK's sums: the query for each period it offers, how periods are named,
-// and what prices say about the tokens (cost by kind, cache savings).
+// and the colours its groups and parts take.
 
 import type { DeepReadonly, Resolution, Summary, Totals, UsageQuery, Wall } from '@clackatoo/caf'
-import { cost, group, price, total } from '@clackatoo/caf'
+import { cost, group, total } from '@clackatoo/caf'
 
 /** The periods the page offers, each ending now. */
 export type Period = '24h' | '7d' | '30d' | '90d'
@@ -72,42 +72,6 @@ export const KINDS = [
 ] as const
 
 export type Kind = (typeof KINDS)[number]['key']
-
-/**
- * What each kind of token cost at the prices the summary used, in US
- * dollars, fast mode's multiplier included: how the cost divides, as an
- * estimate. A cost the agent reported isn't split by kind, so its tokens
- * are priced here too. Models with no price are left out. Null if no
- * model had one.
- */
-export function costByKind(summary: Summary): Record<Kind, number> | null {
-  const sums: Record<Kind, number> = { input: 0, cache_read: 0, cache_write: 0, output: 0 }
-  let priced = false
-  for (const bucket of summary.buckets) {
-    const found = price(summary, bucket.model)
-    if (found === null) continue
-    priced = true
-    const times = bucket.fast ? (found.price.fast ?? 1) : 1
-    for (const { key } of KINDS) sums[key] += (bucket.tokens[key] * found.price[key] * times) / 1e6
-  }
-  return priced ? sums : null
-}
-
-/**
- * What reading input from the cache saved, at the prices the summary
- * used: each cached token at the model's input rate, less what it cost
- * read from the cache. Null if no model read from the cache at a price.
- */
-export function cacheSavings(summary: Summary): number | null {
-  let saved: number | null = null
-  for (const bucket of summary.buckets) {
-    const found = price(summary, bucket.model)
-    if (found === null || bucket.tokens.cache_read === 0) continue
-    const times = bucket.fast ? (found.price.fast ?? 1) : 1
-    saved = (saved ?? 0) + (bucket.tokens.cache_read * (found.price.input - found.price.cache_read) * times) / 1e6
-  }
-  return saved
-}
 
 /** How many colours a chart's groups take in turn. */
 export const COLOURS = 8

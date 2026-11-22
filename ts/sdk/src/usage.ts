@@ -75,6 +75,48 @@ export function price(summary: Summary, model: string): PricedModel | null {
   return entry === undefined ? null : (summary.prices.find((each) => each.model === entry) ?? null);
 }
 
+/** A kind of token a price has a rate for. */
+export type TokenKind = "input" | "cache_read" | "cache_write" | "output";
+
+const KINDS: readonly TokenKind[] = ["input", "cache_read", "cache_write", "output"];
+
+/**
+ * What each kind of token cost at the prices the summary used, in US
+ * dollars, fast mode's multiplier included: how the cost divides, as an
+ * estimate. A cost an agent reported isn't split by kind, so its tokens are
+ * priced here too. Models with no price are left out. Null if no model had
+ * one.
+ */
+export function costByKind(summary: Summary): Record<TokenKind, number> | null {
+  const sums: Record<TokenKind, number> = { input: 0, cache_read: 0, cache_write: 0, output: 0 };
+  let priced = false;
+  for (const bucket of summary.buckets) {
+    const found = price(summary, bucket.model);
+    if (found === null) continue;
+    priced = true;
+    const times = bucket.fast ? (found.price.fast ?? 1) : 1;
+    for (const kind of KINDS) sums[kind] += (bucket.tokens[kind] * found.price[kind] * times) / 1e6;
+  }
+  return priced ? sums : null;
+}
+
+/**
+ * What reading input from the cache saved, at the prices the summary used,
+ * in US dollars: each cached token at the model's input rate, less what it
+ * cost read from the cache, fast mode's multiplier included. Null if no
+ * model read from the cache at a price.
+ */
+export function cacheSavings(summary: Summary): number | null {
+  let saved: number | null = null;
+  for (const bucket of summary.buckets) {
+    const found = price(summary, bucket.model);
+    if (found === null || bucket.tokens.cache_read === 0) continue;
+    const times = bucket.fast ? (found.price.fast ?? 1) : 1;
+    saved = (saved ?? 0) + (bucket.tokens.cache_read * (found.price.input - found.price.cache_read) * times) / 1e6;
+  }
+  return saved;
+}
+
 const NO_TOKENS: Tokens = { input: 0, cache_read: 0, cache_write: 0, output: 0, thinking: null };
 
 /** Two counts added up. Thinking stays unknown only if neither knows it. */

@@ -5,10 +5,10 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CafError, type Bucket, type PricedModel, type Summary, type Tokens, type UsageQuery } from '@clackatoo/caf'
+import { cacheSavings, CafError, costByKind, type Bucket, type PricedModel, type Summary, type Tokens, type UsageQuery } from '@clackatoo/caf'
 import PriceCard from '../../src/chat/usage/PriceCard.svelte'
 import UsagePage from '../../src/chat/usage/UsagePage.svelte'
-import { cacheSavings, colour, costByKind, queryFor } from '../../src/chat/usage/page.ts'
+import { colour, queryFor } from '../../src/chat/usage/page.ts'
 import { percent } from '../../src/chat/figures.ts'
 
 afterEach(cleanup)

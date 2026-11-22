@@ -2,10 +2,10 @@
   // The period's tokens by kind, what the cache saved, and how the cost
   // divides: by kind of token, and by speed (fast mode or not).
   import type { Summary } from '@clackatoo/caf'
-  import { cost, group, total, totals } from '@clackatoo/caf'
+  import { cacheSavings, cost, costByKind, group, total, totals } from '@clackatoo/caf'
   import { count, percent, tokens, usd } from '../figures.ts'
   import Info from '../Info.svelte'
-  import { cacheSavings, costByKind, KINDS, tone } from './page.ts'
+  import { KINDS, tone } from './page.ts'
 
   let { summary }: { summary: Summary } = $props()
 

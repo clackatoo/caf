@@ -4,7 +4,9 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  cacheSavings,
   cost,
+  costByKind,
   group,
   price,
   split,
@@ -308,5 +310,53 @@ describe("price", () => {
   test("is null for a model the summary matched to nothing, or to an entry it doesn't hold", () => {
     expect(find("claude-haiku-5-5")).toBeNull();
     expect(find("gpt-9")).toBeNull();
+  });
+});
+
+describe("cost by kind and cache savings", () => {
+  // $5 in, $0.50 cache read, $6.25 cache write, $25 out, per million; fast mode doubles.
+  const opus: PricedModel = {
+    model: "anthropic/claude-opus-5-5",
+    price: { input: 5, cache_read: 0.5, cache_write: 6.25, output: 25, fast: 2 },
+    layer: { type: "Fetched" },
+  };
+  const matched: [string, string][] = [["claude-opus-5-5", "anthropic/claude-opus-5-5"]];
+  const priced = (buckets: Bucket[]) => ({ ...summary(buckets, {}, [opus]), matched });
+  const million = tokens({ input: 1e6, cache_read: 1e6, cache_write: 1e6, output: 1e6 });
+
+  test("price each kind at the model's rates, reported cost or not", () => {
+    expect(costByKind(priced([bucket({ tokens: million, reported: 9, estimated: 0 })]))).toEqual({
+      input: 5,
+      cache_read: 0.5,
+      cache_write: 6.25,
+      output: 25,
+    });
+    expect(cacheSavings(priced([bucket({ tokens: million })]))).toBe(4.5);
+  });
+
+  test("take fast mode's multiplier, and a model without one at its own rates", () => {
+    expect(costByKind(priced([bucket({ tokens: million, fast: true })]))?.output).toBe(50);
+    expect(cacheSavings(priced([bucket({ tokens: million, fast: true })]))).toBe(9);
+    const plain = { ...opus, price: { ...opus.price, fast: null } };
+    const slow = { ...summary([bucket({ tokens: million, fast: true })], {}, [plain]), matched };
+    expect(costByKind(slow)?.output).toBe(25);
+    expect(cacheSavings(slow)).toBe(4.5);
+  });
+
+  test("add up every priced bucket, and leave out a model with no price", () => {
+    const buckets = [
+      bucket({ tokens: million }),
+      bucket({ tokens: million, app: "eyespy" }),
+      bucket({ tokens: million, model: "gpt-9" }),
+    ];
+    expect(costByKind(priced(buckets))?.input).toBe(10);
+    expect(cacheSavings(priced(buckets))).toBe(9);
+  });
+
+  test("are null when nothing is priced, or nothing priced read from the cache", () => {
+    expect(costByKind(priced([bucket({ model: "gpt-9", tokens: million })]))).toBeNull();
+    expect(costByKind(priced([]))).toBeNull();
+    expect(cacheSavings(priced([bucket({ model: "gpt-9", tokens: million })]))).toBeNull();
+    expect(cacheSavings(priced([bucket({ tokens: tokens({ input: 1e6 }) })]))).toBeNull();
   });
 });
