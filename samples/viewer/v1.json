@@ -228,6 +228,44 @@
         "chat": "00000000-0000-0000-0000-000000000002",
         "shelf": "work"
       }
+    },
+    {
+      "type": "Usage",
+      "value": {
+        "request": 22,
+        "query": {
+          "since": 1800000000000,
+          "until": 1800086400000,
+          "zone": "Europe/London",
+          "by": {
+            "type": "Day"
+          },
+          "apps": [],
+          "agents": []
+        }
+      }
+    },
+    {
+      "type": "SetPrice",
+      "value": {
+        "request": 23,
+        "model": "claude-sonnet-5-5",
+        "price": {
+          "input": 3.0,
+          "cache_read": 0.3,
+          "cache_write": 3.75,
+          "output": 15.0,
+          "fast": 2.0
+        }
+      }
+    },
+    {
+      "type": "SetPrice",
+      "value": {
+        "request": 24,
+        "model": "claude-haiku-5-5",
+        "price": null
+      }
     }
   ],
   "to_viewer": [
@@ -911,7 +949,35 @@
               ],
               "imported": false,
               "model": null,
-              "spent": null
+              "spent": {
+                "models": [
+                  {
+                    "model": "claude-sonnet-5-5",
+                    "tokens": {
+                      "input": 12,
+                      "cache_read": 3000,
+                      "cache_write": 400,
+                      "output": 56,
+                      "thinking": 7
+                    }
+                  },
+                  {
+                    "model": "claude-haiku-5-5",
+                    "tokens": {
+                      "input": 12,
+                      "cache_read": 3000,
+                      "cache_write": 400,
+                      "output": 56,
+                      "thinking": null
+                    }
+                  }
+                ],
+                "cost": {
+                  "amount": 0.0125,
+                  "currency": "USD"
+                },
+                "fast": false
+              }
             },
             {
               "id": 24,
@@ -1158,16 +1224,16 @@
           },
           "spend": {
             "tokens": {
-              "input": 0,
-              "cache_read": 0,
-              "cache_write": 0,
-              "output": 0,
-              "thinking": null
+              "input": 12,
+              "cache_read": 3000,
+              "cache_write": 400,
+              "output": 56,
+              "thinking": 7
             },
-            "reported": 0.0,
-            "estimated": 0.0,
-            "unpriced": 0,
-            "turns": 0
+            "reported": 0.0125,
+            "estimated": 0.5,
+            "unpriced": 80,
+            "turns": 2
           }
         },
         "latest": 5
@@ -2195,6 +2261,63 @@
               "type": "QuestionGone",
               "value": 26
             }
+          },
+          {
+            "no": 54,
+            "change": {
+              "type": "TurnSpent",
+              "value": {
+                "turn": 19,
+                "usage": {
+                  "models": [
+                    {
+                      "model": "claude-sonnet-5-5",
+                      "tokens": {
+                        "input": 12,
+                        "cache_read": 3000,
+                        "cache_write": 400,
+                        "output": 56,
+                        "thinking": 7
+                      }
+                    },
+                    {
+                      "model": "claude-haiku-5-5",
+                      "tokens": {
+                        "input": 12,
+                        "cache_read": 3000,
+                        "cache_write": 400,
+                        "output": 56,
+                        "thinking": null
+                      }
+                    }
+                  ],
+                  "cost": {
+                    "amount": 0.0125,
+                    "currency": "USD"
+                  },
+                  "fast": false
+                }
+              }
+            }
+          },
+          {
+            "no": 55,
+            "change": {
+              "type": "Spend",
+              "value": {
+                "tokens": {
+                  "input": 12,
+                  "cache_read": 3000,
+                  "cache_write": 400,
+                  "output": 56,
+                  "thinking": 7
+                },
+                "reported": 0.0125,
+                "estimated": 0.5,
+                "unpriced": 80,
+                "turns": 2
+              }
+            }
           }
         ]
       }
@@ -3020,6 +3143,106 @@
       ]
     },
     {
+      "type": "Usage",
+      "value": {
+        "request": 22,
+        "summary": {
+          "query": {
+            "since": 1800000000000,
+            "until": 1800086400000,
+            "zone": "Europe/London",
+            "by": {
+              "type": "Hour"
+            },
+            "apps": [
+              "clackatoo"
+            ],
+            "agents": []
+          },
+          "buckets": [
+            {
+              "start": 1800000000000,
+              "app": "clackatoo",
+              "agent": "claude-agent-acp",
+              "model": "claude-sonnet-5-5",
+              "fast": true,
+              "tokens": {
+                "input": 12,
+                "cache_read": 3000,
+                "cache_write": 400,
+                "output": 56,
+                "thinking": 7
+              },
+              "reported": 0.0125,
+              "estimated": 0.5,
+              "unpriced": 80,
+              "turns": 2
+            }
+          ],
+          "chats": {
+            "all": 1,
+            "by_app": [
+              [
+                "clackatoo",
+                1
+              ]
+            ],
+            "by_agent": [
+              [
+                "claude-agent-acp",
+                1
+              ]
+            ]
+          },
+          "prices": [
+            {
+              "model": "anthropic/claude-haiku-5-5",
+              "price": {
+                "input": 1.0,
+                "cache_read": 1.0,
+                "cache_write": 1.0,
+                "output": 5.0,
+                "fast": null
+              },
+              "layer": {
+                "type": "Fetched"
+              }
+            },
+            {
+              "model": "anthropic/claude-sonnet-5-5",
+              "price": {
+                "input": 3.0,
+                "cache_read": 0.3,
+                "cache_write": 3.75,
+                "output": 15.0,
+                "fast": 2.0
+              },
+              "layer": {
+                "type": "Own"
+              }
+            },
+            {
+              "model": "anthropic/claude-opus-5-5",
+              "price": {
+                "input": 5.0,
+                "cache_read": 5.0,
+                "cache_write": 5.0,
+                "output": 25.0,
+                "fast": null
+              },
+              "layer": {
+                "type": "Bundled"
+              }
+            }
+          ],
+          "fetched": 1800000000000,
+          "unreadable": [
+            "eyespy/2026-10.jsonl.zst"
+          ]
+        }
+      }
+    },
+    {
       "type": "Done",
       "value": {
         "request": 1,
@@ -3083,10 +3306,7 @@
       "value": {
         "request": 7,
         "outcome": {
-          "type": "Refused",
-          "value": {
-            "type": "NoSuchChat"
-          }
+          "type": "NoLedger"
         }
       }
     },
@@ -3095,9 +3315,10 @@
       "value": {
         "request": 8,
         "outcome": {
-          "type": "Refused",
+          "type": "BadQuery",
           "value": {
-            "type": "Closed"
+            "type": "Zone",
+            "value": "Mars/Olympus"
           }
         }
       }
@@ -3107,9 +3328,9 @@
       "value": {
         "request": 9,
         "outcome": {
-          "type": "Refused",
+          "type": "BadQuery",
           "value": {
-            "type": "NoSuchAgent"
+            "type": "Period"
           }
         }
       }
@@ -3121,7 +3342,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "RelativeFolder"
+            "type": "NoSuchChat"
           }
         }
       }
@@ -3133,7 +3354,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "Unsendable"
+            "type": "Closed"
           }
         }
       }
@@ -3145,7 +3366,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "QueueFull"
+            "type": "NoSuchAgent"
           }
         }
       }
@@ -3157,7 +3378,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "Unsupported"
+            "type": "RelativeFolder"
           }
         }
       }
@@ -3169,7 +3390,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "CommandNotAlone"
+            "type": "Unsendable"
           }
         }
       }
@@ -3181,7 +3402,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "NoSuchQuestion"
+            "type": "QueueFull"
           }
         }
       }
@@ -3193,7 +3414,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "WrongAnswer"
+            "type": "Unsupported"
           }
         }
       }
@@ -3205,7 +3426,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "NothingToStop"
+            "type": "CommandNotAlone"
           }
         }
       }
@@ -3217,7 +3438,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "NotInstallable"
+            "type": "NoSuchQuestion"
           }
         }
       }
@@ -3229,7 +3450,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "AlreadyInstalled"
+            "type": "WrongAnswer"
           }
         }
       }
@@ -3241,7 +3462,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "CannotSignIn"
+            "type": "NothingToStop"
           }
         }
       }
@@ -3253,7 +3474,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "NotSigningIn"
+            "type": "NotInstallable"
           }
         }
       }
@@ -3265,7 +3486,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "NotSaved"
+            "type": "AlreadyInstalled"
           }
         }
       }
@@ -3277,7 +3498,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "Loaded"
+            "type": "CannotSignIn"
           }
         }
       }
@@ -3289,7 +3510,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "BadShelf"
+            "type": "NotSigningIn"
           }
         }
       }
@@ -3301,7 +3522,7 @@
         "outcome": {
           "type": "Refused",
           "value": {
-            "type": "OwnTools"
+            "type": "NotSaved"
           }
         }
       }
@@ -3310,6 +3531,42 @@
       "type": "Done",
       "value": {
         "request": 26,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "Loaded"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 27,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "BadShelf"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 28,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "OwnTools"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 29,
         "outcome": {
           "type": "Refused",
           "value": {

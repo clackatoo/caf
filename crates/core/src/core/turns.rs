@@ -129,12 +129,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         else {
             return;
         };
+        let sent = self.as_sent(chat);
         if let Some(run) = self.runs.get_mut(&chat) {
             run.running = Some(Running {
                 turn,
                 proc,
                 id,
                 stop_by: None,
+                sent,
             });
         }
         self.set_life(now, chat, turn, TurnLife::Running);
@@ -162,26 +164,26 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         {
             return;
         }
-        let stopping = run
-            .running
-            .take()
-            .is_some_and(|running| running.stop_by.is_some());
+        let Some(running) = run.running.take() else {
+            return;
+        };
+        let stopping = running.stop_by.is_some();
         if let Reply::Error(error) = &reply
             && self.profile_of_chat(chat).session_gone(error)
         {
             return self.prompt_lost_session(now, chat, turn, stopping, out);
         }
-        let life = match reply {
+        let life = match &reply {
             Reply::Result(result) => {
                 // The session works: a setting that finds it gone may have
                 // it opened again.
                 if let Some(run) = self.runs.get_mut(&chat) {
                     run.choosing.reopened = false;
                 }
-                ended_by(&result)
+                ended_by(result)
             }
             Reply::Error(error) => {
-                let mut failure = self.failure(chat, turn, &error);
+                let mut failure = self.failure(chat, turn, error);
                 self.sign_in_failure(chat, &mut failure);
                 TurnLife::Failed(failure)
             }
@@ -192,6 +194,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         // The agent's questions end with its turn.
         self.withdraw_asks(chat, out);
         self.end_turn(now, chat, turn, life);
+        // What it spent, if the agent said, whether it finished or not.
+        if let Reply::Result(result) = &reply {
+            self.turn_spent(now, chat, turn, result, running.sent, out);
+        }
         self.pump(now, chat, out);
     }
 

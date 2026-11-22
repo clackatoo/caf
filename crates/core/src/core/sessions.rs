@@ -124,6 +124,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 resent: None,
                 restored: false,
                 choosing: Choosing::default(),
+                cost: None,
             },
         );
         if let Some(shelf) = open.shelf {

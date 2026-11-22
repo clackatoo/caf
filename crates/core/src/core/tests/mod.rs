@@ -18,6 +18,7 @@ mod setup;
 mod shared;
 mod stop;
 mod traces;
+mod usage;
 mod woken;
 
 use serde_json::{Value, json};

@@ -33,8 +33,9 @@ use crate::question::{
 };
 use crate::save::{CannotRestore, Header, SavedChat, SavedState};
 use crate::settings::{KnownSettings, ModelUsed, SettingChoice};
-use crate::shape::settings;
+use crate::shape::{model_price, settings, spend, turn_usage};
 use crate::time::{End, Wall, Window};
+use crate::usage::{BadQuery, ModelPrice, PriceLayer, PricedModel, UsageQuery};
 use crate::viewer::{
     AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
 };
@@ -185,7 +186,7 @@ fn chat() -> Chat {
         )],
     );
     imported.imported = true;
-    Chat {
+    let mut chat = Chat {
         id: ChatId::from_number(1),
         agent: AgentName("claude".into()),
         cwd: "/work".into(),
@@ -267,8 +268,12 @@ fn chat() -> Chat {
             },
         ],
         settings: settings(),
-        spend: Box::default(),
+        spend: Box::new(spend()),
+    };
+    if let Some(finished) = chat.turns.iter_mut().find(|turn| turn.id == TurnId(19)) {
+        finished.spent = Some(Box::new(turn_usage()));
     }
+    chat
 }
 
 /// One of every change, and of every state, life and failure in them.
@@ -421,6 +426,11 @@ fn changes() -> Vec<Change> {
             }),
         }),
         Change::QuestionGone(QuestionId(26)),
+        Change::TurnSpent {
+            turn: TurnId(19),
+            usage: Box::new(turn_usage()),
+        },
+        Change::Spend(Box::new(spend())),
     ]);
     changes
 }
@@ -578,6 +588,28 @@ fn version_1() -> Sample {
         chat: ChatId::from_number(2),
         shelf: Shelf("work".into()),
     });
+    from_viewer.extend([
+        FromViewer::Usage {
+            request: RequestNo(22),
+            query: UsageQuery::new(wall(0), wall(86_400_000), "Europe/London"),
+        },
+        FromViewer::SetPrice {
+            request: RequestNo(23),
+            model: "claude-sonnet-5-5".into(),
+            price: Some(model_price()),
+        },
+        FromViewer::SetPrice {
+            request: RequestNo(24),
+            model: "claude-haiku-5-5".into(),
+            price: None,
+        },
+    ]);
+    let mut usage = crate::shape::summary();
+    usage.prices.push(PricedModel::new(
+        "anthropic/claude-opus-5-5",
+        ModelPrice::new(5.0, 25.0),
+        PriceLayer::Bundled,
+    ));
     let refused = [
         Refused::NoSuchChat,
         Refused::Closed,
@@ -607,6 +639,9 @@ fn version_1() -> Sample {
         Outcome::NotAllowed,
         Outcome::Gone,
         Outcome::CannotRestore(CannotRestore::InUse),
+        Outcome::NoLedger,
+        Outcome::BadQuery(BadQuery::Zone("Mars/Olympus".into())),
+        Outcome::BadQuery(BadQuery::Period),
     ]
     .into_iter()
     .chain(refused.into_iter().map(Outcome::Refused));
@@ -638,6 +673,10 @@ fn version_1() -> Sample {
         },
         ToViewer::Agents(agents()),
         ToViewer::Saved(saved()),
+        ToViewer::Usage {
+            request: RequestNo(22),
+            summary: Box::new(usage),
+        },
     ];
     to_viewer.extend(
         (outcomes.zip(1..)).map(|(outcome, request)| ToViewer::Done {
