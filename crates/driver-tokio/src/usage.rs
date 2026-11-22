@@ -2,19 +2,20 @@
 //! their own, and LiteLLM's price table, fetched on another.
 //!
 //! Each line is written with [`Ledger::record`], in the order it's given.
-//! A line that can't be written is kept, and tried again before the next,
-//! so a ledger that fails for a while loses nothing; the first failure in
-//! a row is reported to the [`log`] facade, target `caf`, and so is the
-//! ledger taking lines again. It never answers the core, and nothing it
-//! does holds up a chat. Once it's finishing, what's still kept is tried
-//! once more, and any left is reported lost.
+//! A line that can't be written is kept, and tried again before the next
+//! and every hour, so a ledger that fails for a while loses nothing; the
+//! first failure in a row is reported to the [`log`] facade, target
+//! `caf`, and so is the ledger taking lines again. It never answers the
+//! core, and nothing it does holds up a chat.
 //!
 //! The prices are read as the thread starts, and again when they may have
 //! changed: a price of the user's own set ([`prices::set_own`]),
 //! LiteLLM's table fetched, every hour, and before each summary, so a
 //! price another app set is taken too. The whole table goes to the task,
 //! for the core ([`Event::Prices`](caf_core::Event::Prices)), as they're
-//! first read and whenever they differ from what it was last given.
+//! first read and whenever they differ from what it was last given. Only
+//! one reading for a summary is under way at a time: those asked for
+//! meanwhile share it.
 //!
 //! Looking is another thread's, so a slow download never holds a line up:
 //! it looks as it starts and then every hour, fetching first, if it's
@@ -22,24 +23,47 @@
 //! ([`prices::fetched_at`]) is a day old, or was never fetched. A failed
 //! fetch is reported, and tried again in an hour.
 //!
+//! # A thread that's stuck
+//!
+//! The ledger's thread may be stuck, on a disk that has hung, say. So
+//! nothing waits for it for ever:
+//! - if the first prices haven't come in [`PRICES_WITHIN`], the task is
+//!   given the bundled snapshot, with a report, and the prices read come
+//!   when they come;
+//! - a reading for a summary that hasn't come in that time is answered
+//!   with the prices the core has, with a report;
+//! - finishing waits for it for at most [`FINISH_WITHIN`], then reports
+//!   how many lines may be lost, and leaves it.
+//!
 //! With no ledger, the prices are the bundled snapshot's, and lines are
 //! dropped.
 
 use std::collections::VecDeque;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use caf_core::time::Wall;
 use caf_core::usage::{LedgerLine, ModelPrice, PriceTable};
 use caf_usage::{Ledger, prices};
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::Sleep;
 
 use crate::caf::{Error, UsageConfig};
 
-/// How often the fetching thread looks at how old the prices are.
+/// How often the looking thread looks at the prices.
 const CHECK_EVERY: Duration = Duration::from_hours(1);
+
+/// How long the prices are waited for, first and for a summary, before
+/// going on without them.
+pub(crate) const PRICES_WITHIN: Duration = Duration::from_secs(10);
+
+/// How long finishing waits for the ledger's thread.
+pub(crate) const FINISH_WITHIN: Duration = Duration::from_secs(30);
 
 /// The most LiteLLM's table may be, in bytes: past that, the fetch fails.
 /// It's about 1.5 MB.
@@ -63,9 +87,17 @@ pub(crate) enum Report {
         reply: oneshot::Sender<Result<(), Error>>,
         result: Result<(), String>,
     },
-    /// The prices were read again for whoever is waiting: after them, if
-    /// they changed, so it's answered once the core has them.
-    Reloaded(oneshot::Sender<crate::caf::Priced>),
+    /// The prices were read again, as asked: after them, if they changed,
+    /// so whoever asked is answered once the core has them. Or they
+    /// weren't in time, and the core's are as good as it gets.
+    Reloaded,
+}
+
+/// What the ledger's thread tells the driver.
+enum Told {
+    Report(Report),
+    /// The prices were read again, as asked with this number.
+    Reloaded(u64),
 }
 
 /// Work for the ledger's thread.
@@ -76,9 +108,32 @@ enum Work {
         price: Option<ModelPrice>,
         reply: oneshot::Sender<Result<(), Error>>,
     },
-    /// The prices may have changed on disk: read them again, and answer
-    /// whoever waits, if anyone.
-    Reload(Option<oneshot::Sender<crate::caf::Priced>>),
+    /// The prices may have changed on disk: read them again, and say so if
+    /// asked to, with this number. Every hour, also try the lines kept.
+    Reload(Option<u64>),
+}
+
+/// How the driver runs: what's not the defaults is for tests.
+pub(crate) struct Options {
+    /// How often the prices are looked at.
+    pub(crate) every: Duration,
+    /// [`PRICES_WITHIN`].
+    pub(crate) prices_within: Duration,
+    /// [`FINISH_WITHIN`].
+    pub(crate) finish_within: Duration,
+    /// For tests: the ledger's thread is stuck until this is dropped.
+    pub(crate) stuck: Option<std::sync::mpsc::Receiver<()>>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            every: CHECK_EVERY,
+            prices_within: PRICES_WITHIN,
+            finish_within: FINISH_WITHIN,
+            stuck: None,
+        }
+    }
 }
 
 /// Keeps the ledger and the prices on a thread of its own, and looks at
@@ -88,15 +143,29 @@ pub(crate) struct UsageDriver {
     folder: Option<PathBuf>,
     /// Work for the thread. Dropped to end it.
     work: Option<std::sync::mpsc::Sender<Work>>,
-    /// Where reports come from: the driver keeps a sender, so it never
+    /// What the thread tells: the driver keeps a sender, so it never
     /// closes.
-    reports: mpsc::UnboundedReceiver<Report>,
-    _tell: mpsc::UnboundedSender<Report>,
+    told: mpsc::UnboundedReceiver<Told>,
+    _tell: mpsc::UnboundedSender<Told>,
     /// Each look at the prices, from the looking thread.
     looked: mpsc::UnboundedReceiver<()>,
     /// Dropped to stop the looking thread.
     looking: Option<std::sync::mpsc::Sender<()>>,
+    /// Whether the looking thread may keep a table it fetched: no, once
+    /// finishing. It's held while one is kept, so none is kept after.
+    keeping: Arc<Mutex<bool>>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// Lines given the thread, not yet written, dropped or reported lost.
+    unwritten: Arc<AtomicUsize>,
+    /// Until the first prices come: when to go on without them.
+    first: Option<Pin<Box<Sleep>>>,
+    /// The reading asked for a summary, by its number, and when to go on
+    /// without it.
+    reloading: Option<(u64, Pin<Box<Sleep>>)>,
+    /// The last reading's number.
+    reloads: u64,
+    prices_within: Duration,
+    finish_within: Duration,
 }
 
 impl UsageDriver {
@@ -106,43 +175,80 @@ impl UsageDriver {
         let fetcher = (usage.as_ref())
             .filter(|usage| usage.fetch_prices)
             .map(|_| Box::new(|| fetch(prices::LITELLM, true)) as Fetcher);
-        Self::start(usage.map(|usage| usage.folder), app, fetcher, CHECK_EVERY)
+        let folder = usage.map(|usage| usage.folder);
+        Self::launch(folder, app, fetcher, Options::default())
     }
 
     /// A driver for the ledger in `folder`, or none, looking at the prices
     /// every `every`, and fetching them with `fetcher` if given.
+    #[cfg(test)]
     pub(crate) fn start(
         folder: Option<PathBuf>,
         app: String,
         fetcher: Option<Fetcher>,
         every: Duration,
     ) -> Self {
-        let (tell, reports) = mpsc::unbounded_channel();
+        let options = Options {
+            every,
+            ..Options::default()
+        };
+        Self::launch(folder, app, fetcher, options)
+    }
+
+    /// A driver for the ledger in `folder`, or none, fetching prices with
+    /// `fetcher` if given, running as `options` say.
+    pub(crate) fn launch(
+        folder: Option<PathBuf>,
+        app: String,
+        fetcher: Option<Fetcher>,
+        options: Options,
+    ) -> Self {
+        let (tell, told) = mpsc::unbounded_channel();
         let (work, inbox) = std::sync::mpsc::channel();
         let ledger = (folder.clone()).map(|folder| Ledger::new(folder, app));
         let telling = tell.clone();
+        let unwritten = Arc::new(AtomicUsize::new(0));
+        let counting = Arc::clone(&unwritten);
+        let stuck = options.stuck;
         let thread = std::thread::Builder::new()
             .name("caf-usage".into())
-            .spawn(move || keep(ledger.as_ref(), &inbox, &telling))
+            .spawn(move || {
+                if let Some(stuck) = stuck {
+                    let _ = stuck.recv();
+                }
+                keep(ledger.as_ref(), &inbox, &telling, &counting);
+            })
             .expect("a thread for the usage ledger");
+        let keeping = Arc::new(Mutex::new(true));
         let (looks, looked) = mpsc::unbounded_channel();
         let looking = folder.as_ref().map(|folder| {
             let (stop, stopped) = std::sync::mpsc::channel();
             let folder = folder.clone();
+            let keeping = Arc::clone(&keeping);
+            let every = options.every;
             std::thread::Builder::new()
                 .name("caf-prices".into())
-                .spawn(move || look_now_and_then(&folder, fetcher, &looks, &stopped, every))
+                .spawn(move || {
+                    look_now_and_then(&folder, fetcher, &keeping, &looks, &stopped, every);
+                })
                 .expect("a thread for the prices");
             stop
         });
         Self {
             folder,
             work: Some(work),
-            reports,
+            told,
             _tell: tell,
             looked,
             looking,
+            keeping,
             thread: Some(thread),
+            unwritten,
+            first: Some(Box::pin(tokio::time::sleep(options.prices_within))),
+            reloading: None,
+            reloads: 0,
+            prices_within: options.prices_within,
+            finish_within: options.finish_within,
         }
     }
 
@@ -154,6 +260,7 @@ impl UsageDriver {
     /// Writes a turn's line to the ledger, or drops it with none.
     pub(crate) fn record(&mut self, line: Box<LedgerLine>) {
         if self.folder.is_some() {
+            self.unwritten.fetch_add(1, Ordering::Relaxed);
             self.send(Work::Record(line));
         }
     }
@@ -179,10 +286,17 @@ impl UsageDriver {
     }
 
     /// Reads the prices again, as they may have changed on disk, and
-    /// answers `reply`, once the core has them if they did. With no
-    /// ledger, there's nothing to read again.
-    pub(crate) fn reload(&mut self, reply: oneshot::Sender<crate::caf::Priced>) {
-        self.send(Work::Reload(Some(reply)));
+    /// reports [`Report::Reloaded`] once the core has them, if they did,
+    /// or in [`PRICES_WITHIN`] if not by then. While one reading is under
+    /// way, another isn't asked for: the one under way is reported.
+    pub(crate) fn reload(&mut self) {
+        if self.reloading.is_some() {
+            return;
+        }
+        self.reloads += 1;
+        let within = Box::pin(tokio::time::sleep(self.prices_within));
+        self.reloading = Some((self.reloads, within));
+        self.send(Work::Reload(Some(self.reloads)));
     }
 
     /// Hands the thread work. Once it has gone, which it does only as the
@@ -197,22 +311,98 @@ impl UsageDriver {
     /// The driver's next report. Cancel-safe.
     pub(crate) async fn next(&mut self) -> Report {
         loop {
+            let Self {
+                told,
+                looked,
+                first,
+                reloading,
+                ..
+            } = self;
+            let first_late = async {
+                match first {
+                    Some(first) => first.as_mut().await,
+                    None => std::future::pending().await,
+                }
+            };
+            let reload_late = async {
+                match reloading {
+                    Some((_, within)) => within.as_mut().await,
+                    None => std::future::pending().await,
+                }
+            };
             tokio::select! {
-                Some(report) = self.reports.recv() => return report,
-                Some(()) = self.looked.recv() => self.send(Work::Reload(None)),
-                else => std::future::pending().await,
+                Some(told) = told.recv() => match told {
+                    Told::Report(report) => {
+                        if matches!(report, Report::Prices(_)) {
+                            self.first = None;
+                        }
+                        return report;
+                    }
+                    // One asked for before, and given up on, is let be.
+                    Told::Reloaded(reload) => {
+                        if self.reloading.as_ref().is_some_and(|(asked, _)| *asked == reload) {
+                            self.reloading = None;
+                            return Report::Reloaded;
+                        }
+                    }
+                },
+                Some(()) = looked.recv() => self.send(Work::Reload(None)),
+                () = first_late => {
+                    self.first = None;
+                    log::warn!(
+                        target: "caf",
+                        "the prices weren't read in {} s: the bundled snapshot is used until they are",
+                        self.prices_within.as_secs()
+                    );
+                    return Report::Prices(prices::bundled());
+                }
+                () = reload_late => {
+                    self.reloading = None;
+                    log::warn!(
+                        target: "caf",
+                        "the prices weren't read again in {} s: a summary is priced as they were",
+                        self.prices_within.as_secs()
+                    );
+                    return Report::Reloaded;
+                }
             }
         }
     }
 
     /// Stops looking at the prices, and ends the ledger's thread once it
-    /// has written what it was given, and waits for it. A fetch under way
-    /// isn't waited for: it keeps nothing once it's stopped.
+    /// has written what it was given, waiting for it for at most
+    /// [`FINISH_WITHIN`]: past that, it reports how many lines may be lost,
+    /// and leaves it. A fetch under way isn't waited for, and keeps
+    /// nothing from now on.
     pub(crate) async fn finish(mut self) {
         self.looking = None;
         self.work = None;
-        if let Some(thread) = self.thread.take() {
-            let _ = tokio::task::spawn_blocking(move || thread.join()).await;
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        let keeping = Arc::clone(&self.keeping);
+        let (done, ended) = oneshot::channel();
+        // On a thread of its own, so a stuck thread is left, not waited
+        // for, even by the runtime as it shuts down.
+        std::thread::Builder::new()
+            .name("caf-usage-end".into())
+            .spawn(move || {
+                // Waits for a table being kept now, so none is after.
+                *keeping.lock().unwrap_or_else(PoisonError::into_inner) = false;
+                let _ = thread.join();
+                let _ = done.send(());
+            })
+            .expect("a thread to end the usage ledger's");
+        if tokio::time::timeout(self.finish_within, ended)
+            .await
+            .is_err()
+        {
+            log::warn!(
+                target: "caf",
+                "the usage ledger hasn't finished writing in {} s: {} turns' usage may be lost",
+                self.finish_within.as_secs(),
+                self.unwritten.load(Ordering::Relaxed)
+            );
         }
     }
 }
@@ -235,25 +425,29 @@ fn read_prices(ledger: Option<&Ledger>) -> PriceTable {
 fn keep(
     ledger: Option<&Ledger>,
     inbox: &std::sync::mpsc::Receiver<Work>,
-    tell: &mpsc::UnboundedSender<Report>,
+    tell: &mpsc::UnboundedSender<Told>,
+    unwritten: &AtomicUsize,
 ) {
     // Once the task has gone, nobody needs a report.
+    let report = |report: Report| {
+        let _ = tell.send(Told::Report(report));
+    };
     let mut given = read_prices(ledger);
-    let _ = tell.send(Report::Prices(given.clone()));
+    report(Report::Prices(given.clone()));
     // Gives the task the prices if they changed.
     let mut give = |now: PriceTable| {
         if now != given {
             given = now.clone();
-            let _ = tell.send(Report::Prices(now));
+            report(Report::Prices(now));
         }
     };
-    let mut kept = Kept::default();
+    let mut kept = Kept::new(unwritten);
     while let Ok(work) = inbox.recv() {
         match work {
             Work::Record(line) => {
                 if let Some(ledger) = ledger {
                     kept.add(*line);
-                    kept.write(ledger);
+                    kept.try_writing(ledger);
                 }
             }
             Work::SetPrice {
@@ -276,35 +470,39 @@ fn keep(
                 if result.is_ok() {
                     give(read_prices(Some(ledger)));
                 }
-                let _ = tell.send(Report::PriceSet { reply, result });
+                report(Report::PriceSet { reply, result });
             }
-            Work::Reload(reply) => {
-                if ledger.is_some() {
-                    give(read_prices(ledger));
+            Work::Reload(asked) => {
+                if let Some(ledger) = ledger {
+                    if asked.is_none() && !kept.lines.is_empty() {
+                        kept.try_writing(ledger);
+                    }
+                    give(read_prices(Some(ledger)));
                 }
-                if let Some(reply) = reply {
-                    let _ = tell.send(Report::Reloaded(reply));
+                if let Some(asked) = asked {
+                    let _ = tell.send(Told::Reloaded(asked));
                 }
             }
         }
     }
-    if let Some(ledger) = ledger {
-        kept.write(ledger);
-        if !kept.lines.is_empty() {
-            log::warn!(
-                target: "caf",
-                "{} turns' usage couldn't be written to the usage ledger in {}, and is lost",
-                kept.lines.len(),
-                ledger.folder().display()
-            );
-        }
+    if let Some(ledger) = ledger
+        && let Err(error) = kept.write(ledger)
+    {
+        log::warn!(
+            target: "caf",
+            "{} turns' usage couldn't be written to the usage ledger in {} as CAF stopped, and is lost: {error}",
+            kept.lines.len(),
+            ledger.folder().display()
+        );
+        kept.lose_all();
     }
 }
 
 /// The lines waiting to be written, oldest first.
-#[derive(Default)]
-struct Kept {
+struct Kept<'a> {
     lines: VecDeque<LedgerLine>,
+    /// The driver's count of lines not yet written, dropped or lost.
+    unwritten: &'a AtomicUsize,
     /// The last write failed, and that was reported.
     failing: bool,
     /// Lines were dropped since the ledger last took one, and that was
@@ -312,11 +510,21 @@ struct Kept {
     dropping: bool,
 }
 
-impl Kept {
+impl<'a> Kept<'a> {
+    fn new(unwritten: &'a AtomicUsize) -> Self {
+        Self {
+            lines: VecDeque::new(),
+            unwritten,
+            failing: false,
+            dropping: false,
+        }
+    }
+
     /// Keeps `line`, dropping the oldest if too many are waiting.
     fn add(&mut self, line: LedgerLine) {
         if self.lines.len() >= MOST_KEPT {
             self.lines.pop_front();
+            self.unwritten.fetch_sub(1, Ordering::Relaxed);
             if !self.dropping {
                 log::warn!(
                     target: "caf",
@@ -328,48 +536,66 @@ impl Kept {
         self.lines.push_back(line);
     }
 
-    /// Writes every line waiting, in order, stopping at the first that
-    /// fails, which stays first. A line whose write panics is dropped, so
-    /// it never holds up the rest.
-    fn write(&mut self, ledger: &Ledger) {
-        while let Some(line) = self.lines.front() {
-            match std::panic::catch_unwind(AssertUnwindSafe(|| ledger.record(line))) {
-                Ok(Ok(())) => {
-                    self.lines.pop_front();
+    /// Writes every line waiting, as [`Kept::write`] does, reporting the
+    /// first failure in a row, and the ledger taking lines again after.
+    fn try_writing(&mut self, ledger: &Ledger) {
+        match self.write(ledger) {
+            Ok(()) => {
+                if self.failing {
+                    log::info!(target: "caf", "the usage ledger takes lines again: every turn's usage kept is written");
                 }
-                Ok(Err(error)) => {
-                    if !self.failing {
-                        log::warn!(
-                            target: "caf",
-                            "a turn's usage can't be written to the usage ledger in {}: {error}. \
-                             It's kept, and tried again with the next",
-                            ledger.folder().display()
-                        );
-                        self.failing = true;
-                    }
-                    return;
-                }
-                Err(_) => {
-                    log::warn!(target: "caf", "writing a turn's usage to the usage ledger panicked: it's dropped");
-                    self.lines.pop_front();
+                self.failing = false;
+                self.dropping = false;
+            }
+            Err(error) => {
+                if !self.failing {
+                    log::warn!(
+                        target: "caf",
+                        "a turn's usage can't be written to the usage ledger in {}: {error}. \
+                         It's kept, and tried again with the next, and every hour",
+                        ledger.folder().display()
+                    );
+                    self.failing = true;
                 }
             }
         }
-        if self.failing {
-            log::info!(target: "caf", "the usage ledger takes lines again: every turn's usage kept is written");
+    }
+
+    /// Writes every line waiting, in order, stopping at the first that
+    /// fails, which stays first. A line whose write panics is dropped, so
+    /// it never holds up the rest.
+    fn write(&mut self, ledger: &Ledger) -> std::io::Result<()> {
+        while let Some(line) = self.lines.front() {
+            match std::panic::catch_unwind(AssertUnwindSafe(|| ledger.record(line))) {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => return Err(error),
+                Err(_) => {
+                    log::warn!(target: "caf", "writing a turn's usage to the usage ledger panicked: it's dropped");
+                }
+            }
+            self.lines.pop_front();
+            self.unwritten.fetch_sub(1, Ordering::Relaxed);
         }
-        self.failing = false;
-        self.dropping = false;
+        Ok(())
+    }
+
+    /// Lets go of every line, as lost, once that's reported.
+    fn lose_all(&mut self) {
+        self.unwritten
+            .fetch_sub(self.lines.len(), Ordering::Relaxed);
+        self.lines.clear();
     }
 }
 
 /// Looks at the prices now and then every `every`, until `stopped` is
 /// dropped, telling `looks` each time, so they're read again: another app
 /// may have changed them. Each time, first fetches LiteLLM's table with
-/// `fetcher`, if given and it's due.
+/// `fetcher`, if given and it's due, and keeps it, if `keeping` still
+/// says to: it's held while one is kept, so none is once it says not to.
 fn look_now_and_then(
     folder: &std::path::Path,
     mut fetcher: Option<Fetcher>,
+    keeping: &Mutex<bool>,
     looks: &mpsc::UnboundedSender<()>,
     stopped: &std::sync::mpsc::Receiver<()>,
     every: Duration,
@@ -381,17 +607,17 @@ fn look_now_and_then(
         {
             let fetched = std::panic::catch_unwind(AssertUnwindSafe(fetcher))
                 .unwrap_or_else(|_| Err("fetching it panicked".to_owned()));
-            // Nothing is kept once the driver has finished.
-            if !matches!(
-                stopped.try_recv(),
-                Err(std::sync::mpsc::TryRecvError::Empty)
-            ) {
-                return;
-            }
-            let taken = fetched.and_then(|json| {
-                prices::take_fetched(folder, &json, wall_now())
-                    .map_err(|why| format!("it isn't kept: {why:?}"))
-            });
+            let taken = {
+                let keeping = keeping.lock().unwrap_or_else(PoisonError::into_inner);
+                // Nothing is kept once the driver is finishing.
+                if !*keeping {
+                    return;
+                }
+                fetched.and_then(|json| {
+                    prices::take_fetched(folder, &json, wall_now())
+                        .map_err(|why| format!("it isn't kept: {why}"))
+                })
+            };
             match taken {
                 Ok(()) => {
                     if failing {

@@ -42,6 +42,14 @@ fn makes_config(line: &str) -> bool {
     })
 }
 
+/// Whether `line` sets a config's usage ledger, not a viewer's right to
+/// read usage, say.
+fn says_usage(line: &str) -> bool {
+    line.contains("config.usage =")
+        || line.contains(".usage = None")
+        || line.contains(".usage = Some")
+}
+
 #[test]
 fn every_config_made_says_where_its_usage_goes() {
     let mut unsaid = Vec::new();
@@ -56,7 +64,7 @@ fn every_config_made_says_where_its_usage_goes() {
             // Within the statement, or the few after it.
             let said = lines[at..lines.len().min(at + 8)]
                 .iter()
-                .any(|line| line.contains(".usage ="));
+                .any(|line| says_usage(line));
             if makes_config(line) && !said {
                 unsaid.push(format!("{}:{}", file.display(), at + 1));
             }
@@ -110,4 +118,7 @@ fn a_config_made_without_saying_is_found() {
     assert!(!makes_config("let usage = UsageConfig::new(folder);"));
     assert!(!makes_config("let config = Config::new()"), "ts-rs's");
     assert!(!makes_config("//! Caf::start(Config::new(host, agents))"));
+    assert!(says_usage("    config.usage = None;"));
+    assert!(says_usage("    config.usage = Some(scratch_ledger(dir));"));
+    assert!(!says_usage("    rules.usage = true;"), "a viewer's right");
 }

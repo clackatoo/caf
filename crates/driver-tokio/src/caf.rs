@@ -43,12 +43,15 @@
 //!
 //! Asking for the prices ([`Caf::prices`], and [`Caf::usage`], which
 //! prices a summary with them) waits for the usage driver's first table,
-//! so a summary asked for as CAF starts is never priced with none. Before
-//! a summary, the usage driver reads the prices again, as another app may
-//! have set one, and the core is given them if they changed; the summary
-//! is then read on a blocking thread, apart from the task. A price
-//! set ([`Caf::set_price`]) is answered once the core has the prices it
-//! changed.
+//! so a summary asked for as CAF starts is never priced with none: for at
+//! most ten seconds, after which the core is given the bundled snapshot.
+//! Before a summary, the usage driver reads the prices again, as another
+//! app may have set one, and the core is given them if they changed; those
+//! asked for meanwhile share the reading, which is waited for for at most
+//! ten seconds too. The summary is then read on a blocking thread, apart
+//! from the task. A price set ([`Caf::set_price`]) is answered once the
+//! core has the prices it changed. Shutting down waits for the usage
+//! ledger to be written for at most thirty seconds.
 //!
 //! Watches pull rather than being pushed to: a watch asks for what
 //! changed since it last read, so the only changes held for it are the
@@ -432,9 +435,10 @@ impl<A: AppItem, D: AppData> WeakCaf<A, D> {
                 tokio::task::spawn_blocking(move || caf_usage::summarise(&folder, &query, &prices));
             match read.await {
                 Ok(summary) => summary.map_err(Error::BadQuery),
+                // Shutting down, or a bug.
                 Err(error) => {
                     if error.is_panic() {
-                        log::warn!(target: "caf", "reading a usage summary panicked");
+                        log::error!(target: "caf", "reading a usage summary panicked");
                     }
                     Err(Error::Gone)
                 }
@@ -590,12 +594,6 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
             config.agent_limits.biggest_line, config.host.limits.biggest_message,
             "the agent driver's biggest line must be the host's biggest message"
         );
-        #[cfg(test)]
-        assert!(
-            (config.usage.as_ref())
-                .is_none_or(|usage| Some(&usage.folder) != caf_usage::default_folder().as_ref()),
-            "a test's CAF never keeps the user's usage ledger"
-        );
         let recorder = (config.record.as_ref())
             .and_then(|path| Recorder::start(path, &config.host, &config.agents));
         let (commands, inbox) = mpsc::channel(COMMANDS);
@@ -631,6 +629,7 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
             usage,
             priced: false,
             unpriced: Vec::new(),
+            reloading: Vec::new(),
             policy: config.policy,
             deciding: JoinSet::new(),
             tickets: HashMap::new(),
@@ -915,7 +914,8 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     /// # Errors
     ///
     /// [`Error::NoLedger`] with no [`Config::usage`];
-    /// [`Error::BadQuery`]; or [`Error::Gone`].
+    /// [`Error::BadQuery`]; or [`Error::Gone`], which also covers reading
+    /// the summary failing unexpectedly, a bug, which is logged.
     pub async fn usage(&self, query: UsageQuery) -> Result<Summary, Error> {
         self.downgrade().usage(query).await
     }
@@ -928,7 +928,8 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     /// # Errors
     ///
     /// [`Error::NoLedger`] with no [`Config::usage`]; [`Error::Price`] if
-    /// it couldn't be written; or [`Error::Gone`].
+    /// it couldn't be written; or [`Error::Gone`]. One asked for as CAF
+    /// shuts down is [`Error::Gone`] even if the price was written.
     pub async fn set_price(&self, model: String, price: Option<ModelPrice>) -> Result<(), Error> {
         self.downgrade().set_price(model, price).await
     }
@@ -1687,6 +1688,8 @@ struct Task<A: AppItem, D: AppData> {
     priced: bool,
     /// Those waiting for the first prices.
     unpriced: Vec<oneshot::Sender<Priced>>,
+    /// Those waiting for the prices to be read again.
+    reloading: Vec<oneshot::Sender<Priced>>,
     policy: Box<dyn Policy>,
     /// The policy's decisions under way.
     deciding: JoinSet<PolicyAnswer>,
@@ -1924,7 +1927,11 @@ impl<A: AppItem, D: AppData> Task<A, D> {
             }
             // The first prices are read fresh.
             Command::Prices { reply, .. } if !self.priced => self.unpriced.push(reply),
-            Command::Prices { fresh: true, reply } => self.usage.reload(reply),
+            // Those asked for meanwhile share a reading under way.
+            Command::Prices { fresh: true, reply } => {
+                self.reloading.push(reply);
+                self.usage.reload();
+            }
             Command::Prices { reply, .. } => {
                 let _ = reply.send(self.priced_now());
             }
@@ -2149,8 +2156,10 @@ impl<A: AppItem, D: AppData> Task<A, D> {
             UsageReport::PriceSet { reply, result } => {
                 let _ = reply.send(result.map_err(Error::Price));
             }
-            UsageReport::Reloaded(reply) => {
-                let _ = reply.send(self.priced_now());
+            UsageReport::Reloaded => {
+                for waiting in std::mem::take(&mut self.reloading) {
+                    let _ = waiting.send(self.priced_now());
+                }
             }
         }
     }

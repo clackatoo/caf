@@ -126,7 +126,7 @@ The sixth, *usage*, says what the agent costs:
   and adds up each chat's spend, estimating the cost the agent didn't
   report.
 - **One ledger for the machine**: every turn of every CAF app goes into a
-  ledger they all share, never with what was said, so your program can
+  ledger they all share, unless the app turns the ledger off, never with what was said, so your program can
   show how much the user has used across all of them, by day, app, agent
   and model.
 - **Prices**: the user's own, then LiteLLM's table, fetched once a day,

@@ -79,9 +79,11 @@ on.
 
 It's on by default: `Config::new` keeps it in that folder. Writing it is a
 thread's of its own, and it never holds a chat up. A line it can't write
-is kept, and tried again with the next; the first failure in a row is
-reported to the log (target `caf`). By the time `Caf::shutdown` returns,
-every line is written, or reported lost.
+is kept, and tried again with the next and every hour; the first failure
+in a row is reported to the log (target `caf`). By the time
+`Caf::shutdown` returns, every line is written, or reported lost. A disk
+that has hung holds shutting down up for thirty seconds at most: then how
+many lines may be lost is reported, and CAF stops without them.
 
 ## Prices
 
@@ -136,7 +138,7 @@ is a sum of buckets. An agent is named by its built-in profile, such as
 model in it, and `unreadable` any file that couldn't be read: a summary is
 never quietly short.
 
-It's read on a thread of its own, so it never holds anything up. A turn
+It's read on a thread of its own, so it never holds a chat up. A turn
 that ended a moment ago may not be in it yet. A time zone CAF doesn't know,
 or a period that's empty or longer than 400 days, is `Error::BadQuery`.
 

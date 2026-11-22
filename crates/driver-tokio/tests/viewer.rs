@@ -3,7 +3,6 @@
 mod common;
 
 use std::collections::VecDeque;
-use std::os::unix::fs::OpenOptionsExt;
 use std::sync::Arc;
 
 use caf_core::agent::AgentStatus;
@@ -1701,16 +1700,15 @@ async fn a_viewer_hears_there_is_no_ledger_or_that_a_query_is_bad() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_slow_summary_never_holds_up_a_viewers_other_requests() {
     let dir = Dir::new();
-    // January's file, as a pipe: reading it waits until something writes
-    // to it.
-    let app = dir.path("usage/blocked");
-    std::fs::create_dir_all(&app).unwrap();
-    let pipe = app.join("2026-01.jsonl");
-    let path = std::ffi::CString::new(pipe.as_os_str().as_encoded_bytes()).unwrap();
-    // SAFETY: a plain syscall, with a path that lives through it.
-    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
-    let (caf, running) = Caf::start(config_with_ledger(&dir, host(), Vec::new()));
+    let hold = Hold::default();
+    let config = config_with_ledger(&dir, host(), Vec::new());
+    let (caf, running) = Caf::start_watching(config, hold.clone());
     let (mut viewer, ..) = Viewer::welcomed(&caf, usage_rules(), 64).await;
+    // CAF's task is held up, so the summary waits for its prices.
+    hold.next_step();
+    let checking = caf.clone();
+    let checked = tokio::spawn(async move { checking.check_agents().await });
+    hold.held().await;
     viewer
         .send(FromViewer::Usage {
             request: RequestNo(1),
@@ -1728,33 +1726,11 @@ async fn a_slow_summary_never_holds_up_a_viewers_other_requests() {
         Outcome::NotAllowed,
         "answered at once"
     );
-    viewer
-        .send(FromViewer::SetPrice {
-            request: RequestNo(3),
-            model: "claude-viewer-1".into(),
-            price: None,
-        })
-        .await;
-    assert_eq!(viewer.done(3).await, Outcome::Done, "so is a price");
     assert!(
         !(viewer.skipped.iter()).any(|message| matches!(message, ToViewer::Usage { .. })),
-        "the summary waits for the pipe"
+        "the summary waits"
     );
-    // Something opens it to write, once the summary is reading it, and
-    // writes nothing: then the summary is read.
-    let opened = tokio::time::timeout(PATIENCE, async {
-        loop {
-            let writer = std::fs::OpenOptions::new()
-                .write(true)
-                .custom_flags(libc::O_NONBLOCK)
-                .open(&pipe);
-            match writer {
-                Ok(writer) => return drop(writer),
-                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
-            }
-        }
-    });
-    opened.await.expect("the summary reads the pipe");
+    hold.release();
     match viewer.next().await {
         Some(ToViewer::Usage {
             request: RequestNo(1),
@@ -1762,6 +1738,7 @@ async fn a_slow_summary_never_holds_up_a_viewers_other_requests() {
         }) => {}
         other => panic!("the summary, not {other:?}"),
     }
+    checked.await.unwrap().unwrap();
     shut_down(&caf, running).await;
 }
 
