@@ -5,10 +5,11 @@
 //!
 //! [`Caf::start`] spawns one task that owns the [`Core`], the
 //! [`AgentDriver`], the [`TimerDriver`], the [`SetupDriver`], the store
-//! ([`Config::store`]) and the [`Policy`]. Handles talk to it through a
-//! queue, and it waits on six things at once: a handle's command, an
-//! adapter's event, the timer, the setup driver's report, the store's
-//! answer, and a policy's answer. Each
+//! ([`Config::store`]), the usage driver ([`Config::usage`]) and the
+//! [`Policy`]. Handles talk to it through a queue, and it waits on seven
+//! things at once: a handle's command, an adapter's event, the timer, the
+//! setup driver's report, the store's answer, the usage driver's prices,
+//! and a policy's answer. Each
 //! goes into the core with the time from [`TimerDriver::now`], and every
 //! directive that comes out goes to its driver:
 //!
@@ -21,6 +22,7 @@
 //! | `Viewer(Changed)` | Wakes the chat's watches, which read with [`Core::read`] |
 //! | `Setup` | [`SetupDriver::apply`]; its reports come back as [`Event::Setup`] |
 //! | `Storage` | [`caf_save::carry_out`] with [`Config::store`], on a thread of its own, in order; its reports come back as [`Event::Storage`] |
+//! | `Usage` | [`caf_usage::Ledger::record`] with [`Config::usage`], on a thread of its own, in order; never answered. The prices, read on the same thread as it starts and whenever they change, come back as [`Event::Prices`] |
 //! | `Report` | The [`log`] facade, target `caf` |
 //!
 //! A [`Steps`] given to [`Caf::start_watching`] sees each event once the
@@ -38,6 +40,13 @@
 //!
 //! A restore is answered once [`Core::restoring`] says it's over: loaded,
 //! as [`Core::chat`] then says, or failed, saying why as the store did.
+//!
+//! Asking for the prices ([`Caf::prices`], and [`Caf::usage`], which
+//! prices a summary with them) waits for the usage driver's first table,
+//! so a summary asked for as CAF starts is never priced with none. A
+//! summary is then read on a blocking thread, apart from the task. A price
+//! set ([`Caf::set_price`]) is answered once the core has the prices it
+//! changed.
 //!
 //! Watches pull rather than being pushed to: a watch asks for what
 //! changed since it last read, so the only changes held for it are the
@@ -62,7 +71,7 @@ use caf_core::agent::AgentStatus;
 use caf_core::agent::{AgentSpec, EnvChange, Launch, McpServer};
 use caf_core::chat::{ChatState, UserMessage};
 use caf_core::directive::{
-    Level, PolicyDirective, StorageDirective, TimerDirective, ViewerDirective,
+    Level, PolicyDirective, StorageDirective, TimerDirective, UsageDirective, ViewerDirective,
 };
 use caf_core::event::{AgentEvent, HostCommand, PolicyAnswer, StorageEvent};
 use caf_core::ids::{AgentName, ChangeNo};
@@ -87,6 +96,7 @@ use crate::setup::SetupDriver;
 use crate::steps::{Step, Steps};
 use crate::storage::StorageDriver;
 use crate::timer::TimerDriver;
+use crate::usage::{Report as UsageReport, UsageDriver};
 
 /// What to start CAF with.
 #[non_exhaustive]
@@ -385,6 +395,71 @@ impl<A: AppItem, D: AppData> WeakCaf<A, D> {
         }
     }
 
+    /// The ledger's folder, if there is one, and the prices in force,
+    /// once the core has the usage driver's first: keeping CAF running only
+    /// while it asks.
+    pub(crate) fn priced(&self) -> impl Future<Output = Result<Priced, Error>> + Send + 'static {
+        let commands = self.commands.clone();
+        async move {
+            let (reply, answer) = oneshot::channel();
+            let commands = commands.upgrade().ok_or(Error::Gone)?;
+            let sent = commands.send(Command::Prices { reply }).await;
+            drop(commands);
+            sent.map_err(|_| Error::Gone)?;
+            // The task drops the reply when it's shutting down.
+            answer.await.map_err(|_| Error::Gone)
+        }
+    }
+
+    /// A usage summary, as [`Caf::usage`] makes one, keeping CAF running
+    /// only while it asks for the prices: so a viewer's summary doesn't
+    /// keep it running while the ledger is read.
+    pub(crate) fn usage(
+        &self,
+        query: UsageQuery,
+    ) -> impl Future<Output = Result<Summary, Error>> + Send + 'static {
+        let priced = self.priced();
+        async move {
+            let (folder, prices) = priced.await?;
+            let folder = folder.ok_or(Error::NoLedger)?;
+            let read =
+                tokio::task::spawn_blocking(move || caf_usage::summarise(&folder, &query, &prices));
+            match read.await {
+                Ok(summary) => summary.map_err(Error::BadQuery),
+                Err(error) => {
+                    if error.is_panic() {
+                        log::warn!(target: "caf", "reading a usage summary panicked");
+                    }
+                    Err(Error::Gone)
+                }
+            }
+        }
+    }
+
+    /// Sets a price of the user's own, as [`Caf::set_price`] does, keeping
+    /// CAF running only while it asks.
+    pub(crate) fn set_price(
+        &self,
+        model: String,
+        price: Option<ModelPrice>,
+    ) -> impl Future<Output = Result<(), Error>> + Send + 'static {
+        let commands = self.commands.clone();
+        async move {
+            let (reply, answer) = oneshot::channel();
+            let commands = commands.upgrade().ok_or(Error::Gone)?;
+            let setting = Command::SetPrice {
+                model,
+                price,
+                reply,
+            };
+            let sent = commands.send(setting).await;
+            drop(commands);
+            sent.map_err(|_| Error::Gone)?;
+            // Dropped when the task is shutting down.
+            answer.await.map_err(|_| Error::Gone)?
+        }
+    }
+
     /// Resolves once CAF's task has ended.
     pub(crate) async fn ended(&self) {
         let mut ended = self.shared.ended.clone();
@@ -537,6 +612,7 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
                 );
                 root
             });
+        let usage = UsageDriver::new(config.usage, config.host.name.clone());
         let core = Core::new(config.host, config.agents);
         let (told, statuses) = watch::channel(core.agents());
         let (listed, saved) = watch::channel(None);
@@ -546,6 +622,9 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
             timers: TimerDriver::new(),
             setup: SetupDriver::new(root),
             storage: StorageDriver::new(config.store),
+            usage,
+            priced: false,
+            unpriced: Vec::new(),
             policy: config.policy,
             deciding: JoinSet::new(),
             tickets: HashMap::new(),
@@ -829,8 +908,7 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     /// [`Error::NoLedger`] with no [`Config::usage`];
     /// [`Error::BadQuery`]; or [`Error::Gone`].
     pub async fn usage(&self, query: UsageQuery) -> Result<Summary, Error> {
-        let _ = query;
-        todo!()
+        self.downgrade().usage(query).await
     }
 
     /// Sets the user's own price for a model, by the agent's id for it,
@@ -843,8 +921,7 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     /// [`Error::NoLedger`] with no [`Config::usage`]; [`Error::Price`] if
     /// it couldn't be written; or [`Error::Gone`].
     pub async fn set_price(&self, model: String, price: Option<ModelPrice>) -> Result<(), Error> {
-        let _ = (model, price);
-        todo!()
+        self.downgrade().set_price(model, price).await
     }
 
     /// The prices CAF estimates cost with now: the user's own, then
@@ -854,7 +931,8 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     ///
     /// [`Error::Gone`].
     pub async fn prices(&self) -> Result<PriceTable, Error> {
-        todo!()
+        let (_, prices) = self.downgrade().priced().await?;
+        Ok(prices)
     }
 
     /// Stops everything: every session closed, every adapter stopped,
@@ -1358,7 +1436,22 @@ enum Command<D: AppData> {
         chat: ChatId,
         reply: oneshot::Sender<Result<D, Refused>>,
     },
+    /// Answered once the usage driver has given the core its first
+    /// prices.
+    Prices {
+        reply: oneshot::Sender<Priced>,
+    },
+    /// Answered once the core has the prices it changed.
+    SetPrice {
+        model: String,
+        price: Option<ModelPrice>,
+        reply: oneshot::Sender<Result<(), Error>>,
+    },
 }
+
+/// The ledger's folder, if there is one, and the prices in force: what a
+/// summary is read with.
+type Priced = (Option<PathBuf>, PriceTable);
 
 /// Something a handle asks the task to do about an agent.
 enum AgentCall {
@@ -1578,6 +1671,11 @@ struct Task<A: AppItem, D: AppData> {
     timers: TimerDriver,
     setup: SetupDriver,
     storage: StorageDriver<A, D>,
+    usage: UsageDriver,
+    /// The core has been given the usage driver's first prices.
+    priced: bool,
+    /// Those waiting for the first prices.
+    unpriced: Vec<oneshot::Sender<Priced>>,
     policy: Box<dyn Policy>,
     /// The policy's decisions under way.
     deciding: JoinSet<PolicyAnswer>,
@@ -1658,6 +1756,7 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 (process, event) = self.agents.next() => self.give(Event::Agent { process, event }),
                 (ticket, event) = self.setup.next() => self.give(Event::Setup { ticket, event }),
                 (ticket, event) = self.storage.next() => self.stored(ticket, event),
+                report = self.usage.next() => self.usage_report(report),
                 () = self.timers.woken() => self.give(Event::Woken),
                 Some(decided) = self.deciding.join_next_with_id() => self.decided(decided),
             }
@@ -1712,6 +1811,8 @@ impl<A: AppItem, D: AppData> Task<A, D> {
         // its thread ends, so once shutting down returns, they're free.
         let storage = std::mem::replace(&mut self.storage, StorageDriver::new(None));
         storage.finish().await;
+        // Every line the core gave it is written, or reported lost.
+        self.usage.finish().await;
         if let Some(recorder) = self.recorder.take() {
             recorder.finish().await;
         }
@@ -1810,6 +1911,18 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 );
                 let _ = reply.send(result);
             }
+            Command::Prices { reply } => {
+                if self.priced {
+                    let _ = reply.send(self.priced_now());
+                } else {
+                    self.unpriced.push(reply);
+                }
+            }
+            Command::SetPrice {
+                model,
+                price,
+                reply,
+            } => self.usage.set_price(model, price, reply),
             command @ (Command::ListSaved { .. }
             | Command::Restore { .. }
             | Command::PutAway { .. }
@@ -2009,6 +2122,29 @@ impl<A: AppItem, D: AppData> Task<A, D> {
         self.restores.answered(ticket, &event);
         self.lists_due = true;
         self.give(Event::Storage { ticket, event });
+    }
+
+    /// Gives the core the usage driver's prices, answering those waiting
+    /// for them; or answers whoever set a price, once the core has the
+    /// prices it changed.
+    fn usage_report(&mut self, report: UsageReport) {
+        match report {
+            UsageReport::Prices(prices) => {
+                self.give(Event::Prices(prices));
+                self.priced = true;
+                for waiting in std::mem::take(&mut self.unpriced) {
+                    let _ = waiting.send(self.priced_now());
+                }
+            }
+            UsageReport::PriceSet { reply, result } => {
+                let _ = reply.send(result.map_err(Error::Price));
+            }
+        }
+    }
+
+    /// The ledger's folder and the prices in force.
+    fn priced_now(&self) -> Priced {
+        (self.usage.folder().cloned(), self.core.prices().clone())
     }
 
     /// Gives the core what a driver reported.
@@ -2297,10 +2433,9 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                     self.storage.apply(storage);
                 }
                 Directive::Report(report) => log_report(&report),
-                Directive::Usage(usage) => {
-                    let _ = usage;
-                    todo!("feature 6: the usage driver")
-                }
+                Directive::Usage(UsageDirective::Record(line)) => self.usage.record(line),
+                // No other kind is given yet.
+                Directive::Usage(_) => {}
                 // No other kind is given yet. One added later needs a
                 // driver here.
                 _ => {}
