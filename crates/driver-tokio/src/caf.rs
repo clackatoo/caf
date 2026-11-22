@@ -1229,7 +1229,8 @@ impl SavedWatch {
 }
 
 /// Follows which chats are open: opened by the host, by any viewer, or
-/// closed. Like [`Watch`], it doesn't keep CAF running.
+/// closed, which archives them. An archived chat isn't open, until it's
+/// unarchived. Like [`Watch`], it doesn't keep CAF running.
 pub struct ChatsWatch {
     list: watch::Receiver<Vec<ChatSummary>>,
     /// It hasn't given the list yet.
@@ -1277,8 +1278,11 @@ pub enum Update<A: AppItem = NoAppItems> {
 }
 
 impl<A: AppItem> Watch<A> {
-    /// The next update, or `None` once the chat is closed, put away or
-    /// deleted, or CAF has shut down.
+    /// The next update, or `None` once the chat is put away or deleted,
+    /// a saved chat closed and so put away included, or CAF has shut
+    /// down. Closing a chat that isn't saved archives it, and its watch
+    /// goes on, as it may be unarchived ([`ChatHandle::unarchive`]); so
+    /// does a watch of an archived chat restored.
     ///
     /// When CAF shuts down, a watch that hasn't seen how it left the chat
     /// gets that as one last [`Update::Picture`], even if it never read
@@ -1322,10 +1326,10 @@ impl<A: AppItem> Watch<A> {
             if self.ended {
                 return None;
             }
-            // A read of a chat that's open always gives a way to wait.
+            // A read of a chat the core has always gives a way to wait.
             let wake = self.wake.as_mut()?;
             if wake.changed().await.is_err() {
-                // The chat was closed or CAF has ended: the next read says
+                // The chat is gone or CAF has ended: the next read says
                 // which.
                 self.wake = None;
             }
@@ -1526,9 +1530,9 @@ struct Seen<A: AppItem> {
     update: Option<Update<A>>,
     /// The last change it has now seen.
     latest: Option<ChangeNo>,
-    /// The chat is closed: nothing more will change.
+    /// The chat is gone from the core: nothing more will change.
     closed: bool,
-    /// How to hear of changes, if it asked and the chat is open.
+    /// How to hear of changes, if it asked and the core has the chat.
     wake: Option<watch::Receiver<()>>,
 }
 
@@ -2456,9 +2460,10 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                     if let Some(feed) = self.feeds.get(&chat) {
                         feed.send_replace(());
                     }
-                    // A closed chat changes no more: its watches read the
-                    // last of it and end.
-                    if self.closed(chat) {
+                    // A chat gone from the core changes no more: its
+                    // watches read the last of it and end. An archived one
+                    // goes on, as it may be unarchived.
+                    if self.core.chat(chat).is_none() {
                         self.feeds.remove(&chat);
                     }
                 }
@@ -2507,7 +2512,7 @@ impl<A: AppItem, D: AppData> Task<A, D> {
         });
     }
 
-    /// Whether `chat` is closed, or was never there.
+    /// Whether `chat` isn't open: archived, or not there.
     fn closed(&self, chat: ChatId) -> bool {
         self.core
             .chat(chat)
@@ -2522,7 +2527,6 @@ impl<A: AppItem, D: AppData> Task<A, D> {
         since: Option<ChangeNo>,
         subscribe: bool,
     ) -> Option<Seen<A>> {
-        let closed = self.closed(chat);
         let Some(read) = self.core.read(chat, since) else {
             // Put away while it was watched: as it was left, and nothing
             // more.
@@ -2545,14 +2549,16 @@ impl<A: AppItem, D: AppData> Task<A, D> {
             // handling here, or its watches end.
             _ => return None,
         };
-        let wake = (subscribe && !closed).then(|| {
+        // A chat the core has may change, even archived: it may be
+        // unarchived.
+        let wake = subscribe.then(|| {
             let feed = (self.feeds.entry(chat)).or_insert_with(|| watch::Sender::new(()));
             feed.subscribe()
         });
         Some(Seen {
             update,
             latest,
-            closed,
+            closed: false,
             wake,
         })
     }

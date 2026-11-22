@@ -297,9 +297,12 @@ pub enum ToViewer<A: AppItem = NoAppItems> {
         /// The changes.
         changes: Vec<Numbered<A>>,
     },
-    /// A watched chat is closed, there's no such chat, CAF has shut
+    /// A watched chat is gone: put away, a saved chat closed and so put
+    /// away included, or deleted. Or there's no such chat, CAF has shut
     /// down, or the viewer already watches as many chats as the host
-    /// allows: nothing more comes for it.
+    /// allows: nothing more comes for it. A chat archived but still loaded,
+    /// such as one closed that isn't saved, goes on being watched, as it
+    /// may be unarchived.
     Ended {
         /// The chat.
         chat: ChatId,
