@@ -174,6 +174,14 @@ pub struct ProfileLimits {
     pub limits: AccountLimits,
 }
 
+impl ProfileLimits {
+    /// `profile`'s account's limits.
+    #[must_use]
+    pub fn new(profile: Builtin, limits: AccountLimits) -> Self {
+        Self { profile, limits }
+    }
+}
+
 impl WindowKind {
     /// How long the window is: five hours, or a week; `None` for
     /// [`Other`](WindowKind::Other).

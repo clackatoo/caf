@@ -100,6 +100,8 @@ mod tests;
 
 /// The folder prices are kept in, which no app may be named.
 const PRICES: &str = "prices";
+/// The folder account limits are kept in, which no app may be named.
+const LIMITS: &str = "limits";
 /// A day, in milliseconds.
 const DAY: i64 = 24 * 60 * 60 * 1000;
 /// The longest period a summary covers: 400 days.
@@ -266,6 +268,7 @@ fn is_app(app: &str) -> bool {
     // them one.
     !app.is_empty()
         && !app.eq_ignore_ascii_case(PRICES)
+        && !app.eq_ignore_ascii_case(LIMITS)
         && !app.starts_with('.')
         && !app.contains(['/', '\\', '\0'])
 }

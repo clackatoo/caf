@@ -42,7 +42,7 @@ pub(crate) fn open(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
 /// file CAF keeps is in a folder of the ledger's. What an error says, as
 /// errors can reach a viewer, and the rest of the path, with the user's
 /// home folder in it, is no viewer's business.
-fn name(path: &Path) -> String {
+pub(crate) fn name(path: &Path) -> String {
     let mut parts: Vec<_> = path.iter().rev().take(2).collect();
     parts.reverse();
     parts
