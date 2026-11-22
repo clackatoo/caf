@@ -33,7 +33,7 @@ use crate::chat::{AppItem, ChatState, Failure, FailureReason, Note, Remedy, Star
 use crate::directive::{Directive, Level, SetupDirective};
 use crate::event::SetupEvent;
 use crate::ids::{AgentName, ChatId, Ticket};
-use crate::install::{Bundled, EnvValue, Install, Program, SignedInAs};
+use crate::install::{Bundled, EnvValue, Install, Program, Recipe, SignedInAs};
 use crate::profiles::Checked;
 use crate::settings::KnownSettings;
 use crate::time::{Now, Wall};
@@ -87,8 +87,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         let (install, patch, size) = (recipe.install.clone(), recipe.patch.clone(), recipe.size);
         let private = self.private_folder(agent);
+        let earlier = self.earlier_level(agent);
         // Another agent of the same profile is installing it already.
-        if self.install_job(&folder).is_none() {
+        let started = self.install_job(&folder).is_some();
+        if let (false, Some(from)) = (started, earlier) {
+            // A new patch level of an install that's there: nothing to
+            // download.
+            self.prepare(agent, &folder, from, out);
+        } else if !started {
             // Starting it later needs the folder installs live in.
             if self.setup.machine.is_none() && self.setup.survey.is_none() {
                 self.survey(out);
@@ -97,6 +103,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 agent,
                 Work::Install {
                     folder: folder.clone(),
+                    from: None,
                 },
             );
             out.push(Directive::Setup(SetupDirective::Install {
@@ -299,7 +306,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let agent = job.agent.clone();
         let stopped = job.stopped;
         match (job.work.clone(), event) {
-            (Work::Install { folder }, SetupEvent::Progress { done }) if !stopped => {
+            (Work::Install { folder, .. }, SetupEvent::Progress { done }) if !stopped => {
                 let done = done.min(super::updates::MOST_EXACT);
                 for each in self.sharing(&folder) {
                     if let Some(InstallState::Installing { size, .. }) = self.install_state(&each) {
@@ -307,18 +314,30 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     }
                 }
             }
-            (Work::Install { folder }, SetupEvent::Installed) => {
+            (Work::Install { folder, .. }, SetupEvent::Installed) => {
                 // Even one stopped too late: the folder is there.
                 self.setup.jobs.remove(&ticket);
                 self.installed(&folder, out);
             }
-            (Work::Install { folder }, SetupEvent::InstallFailed(why)) => {
+            (
+                Work::Install {
+                    folder,
+                    from: Some(from),
+                },
+                event @ (SetupEvent::InstallFailed(_) | SetupEvent::Failed(_)),
+            ) => {
+                self.setup.jobs.remove(&ticket);
+                if !stopped {
+                    self.prepare_failed(&folder, &from, &event, out);
+                }
+            }
+            (Work::Install { folder, .. }, SetupEvent::InstallFailed(why)) => {
                 self.setup.jobs.remove(&ticket);
                 if !stopped {
                     self.install_failed(now, &folder, why, out);
                 }
             }
-            (Work::Install { folder }, SetupEvent::Failed(why)) => {
+            (Work::Install { folder, .. }, SetupEvent::Failed(why)) => {
                 self.setup.jobs.remove(&ticket);
                 if !stopped {
                     let why = InstallFailure::Other(agent_text(&why, MOST_REASON));
@@ -503,8 +522,118 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             let state = self.judge(&agent);
             self.set_install(&agent, state);
         }
+        // A new patch level of an install that's there is made from it,
+        // with nothing downloaded, and nobody asked.
+        for agent in self.setup.order.clone() {
+            let Some(folder) = self.folder_of(&agent) else {
+                continue;
+            };
+            let waiting = !matches!(
+                self.install_state(&agent),
+                Some(InstallState::Installing { .. } | InstallState::Installed { .. })
+            );
+            if waiting
+                && self.install_job(&folder).is_none()
+                && let Some(from) = self.earlier_level(&agent)
+            {
+                self.prepare(&agent, &folder, from, out);
+            }
+        }
         for agent in self.setup.order.clone() {
             self.check_status(&agent, out);
+        }
+    }
+
+    /// The complete install `agent`'s folder can be prepared from, with
+    /// nothing downloaded, as the last survey found: of the same upstream
+    /// version at a lower patch level, the highest, if its recipe patches
+    /// it, it isn't installed, and preparing it hasn't failed.
+    fn earlier_level(&self, agent: &AgentName) -> Option<String> {
+        let spec = self.agents.get(agent)?;
+        let (recipe, folder, slug) = (
+            self.recipes.get(agent)?,
+            self.folder_of(agent)?,
+            self.slugs.get(agent)?,
+        );
+        let level = recipe.patch.as_ref()?.level;
+        let machine = self.setup.machine.as_ref()?;
+        if spec.launch != Launch::Installed
+            || machine.installed.contains(&folder)
+            || self.setup.unprepared.contains(&folder)
+        {
+            return None;
+        }
+        (machine.installed.iter())
+            .filter(|each| is_folder_name(each))
+            .filter_map(|each| Some((patch_level(slug, each, &recipe.version)?, each)))
+            .filter(|&(earlier, _)| earlier < level)
+            .max_by_key(|&(earlier, _)| earlier)
+            .map(|(_, each)| each.clone())
+    }
+
+    /// Prepares `folder`, `agent`'s, from the earlier patch level `from`:
+    /// every agent of its profile is installing it meanwhile.
+    fn prepare(
+        &mut self,
+        agent: &AgentName,
+        folder: &str,
+        from: String,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
+        let Some((patch, size)) =
+            (self.recipes.get(agent)).and_then(|recipe| Some((recipe.patch.clone()?, recipe.size)))
+        else {
+            return;
+        };
+        report(
+            out,
+            Level::Info,
+            format!("preparing {folder} from {from}, with nothing downloaded"),
+        );
+        let ticket = self.job(
+            agent,
+            Work::Install {
+                folder: folder.to_owned(),
+                from: Some(from.clone()),
+            },
+        );
+        out.push(Directive::Setup(SetupDirective::Prepare {
+            ticket,
+            folder: folder.to_owned(),
+            from,
+            patch,
+        }));
+        for each in self.sharing(folder) {
+            self.set_install(&each, InstallState::Installing { done: 0, size });
+        }
+    }
+
+    /// Preparing `folder` from `from` failed: it's never tried again, and
+    /// every agent of its profile reads as not installed, to be installed
+    /// as any other is, with the user's leave. Messages waiting for it go
+    /// on waiting.
+    fn prepare_failed(
+        &mut self,
+        folder: &str,
+        from: &str,
+        event: &SetupEvent,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
+        let why = match event {
+            SetupEvent::InstallFailed(why) => format!("{why:?}"),
+            SetupEvent::Failed(why) => why.clone(),
+            other => setup_event_kind(other).to_owned(),
+        };
+        let why = agent_text(&why, MOST_REASON);
+        report(
+            out,
+            Level::Warn,
+            format!("preparing {folder} from {from} failed, so it's to be installed: {why}"),
+        );
+        self.setup.unprepared.insert(folder.to_owned());
+        for agent in self.sharing(folder) {
+            let size = self.recipes.get(&agent).map_or(0, |recipe| recipe.size);
+            self.set_install(&agent, InstallState::Missing { size });
         }
     }
 
@@ -519,7 +648,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         if machine.installed.contains(&folder) {
             return InstallState::Installed {
-                version: recipe.version.clone(),
+                version: recipe.installed_version(),
             };
         }
         if let Install::Download(artifacts) = &recipe.install
@@ -561,11 +690,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             self.stop_job(ticket, out);
         }
         for agent in self.sharing(folder) {
-            let Some(version) = self
-                .recipes
-                .get(&agent)
-                .map(|recipe| recipe.version.clone())
-            else {
+            let Some(version) = self.recipes.get(&agent).map(Recipe::installed_version) else {
                 continue;
             };
             self.set_install(&agent, InstallState::Installed { version });
@@ -584,6 +709,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     ) {
         let why = match why {
             InstallFailure::Other(text) => InstallFailure::Other(agent_text(&text, MOST_REASON)),
+            InstallFailure::Patch(text) => InstallFailure::Patch(agent_text(&text, MOST_REASON)),
             other => other,
         };
         report(
@@ -838,13 +964,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         ) else {
             return;
         };
-        let Some(version) = crate::profiles::version(&recipe.version) else {
-            return;
-        };
+        let (version, level) = (
+            recipe.version.as_str(),
+            recipe.patch.as_ref().map_or(0, |patch| patch.level),
+        );
         let unused_since = now.wall.0 - i64::try_from(KEEP_UNUSED.as_millis()).unwrap_or(i64::MAX);
         let old: Vec<String> = (machine.installed.iter())
             .filter(|each| *each != pinned && is_folder_name(each))
-            .filter(|each| older(slug, each, version))
+            .filter(|each| older(slug, each, version, level))
             .filter(|each| {
                 machine
                     .used
@@ -1060,7 +1187,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let running: Vec<(Ticket, AgentName, Option<String>)> = (self.setup.jobs.iter())
             .filter(|(_, job)| !job.stopped)
             .filter_map(|(&ticket, job)| match &job.work {
-                Work::Install { folder } => Some((ticket, job.agent.clone(), Some(folder.clone()))),
+                Work::Install { folder, .. } => {
+                    Some((ticket, job.agent.clone(), Some(folder.clone())))
+                }
                 Work::SignIn { .. } => Some((ticket, job.agent.clone(), None)),
                 _ => None,
             })
@@ -1076,13 +1205,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
     }
 
-    /// The folder `agent` is installed in: its profile's name and its
-    /// recipe's version, such as `claude-agent-acp-0.98.0`. `None` if CAF
-    /// doesn't install it.
+    /// The folder `agent` is installed in: its profile's name and the
+    /// version its recipe installs, such as `claude-agent-acp-0.98.0`, or
+    /// `claude-agent-acp-0.98.0+caf.1` patched. `None` if CAF doesn't
+    /// install it.
     fn folder_of(&self, agent: &AgentName) -> Option<String> {
         let slug = self.slugs.get(agent)?;
         let recipe = self.recipes.get(agent)?;
-        let folder = format!("{slug}-{}", recipe.version);
+        let folder = format!("{slug}-{}", recipe.installed_version());
         is_folder_name(&folder).then_some(folder)
     }
 
@@ -1122,7 +1252,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         (self.setup.jobs.iter())
             .find(|(_, job)| {
                 !job.stopped
-                    && matches!(&job.work, Work::Install { folder: each } if each == folder)
+                    && matches!(&job.work, Work::Install { folder: each, .. } if each == folder)
             })
             .map(|(&ticket, _)| ticket)
     }
@@ -1272,17 +1402,46 @@ fn is_folder_name(name: &str) -> bool {
             .any(|c| c == '/' || c == '\\' || c.is_control())
 }
 
-/// Whether `folder` is an install of the profile `slug` at a version older
-/// than `pinned`: the slug and a version of three numbers, so that
-/// `claude-agent-acp-2-1.0.0` is no install of `claude-agent-acp`. A
-/// prerelease comes before its release.
-fn older(slug: &str, folder: &str, pinned: ([u64; 3], bool)) -> bool {
+/// Whether `folder` is an install of the profile `slug` older than the
+/// upstream version `pinned` patched at `level` (0 unpatched): the slug
+/// and a version of three numbers, so that `claude-agent-acp-2-1.0.0` is
+/// no install of `claude-agent-acp`. A prerelease comes before its
+/// release, and of the same upstream version, a lower patch level before
+/// a higher one. One patched some way CAF doesn't know is never older
+/// than its own upstream version.
+fn older(slug: &str, folder: &str, pinned: &str, level: u32) -> bool {
+    if let Some(earlier) = patch_level(slug, folder, pinned) {
+        return earlier < level;
+    }
     let rank = |(numbers, pre): ([u64; 3], bool)| (numbers, !pre);
+    let Some(pinned) = crate::profiles::version(pinned) else {
+        return false;
+    };
     folder
         .strip_prefix(slug)
         .and_then(|rest| rest.strip_prefix('-'))
         .and_then(crate::profiles::version)
         .is_some_and(|version| rank(version) < rank(pinned))
+}
+
+/// The patch level of `folder`, if it's an install of the profile `slug`
+/// at the upstream version `upstream`: 0 unpatched, as
+/// `claude-agent-acp-0.98.0`, and `N` as `claude-agent-acp-0.98.0+caf.N`.
+/// `None` for any other folder, one of another version or patched some
+/// other way included.
+fn patch_level(slug: &str, folder: &str, upstream: &str) -> Option<u32> {
+    let rest = folder
+        .strip_prefix(slug)?
+        .strip_prefix('-')?
+        .strip_prefix(upstream)?;
+    if rest.is_empty() {
+        return Some(0);
+    }
+    let level = rest.strip_prefix("+caf.")?;
+    if level.is_empty() || !level.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    level.parse().ok()
 }
 
 /// `path` as a path inside an install: `None` if it would leave it.
@@ -1372,8 +1531,7 @@ mod tests {
 
     #[test]
     fn an_older_install_is_its_profiles_name_and_an_older_version() {
-        let pinned = crate::profiles::version("0.98.0").expect("a version");
-        let older = |folder: &str| older("claude-agent-acp", folder, pinned);
+        let older = |folder: &str| older("claude-agent-acp", folder, "0.98.0", 0);
         assert!(older("claude-agent-acp-0.97.0"));
         assert!(older("claude-agent-acp-0.98.0-rc.1"));
         assert!(!older("claude-agent-acp-0.98.0"));
@@ -1383,6 +1541,30 @@ mod tests {
         assert!(!older("claude-agent-acp-private"));
         assert!(!older("claude-agent-acpx-0.1.0"));
         assert!(!older("claude-agent-acp"));
+        // Patched later, at any level, it's newer.
+        assert!(!older("claude-agent-acp-0.98.0+caf.1"));
+        assert!(older("claude-agent-acp-0.97.0+caf.3"));
+    }
+
+    #[test]
+    fn a_lower_patch_level_of_the_same_upstream_version_is_older() {
+        let older = |folder: &str| older("claude-agent-acp", folder, "0.98.0", 2);
+        assert!(older("claude-agent-acp-0.98.0"));
+        assert!(older("claude-agent-acp-0.98.0+caf.1"));
+        assert!(older("claude-agent-acp-0.98.0+caf.0"));
+        assert!(older("claude-agent-acp-0.97.0+caf.9"));
+        assert!(older("claude-agent-acp-0.98.0-rc.1+caf.5"));
+        assert!(!older("claude-agent-acp-0.98.0+caf.2"));
+        assert!(!older("claude-agent-acp-0.98.0+caf.3"));
+        assert!(!older("claude-agent-acp-0.99.0+caf.1"));
+        // Patched some way this CAF doesn't know: never.
+        assert!(!older("claude-agent-acp-0.98.0+caf.x"));
+        assert!(!older("claude-agent-acp-0.98.0+caf."));
+        assert!(!older("claude-agent-acp-0.98.0+caf.+1"));
+        assert!(!older("claude-agent-acp-0.98.0+caf.1.1"));
+        assert!(!older("claude-agent-acp-0.98.0+other.1"));
+        assert!(!older("claude-agent-acp-0.98.0.1"));
+        assert!(!older("claude-agent-acp-2-0.98.0+caf.1"));
     }
 
     #[test]

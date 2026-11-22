@@ -45,7 +45,7 @@ folder: string,
 install: Install, 
 /**
  * How to patch it once installed, as the last step: see
- * [`Patch`](crate::install::Patch).
+ * [`crate::install::Patch`].
  */
 patch: Patch | null, 
 /**

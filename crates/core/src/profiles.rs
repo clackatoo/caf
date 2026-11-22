@@ -1247,13 +1247,21 @@ pub(crate) mod tests {
         }
     }
 
+    thread_local! {
+        /// The patch the npm agent's recipe has, on this thread: none, but
+        /// in tests of patching, which set it before they make a core.
+        pub(crate) static NPM_PATCH: std::cell::RefCell<Option<crate::install::Patch>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
     /// The test agent installed with npm: it signs in through its adapter,
     /// whose link opens a browser, and says by itself whether it's signed
-    /// in. It has no status command, and takes no paste.
+    /// in. It has no status command, and takes no paste. It's patched as
+    /// [`NPM_PATCH`] says.
     pub(crate) fn npm_recipe() -> Recipe {
         Recipe {
             version: "2.0.0".to_owned(),
-            patch: None,
+            patch: NPM_PATCH.with_borrow(Clone::clone),
             install: Install::Npm(NpmPackage {
                 manifest: r#"{"dependencies":{"test-npm-acp":"2.0.0"}}"#.to_owned(),
                 lockfile: r#"{"name":"test","lockfileVersion":3,"packages":{}}"#.to_owned(),

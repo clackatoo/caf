@@ -447,6 +447,9 @@ pub(super) struct Setup {
     pub(super) fresh: BTreeSet<String>,
     /// Work the setup driver is doing, by ticket.
     pub(super) jobs: BTreeMap<Ticket, Job>,
+    /// Folders preparing failed for: they're installed as any other, and
+    /// never prepared again, so a failure can't repeat itself.
+    pub(super) unprepared: BTreeSet<String>,
 }
 
 /// Where one agent stands.
@@ -511,6 +514,9 @@ pub(super) enum Work {
     Install {
         /// The folder.
         folder: String,
+        /// The earlier patch level it's prepared from, with nothing
+        /// downloaded, if it is.
+        from: Option<String>,
     },
     /// Removing this folder.
     Remove {

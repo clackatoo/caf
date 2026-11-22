@@ -16,7 +16,7 @@ const ROOT: &str = "/caf/agents";
 
 /// The one directive in `out` with `key`, such as `"install"`.
 #[track_caller]
-fn one(out: &[Value], key: &str) -> Value {
+pub(super) fn one(out: &[Value], key: &str) -> Value {
     let found = with(out, key);
     assert_eq!(found.len(), 1, "one {key} in {out:#?}");
     found.into_iter().next().unwrap_or_default()
@@ -24,7 +24,7 @@ fn one(out: &[Value], key: &str) -> Value {
 
 /// The ticket of the one directive in `out` with `key`.
 #[track_caller]
-fn ticket_of(out: &[Value], key: &str) -> u64 {
+pub(super) fn ticket_of(out: &[Value], key: &str) -> u64 {
     one(out, key)[key].as_u64().expect("a ticket")
 }
 
@@ -59,7 +59,7 @@ impl Script {
 }
 
 /// What the npm agent's adapter answers `initialize` with.
-fn npm_init() -> Value {
+pub(super) fn npm_init() -> Value {
     json!({
         "protocolVersion": 1,
         "agentCapabilities": { "loadSession": true },
@@ -73,7 +73,7 @@ fn signed_in(how: &str) -> Value {
 }
 
 /// The notes in `chat`, in order.
-fn notes(chat: &Value) -> Vec<Value> {
+pub(super) fn notes(chat: &Value) -> Vec<Value> {
     (chat["turns"].as_array().into_iter().flatten())
         .filter(|turn| turn["starter"]["type"] == "Caf")
         .flat_map(|turn| turn["items"].as_array().cloned().unwrap_or_default())

@@ -1,0 +1,260 @@
+//! Patched adapters: a new patch level made from an earlier one on the
+//! disk, with nothing downloaded and nobody asked, an install as any other
+//! when it can't be, and earlier levels removed as older versions are.
+
+use serde_json::{Value, json};
+
+use super::harness::{EPOCH, Script, assert_has, host, sent, with};
+use super::setup::{found, notes, npm_init, one, ticket_of};
+use crate::agent::InstallFailure;
+use crate::core::OpenChat;
+use crate::event::SetupEvent;
+use crate::install::Patch;
+use crate::profiles::tests::NPM_PATCH;
+use crate::time::Wall;
+
+/// A day, in milliseconds.
+const DAY: i64 = 24 * 60 * 60 * 1000;
+
+/// The npm agent's recipe patched at a level, on this thread, until it's
+/// dropped. Made before the script, so the script's replay, as it's
+/// dropped, sees it too.
+struct Patched;
+
+impl Patched {
+    fn at(level: u32) -> Self {
+        NPM_PATCH.set(Some(Patch::new(level, Vec::new())));
+        Self
+    }
+}
+
+impl Drop for Patched {
+    fn drop(&mut self) {
+        NPM_PATCH.set(None);
+    }
+}
+
+impl Script {
+    /// Checks what's installed, and the survey finds `installed`, each
+    /// last used `used`. Returns what the answer gave out.
+    fn found(&mut self, installed: &[&str], used: Wall) -> Vec<Value> {
+        let out = self.check_agents();
+        let SetupEvent::Surveyed {
+            root,
+            node,
+            npm,
+            platform,
+            ..
+        } = found(&[])
+        else {
+            unreachable!()
+        };
+        self.setup(
+            ticket_of(&out, "survey"),
+            SetupEvent::Surveyed {
+                root,
+                installed: installed.iter().map(|&each| each.to_owned()).collect(),
+                node,
+                npm,
+                platform,
+                used: (installed.iter())
+                    .map(|&each| (each.to_owned(), used))
+                    .collect(),
+            },
+        )
+    }
+}
+
+/// The npm agent's install state, as JSON.
+fn installing() -> Value {
+    json!({ "type": "Installing", "value": { "done": 0, "size": 40_000_000 } })
+}
+
+/// The npm agent's install state, not installed.
+fn missing() -> Value {
+    json!({ "type": "Missing", "value": { "size": 40_000_000 } })
+}
+
+#[test]
+fn a_new_patch_level_is_prepared_from_an_earlier_one_with_nobody_asked() {
+    let _patched = Patched::at(2);
+    let mut script = Script::new(host());
+    let out = script.found(
+        &[
+            "test-npm-1.9.0+caf.4",
+            "test-npm-2.0.0",
+            "test-npm-2.0.0+caf.1",
+            // Another program's later level, and a patch this CAF doesn't
+            // know: never prepared from.
+            "test-npm-2.0.0+caf.3",
+            "test-npm-2.0.0+caf.x",
+        ],
+        Wall(EPOCH),
+    );
+    assert!(with(&out, "install").is_empty(), "{out:#?}");
+    let prepare = one(&out, "prepare");
+    assert_eq!(
+        prepare,
+        json!({ "prepare": prepare["prepare"], "folder": "test-npm-2.0.0+caf.2", "from": "test-npm-2.0.0+caf.1", "level": 2 })
+    );
+    let prepare = prepare["prepare"].as_u64().expect("a ticket");
+    // Every agent of its profile, shown installing, with nothing asked.
+    for agent in ["npm-agent", "npm-twin"] {
+        assert_eq!(script.agent_status(agent)["install"], installing());
+    }
+    let (chat, out) = script.open(OpenChat::new("npm-agent", "/work"));
+    let chat = chat.expect("opened");
+    assert!(with(&out, "start").is_empty());
+    assert_has(
+        &script.chat(chat),
+        &json!({ "state": { "type": "WaitingForAgent" } }),
+    );
+    // A host installing it meanwhile adds nothing.
+    let (done, out) = script.install("npm-twin");
+    assert_eq!(done, Ok(()));
+    assert!(out.is_empty(), "{out:#?}");
+    let out = script.setup(prepare, SetupEvent::Installed);
+    for agent in ["npm-agent", "npm-twin"] {
+        assert_eq!(
+            script.agent_status(agent)["install"],
+            json!({ "type": "Installed", "value": { "version": "2.0.0+caf.2" } })
+        );
+    }
+    // The chat starts from the new level.
+    let start = one(&out, "start");
+    assert_eq!(start["hold"], "/caf/agents/test-npm-2.0.0+caf.2");
+    assert_eq!(
+        start["program"],
+        "/caf/agents/test-npm-2.0.0+caf.2/node_modules/.bin/test-npm-acp"
+    );
+    sent(&out, "initialize");
+}
+
+#[test]
+fn an_installed_patch_level_is_never_prepared() {
+    let _patched = Patched::at(2);
+    let mut script = Script::new(host());
+    let out = script.found(
+        &["test-npm-2.0.0+caf.1", "test-npm-2.0.0+caf.2"],
+        Wall(EPOCH),
+    );
+    assert!(with(&out, "prepare").is_empty(), "{out:#?}");
+    assert_eq!(
+        script.agent_status("npm-agent")["install"],
+        json!({ "type": "Installed", "value": { "version": "2.0.0+caf.2" } })
+    );
+}
+
+#[test]
+fn a_patch_level_with_no_earlier_one_of_its_upstream_version_is_missing() {
+    let _patched = Patched::at(1);
+    let mut script = Script::new(host());
+    let out = script.found(
+        &["test-npm-1.9.0+caf.1", "test-npm-2.0.0+caf.2"],
+        Wall(EPOCH),
+    );
+    assert!(with(&out, "prepare").is_empty(), "{out:#?}");
+    assert_eq!(script.agent_status("npm-agent")["install"], missing());
+}
+
+#[test]
+fn a_patch_level_that_cant_be_prepared_is_installed_as_any_other_once_asked() {
+    for failed in [
+        SetupEvent::InstallFailed(InstallFailure::Patch(
+            "node_modules/test-npm-acp/dist/agent.js isn't the file this patch was written for"
+                .into(),
+        )),
+        SetupEvent::Failed("the work panicked".into()),
+    ] {
+        let _patched = Patched::at(2);
+        let mut script = Script::new(host());
+        let out = script.found(&["test-npm-2.0.0+caf.1"], Wall(EPOCH));
+        let prepare = ticket_of(&out, "prepare");
+        let chat = (script.open(OpenChat::new("npm-agent", "/work")).0).expect("opened");
+        let turn = script.send(chat, "hello").0.expect("sent");
+        let out = script.setup(prepare, failed);
+        assert_eq!(with(&out, "report")[0]["report"], "Warn");
+        for agent in ["npm-agent", "npm-twin"] {
+            assert_eq!(script.agent_status(agent)["install"], missing());
+        }
+        // Its message waits on, for the host to ask the user.
+        let whole = script.chat(chat);
+        assert_has(
+            &whole,
+            &json!({ "state": { "type": "WaitingForAgent" }, "turns": [{ "id": turn.0, "life": { "type": "Waiting" } }] }),
+        );
+        assert!(notes(&whole).is_empty(), "{:?}", notes(&whole));
+        // Never prepared again: a survey finds it missing.
+        let out = script.found(&["test-npm-2.0.0+caf.1"], Wall(EPOCH));
+        assert!(with(&out, "prepare").is_empty(), "{out:#?}");
+        assert_eq!(script.agent_status("npm-agent")["install"], missing());
+        // Installed when asked, downloaded as any other.
+        let out = script.install("npm-agent").1;
+        assert!(with(&out, "prepare").is_empty(), "{out:#?}");
+        let install = one(&out, "install");
+        assert_eq!(install["folder"], "test-npm-2.0.0+caf.2");
+        let out = script.setup(
+            install["install"].as_u64().expect("a ticket"),
+            SetupEvent::Installed,
+        );
+        one(&out, "start");
+    }
+}
+
+#[test]
+fn a_patch_level_whose_preparing_was_stopped_is_prepared_when_installed() {
+    let _patched = Patched::at(2);
+    let mut script = Script::new(host());
+    let prepare = ticket_of(
+        &script.found(&["test-npm-2.0.0+caf.1"], Wall(EPOCH)),
+        "prepare",
+    );
+    let (done, out) = script.stop_install("npm-agent");
+    assert_eq!(done, Ok(()));
+    assert_eq!(ticket_of(&out, "stop"), prepare);
+    assert_eq!(script.agent_status("npm-agent")["install"], missing());
+    script.setup(prepare, SetupEvent::InstallFailed(InstallFailure::Stopped));
+    assert_eq!(script.agent_status("npm-agent")["install"], missing());
+    // Installing it prepares it again: still nothing to download.
+    let out = script.install("npm-agent").1;
+    assert!(with(&out, "install").is_empty(), "{out:#?}");
+    assert_eq!(one(&out, "prepare")["from"], "test-npm-2.0.0+caf.1");
+    assert_eq!(script.agent_status("npm-agent")["install"], installing());
+}
+
+#[test]
+fn earlier_patch_levels_are_removed_as_older_versions_are() {
+    let _patched = Patched::at(2);
+    let mut script = Script::new(host());
+    script.found(
+        &[
+            "test-npm-1.9.0+caf.7",
+            "test-npm-2.0.0",
+            "test-npm-2.0.0+caf.1",
+            "test-npm-2.0.0+caf.2",
+            // Another program's later level, and a patch this CAF doesn't
+            // know: never older.
+            "test-npm-2.0.0+caf.3",
+            "test-npm-2.0.0+caf.x",
+            "test-npm-2.1.0",
+        ],
+        Wall(EPOCH - 30 * DAY),
+    );
+    let (chat, out) = script.open(OpenChat::new("npm-agent", "/work"));
+    chat.expect("opened");
+    let proc = one(&out, "start")["start"].as_u64().expect("a process");
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let out = script.answers(proc, init, &npm_init());
+    let mut removed: Vec<Value> = (with(&out, "remove").into_iter())
+        .map(|each| each["folder"].clone())
+        .collect();
+    removed.sort_by_key(ToString::to_string);
+    assert_eq!(
+        removed,
+        [
+            "test-npm-1.9.0+caf.7",
+            "test-npm-2.0.0",
+            "test-npm-2.0.0+caf.1"
+        ]
+    );
+}

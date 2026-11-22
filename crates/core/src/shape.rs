@@ -468,8 +468,6 @@ fn adapter(args: &[&str]) -> Bundled {
     }
 }
 
-/// A recipe with one of everything: an npm install, a sign-in, a sign-out
-/// and a status command.
 /// A patch of one file, by two edits.
 fn patch() -> Patch {
     Patch::new(
@@ -492,6 +490,8 @@ fn patch() -> Patch {
     )
 }
 
+/// A recipe with one of everything: an npm install, a patch, a sign-in, a
+/// sign-out and a status command.
 fn recipe() -> Recipe {
     Recipe {
         version: "1.2.3".into(),

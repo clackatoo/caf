@@ -14,14 +14,17 @@
 //! Each agent's adapter is installed at the version its profile was checked
 //! at, in a folder of its own, named after its profile, never after what a
 //! host calls the agent: `<profile>-<version>`, such as
-//! `claude-agent-acp-0.98.0`. They live under one folder every
+//! `claude-agent-acp-0.98.0`, or, patched ([`Patch`]),
+//! `claude-agent-acp-0.98.0+caf.1`. They live under one folder every
 //! CAF program on the machine shares: `$XDG_DATA_HOME/caf/agents/` (by
 //! default `~/.local/share/caf/agents/`), so every CAF program that offers
 //! an agent shares one install of it. A version stays while any process
 //! runs from it, in any CAF program. One older than the version a program
 //! pins is removed once that pinned version has started, and only once no
 //! process has started from it for 14 days, so two programs pinning
-//! different versions don't remove each other's.
+//! different versions don't remove each other's. A lower patch level of
+//! the pinned upstream version counts as older; a higher one, or one
+//! patched some way CAF doesn't know, never does.
 
 use std::path::PathBuf;
 
