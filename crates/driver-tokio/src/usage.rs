@@ -46,8 +46,17 @@
 //! Account limits are kept on the ledger's thread too
 //! ([`caf_usage::limits`]): read as it starts, after the prices, and
 //! reported, for the core; each save merged with the file, the merged
-//! limits reported if the file had news. A save that fails is reported,
-//! and not tried again: the next has news as fresh.
+//! limits reported if the file had news. Each profile's latest limits not
+//! yet kept, those given since merged in, are saved before the thread
+//! does anything else, so saves given one after another are one. Those
+//! that fail are kept, and tried again with the next save, at the hourly
+//! look and as the thread ends; the first failure in a row is reported to
+//! the log's warnings. One whose save panics is dropped, as the next has
+//! news as fresh. Once another program's lock on them is given up on,
+//! nothing is tried for [`LOCK_COOLDOWN`], as for lines, so nothing else
+//! waits behind them, and what's not kept as the thread ends is reported
+//! lost. With the thread stuck, the limits kept come when it isn't: the
+//! core has those it hears meanwhile.
 //!
 //! With no ledger, the prices are the bundled snapshot's, and lines and
 //! limits are dropped.
@@ -61,7 +70,7 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
-use caf_core::limits::ProfileLimits;
+use caf_core::limits::{AccountLimits, ProfileLimits};
 use caf_core::time::Wall;
 use caf_core::usage::{LedgerLine, ModelPrice, PriceTable};
 use caf_usage::{Ledger, prices};
@@ -110,6 +119,9 @@ pub(crate) enum Report {
     /// changed, so each is answered once the core has them. Or they
     /// weren't in time, and the core's are as good as it gets.
     Reloaded(Vec<oneshot::Sender<crate::caf::Priced>>),
+    /// Account limits kept: every profile's, as the thread starts, or
+    /// one's a save found news in.
+    Limits(Vec<ProfileLimits>),
 }
 
 /// What the ledger's thread tells the driver.
@@ -141,6 +153,7 @@ enum Work {
     /// The prices may have changed on disk: read them again, and say so if
     /// asked to, with this number. Every hour, also try the lines kept.
     Reload(Option<u64>),
+    SaveLimits(Box<ProfileLimits>),
 }
 
 /// How the driver runs: what's not the defaults is for tests.
@@ -155,6 +168,8 @@ pub(crate) struct Options {
     pub(crate) cooldown: Duration,
     /// For tests: the ledger's thread is stuck until this is dropped.
     pub(crate) stuck: Option<std::sync::mpsc::Receiver<()>>,
+    /// [`caf_usage::limits::save`], but in tests.
+    pub(crate) save_limits: Saver,
 }
 
 impl Default for Options {
@@ -165,6 +180,7 @@ impl Default for Options {
             finish_within: FINISH_WITHIN,
             cooldown: LOCK_COOLDOWN,
             stuck: None,
+            save_limits: caf_usage::limits::save,
         }
     }
 }
@@ -253,13 +269,21 @@ impl UsageDriver {
         let counting = Arc::clone(&unwritten);
         let stuck = options.stuck;
         let cooldown = options.cooldown;
+        let limits = Limits::new(options.cooldown, options.save_limits);
         let thread = std::thread::Builder::new()
             .name("caf-usage".into())
             .spawn(move || {
                 if let Some(stuck) = stuck {
                     let _ = stuck.recv();
                 }
-                keep(ledger.as_ref(), &inbox, &telling, &counting, cooldown);
+                keep(
+                    ledger.as_ref(),
+                    &inbox,
+                    &telling,
+                    &counting,
+                    cooldown,
+                    limits,
+                );
             })
             .expect("a thread for the usage ledger");
         let keeping = Arc::new(Mutex::new(true));
@@ -307,15 +331,12 @@ impl UsageDriver {
     /// Keeps a profile's account limits beside the ledger, merged with
     /// what's there, or drops them with none. If what was kept had news,
     /// the merged limits are reported, for the core
-    /// ([`Event::Limits`](caf_core::Event::Limits)). Not tried again: the
-    /// next save has news as fresh.
-    #[allow(
-        clippy::boxed_local,
-        reason = "drafted: the builder sends it on to the thread"
-    )]
+    /// ([`Event::Limits`](caf_core::Event::Limits)). If they can't be
+    /// kept, they're tried again, with the next.
     pub(crate) fn save_limits(&mut self, limits: Box<ProfileLimits>) {
-        let _ = limits;
-        todo!()
+        if self.folder.is_some() {
+            self.send(Work::SaveLimits(limits));
+        }
     }
 
     /// Writes a turn's line to the ledger, or drops it with none.
@@ -530,6 +551,7 @@ fn keep(
     tell: &mpsc::UnboundedSender<Told>,
     unwritten: &AtomicUsize,
     cooldown: Duration,
+    mut limits: Limits,
 ) {
     // Once the task has gone, nobody needs a report.
     let report = |report: Report| {
@@ -544,8 +566,22 @@ fn keep(
             report(Report::Prices(now));
         }
     };
+    if let Some(ledger) = ledger {
+        load_limits(ledger, &report);
+    }
     let mut kept = Kept::new(unwritten, cooldown);
-    while let Ok(work) = inbox.recv() {
+    let mut next = inbox.recv().ok();
+    while let Some(work) = next.take() {
+        // Limits given are saved before anything else is done, so those
+        // given one after another are one save.
+        let mut tried = false;
+        if limits.given
+            && !matches!(work, Work::SaveLimits(_))
+            && let Some(ledger) = ledger
+        {
+            limits.try_saving(ledger, &report);
+            tried = true;
+        }
         match work {
             Work::Record(line) => {
                 if let Some(ledger) = ledger {
@@ -553,23 +589,22 @@ fn keep(
                     kept.try_writing(ledger);
                 }
             }
+            // Never given without one.
             Work::SetPrice { set, model, price } => {
-                // Never given without one.
-                let Some(ledger) = ledger else {
-                    continue;
-                };
-                let written = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    prices::set_own(ledger.folder(), &model, price)
-                }));
-                let result = match written {
-                    Ok(Ok(())) => Ok(()),
-                    Ok(Err(error)) => Err(error.to_string()),
-                    Err(_) => Err("setting it panicked".to_owned()),
-                };
-                if result.is_ok() {
-                    give(read_prices(Some(ledger)));
+                if let Some(ledger) = ledger {
+                    let written = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        prices::set_own(ledger.folder(), &model, price)
+                    }));
+                    let result = match written {
+                        Ok(Ok(())) => Ok(()),
+                        Ok(Err(error)) => Err(error.to_string()),
+                        Err(_) => Err("setting it panicked".to_owned()),
+                    };
+                    if result.is_ok() {
+                        give(read_prices(Some(ledger)));
+                    }
+                    let _ = tell.send(Told::PriceSet { set, result });
                 }
-                let _ = tell.send(Told::PriceSet { set, result });
             }
             Work::Reload(asked) => {
                 if let Some(ledger) = ledger {
@@ -578,13 +613,31 @@ fn keep(
                         kept.cooling = None;
                         kept.try_writing(ledger);
                     }
+                    // Not again if they were just now.
+                    if asked.is_none() && !tried {
+                        limits.try_saving(ledger, &report);
+                    }
                     give(read_prices(Some(ledger)));
                 }
                 if let Some(asked) = asked {
                     let _ = tell.send(Told::Reloaded(asked));
                 }
             }
+            Work::SaveLimits(given) => limits.give(*given),
         }
+        next = match inbox.try_recv() {
+            Ok(work) => Some(work),
+            // Or once there's nothing else to do.
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                if limits.given
+                    && let Some(ledger) = ledger
+                {
+                    limits.try_saving(ledger, &report);
+                }
+                inbox.recv().ok()
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+        };
     }
     // Once, whatever the lock did.
     if let Some(ledger) = ledger
@@ -597,6 +650,173 @@ fn keep(
             ledger.folder().display()
         );
         kept.lose_all();
+    }
+    if let Some(ledger) = ledger {
+        limits.finish(ledger, &report);
+    }
+}
+
+/// Reads the account limits kept, and reports them if there are any. A
+/// file that can't be read is reported to the log, and left out: its
+/// limits are heard again as agents say them. Reading them is never let
+/// panic the thread.
+fn load_limits(ledger: &Ledger, report: &impl Fn(Report)) {
+    let read = std::panic::catch_unwind(|| caf_usage::limits::load(ledger.folder(), wall_now()));
+    let Ok((kept, errors)) = read else {
+        log::warn!(target: "caf", "reading the account limits kept panicked: they're heard again as agents say them");
+        return;
+    };
+    for error in errors {
+        log::warn!(
+            target: "caf",
+            "account limits kept beside the usage ledger in {} can't be read: {error}. They're heard again as agents say them",
+            ledger.folder().display()
+        );
+    }
+    if !kept.is_empty() {
+        report(Report::Limits(kept));
+    }
+}
+
+/// Saves a profile's account limits: [`caf_usage::limits::save`].
+type Saver = fn(&std::path::Path, &ProfileLimits, Wall) -> std::io::Result<Option<AccountLimits>>;
+
+/// Keeps account limits beside the ledger: each profile's latest not yet
+/// kept, tried with the next save, at the hourly look and as the thread
+/// ends.
+struct Limits {
+    /// Each profile's limits not yet kept, all those given merged.
+    unsaved: Vec<ProfileLimits>,
+    /// Limits were given since they were last tried.
+    given: bool,
+    /// The last save failed, and that was reported.
+    failing: bool,
+    /// Another program's lock was given up on: nothing is tried until
+    /// then.
+    cooling: Option<Instant>,
+    /// [`LOCK_COOLDOWN`].
+    cooldown: Duration,
+    /// [`caf_usage::limits::save`], but in tests.
+    save: Saver,
+}
+
+impl Limits {
+    fn new(cooldown: Duration, save: Saver) -> Self {
+        Self {
+            unsaved: Vec::new(),
+            given: false,
+            failing: false,
+            cooling: None,
+            cooldown,
+            save,
+        }
+    }
+
+    /// Takes in a profile's limits to keep, merged with any of its not
+    /// yet kept: so several given at once are one save, with the latest
+    /// news of each.
+    fn give(&mut self, limits: ProfileLimits) {
+        let unsaved = self.unsaved.iter_mut();
+        match unsaved
+            .into_iter()
+            .find(|unsaved| unsaved.profile == limits.profile)
+        {
+            Some(unsaved) => {
+                unsaved.limits.merge(&limits.limits);
+            }
+            None => self.unsaved.push(limits),
+        }
+        self.given = true;
+    }
+
+    /// Merges each profile's limits not yet kept into what's kept,
+    /// reporting the merged limits if what was kept had news; unless
+    /// another program's lock was given up on less than the cooldown ago.
+    /// Those that fail are kept, to be tried again, and the first failure
+    /// in a row is reported to the log's warnings; those whose save
+    /// panics are dropped, as the next has news as fresh.
+    fn try_saving(&mut self, ledger: &Ledger, report: &impl Fn(Report)) {
+        self.given = false;
+        if self.unsaved.is_empty() || self.cooling.is_some_and(|until| Instant::now() < until) {
+            return;
+        }
+        self.cooling = None;
+        let folder = ledger.folder();
+        let mut at = 0;
+        while let Some(limits) = self.unsaved.get(at) {
+            let save = self.save;
+            let saved = std::panic::catch_unwind(|| save(folder, limits, wall_now()));
+            match saved {
+                Ok(Ok(merged)) => {
+                    let limits = self.unsaved.remove(at);
+                    if self.failing {
+                        log::info!(target: "caf", "account limits are kept beside the usage ledger in {} again", folder.display());
+                    }
+                    self.failing = false;
+                    if let Some(merged) = merged {
+                        report(Report::Limits(vec![ProfileLimits::new(
+                            limits.profile,
+                            merged,
+                        )]));
+                    }
+                }
+                Ok(Err(error)) => {
+                    let timed_out = error.kind() == std::io::ErrorKind::TimedOut;
+                    let again = if timed_out {
+                        format!(
+                            "not tried again for {} s, then with the next save, every hour and as CAF shuts down",
+                            self.cooldown.as_secs()
+                        )
+                    } else {
+                        "tried again with the next save, every hour and as CAF shuts down"
+                            .to_owned()
+                    };
+                    self.failed(&format!(
+                        "account limits can't be kept beside the usage ledger in {}: {error}. They're kept while CAF runs, and {again}",
+                        folder.display()
+                    ));
+                    if timed_out {
+                        // Every other profile's would wait as long.
+                        self.cooling = Some(Instant::now() + self.cooldown);
+                        return;
+                    }
+                    at += 1;
+                }
+                Err(_) => {
+                    self.unsaved.remove(at);
+                    self.failed(&format!(
+                        "keeping account limits beside the usage ledger in {} panicked: they're dropped, and saved again as they change",
+                        folder.display()
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Reports a failure: the first in a row as a warning, as limits are
+    /// saved with every change.
+    fn failed(&mut self, why: &str) {
+        let level = if self.failing {
+            log::Level::Debug
+        } else {
+            log::Level::Warn
+        };
+        log::log!(target: "caf", level, "{why}");
+        self.failing = true;
+    }
+
+    /// As the thread ends: tries what's not yet kept once more, unless
+    /// cooling, and reports what's lost.
+    fn finish(&mut self, ledger: &Ledger, report: &impl Fn(Report)) {
+        self.try_saving(ledger, report);
+        if !self.unsaved.is_empty() {
+            log::warn!(
+                target: "caf",
+                "{} profiles' account limits couldn't be kept beside the usage ledger in {} as CAF stopped: they're heard again as agents say them",
+                self.unsaved.len(),
+                ledger.folder().display()
+            );
+        }
     }
 }
 

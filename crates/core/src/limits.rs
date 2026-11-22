@@ -17,9 +17,13 @@
 //!
 //! `overage` is never a window: it says whether extra usage is in use
 //! ([`AccountLimits::extra_usage`]), as `isUsingOverage` does. A window
-//! with no share that reads is skipped; a share is kept to 0–100% and
-//! rounded, and a reset only between 2020 and 2100. Agents whose profile
-//! says nothing of limits have none.
+//! with no share that reads is skipped, unless refused; a share is kept
+//! to 0–100% and rounded, and a reset only between 2020 and 2100. A
+//! status CAF doesn't know reads as fine, and a window whose name isn't
+//! plain (letters, digits, `_`, `-` and `.`, 64 bytes at most) is
+//! skipped. Limits are heard only from what an agent says as it works,
+//! never from a session's history replayed, and a window already reset is
+//! no news. Agents whose profile says nothing of limits have none.
 //!
 //! Claude's adapter passes a report on only once the turn has had some of
 //! the agent's reply, so a new Claude process's first one may be lost.
@@ -72,6 +76,7 @@
 //! 3. **Refused is always 100% used.**
 //! 4. **Limits never stop a message being sent.**
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -174,12 +179,41 @@ pub struct ProfileLimits {
     pub limits: AccountLimits,
 }
 
+impl ProfileLimits {
+    /// `profile`'s account's limits.
+    #[must_use]
+    pub fn new(profile: Builtin, limits: AccountLimits) -> Self {
+        Self { profile, limits }
+    }
+}
+
+/// Five hours.
+const FIVE_HOURS: Duration = Duration::from_secs(5 * 60 * 60);
+
+/// A week.
+const WEEK: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 impl WindowKind {
     /// How long the window is: five hours, or a week; `None` for
     /// [`Other`](WindowKind::Other).
     #[must_use]
     pub fn length(&self) -> Option<Duration> {
-        todo!()
+        match self {
+            Self::FiveHours => Some(FIVE_HOURS),
+            Self::Week | Self::ModelWeek(_) | Self::ExtraWeek => Some(WEEK),
+            Self::Other(_) => None,
+        }
+    }
+}
+
+impl LimitState {
+    /// How bad it is, for telling two windows heard at once apart.
+    fn rank(self) -> u8 {
+        match self {
+            Self::Fine => 0,
+            Self::Warning => 1,
+            Self::Refused => 2,
+        }
     }
 }
 
@@ -189,8 +223,26 @@ impl LimitWindow {
     /// pace. `None` with no reset or no [length](WindowKind::length).
     #[must_use]
     pub fn pace(&self, now: Wall) -> Option<u8> {
-        let _ = now;
-        todo!()
+        let length = i128::try_from(self.kind.length()?.as_millis()).ok()?;
+        let resets = i128::from(self.resets?.0);
+        let gone = i128::from(now.0) - (resets - length);
+        // Rounded half up, as JavaScript's `Math.round` does: the SDKs'
+        // pace is the same to the percent.
+        let pace = if gone <= 0 {
+            0
+        } else if gone >= length {
+            100
+        } else {
+            (200 * gone + length) / (2 * length)
+        };
+        u8::try_from(pace).ok()
+    }
+
+    /// What tells two of a kind apart, the later or more cautious
+    /// greater: when it was heard, then how much is used, how bad its
+    /// state is, and when it resets.
+    fn rank(&self) -> (Wall, u8, u8, Option<Wall>) {
+        (self.heard, self.used, self.state.rank(), self.resets)
     }
 }
 
@@ -198,8 +250,7 @@ impl AccountLimits {
     /// The window of this kind, if any.
     #[must_use]
     pub fn window(&self, kind: &WindowKind) -> Option<&LimitWindow> {
-        let _ = kind;
-        todo!()
+        self.windows.iter().find(|window| &window.kind == kind)
     }
 
     /// Take in `news`: each of its windows replaces this one's of its
@@ -213,21 +264,56 @@ impl AccountLimits {
     /// extra usage in use wins over not. So it's the same in any order:
     /// `a.merge(b)` and `b.merge(a)` end alike.
     pub fn merge(&mut self, news: &AccountLimits) -> bool {
-        let _ = news;
-        todo!()
+        // Both sides are taken as they come, each window against every
+        // other of its kind, so limits read from anywhere, unsorted or
+        // with two of a kind, end the same whichever side they're on. A
+        // refused window is all used, whoever wrote it.
+        let mut windows: BTreeMap<WindowKind, LimitWindow> = BTreeMap::new();
+        for window in self.windows.iter().chain(&news.windows) {
+            let mut window = window.clone();
+            if window.state == LimitState::Refused {
+                window.used = 100;
+            }
+            match windows.get(&window.kind) {
+                Some(kept) if kept.rank() >= window.rank() => {}
+                _ => {
+                    windows.insert(window.kind.clone(), window);
+                }
+            }
+        }
+        let cleared = self.cleared.max(news.cleared);
+        let fresh = |heard: Wall| cleared.is_none_or(|cleared| heard >= cleared);
+        let windows: Vec<LimitWindow> = (windows.into_values())
+            .filter(|window| fresh(window.heard))
+            .collect();
+        let extra_usage = (self.extra_usage.into_iter().chain(news.extra_usage))
+            .max_by_key(|extra| (extra.heard, extra.in_use))
+            .filter(|extra| fresh(extra.heard));
+        let merged = AccountLimits {
+            windows,
+            extra_usage,
+            cleared,
+        };
+        let changed = *self != merged;
+        *self = merged;
+        changed
     }
 
     /// Drop every window whose reset is at or before `now`. Whether any
     /// was.
     pub fn forget_passed(&mut self, now: Wall) -> bool {
-        let _ = now;
-        todo!()
+        let before = self.windows.len();
+        (self.windows).retain(|window| window.resets.is_none_or(|resets| resets > now));
+        self.windows.len() != before
     }
 
     /// The earliest reset of any window: when the core next has one to
     /// forget.
     #[must_use]
     pub fn next_reset(&self) -> Option<Wall> {
-        todo!()
+        self.windows.iter().filter_map(|window| window.resets).min()
     }
 }
+
+#[cfg(test)]
+mod tests;

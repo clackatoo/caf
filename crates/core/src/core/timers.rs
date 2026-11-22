@@ -44,6 +44,8 @@ enum Due {
     Save(ChatId),
     /// A chat put away is due to be written again, after a write failed.
     Away(ChatId),
+    /// An account's limits have a window to forget, as it reset.
+    Limits,
 }
 
 impl<A: AppItem, D: AppData> Core<A, D> {
@@ -91,6 +93,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .filter_map(|&chat| Some((self.save_at(chat)?, Due::Save(chat))));
         let away = (self.saving.away.keys())
             .filter_map(|&chat| Some((self.away_at(chat)?, Due::Away(chat))));
+        let limits = self.limits.wake.map(|at| (at, Due::Limits));
         procs
             .chain(requests)
             .chain(stops)
@@ -99,6 +102,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .chain(sign_ins)
             .chain(saves)
             .chain(away)
+            .chain(limits)
     }
 
     /// The timer driver woke the core: whatever is due is done.
@@ -135,6 +139,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Due::SignIn(ticket) => self.sign_in_overdue(ticket, out),
             Due::Save(chat) => self.write(now, chat, out),
             Due::Away(chat) => self.write_away(chat, out),
+            Due::Limits => self.limits_woken(now),
             Due::Held(chat) => {
                 if let Some(run) = self.runs.get_mut(&chat) {
                     run.held_by = None;

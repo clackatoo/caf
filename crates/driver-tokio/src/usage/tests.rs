@@ -705,3 +705,382 @@ async fn a_reading_asked_for_while_one_is_under_way_waits_for_another_after_it()
     assert!(more.is_err(), "and no more");
     driver.finish().await;
 }
+
+/// Claude's limits: its five hours `used`, heard `ago` ms before now,
+/// resetting in four hours.
+fn limits(used: u8, ago: i64) -> Box<ProfileLimits> {
+    let now = wall_now().0;
+    let limits = serde_json::json!({
+        "windows": [{
+            "kind": {"type": "FiveHours"},
+            "used": used,
+            "resets": now + 4 * 3_600_000,
+            "state": {"type": "Fine"},
+            "heard": now - ago,
+        }],
+        "extra_usage": null,
+        "cleared": null,
+    });
+    let limits = serde_json::from_value(limits).unwrap();
+    Box::new(ProfileLimits::new(
+        caf_core::profiles::Builtin::ClaudeAgentAcp,
+        limits,
+    ))
+}
+
+/// The limits kept in `folder`, now.
+fn kept(folder: &Path) -> Vec<ProfileLimits> {
+    let (kept, errors) = caf_usage::limits::load(folder, wall_now());
+    assert!(errors.is_empty(), "{errors:?}");
+    kept
+}
+
+/// That the driver says nothing more for a while.
+async fn quiet(driver: &mut UsageDriver) {
+    let more = tokio::time::timeout(Duration::from_millis(200), driver.next()).await;
+    assert!(more.is_err(), "nothing more: {:?}", more.map(|_| ()));
+}
+
+#[tokio::test]
+async fn with_no_ledger_limits_are_dropped() {
+    let mut driver = UsageDriver::start(None, "caf-test".into(), None, CHECK_EVERY);
+    assert_eq!(prices(&mut driver).await, prices::bundled());
+    driver.save_limits(limits(40, 1000));
+    quiet(&mut driver).await;
+    driver.finish().await;
+}
+
+#[tokio::test]
+async fn with_no_limits_kept_none_are_reported() {
+    let dir = Dir::new("limits-none");
+    let mut driver = UsageDriver::start(Some(dir.0.clone()), "caf-test".into(), None, CHECK_EVERY);
+    prices(&mut driver).await;
+    quiet(&mut driver).await;
+    driver.finish().await;
+}
+
+#[tokio::test]
+async fn the_limits_kept_are_reported_after_the_first_prices() {
+    let dir = Dir::new("limits-start");
+    caf_usage::limits::save(&dir.0, &limits(40, 1000), wall_now()).unwrap();
+    let mut driver = UsageDriver::start(Some(dir.0.clone()), "caf-test".into(), None, CHECK_EVERY);
+    prices(&mut driver).await;
+    match next(&mut driver).await {
+        Report::Limits(given) => assert_eq!(given, kept(&dir.0)),
+        _ => panic!("the limits kept"),
+    }
+    driver.finish().await;
+}
+
+#[tokio::test]
+async fn a_save_is_kept_and_news_another_app_kept_is_reported() {
+    let dir = Dir::new("limits-save");
+    let mut driver = UsageDriver::start(Some(dir.0.clone()), "caf-test".into(), None, CHECK_EVERY);
+    prices(&mut driver).await;
+    driver.save_limits(limits(40, 2000));
+    // Saved: nothing was news.
+    let started = std::time::Instant::now();
+    while kept(&dir.0).is_empty() {
+        assert!(started.elapsed() < PATIENCE, "it's kept");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    quiet(&mut driver).await;
+    // Another app hears later news, and a save of older news takes it in.
+    caf_usage::limits::save(&dir.0, &limits(60, 1000), wall_now()).unwrap();
+    driver.save_limits(limits(50, 1500));
+    let later = kept(&dir.0);
+    match next(&mut driver).await {
+        Report::Limits(given) => assert_eq!(given, later, "the later news"),
+        _ => panic!("the limits kept"),
+    }
+    assert_eq!(kept(&dir.0), later, "never undone");
+    driver.finish().await;
+}
+
+#[tokio::test]
+async fn with_the_thread_stuck_a_save_waits_and_a_reading_doesnt() {
+    let dir = Dir::new("stuck-limits");
+    let (mut driver, unstick) = stuck(&dir, Duration::from_millis(50));
+    let given = limits(40, 1000);
+    driver.save_limits(given.clone());
+    assert_eq!(
+        prices(&mut driver).await,
+        prices::bundled(),
+        "after a while"
+    );
+    let started = std::time::Instant::now();
+    driver.reload(oneshot::channel().0);
+    assert!(matches!(next(&mut driver).await, Report::Reloaded(_)));
+    assert!(started.elapsed() < PATIENCE, "answered without the thread");
+    drop(unstick);
+    prices(&mut driver).await;
+    driver.finish().await;
+    assert_eq!(kept(&dir.0), [*given], "saved once it isn't stuck");
+}
+
+#[tokio::test]
+async fn finishing_with_a_save_the_stuck_thread_hasnt_made_waits_only_so_long() {
+    let dir = Dir::new("stuck-limits-finish");
+    let (mut driver, unstick) = stuck(&dir, Duration::from_millis(50));
+    driver.save_limits(limits(40, 1000));
+    let finished = tokio::time::timeout(PATIENCE, driver.finish()).await;
+    assert!(finished.is_ok(), "it isn't waited for for ever");
+    drop(unstick);
+}
+
+#[tokio::test]
+async fn saves_queued_together_are_one_with_the_latest_news_of_each() {
+    let dir = Dir::new("limits-queued");
+    let (mut driver, unstick) = stuck(&dir, Duration::from_millis(50));
+    let latest = limits(40, 1000);
+    driver.save_limits(latest.clone());
+    // Older news, as the core never sends: kept apart, it'd be told.
+    driver.save_limits(limits(30, 2000));
+    assert_eq!(prices(&mut driver).await, prices::bundled());
+    drop(unstick);
+    prices(&mut driver).await;
+    quiet(&mut driver).await;
+    driver.finish().await;
+    assert_eq!(kept(&dir.0), [*latest]);
+}
+
+/// Holds the limits' lock in `dir`, as another program would, until the
+/// file is dropped.
+fn hold_limits_lock(dir: &Dir) -> std::fs::File {
+    let folder = dir.0.join("limits");
+    std::fs::create_dir_all(&folder).unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(folder.join(".lock"))
+        .unwrap();
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive).unwrap();
+    lock
+}
+
+/// A driver for the ledger in `dir`, an hour between looks, that tries
+/// nothing behind a lock given up on for `cooldown`.
+fn cooling_for(dir: &Dir, cooldown: Duration) -> UsageDriver {
+    let options = Options {
+        cooldown,
+        ..Options::default()
+    };
+    UsageDriver::launch(Some(dir.0.clone()), "caf-test".into(), None, options)
+}
+
+/// Sets no price, and says how long since `started` the ledger's thread
+/// answered: so how long the work before it took.
+async fn answered_since(driver: &mut UsageDriver, started: std::time::Instant) -> Duration {
+    answered_in(driver).await;
+    started.elapsed()
+}
+
+/// A profile's limits cleared `ago` ms before now, with no window.
+fn cleared(ago: i64) -> Box<ProfileLimits> {
+    let mut cleared = limits(0, 0);
+    cleared.limits.windows.clear();
+    cleared.limits.cleared = Some(Wall(wall_now().0 - ago));
+    cleared
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn once_a_lock_on_the_limits_is_given_up_on_saves_arent_tried_even_as_it_finishes() {
+    let dir = Dir::new("limits-lock-held");
+    let lock = hold_limits_lock(&dir);
+    let mut driver = cooling(&dir);
+    prices(&mut driver).await;
+    let started = std::time::Instant::now();
+    driver.save_limits(limits(40, 1000));
+    let first = answered_since(&mut driver, started).await;
+    assert!(
+        first >= Duration::from_secs(5),
+        "the lock is tried for five seconds: {first:?}"
+    );
+    for used in [50, 60, 70] {
+        driver.save_limits(limits(used, 1000));
+    }
+    let started = std::time::Instant::now();
+    driver.finish().await;
+    let took = started.elapsed();
+    assert!(took < Duration::from_secs(4), "not tried: {took:?}");
+    drop(lock);
+    assert!(kept(&dir.0).is_empty(), "never kept");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn once_the_cooldown_has_passed_the_latest_unsaved_are_saved_with_the_next() {
+    let dir = Dir::new("limits-cooled");
+    let cooldown = Duration::from_secs(3);
+    let lock = hold_limits_lock(&dir);
+    let mut driver = cooling_for(&dir, cooldown);
+    prices(&mut driver).await;
+    driver.save_limits(limits(40, 3000));
+    answered_in(&mut driver).await;
+    let clearing = cleared(2000);
+    driver.save_limits(clearing.clone());
+    let then = answered_in(&mut driver).await;
+    assert!(then < Duration::from_secs(2), "not tried: {then:?}");
+    drop(lock);
+    tokio::time::sleep(cooldown + Duration::from_millis(500)).await;
+    assert!(kept(&dir.0).is_empty(), "nothing tried meanwhile");
+    let news = limits(70, 1000);
+    driver.save_limits(news.clone());
+    answered_in(&mut driver).await;
+    let mut expected = clearing.limits.clone();
+    expected.merge(&news.limits);
+    let kept: Vec<_> = (kept(&dir.0).into_iter()).map(|kept| kept.limits).collect();
+    assert_eq!(kept, [expected], "both");
+    driver.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_clearing_saved_while_cooling_is_kept_as_it_finishes() {
+    let dir = Dir::new("limits-cooled-finish");
+    let cooldown = Duration::from_secs(3);
+    let lock = hold_limits_lock(&dir);
+    let mut driver = cooling_for(&dir, cooldown);
+    prices(&mut driver).await;
+    driver.save_limits(limits(40, 3000));
+    answered_in(&mut driver).await;
+    let clearing = cleared(2000);
+    driver.save_limits(clearing.clone());
+    answered_in(&mut driver).await;
+    drop(lock);
+    tokio::time::sleep(cooldown + Duration::from_millis(500)).await;
+    driver.finish().await;
+    assert_eq!(kept(&dir.0), [*clearing]);
+}
+
+#[tokio::test]
+async fn a_cleared_only_file_is_reported() {
+    let dir = Dir::new("limits-cleared-only");
+    let clearing = cleared(1000);
+    caf_usage::limits::save(&dir.0, &clearing, wall_now()).unwrap();
+    let mut driver = UsageDriver::start(Some(dir.0.clone()), "caf-test".into(), None, CHECK_EVERY);
+    prices(&mut driver).await;
+    match next(&mut driver).await {
+        Report::Limits(given) => assert_eq!(given, [*clearing]),
+        _ => panic!("the limits kept"),
+    }
+    driver.finish().await;
+}
+
+/// Every record logged while the tests run, by level: each test finds its
+/// own by its folder, which they name.
+static LOGGED: Mutex<Vec<(log::Level, String)>> = Mutex::new(Vec::new());
+
+/// Keeps what CAF logs, in [`LOGGED`].
+struct Logged;
+
+impl log::Log for Logged {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.target() == "caf" && metadata.level() <= log::Level::Debug
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let text = record.args().to_string();
+        let mut logged = LOGGED.lock().unwrap_or_else(PoisonError::into_inner);
+        logged.push((record.level(), text));
+    }
+
+    fn flush(&self) {}
+}
+
+/// What's been logged that names `folder`, once the logger's in place.
+fn logged(folder: &Path) -> Vec<(log::Level, String)> {
+    let folder = folder.display().to_string();
+    let logged = LOGGED.lock().unwrap_or_else(PoisonError::into_inner);
+    (logged.iter())
+        .filter(|(_, text)| text.contains(&folder))
+        .cloned()
+        .collect()
+}
+
+/// Puts [`Logged`] in place, if it isn't already.
+fn logging() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        log::set_logger(&Logged).expect("the tests' logger");
+        log::set_max_level(log::LevelFilter::Debug);
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lock_given_up_on_is_reported_as_cooling() {
+    logging();
+    let dir = Dir::new("limits-lock-said");
+    let lock = hold_limits_lock(&dir);
+    let mut driver = cooling(&dir);
+    prices(&mut driver).await;
+    driver.save_limits(limits(40, 1000));
+    answered_in(&mut driver).await;
+    drop(lock);
+    let said = logged(&dir.0);
+    let [(level, text)] = said.as_slice() else {
+        panic!("one report: {said:?}");
+    };
+    assert_eq!(*level, log::Level::Warn);
+    assert!(
+        text.contains("limits/.lock") && text.contains("not tried again for 60 s"),
+        "{text}"
+    );
+    driver.finish().await;
+}
+
+#[tokio::test]
+async fn a_save_that_panics_is_reported_once_in_a_row_and_dropped() {
+    logging();
+    let dir = Dir::new("limits-panics");
+    let options = Options {
+        save_limits: |_, _, _| panic!("a save that panics"),
+        ..Options::default()
+    };
+    let mut driver = UsageDriver::launch(Some(dir.0.clone()), "caf-test".into(), None, options);
+    prices(&mut driver).await;
+    for used in [40, 50] {
+        driver.save_limits(limits(used, 1000));
+        answered_in(&mut driver).await;
+    }
+    driver.finish().await;
+    let levels: Vec<log::Level> = logged(&dir.0).into_iter().map(|(level, _)| level).collect();
+    assert_eq!(
+        levels,
+        [log::Level::Warn, log::Level::Debug],
+        "a warning, then not again; nothing lost as it finishes"
+    );
+}
+
+#[test]
+fn a_failing_save_followed_by_the_hourly_look_is_tried_once_before_it() {
+    static TRIES: AtomicUsize = AtomicUsize::new(0);
+    let dir = Dir::new("limits-tried-once");
+    let ledger = Ledger::new(dir.0.clone(), "caf-test");
+    let (work, inbox) = std::sync::mpsc::channel();
+    let (tell, _told) = mpsc::unbounded_channel();
+    let save: Saver = |_, _, _| {
+        TRIES.fetch_add(1, Ordering::SeqCst);
+        Err(std::io::Error::other("it fails"))
+    };
+    work.send(Work::SaveLimits(limits(40, 1000))).unwrap();
+    work.send(Work::Reload(None)).unwrap();
+    drop(work);
+    let limits = Limits::new(LOCK_COOLDOWN, save);
+    keep(
+        Some(&ledger),
+        &inbox,
+        &tell,
+        &AtomicUsize::new(0),
+        LOCK_COOLDOWN,
+        limits,
+    );
+    assert_eq!(
+        TRIES.load(Ordering::SeqCst),
+        2,
+        "before the look, not again in it, and once as it ends"
+    );
+}

@@ -71,6 +71,9 @@ const FOLDER: &str = "prices";
 const OWN: &str = "own.json";
 /// LiteLLM's table, as last fetched.
 const FETCHED: &str = "litellm.json";
+/// The most a prices file may be, in bytes: past that, it's taken not to
+/// read. LiteLLM's whole table is about 1.5 MB, and what's kept of it less.
+const MOST: u64 = 32 << 20;
 /// The snapshot bundled with CAF.
 const BUNDLED: &str = include_str!("../prices/bundled.json");
 /// LiteLLM's example entry, which documents the fields: no model.
@@ -294,7 +297,7 @@ fn own(folder: &Path) -> Vec<(String, ModelPrice)> {
 
 /// The user's own prices file, as JSON: `None` if it isn't there.
 fn read_own(folder: &Path) -> io::Result<Option<Value>> {
-    let Some(bytes) = files::read(&folder.join(OWN))? else {
+    let Some(bytes) = files::read(&folder.join(OWN), MOST)? else {
         return Ok(None);
     };
     serde_json::from_slice(&bytes)
@@ -314,7 +317,7 @@ struct Kept<T> {
 /// LiteLLM's table as last fetched, and when: `None` if it isn't there or
 /// doesn't read.
 fn fetched(folder: &Path) -> Option<(Wall, Vec<(String, ModelPrice)>)> {
-    let bytes = files::read(&folder.join(FETCHED)).ok()??;
+    let bytes = files::read(&folder.join(FETCHED), MOST).ok()??;
     let kept: Kept<&RawValue> = serde_json::from_slice(&bytes).ok()?;
     let prices = read_litellm(kept.table.get().as_bytes()).ok()?;
     Some((kept.fetched, prices))
@@ -361,7 +364,7 @@ pub fn take_fetched(folder: &Path, json: &[u8], at: Wall) -> Result<(), PriceErr
 /// driver goes by to fetch it once a day, across every CAF app.
 #[must_use]
 pub fn fetched_at(folder: &Path) -> Option<Wall> {
-    let bytes = files::read(&folder.join(FOLDER).join(FETCHED)).ok()??;
+    let bytes = files::read(&folder.join(FOLDER).join(FETCHED), MOST).ok()??;
     let kept: Kept<serde::de::IgnoredAny> = serde_json::from_slice(&bytes).ok()?;
     Some(kept.fetched)
 }
