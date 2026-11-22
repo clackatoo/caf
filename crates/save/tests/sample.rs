@@ -96,7 +96,7 @@ struct Sample {
 /// A version's sample's values.
 fn sample(version: u32) -> Sample {
     match version {
-        1..=3 => Sample {
+        1..=4 => Sample {
             header: from(header(9)),
             before: before(),
             records: records(version),
@@ -334,9 +334,10 @@ fn header(turns: u64) -> Value {
 
 /// What the journal adds, a record at a time: one of every kind of
 /// change, and of entry; from version 2, a chat lost as CAF can't turn
-/// off its agent's own tools; and from version 3, the agent's settings,
-/// the model a turn was sent on, the notes about settings, and a message
-/// failed as a setting couldn't be applied.
+/// off its agent's own tools; from version 3, the agent's settings, the
+/// model a turn was sent on, the notes about settings, and a message
+/// failed as a setting couldn't be applied; and from version 4, what a
+/// turn spent and what the chat has spent.
 fn records(version: u32) -> Vec<Vec<Entry<Pin, Notes>>> {
     let change = |change: Value| json!({ "type": "Change", "value": change });
     let own_tools = change(
@@ -353,6 +354,9 @@ fn records(version: u32) -> Vec<Vec<Entry<Pin, Notes>>> {
     }
     if version >= 3 {
         last.extend(settings().into_iter().map(change));
+    }
+    if version >= 4 {
+        last.extend(spent().into_iter().map(change));
     }
     last.push(change(
         json!({ "type": "State", "value": { "type": "Idle" } }),
@@ -454,6 +458,26 @@ fn settings() -> Vec<Value> {
             } },
             "end": { "type": "At", "value": wall(1100) },
         }}),
+    ]
+}
+
+/// What version 4 added: what turn 8 spent, on two models, with the cost
+/// its agent reported, and what the chat has spent.
+fn spent() -> Vec<Value> {
+    let tokens = |input: u64, thinking: Value| json!({ "input": input, "cache_read": 3000, "cache_write": 400, "output": 56, "thinking": thinking });
+    vec![
+        json!({ "type": "TurnSpent", "value": { "turn": 8, "usage": {
+            "models": [
+                { "model": "claude-sonnet-5-5", "tokens": tokens(12, json!(7)) },
+                { "model": "claude-haiku-5-5", "tokens": tokens(3, Value::Null) },
+            ],
+            "cost": { "amount": 0.0125, "currency": "USD" },
+            "fast": true,
+        } } }),
+        json!({ "type": "Spend", "value": {
+            "tokens": { "input": 15, "cache_read": 6000, "cache_write": 800, "output": 112, "thinking": 7 },
+            "reported": 0.0125, "estimated": 0.0, "unpriced": 0, "turns": 1,
+        } }),
     ]
 }
 

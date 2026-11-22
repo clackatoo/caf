@@ -128,10 +128,14 @@ mod common;
 ///    ([`Turn::model`](caf_core::chat::Turn::model),
 ///    [`Change::TurnModel`](caf_core::change::Change::TurnModel)), CAF's
 ///    notes about settings, and a message failed as a setting couldn't be
-///    applied ([`FailureReason::SettingNotApplied`]).
+///    applied ([`FailureReason::SettingNotApplied`]);
+/// 4. what each turn spent ([`Turn::spent`](caf_core::chat::Turn::spent),
+///    [`Change::TurnSpent`](caf_core::change::Change::TurnSpent)) and what
+///    the chat has spent ([`Chat::spend`](caf_core::Chat::spend),
+///    [`Change::Spend`](caf_core::change::Change::Spend)).
 ///
 /// [`FailureReason::SettingNotApplied`]: caf_core::chat::FailureReason::SettingNotApplied
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 /// How hard to compress.
 #[non_exhaustive]
