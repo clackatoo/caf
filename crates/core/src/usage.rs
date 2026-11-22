@@ -53,6 +53,9 @@ use crate::chat::Cost;
 use crate::ids::{AgentName, ChatId, TurnId};
 use crate::time::Wall;
 
+#[cfg(test)]
+mod tests;
+
 /// Token counts, by kind. Every count is a whole number of tokens.
 #[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,14 +78,23 @@ impl Tokens {
     /// of output, so isn't counted again.
     #[must_use]
     pub fn total(&self) -> u64 {
-        todo!()
+        self.input
+            .saturating_add(self.cache_read)
+            .saturating_add(self.cache_write)
+            .saturating_add(self.output)
     }
 
     /// Adds another's counts to these. Thinking stays unknown only if
     /// neither knows it.
     pub fn add(&mut self, other: &Tokens) {
-        let _ = other;
-        todo!()
+        self.input = self.input.saturating_add(other.input);
+        self.cache_read = self.cache_read.saturating_add(other.cache_read);
+        self.cache_write = self.cache_write.saturating_add(other.cache_write);
+        self.output = self.output.saturating_add(other.output);
+        self.thinking = match (self.thinking, other.thinking) {
+            (None, None) => None,
+            (one, other) => Some(one.unwrap_or(0).saturating_add(other.unwrap_or(0))),
+        };
     }
 }
 
@@ -123,7 +135,11 @@ impl TurnUsage {
     /// Its tokens, every model's added up.
     #[must_use]
     pub fn tokens(&self) -> Tokens {
-        todo!()
+        let mut tokens = Tokens::default();
+        for row in &self.models {
+            tokens.add(&row.tokens);
+        }
+        tokens
     }
 }
 
@@ -158,7 +174,7 @@ impl Spend {
     /// The cost, reported and estimated together.
     #[must_use]
     pub fn cost(&self) -> f64 {
-        todo!()
+        self.reported + self.estimated
     }
 }
 
@@ -186,8 +202,29 @@ impl ModelPrice {
     /// say to price a model.
     #[must_use]
     pub fn new(input: f64, output: f64) -> Self {
-        let _ = (input, output);
-        todo!()
+        Self {
+            input,
+            cache_read: input,
+            cache_write: input,
+            output,
+            fast: None,
+        }
+    }
+
+    /// What `tokens` cost at these prices, in US dollars, at the fast
+    /// rate if `fast` and the model has one.
+    #[must_use]
+    pub fn cost(&self, tokens: &Tokens, fast: bool) -> f64 {
+        // Every count is below 2^53, so each is exact as a float.
+        let per_million = tokens.input as f64 * self.input
+            + tokens.cache_read as f64 * self.cache_read
+            + tokens.cache_write as f64 * self.cache_write
+            + tokens.output as f64 * self.output;
+        let multiplier = match self.fast {
+            Some(multiplier) if fast => multiplier,
+            _ => 1.0,
+        };
+        per_million / 1_000_000.0 * multiplier
     }
 }
 
@@ -217,6 +254,18 @@ pub struct PricedModel {
     pub price: ModelPrice,
     /// Where it came from.
     pub layer: PriceLayer,
+}
+
+impl PricedModel {
+    /// `model`'s price, from `layer`.
+    #[must_use]
+    pub fn new(model: impl Into<String>, price: ModelPrice, layer: PriceLayer) -> Self {
+        Self {
+            model: model.into(),
+            price,
+            layer,
+        }
+    }
 }
 
 /// The prices CAF estimates cost with: each model's, from the first layer
@@ -253,8 +302,24 @@ impl PriceTable {
     /// sorted by name.
     #[must_use]
     pub fn find(&self, model: &str) -> Option<&PricedModel> {
-        let _ = model;
-        todo!()
+        self.find_as(model)
+            .or_else(|| undated(model).and_then(|model| self.find_as(model)))
+    }
+
+    /// The entry named `model`, else the first that's it with a provider
+    /// before it.
+    fn find_as(&self, model: &str) -> Option<&PricedModel> {
+        let provided = |entry: &&PricedModel| {
+            entry
+                .model
+                .strip_suffix(model)
+                .and_then(|provider| provider.strip_suffix('/'))
+                .is_some_and(|provider| !provider.is_empty() && !provider.contains('/'))
+        };
+        self.models
+            .iter()
+            .find(|entry| entry.model == model)
+            .or_else(|| self.models.iter().find(provided))
     }
 
     /// What a turn would cost at these prices: each model's tokens at its
@@ -263,9 +328,23 @@ impl PriceTable {
     /// estimate only for turns without one.
     #[must_use]
     pub fn estimate(&self, usage: &TurnUsage) -> Estimate {
-        let _ = usage;
-        todo!()
+        let mut estimate = Estimate::default();
+        for row in &usage.models {
+            match self.find(&row.model) {
+                Some(priced) => estimate.usd += priced.price.cost(&row.tokens, usage.fast),
+                None => estimate.unpriced = estimate.unpriced.saturating_add(row.tokens.total()),
+            }
+        }
+        estimate
     }
+}
+
+/// A model's id without the date it ends in, such as `-20261001`, if it
+/// ends in one.
+fn undated(model: &str) -> Option<&str> {
+    let (stem, date) = model.rsplit_once('-')?;
+    (!stem.is_empty() && date.len() == 8 && date.bytes().all(|byte| byte.is_ascii_digit()))
+        .then_some(stem)
 }
 
 /// One turn, as the usage ledger keeps it: a line in its app's file for
@@ -322,8 +401,14 @@ impl UsageQuery {
     /// Every app and agent between `since` and `until`, by day in `zone`.
     #[must_use]
     pub fn new(since: Wall, until: Wall, zone: impl Into<String>) -> Self {
-        let _ = (since, until, zone.into());
-        todo!()
+        Self {
+            since,
+            until,
+            zone: zone.into(),
+            by: Resolution::Day,
+            apps: Vec::new(),
+            agents: Vec::new(),
+        }
     }
 }
 
@@ -375,6 +460,21 @@ pub struct Summary {
     pub unreadable: Vec<String>,
 }
 
+impl Summary {
+    /// A summary of nothing, for `query`: no buckets, chats or prices.
+    #[must_use]
+    pub fn new(query: UsageQuery) -> Self {
+        Self {
+            query,
+            buckets: Vec::new(),
+            chats: ChatCounts::default(),
+            prices: Vec::new(),
+            fetched: None,
+            unreadable: Vec::new(),
+        }
+    }
+}
+
 /// One period's usage by one app, agent, model and fast mode.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -404,6 +504,31 @@ pub struct Bucket {
     pub unpriced: u64,
     /// How many turns.
     pub turns: u64,
+}
+
+impl Bucket {
+    /// An empty bucket: no tokens, cost or turns yet.
+    #[must_use]
+    pub fn new(
+        start: Wall,
+        app: impl Into<String>,
+        agent: impl Into<String>,
+        model: impl Into<String>,
+        fast: bool,
+    ) -> Self {
+        Self {
+            start,
+            app: app.into(),
+            agent: agent.into(),
+            model: model.into(),
+            fast,
+            tokens: Tokens::default(),
+            reported: 0.0,
+            estimated: 0.0,
+            unpriced: 0,
+            turns: 0,
+        }
+    }
 }
 
 /// How many chats a summary covers.
