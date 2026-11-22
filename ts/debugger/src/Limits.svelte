@@ -31,7 +31,7 @@
       {#if least !== null}
         {@const low = lowness(least)}
         <span class="dot" aria-hidden="true"></span>
-        <span class="glance">{label(least.kind)}: {left(least)}% left{#if low !== 'fine'}<span class="low">, {low}</span>{/if}</span>
+        <span class="glance">{label(least.kind)}: {left(least)}% left{#if low !== 'fine'}<span class="low">, {low}</span>{/if}{#if extra}<span class="hidden">{', '}</span>{/if}</span>
       {/if}
       {#if extra}<span class="extra">Extra usage in use</span>{/if}
     </summary>

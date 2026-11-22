@@ -139,7 +139,9 @@ describe('an agent’s limits', () => {
   it('says when extra usage is in use, and only then', () => {
     const limits = (inUse: boolean): AccountLimits => ({ windows: [window({ used: 100, state: { type: 'Refused' } })], extra_usage: { in_use: inUse, heard: HEARD }, cleared: null })
     draw(limits(true))
-    expect(text(glance())).toBe("claude's limits: 5-hour: 0% left, out Extra usage in use")
+    // Told apart from the glance to a screen reader, as the eye has the gap.
+    expect(text(glance())).toBe("claude's limits: 5-hour: 0% left, out, Extra usage in use")
+    expect(glance().querySelector('.glance .hidden')!.textContent).toBe(', ')
     cleanup()
     draw(limits(false))
     expect(text(glance())).toBe("claude's limits: 5-hour: 0% left, out")

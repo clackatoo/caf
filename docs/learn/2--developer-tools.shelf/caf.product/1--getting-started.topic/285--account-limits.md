@@ -18,8 +18,10 @@ is left before they run out.
 ## Where they come from
 
 Only Claude says, for now, and only, as the Claude Agent SDK documents
-its `rate_limit_info`, for "claude.ai subscription users": an account
-signed in with an API key should expect none. Its adapter tells a session
+its `rate_limit_info` (type `SDKRateLimitInfo` in its `sdk.d.ts`, as
+bundled with `@agentclientprotocol/claude-agent-acp` 0.98.0), for
+"claude.ai subscription users": an account signed in with an API key
+should expect none. Its adapter tells a session
 of them in a
 `usage_update`, whenever a window's whole percent, reset or state
 changes, once the turn has had some of the agent's reply. An agent that

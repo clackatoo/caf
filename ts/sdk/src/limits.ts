@@ -34,7 +34,7 @@ export function length(kind: DeepReadonly<WindowKind>): number | null {
 /**
  * How much of the window has gone by at `now`, as a whole percent, 0–100:
  * where `used` would be at an even pace. Null with no reset or no length,
- * or a time that isn't a number.
+ * or a time that isn't a finite number.
  */
 export function pace(window: DeepReadonly<LimitWindow>, now: Wall): number | null {
   const long = length(window.kind);

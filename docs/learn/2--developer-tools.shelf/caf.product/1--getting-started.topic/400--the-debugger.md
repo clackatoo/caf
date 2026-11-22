@@ -261,9 +261,9 @@ percent a turn, its week, its week with extra usage and Opus's week more
 slowly, until the sixth turn's, each chat's fake starting the climb
 again. Send it exactly `limit`, and its five hours are refused and the
 turn fails for a usage limit, the first time in each chat. Its resets
-are made up as the debugger starts, the five hours' three hours on, as
-its script can't say the time: after that, its five hours are forgotten
-until the debugger starts again. They're made up, and kept in the usage
+are made up as the debugger starts, as its script can't say the time:
+they're forgotten, the five hours after three hours, the weeks after four
+days, until the debugger starts again. They're made up, and kept in the usage
 folder under the fake's own profile, so give it one of its own:
 
 ```sh
