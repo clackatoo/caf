@@ -278,7 +278,10 @@ impl Recipe {
     /// [`patch`](Recipe::patch), `+caf.` and its level: `0.98.0+caf.1`.
     #[must_use]
     pub fn installed_version(&self) -> String {
-        todo!()
+        match &self.patch {
+            Some(patch) => format!("{}+caf.{}", self.version, patch.level),
+            None => self.version.clone(),
+        }
     }
 }
 
@@ -316,9 +319,52 @@ impl FilePatch {
     /// If `original` isn't as pinned, an edit's text isn't there exactly
     /// once, or the result isn't as tested.
     pub fn apply(&self, original: &[u8]) -> Result<Vec<u8>, PatchError> {
-        let _ = original;
-        todo!()
+        if !hashes_to(original, &self.before) {
+            return Err(PatchError::NotAsPinned);
+        }
+        let mut text = original.to_vec();
+        for (edit, Edit { find, replace }) in self.edits.iter().enumerate() {
+            let find = find.as_bytes();
+            let at = memchr::memmem::find(&text, find);
+            let times = at.map_or(0, |at| times_in(&text[at..], find));
+            let (Some(at), 1) = (at, times) else {
+                return Err(PatchError::Found { edit, times });
+            };
+            text.splice(at..at + find.len(), replace.bytes());
+        }
+        if !hashes_to(&text, &self.after) {
+            return Err(PatchError::NotAsTested);
+        }
+        Ok(text)
     }
+}
+
+/// Whether `bytes`' SHA-256 is `sha256`, in hex.
+fn hashes_to(bytes: &[u8], sha256: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    let hex = Sha256::digest(bytes)
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
+    hex.eq_ignore_ascii_case(sha256.trim())
+}
+
+/// How many times `find` appears in `text`, overlaps counted: `aa` is
+/// twice in `aaa`, so an edit can't pick one of them.
+fn times_in(text: &[u8], find: &[u8]) -> usize {
+    let mut times = 0;
+    let mut from = 0;
+    while let Some(at) = text
+        .get(from..)
+        .and_then(|rest| memchr::memmem::find(rest, find))
+    {
+        times += 1;
+        from += at + 1;
+    }
+    times
 }
 
 impl Edit {
@@ -477,3 +523,6 @@ pub enum SignedInAs {
     /// Signed in, but the agent didn't say how.
     Unknown,
 }
+
+#[cfg(test)]
+mod tests;
