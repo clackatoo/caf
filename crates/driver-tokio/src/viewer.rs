@@ -67,16 +67,18 @@ pub struct ViewerRules {
     ///
     /// [`Outcome::NotAllowed`]: caf_core::viewer::Outcome::NotAllowed
     pub restore: Box<Restorer>,
-    /// Whether viewers may send, stop, answer, choose a chat's settings
-    /// and close. `true` by default; `false` makes them watch only.
+    /// Whether viewers may send, stop, answer, choose a chat's settings,
+    /// close and unarchive. `true` by default; `false` makes them watch
+    /// only.
     pub act: bool,
     /// How many chats one viewer may watch at once: 256 by default. A
     /// `Watch` for one more is answered with [`ToViewer::Ended`] at once.
     /// Watching a chat over again doesn't count, and a chat that has
     /// ended, or was unwatched, makes room for another.
     pub max_watches: usize,
-    /// Whether viewers may install agents, sign in and out of them, and
-    /// learn their settings. `false` by default: an install is hundreds
+    /// Whether viewers may install agents, sign in and out of them, learn
+    /// their settings, and have CAF look at the machine again. `false` by
+    /// default: an install is hundreds
     /// of megabytes, and a sign-in decides whose account the agent uses,
     /// so a host opts in.
     /// Refused requests get [`Outcome::NotAllowed`].
@@ -131,7 +133,8 @@ impl Default for ViewerRules {
 /// Right after the welcome comes [`ToViewer::Agents`], every agent's
 /// status, and again each time any of it changes: only the latest, if it
 /// changes faster than the viewer reads. A request to install an agent,
-/// or sign in or out of one ([`FromViewer::Agent`]), is done only if
+/// sign in or out of one, or look at every agent again
+/// ([`FromViewer::Agent`]), is done only if
 /// [`ViewerRules::agents`] allows it, and otherwise answered
 /// [`Outcome::NotAllowed`]. A viewer it doesn't allow sees a sign-in under
 /// way without its link or code: whoever opens the link, or types the
@@ -397,6 +400,13 @@ impl<A: AppItem, D: AppData> Link<A, D> {
                 .await;
                 (request, outcome)
             }
+            FromViewer::Unarchive { request, chat } => {
+                let outcome = act(caf, rules, |caf| async move {
+                    caf.chat(chat).unarchive().await.map(|()| Outcome::Done)
+                })
+                .await;
+                (request, outcome)
+            }
             FromViewer::Agent {
                 request,
                 agent,
@@ -509,7 +519,7 @@ fn restoring<A: AppItem, D: AppData>(
     }))
 }
 
-/// Sends, stops, answers or closes, if viewers may.
+/// Sends, stops, answers, closes or unarchives, if viewers may.
 async fn act<A: AppItem, D: AppData, F: Future<Output = Result<Outcome, Error>>>(
     caf: &WeakCaf<A, D>,
     rules: &ViewerRules,
@@ -524,7 +534,8 @@ async fn act<A: AppItem, D: AppData, F: Future<Output = Result<Outcome, Error>>>
     outcome(act(caf).await)
 }
 
-/// Installs an agent, or signs in or out of it, if viewers may.
+/// Installs an agent, signs in or out of it, learns its settings, or
+/// looks at every agent again, if viewers may.
 async fn about<A: AppItem, D: AppData>(
     caf: &WeakCaf<A, D>,
     rules: &ViewerRules,
@@ -545,6 +556,7 @@ async fn about<A: AppItem, D: AppData>(
         AgentAction::StopSignIn => caf.stop_sign_in(agent).await,
         AgentAction::SignOut => caf.sign_out(agent).await,
         AgentAction::LearnSettings => caf.learn_settings(agent).await,
+        AgentAction::CheckAgain => caf.check_agents().await,
         // One added in a later version of the wire, which this CAF can't
         // do.
         _ => return Outcome::NotAllowed,
