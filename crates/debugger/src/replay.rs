@@ -51,11 +51,10 @@ pub const BUDGET: Duration = Duration::from_millis(50);
 /// replays, [`CHECKPOINT`](crate::steps::CHECKPOINT) steps, fits in [`BUDGET`].
 pub const PER_STEP: Duration = Duration::from_micros(50);
 
-/// The version of recordings the debugger reads: only this one, as CAF
+/// The version of recordings the debugger reads: only this CAF's, as CAF
 /// isn't released yet, so a recording's events change shape with no
-/// migration. Version 3 came with archiving and the names on notes about
-/// settings, which version 2's events don't read as.
-const VERSION: u32 = 3;
+/// migration.
+const VERSION: u32 = caf_core::event::RECORDING_VERSION;
 
 /// What a core is made with: a recording's first line.
 #[derive(Clone, Debug, Deserialize)]

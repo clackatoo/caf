@@ -313,9 +313,10 @@ fn unarchiving_a_chat_of_its_own_adapter_gives_it_a_new_one_once_the_old_lets_it
     let mut script = Script::new(per_chat);
     script.open_claude();
     script.close(CHAT).0.expect("closed");
-    script.unarchive(CHAT).0.expect("unarchived");
-    // Its old adapter, let go, still ends: a new one is started for it,
-    // on a connection of its own.
+    // Sent to, it's unarchived as the message goes, so the turn and the
+    // connection it's put on are numbered in the one command: they must
+    // differ. Its old adapter, let go, still ends: a new one is started
+    // for it, on a connection of its own.
     let (turn, out) = script.send(CHAT, "Again");
     let turn = turn.expect("sent");
     let proc = with(&out, "start")[0]["start"].as_u64().expect("a process");
