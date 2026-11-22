@@ -181,6 +181,9 @@
       if (live === null) throw new Error('Not live.')
       const caf = live.caf
       selected = await restoreOnceFree(() => caf.restore(chat, shelf))
+      // Under the same id as when it was put away, whose watch has ended:
+      // choosing it again doesn't watch it again by itself.
+      live.watch(selected)
     },
   }
 

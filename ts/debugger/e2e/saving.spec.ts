@@ -55,17 +55,42 @@ test('a chat saved in one run is restored in the next, and carries on', async ({
     await expect(turns.last().locator('.life')).toHaveText('Finished')
     await expect(turns.last().locator('.words .markdown')).toContainText("CAF's fake agent")
 
-    // Closed, it's put away, and shown closed; restored again at once, it
-    // comes back as soon as CAF has written it.
+    // Closed, it's archived and put away, and shown archived; restored again
+    // at once, it comes back as soon as CAF has written it, still archived.
     await page.locator('.caf-chat header').getByRole('button', { name: 'Close' }).click()
-    await expect(page.locator('.caf-chat [data-state]')).toHaveText('Closed')
+    await expect(page.locator('.caf-chat > header .state')).toHaveText('Archived')
+    await expect(page.getByText('This chat is archived.')).toBeVisible()
     await expect(row).toHaveAttribute('data-state', 'Saved')
-    await expect(row).toContainText('closed')
+    await expect(row).toContainText('archived')
     await row.getByRole('button', { name: 'Restore hello' }).click()
     await expect(row).toHaveAttribute('data-state', 'Loaded')
     await expect(turns).toHaveCount(2)
     await expect(saved.getByRole('alert')).toHaveCount(0)
+    await expect(page.locator('.caf-chat > header .state')).toHaveText('Archived')
+    await expect(page.getByText('This chat is archived.')).toBeVisible()
+    await expect(page.getByRole('textbox', { name: 'Message' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Unarchive' })).toBeVisible()
   } finally {
     await stop(again)
   }
+})
+
+// FIXME: caf-driver-tokio ends the watch of a chat that's Closed, as an
+// archived chat is, so a viewer never hears it unarchived. Unfix once a
+// watch outlives archiving.
+test.fixme('an archived chat, unarchived, is an ordinary chat again, and carries on', async ({ page, server }) => {
+  await page.goto(server.url)
+  await expect(page.locator('.link')).toHaveText('Connected')
+  await openChat(page, process.cwd())
+  await send(page, 'hello')
+  const turns = page.locator('.caf-chat .turn')
+  await expect(turns.last().locator('.life')).toHaveText('Finished')
+  await page.locator('.caf-chat > header').getByRole('button', { name: 'Close' }).click()
+  await expect(page.locator('.caf-chat > header .state')).toHaveText('Archived')
+  await page.getByRole('button', { name: 'Unarchive' }).click()
+  await expect(page.locator('.caf-chat > header .state')).not.toHaveText('Archived')
+  await expect(page.getByRole('button', { name: 'Unarchive' })).toHaveCount(0)
+  await send(page, 'again')
+  await expect(turns).toHaveCount(2)
+  await expect(turns.last().locator('.life')).toHaveText('Finished')
 })

@@ -192,10 +192,10 @@ test("with a closed chat of the agent beside, the panel shows its sign-in itself
   await send(page, 'hello')
   await expect(page.locator('.caf-chat .turn .life').last()).toHaveText('Finished')
   await page.locator('.caf-chat header').getByRole('button', { name: 'Close' }).click()
-  await expect(page.locator('.caf-chat [data-state]')).toHaveText('Closed')
+  await expect(page.locator('.caf-chat > header .state')).toHaveText('Archived')
   const agent = row(page, 'signs-in')
   await agent.getByRole('button', { name: 'Sign in to signs-in' }).click()
-  // A closed chat shows no sign-in, so the panel does: once.
+  // An archived chat shows no sign-in, so the panel does: once.
   await expect(agent.getByRole('link', { name: 'the sign-in page on caf.example' })).toBeVisible()
   await expect(page.getByRole('textbox', { name: /paste it here/ })).toHaveCount(1)
   await expect(agent).not.toContainText('see the chat')

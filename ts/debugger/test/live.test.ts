@@ -59,6 +59,20 @@ describe('live', () => {
     expect(live.chat).toBeNull()
   })
 
+  it('keeps a chat whose watch ended as it was, and watches it afresh when it is chosen again', async () => {
+    const link = transport()
+    const live = new Live()
+    await live.connect(async () => link)
+    live.watch(one)
+    const chat = { id: one, agent: 'fake', cwd: '/a', state: { type: 'Closed' }, turns: [], usage: null, questions: [], settings: { offered: [], chosen: [], own: [] }, archived: 1 }
+    link.deliver({ type: 'Picture', value: { chat, latest: 0 } })
+    expect(live.chat?.archived).toBe(1)
+    link.deliver({ type: 'Ended', value: { chat: one } })
+    expect(live.chat?.archived).toBe(1)
+    live.watch(one)
+    expect(link.sent.map((message) => message.type)).toEqual(['Hello', 'Watch', 'Watch'])
+  })
+
   it('watches the chat chosen again once connected again', async () => {
     const live = new Live()
     live.watch(one)
