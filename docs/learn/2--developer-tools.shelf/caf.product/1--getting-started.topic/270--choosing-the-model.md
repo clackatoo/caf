@@ -66,6 +66,12 @@ program's default, if the agent offers it, and otherwise to what the
 agent uses. Your program's own default that can't be applied is dropped
 quietly.
 
+Each note about a setting holds the choice, and the agent's name for it,
+such as "Opus (1M context)", as CAF last knew it (`name`): from what the
+agent offers now, or offered before, in this chat's session or any other.
+A choice never offered, and a switch such as fast mode, have none; show
+the choice's id then.
+
 A change the agent never answers doesn't fail anything: as with any
 request it leaves unanswered for `Timers::request` (60 s), its program is
 taken to be stuck and restarted, or, while another chat is mid-turn on
@@ -127,7 +133,11 @@ agent's tools, reads what it offers, and closes it. The session is in
 CAF's installs' folder if CAF has found installs there, and otherwise in
 `/`, as no chat gives it a folder. No message is sent, so it costs
 nothing. Where it stands is in the agent's status from `watch_agents`, as
-`settings`: `Unknown`, `Learning`, `Known(settings)` or `Failed(why)`.
+`settings`: `Unknown`, `Learning`, `Known(settings)` or `Failed(why)`,
+`why` a `LearnFailure` that says what went wrong, such as `NotInstalled`
+or `SignInNeeded`, for your program to word; where the agent or the system
+said why, its words are kept apart (`Refused { message }`,
+`CouldNotStart { error }`), to show as theirs.
 What was learned before stays shown while it's learned again, and if that
 fails. If the agent's adapter serves chats and can't close sessions, the
 session stays until the adapter stops. Every chat's session tells it too.

@@ -20,6 +20,14 @@ use crate::settings::SettingChoice;
 use crate::time::Wall;
 use crate::usage::PriceTable;
 
+/// The version of a recording of a run's events (the tokio kit's
+/// `Config::record`), as its first line says (`caf_recording`). It goes up
+/// whenever an [`Event`] of an older version no longer reads the same; as
+/// CAF isn't released yet, nothing migrates an older one, and a reader
+/// refuses it. Version 3 came with archiving and the names on notes about
+/// settings.
+pub const RECORDING_VERSION: u32 = 3;
+
 /// Something that happened. `A` and `D` are the app's item and data
 /// types.
 #[non_exhaustive]

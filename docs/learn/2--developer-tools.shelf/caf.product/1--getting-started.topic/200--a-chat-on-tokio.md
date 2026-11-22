@@ -117,7 +117,7 @@ config.record = Some("/home/me/caf-run.jsonl".into());
 The first line holds the host and the agents:
 
 ```json
-{"caf_recording": 2, "host": {…}, "agents": [{…}]}
+{"caf_recording": 3, "host": {…}, "agents": [{…}]}
 ```
 
 Each line after it is one event, in order:
@@ -128,7 +128,10 @@ Each line after it is one event, in order:
 
 Every enum is written as its variant's name as `type`, with what it holds, if
 anything, as `value`, as everywhere in CAF: `{"type": "Woken"}`. This is
-version 2 of the format: check `caf_recording` before reading the rest.
+version 3 of the format: check `caf_recording` before reading the rest.
+Until CAF is released, an older version's recording isn't read: its
+events change shape with no migration, as version 3's did for archiving
+and the names on notes about settings.
 Each `type` comes before its `value`, and must stay there: what the agent
 sent is kept exactly as it came, and reads back only in that order.
 

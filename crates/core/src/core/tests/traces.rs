@@ -91,7 +91,11 @@ fn replay_recording(text: &str) -> (Core, Vec<Vec<serde_json::Value>>) {
     let mut lines = text.lines();
     let header: Header =
         serde_json::from_str(lines.next().expect("a header")).expect("the header reads");
-    assert_eq!(header.caf_recording, 2, "a recording of version 2");
+    assert_eq!(
+        header.caf_recording,
+        crate::event::RECORDING_VERSION,
+        "a recording of this version"
+    );
     let mut core = Core::new(header.host, header.agents);
     let mut outs = Vec::new();
     // A recording cut short says so, and ends there.
@@ -146,7 +150,7 @@ fn a_live_claude_run_replays_to_its_end() {
     assert_eq!(
         chat["turns"][0]["spent"],
         json!({
-            "models": [{ "model": "claude-haiku-5-5", "tokens": tokens(1178, 12799, 12123, 18, json!(0)) }],
+            "models": [{ "model": "claude-haiku-5-5", "name": "Haiku 5.5", "tokens": tokens(1178, 12799, 12123, 18, json!(0)) }],
             "cost": { "amount": first, "currency": "USD" },
             "fast": false,
         })
@@ -154,7 +158,7 @@ fn a_live_claude_run_replays_to_its_end() {
     assert_eq!(
         chat["turns"][1]["spent"],
         json!({
-            "models": [{ "model": "claude-haiku-5-5", "tokens": tokens(2, 15847, 11185, 0, Value::Null) }],
+            "models": [{ "model": "claude-haiku-5-5", "name": "Haiku 5.5", "tokens": tokens(2, 15847, 11185, 0, Value::Null) }],
             "cost": null,
             "fast": false,
         })

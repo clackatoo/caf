@@ -34,9 +34,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         let whole = self.chats.get(&chat).ok_or(Refused::NoSuchChat)?;
-        if whole.state == ChatState::Closed {
-            return Err(Refused::Closed);
-        }
+        let archived = whole.state == ChatState::Closed;
         // A restored chat whose agent the host no longer offers, or whose
         // own tools CAF can't turn off.
         let spec = self.agents.get(&whole.agent).ok_or(Refused::NoSuchAgent)?;
@@ -54,7 +52,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if self.waiting_turns(chat).len() >= self.host.limits.queued_messages {
             return Err(Refused::QueueFull);
         }
+        // Its number is taken before anything unarchiving numbers.
         self.ids.seen(turn.0);
+        // Unarchived only once the message can go: one refused leaves it
+        // archived.
+        if archived {
+            self.unarchive_chat(now, chat, out)?;
+        }
         self.call_off_shutdown(now);
         self.end_agent_turn(now, chat);
         self.add_turn(

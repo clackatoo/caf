@@ -44,7 +44,13 @@ pub enum Change<A: AppItem = NoAppItems> {
     /// The chat's state changed.
     State(ChatState),
     /// The chat was archived, as of then, or unarchived (`None`): its
-    /// [`archived`](crate::Chat::archived). Sent with the state it changes.
+    /// [`archived`](crate::Chat::archived). Sent straight after the state
+    /// it goes with, as a chat is closed or unarchived, or alone, as a
+    /// restore finds a chat saved closed before CAF kept when. Not sent
+    /// where the chat already says it: a restore of a chat saved with
+    /// when it was archived, but in another state, sends only
+    /// [`Change::State`], closed. A chat deleted is closed with none, as
+    /// it's let go at once.
     Archived(Option<Wall>),
     /// The chat's settings changed: what the agent offers, or what was
     /// chosen. The whole of them, each time.

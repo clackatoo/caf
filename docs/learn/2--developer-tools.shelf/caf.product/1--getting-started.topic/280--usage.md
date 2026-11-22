@@ -24,7 +24,9 @@ keeps them on the turn, as `Turn::spent`:
   agent says;
 - **by model**: an agent that splits them by model, as Claude and Codex do,
   counts what its subagents and compaction spent too, so CAF keeps that
-  split; otherwise one row, against the turn's model;
+  split; otherwise one row, against the turn's model. Each row has the
+  agent's id for its model, and a `name` to show where the agent's profile
+  knows how its ids are named: Claude's `claude-opus-5-5` is "Opus 5.5";
 - **cost**, as the agent reported it, if it did: Claude says what its
   session has cost so far, and the turn's cost is how much that rose;
 - **fast mode**, if it was on, which costs more.

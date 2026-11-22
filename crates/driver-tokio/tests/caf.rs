@@ -696,7 +696,11 @@ fn replay(text: &str) -> Core {
     let mut lines = text.lines();
     let header: Header =
         serde_json::from_str(lines.next().expect("a header")).expect("the header reads");
-    assert_eq!(header.caf_recording, 2, "a recording of version 2");
+    assert_eq!(
+        header.caf_recording,
+        caf_core::event::RECORDING_VERSION,
+        "a recording of this version"
+    );
     let mut core = Core::new(header.host, header.agents);
     let mut out = Vec::new();
     // A recording cut short says so, and ends there.

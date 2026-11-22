@@ -51,8 +51,10 @@ pub const BUDGET: Duration = Duration::from_millis(50);
 /// replays, [`CHECKPOINT`](crate::steps::CHECKPOINT) steps, fits in [`BUDGET`].
 pub const PER_STEP: Duration = Duration::from_micros(50);
 
-/// The version of recordings the debugger reads.
-const VERSION: u32 = 2;
+/// The version of recordings the debugger reads: only this CAF's, as CAF
+/// isn't released yet, so a recording's events change shape with no
+/// migration.
+const VERSION: u32 = caf_core::event::RECORDING_VERSION;
 
 /// What a core is made with: a recording's first line.
 #[derive(Clone, Debug, Deserialize)]
@@ -117,9 +119,16 @@ impl std::fmt::Display for LoadError {
             Self::NotARecording(error) => {
                 write!(f, "its first line isn't a CAF recording's: {error}")
             }
+            Self::Version(version) if *version < VERSION => write!(
+                f,
+                "it's a recording of version {version}, by an older CAF, and this debugger reads \
+                 only version {VERSION}: CAF isn't released yet, so older recordings aren't read. \
+                 Replay it with the CAF that made it, or record the run again"
+            ),
             Self::Version(version) => write!(
                 f,
-                "it's a recording of version {version}, and this debugger reads version {VERSION}"
+                "it's a recording of version {version}, by a newer CAF, and this debugger reads \
+                 version {VERSION}"
             ),
             Self::Line(line, error) => write!(f, "line {line} isn't a step: {error}"),
         }
@@ -137,7 +146,7 @@ impl std::error::Error for LoadError {}
 ///
 /// # Errors
 ///
-/// If the file can't be read, isn't a recording of version 2, or has a
+/// If the file can't be read, isn't a recording of version 3, or has a
 /// line that isn't a step, or whose event isn't one this CAF knows: a
 /// replay of it would be wrong from there on.
 pub fn load(path: &Path) -> Result<Arc<Book>, LoadError> {
