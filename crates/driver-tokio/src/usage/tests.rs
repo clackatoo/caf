@@ -593,7 +593,15 @@ async fn first_look(driver: &mut UsageDriver) {
     let looked = tokio::time::timeout(PATIENCE, async {
         while driver.looks == 0 {
             // The driver hands each look to the thread as it's polled.
-            let _ = tokio::time::timeout(Duration::from_millis(5), driver.next()).await;
+            // Nothing's been asked, so what it reports meanwhile is only
+            // what it tells unasked, which no test here waits for.
+            if let Ok(report) = tokio::time::timeout(Duration::from_millis(5), driver.next()).await
+            {
+                assert!(
+                    matches!(report, Report::Prices(_) | Report::Limits(_)),
+                    "only what's told unasked"
+                );
+            }
         }
     });
     looked.await.expect("the first look, in good time");

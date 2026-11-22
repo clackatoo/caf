@@ -666,7 +666,9 @@ impl<'a> Sum<'a> {
     fn name(&mut self, line: &LedgerLine) {
         let profile = line.profile.as_deref().and_then(Builtin::from_slug);
         for row in &line.usage.models {
-            let recorded = row.name.as_ref().filter(|name| !name.trim().is_empty());
+            let recorded = (row.name.as_deref())
+                .map(str::trim)
+                .filter(|name| !name.is_empty());
             match recorded {
                 // A model renamed since is shown by its latest name. Lines
                 // aren't read in time order, so the latest is chosen by
@@ -678,7 +680,7 @@ impl<'a> Sum<'a> {
                     let latest =
                         (self.recorded.get(&row.model)).is_none_or(|(at, _)| line.at >= *at);
                     if latest {
-                        (self.recorded).insert(row.model.clone(), (line.at, name.clone()));
+                        (self.recorded).insert(row.model.clone(), (line.at, name.to_owned()));
                     }
                 }
                 None if !self.derived.contains_key(&row.model) => {

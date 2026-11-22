@@ -879,11 +879,11 @@ fn an_empty_name_recorded_is_no_name() {
                 Some(""),
                 acp,
             ),
-            // An empty name later doesn't hide an earlier one.
+            // An empty name later doesn't hide an earlier one, kept trimmed.
             on(
                 line("2026-11-22T09:00:00Z", 1, 2),
                 "claude-haiku-5-5",
-                Some("Haiku"),
+                Some(" Haiku\n"),
                 None,
             ),
             on(
