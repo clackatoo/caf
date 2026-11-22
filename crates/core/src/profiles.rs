@@ -1351,7 +1351,7 @@ pub(crate) mod tests {
         let neither = json!({ "usage": { "inputTokens": -1, "outputTokens": 1, "totalTokens": 1 },
             "_meta": { "quota": { "model_usage": {} } } });
         assert_eq!(claude().spent(&neither), (Reported::Unreadable, true));
-        assert_eq!(claude().spent(&answered(json!([]))).1, false);
+        assert!(!claude().spent(&answered(json!([]))).1);
     }
 
     #[cfg(feature = "fake")]

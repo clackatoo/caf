@@ -4,7 +4,7 @@ import type { ModelTokens } from "./ModelTokens.ts";
 
 /**
  * What a turn spent: its [`spent`](crate::chat::Turn::spent), recorded
- * when it ends, if the agent said.
+ * when its prompt is answered, however it ended, if the agent said.
  */
 export type TurnUsage = { 
 /**
