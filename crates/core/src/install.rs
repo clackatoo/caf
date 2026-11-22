@@ -213,7 +213,8 @@ pub enum Unpack {
 /// `node_modules`, whatever the recipe's lockfile now says. So what a
 /// recipe installs (its lockfile, or its downloads) changes only with a
 /// new upstream [`version`](Recipe::version), never between patch levels
-/// of one; a test pins each built-in npm recipe's to its version.
+/// of one; a test pins what each built-in recipe installs to its version,
+/// for every version CAF has shipped.
 ///
 /// # Guarantees
 ///
