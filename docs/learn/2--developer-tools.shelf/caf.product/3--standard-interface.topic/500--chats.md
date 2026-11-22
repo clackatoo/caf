@@ -305,8 +305,11 @@ A saved chat is put away as it's archived, so the app no longer has it
 open. To send to it or unarchive it, the app restores it first
 (`Core::restore`), archived still, then sends or unarchives, as
 [The composer](~caf/standard-interface/composer#what-the-chat-allows)
-says: the user sees nothing of this. A chat restored archived is
-`ChatState::Closed` until it's brought back, then `Idle`.
+says: the user sees nothing of this. Right after it's archived, the
+restore is refused (`Refused::Loaded`) while CAF finishes writing it, for
+moments: the app tries again for a moment meanwhile, as for a chat just
+put away. A chat restored archived is `ChatState::Closed` until it's
+brought back, then `Idle`.
 
 A chat that isn't saved, once archived, stays in memory, archived, until
 the app stops, and is brought back the same way.

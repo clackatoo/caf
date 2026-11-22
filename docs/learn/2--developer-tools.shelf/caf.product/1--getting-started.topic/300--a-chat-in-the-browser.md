@@ -542,11 +542,36 @@ It offers only what `may` lets it: without `act`, the chat can be watched,
 not acted in; without `agents`, it says what's happening to the agent but
 offers no Install, sign-in or Check again. An archived chat says so above
 its composer, which stays usable, as sending brings it back, and offers
-Unarchive, if `unarchive` is given; only its settings can't be chosen. A
-saved chat is put away as it's archived, so CAF refuses to send to it or
-unarchive it until it's restored: `orRestored`, from the same folder,
-restores it first, archived still, then tries again, as the debugger
-does.
+Unarchive, if `unarchive` is given; only its settings can't be chosen.
+
+A saved chat is put away as it's archived, so CAF refuses to send to it or
+unarchive it (`NoSuchChat`) until it's restored, and its watch has ended.
+The same folder has what a host needs to do it as the debugger does:
+`orRestored` restores the chat, archived still, then tries again;
+`restoreOnceFree` tries the restore again for a moment while CAF refuses it
+as `Loaded`, still writing the chat just archived; and `oneAtATime` shares
+one restore per chat, so two actions at once restore it once. The host
+then watches the chat again, as its watch ended when it was put away:
+
+```ts
+import { oneAtATime, orRestored, restoreOnceFree } from "./chat";
+
+const restoring = oneAtATime<ChatId>();
+
+// Sends to, or unarchives, the chat shown, restoring it first if it was put
+// away; `shelf` is where `saved` lists it.
+async function toChat<T>(act: () => Promise<T>): Promise<T> {
+  const restore = () => restoring(chat.id, () => restoreOnceFree(() => caf.restore(chat.id, shelf)));
+  try {
+    return await orRestored(act, restore);
+  } finally {
+    watchAgain(chat.id); // as it was watched before, unless another chat is shown by then
+  }
+}
+```
+
+and gives the view `send: (message) => toChat(() => caf.send(chat.id,
+message))`, and `unarchive` the same way.
 
 Given its agent's status, the view also shows what the agent needs before
 the chat can go on. While the chat waits for an agent that isn't

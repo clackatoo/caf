@@ -364,9 +364,18 @@ A saved chat is put away as it's archived, so CAF no longer has it, and
 refuses to send to it or unarchive it (`Refused::NoSuchChat`). An app that
 still shows it restores it first (`Core::restore`), archived still, then
 sends or unarchives: the user sees nothing of this, and never *Couldn't
-send: this chat isn't open any more.* If restoring it fails, the message
-stays in the box, and the tray says why, as for any message that couldn't
-be sent.
+send: this chat isn't open any more.* Right after it's archived, CAF may
+still be writing it, and refuses to restore it (`Refused::Loaded`) until
+it's done, which takes moments: the app tries again for a moment while it
+does, as it would restoring a chat just put away.
+
+If restoring it fails, the message stays in the box, and the tray says
+*Couldn't send:* and why, in the words
+[A chat's identity and lifecycle](~caf/standard-interface/chats#when-it-can-t-be-restored)
+gives each reason a chat can't be restored, its heading made a clause,
+such as *Couldn't send: this chat is open somewhere else.* or *Couldn't
+send: this chat's save is damaged.* If Unarchive's restore fails, the tray
+says the same, with *Couldn't unarchive:*.
 
 While it's archived, only its settings can't be chosen, as CAF refuses to
 change them (`Refused::Closed`): the control shows the model and effort,
