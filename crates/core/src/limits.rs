@@ -35,9 +35,24 @@
 //! session's history replayed. Agents whose profile says nothing of
 //! limits have none.
 //!
-//! Claude's adapter passes a report on only once the turn has had some of
-//! the agent's reply, so a new Claude process's first one may be lost.
-//! That's why limits are kept (below).
+//! Claude Code, signed in to a claude.ai subscription, reports them from
+//! a response's rate-limit headers when they say something other than
+//! what that process last heard: first from a quota check it makes as it
+//! starts. Upstream's Claude adapter reads that report only once the first
+//! prompt is sent, before the prompt's turn is active, and drops it, as it
+//! drops any that comes before a turn has measured the agent's memory; and
+//! as the turn's own reply then says nothing new, a new chat may never
+//! hear its limits. CAF's patched adapter, `0.98.0+caf.1`, passes on every
+//! report it hears while the session lasts: one with no turn active at
+//! once, and one during a turn once the turn has measured the agent's
+//! memory, or before its answer; one still held as the session closes is
+//! lost. One sent before the session ever measured it says
+//! `_meta._caf/limitsOnly`: it's heard for its limits alone, and says
+//! nothing of the agent's memory.
+//!
+//! A live run on the patched adapter heard the limits with the chat's
+//! first prompt, sent so. A host running upstream's adapter may never
+//! hear them, which is why limits are kept (below).
 //!
 //! # Whose they are
 //!

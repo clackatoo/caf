@@ -1,0 +1,5 @@
+        let lastAssistantTotalUsage = null;
+        // CAF: the account's limits Claude Code reported during a turn, before
+        // its context was measured, in order, until they're sent: never cleared
+        // with the rest of the turn's scratch.
+        let heldLimits = [];

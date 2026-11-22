@@ -1,0 +1,13 @@
+acp-agent.js is dist/acp-agent.js of @agentclientprotocol/claude-agent-acp
+0.98.0, as published to npm (the tarball whose integrity CAF's
+package-lock.json pins), copyright 2025 Zed Industries, Inc. and
+contributors, under the Apache License 2.0 in LICENSE. It is kept here
+unchanged, for CAF's tests.
+
+CAF modifies it as it installs the adapter: the *.find and *.replace
+files beside it are those modifications, made in the order of their
+numbers, and the first adds a notice at the top of the file saying so.
+They are derived from the adapter, and are under the Apache License 2.0
+in LICENSE, though the crate they're in, caf-core, is under MIT OR
+Apache-2.0. edits.test.mjs, which runs them in CAF's tests, is CAF's own,
+under the crate's licence.

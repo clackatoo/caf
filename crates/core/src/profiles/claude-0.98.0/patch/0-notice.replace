@@ -1,0 +1,3 @@
+// Modified by CAF, the Clackatoo Agent Framework, as it installs this adapter:
+// each change is marked "CAF:". The original is kept beside this file.
+import { agent as acpAgent, CreateElicitationResponse, methods, ndJsonStream, RequestError, } from "@agentclientprotocol/sdk/unstable";

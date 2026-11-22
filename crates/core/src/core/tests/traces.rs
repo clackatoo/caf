@@ -196,6 +196,64 @@ fn a_live_claude_run_replays_to_its_end() {
     assert_eq!(again.inspect(), core.inspect());
 }
 
+/// A real run of CAF's patched claude-agent-acp, `0.98.0+caf.1`, freshly
+/// installed and on Haiku, recorded by the tokio kit: CAF installs it,
+/// learns its settings, and the chat asks for "pong" and gets it, then
+/// CAF shuts down. Claude Code's first report of the account's limits,
+/// from its quota probe as it starts, comes before the turn is active and
+/// with nothing measured yet, so the adapter sends it as the limits alone
+/// (`_caf/limitsOnly`).
+///
+/// Scrubbed before it was checked in, as [`CLAUDE_LIVE`] was, of the
+/// install's and the chat's folders, the chat's id, and the user's own
+/// agents and models
+/// in the session's settings; and the report's figures (shares, thresholds,
+/// resets and the state of extra usage, which reads as allowed and on) are
+/// made up, as they're the account's own.
+const CLAUDE_PATCHED_LIVE: &str = include_str!("traces/claude-0.98.0+caf.1-limits.jsonl");
+
+#[test]
+fn a_live_run_of_claudes_patched_adapter_hears_its_first_limits_report() {
+    use crate::ids::AgentName;
+
+    let (core, _) = replay_recording(CLAUDE_PATCHED_LIVE);
+    // The adapter said it's patched.
+    assert_eq!(
+        CLAUDE_PATCHED_LIVE
+            .matches(r#""version":"0.98.0+caf.1""#)
+            .count(),
+        2
+    );
+    let limits = serde_json::to_value(core.agent_limits(&AgentName("claude".into())))
+        .expect("limits serialise");
+    assert_eq!(
+        limits["windows"],
+        json!([{ "kind": { "type": "Week" }, "used": 50, "resets": 1_795_600_000_000_i64,
+            "state": { "type": "Warning" }, "heard": limits["windows"][0]["heard"] }])
+    );
+    assert_eq!(limits["extra_usage"]["in_use"], false);
+    // The report came before the turn's first measure of the agent's
+    // memory, and said nothing of it.
+    let alone = CLAUDE_PATCHED_LIVE
+        .find("_caf/limitsOnly")
+        .expect("the report");
+    let measured = CLAUDE_PATCHED_LIVE
+        .find(r#""sessionUpdate":"usage_update","used":6"#)
+        .expect("a measure");
+    assert!(alone < measured);
+    let chat = serde_json::to_value(core.chat(ChatId::from_number(1)).expect("the chat"))
+        .expect("chats serialise");
+    assert_has(
+        &chat,
+        &json!({ "turns": [{ "life": { "type": "Finished" }, "items": [{ "kind": { "type": "Words", "value": "pong" } }] }] }),
+    );
+    assert!(
+        chat["usage"]["used"].as_u64().is_some_and(|used| used > 0),
+        "{chat:#}"
+    );
+    check_fixtures(&core);
+}
+
 /// Every count of what a turn spent in the live trace, as the Claude
 /// profile reads it, adds up to the total Claude gave: so input is
 /// uncached, and thinking is part of output, not counted beside it. An

@@ -148,6 +148,91 @@ fn limits_are_heard_even_from_an_update_the_rest_of_which_doesnt_read() {
     );
 }
 
+/// [`five_and_week`] as CAF's patched Claude adapter sends it before the
+/// session's context was ever measured: the limits alone, its `used`
+/// meaning nothing.
+fn limits_alone() -> Value {
+    let mut report = five_and_week(0.2, 3_600_000, 0.3, 86_400_000);
+    report["used"] = json!(0);
+    report["_meta"]["_caf/limitsOnly"] = json!(true);
+    report
+}
+
+#[test]
+fn a_report_of_the_limits_alone_is_heard_but_says_nothing_of_the_agents_memory() {
+    let mut script = Script::with_claude();
+    script.send(CHAT, "Hi").0.expect("sent");
+    script.at(1000);
+    script.update(
+        PROC,
+        SESSION,
+        &json!({ "sessionUpdate": "usage_update", "used": 1000, "size": 200_000 }),
+    );
+    let chat = script.chat(CHAT);
+    assert_eq!(chat["usage"]["used"], 1000);
+    let out = script.update(PROC, SESSION, &limits_alone());
+    assert_eq!(saved(&out).len(), 1);
+    assert_eq!(
+        script.limits("claude")["windows"].as_array().map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(script.chat(CHAT), chat, "nothing of the chat changed");
+    // Only `true` says so.
+    let mut report = limits_alone();
+    report["_meta"]["_caf/limitsOnly"] = json!("yes");
+    script.update(PROC, SESSION, &report);
+    assert_eq!(script.chat(CHAT)["usage"]["used"], 0);
+}
+
+#[test]
+fn a_report_outside_any_turn_is_heard_and_opens_none() {
+    // Claude's first report comes from its quota probe as it starts,
+    // before the first prompt's turn: the patched adapter sends it then.
+    let mut script = Script::with_claude();
+    script.at(1000);
+    let chat = script.chat(CHAT);
+    let out = script.update(PROC, SESSION, &limits_alone());
+    assert_eq!(saved(&out).len(), 1);
+    assert_eq!(
+        script.limits("claude")["windows"].as_array().map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(script.chat(CHAT), chat, "no turn, and no memory said");
+    // Once the session has measured its memory, a report outside a turn
+    // says it too.
+    script.at(2000);
+    let out = script.update(
+        PROC,
+        SESSION,
+        &five_and_week(0.3, 3_600_000, 0.3, 86_400_000),
+    );
+    assert_eq!(saved(&out).len(), 1);
+    let chat = script.chat(CHAT);
+    assert_eq!(chat["usage"]["used"], 1000);
+    assert_eq!(chat["turns"], json!([]));
+}
+
+#[test]
+fn a_report_of_the_limits_alone_replayed_says_nothing_of_the_agents_memory() {
+    use crate::core::SessionChoice;
+    use crate::ids::AgentSessionId;
+
+    let mut script = Script::new(host());
+    let mut open = OpenChat::new("claude", "/work");
+    open.session = SessionChoice::Continue(AgentSessionId("old".into()));
+    let (chat, out) = script.open(open);
+    chat.expect("opened");
+    let mut init = super::claude_init();
+    init["agentCapabilities"]["sessionCapabilities"] = json!({});
+    let init_id = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let out = script.answers(PROC, init_id, &init);
+    let load = sent(&out, "session/load")["id"].as_u64().expect("an id");
+    script.update(PROC, "old", &limits_alone());
+    script.answers(PROC, load, &json!({}));
+    assert_eq!(script.chat(CHAT)["usage"], Value::Null);
+    assert_eq!(script.limits("claude")["windows"], json!([]));
+}
+
 #[test]
 fn an_agent_whose_profile_says_nothing_of_limits_has_none() {
     let mut script = Script::new(host());

@@ -1,0 +1,4 @@
+                                        used: nextUsage,
+                                        size: session.contextWindowSize,
+                                    }),
+                                });

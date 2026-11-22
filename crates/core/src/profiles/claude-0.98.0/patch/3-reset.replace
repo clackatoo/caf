@@ -1,0 +1,24 @@
+        // CAF: sends the limits held, in order, as the rate_limit_event case
+        // does: with the context as this turn measured it, else as it was last
+        // measured, else as limits alone (`_caf/limitsOnly`, `used` meaning
+        // nothing).
+        const sendHeldLimits = async () => {
+            const held = heldLimits;
+            heldLimits = [];
+            const used = lastAssistantTotalUsage ?? session.contextUsedTokens;
+            for (const info of held) {
+                await sendUpdate({
+                    sessionId: params.sessionId,
+                    update: attachUsageModel({
+                        sessionUpdate: "usage_update",
+                        used: used ?? 0,
+                        size: session.contextWindowSize,
+                        _meta: used === undefined
+                            ? { "_claude/rateLimit": info, "_caf/limitsOnly": true }
+                            : { "_claude/rateLimit": info },
+                    }),
+                });
+            }
+        };
+        const resetTurnScratch = () => {
+            lastAssistantTotalUsage = null;

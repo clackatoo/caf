@@ -1,0 +1,7 @@
+                                        used: nextUsage,
+                                        size: session.contextWindowSize,
+                                    }),
+                                });
+                                // CAF: the context is measured: send the limits held.
+                                if (heldLimits.length > 0)
+                                    await sendHeldLimits();

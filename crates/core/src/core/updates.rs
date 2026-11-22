@@ -42,6 +42,9 @@ enum Said {
     /// How full the agent's memory is, and the model the agent says it's
     /// using, if it says.
     Usage { usage: Usage, model: Option<String> },
+    /// The account's limits alone, which are heard from the update
+    /// itself: nothing of the agent's memory.
+    Limits,
     /// The user's own message, as the agent tells it.
     User(String),
     /// What the agent offers of its settings, as ACP's session config
@@ -147,6 +150,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             "tool_call_update" => tool_update(&update),
             // A number JavaScript can't read exactly makes it unreadable:
             // every number in a chat is below 2^53.
+            "usage_update" if profile.limits_only(&update) => Some(Said::Limits),
             "usage_update" => serde_json::from_value::<acp::UsageUpdate>(update.clone())
                 .ok()
                 .filter(|usage| usage.used <= MOST_EXACT && usage.size <= MOST_EXACT)
@@ -235,6 +239,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 self.heard_usage(chat, &usage, model);
                 self.set_usage(chat, usage);
             }
+            Said::Limits => {}
             Said::User(_) => report(
                 out,
                 Level::Debug,
@@ -433,6 +438,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 return;
             }
             Said::Usage { usage, .. } => return self.set_usage(chat, usage),
+            Said::Limits => return,
             // What the session offers is in the answer that opens it.
             Said::Options(_) => {
                 return report(

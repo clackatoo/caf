@@ -1,0 +1,11 @@
+            // CAF: the limits still held go before the answer. Should a cancel
+            // settle the turn while they're sent, its answer can go before the
+            // rest of them, which still go: the order is only lost then.
+            if (heldLimits.length > 0) {
+                await sendHeldLimits().catch((sendError) => {
+                    this.logger.error(`Session ${params.sessionId}: failed to send the limits held`, sendError);
+                });
+                if (turn.settled || turn.settling || session.activeTurn !== turn)
+                    return;
+            }
+            // Both a result and EOF can end the turn here. Preserve cancellation

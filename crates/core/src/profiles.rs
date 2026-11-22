@@ -185,8 +185,8 @@ use serde_json::{Value, json};
 use crate::acp::RpcError;
 use crate::chat::{FailureReason, Remedy};
 use crate::install::{
-    Bundled, Install, LinkFrom, Needs, NpmPackage, Program, Recipe, SignIn, SignedInAs, Status,
-    StatusCommand,
+    Bundled, Edit, FilePatch, Install, LinkFrom, Needs, NpmPackage, Patch, Program, Recipe, SignIn,
+    SignedInAs, Status, StatusCommand,
 };
 use crate::limits::{
     AccountLimits, EARLIEST_RESET, ExtraUsage, LATEST_RESET, LimitState, LimitWindow, WindowKind,
@@ -405,8 +405,68 @@ const CLAUDE_CHECKED: [u64; 3] = [0, 98, 0];
 /// The adapter Claude's recipe runs, inside its install.
 const CLAUDE_ADAPTER: &str = "node_modules/.bin/claude-agent-acp";
 
-/// Claude's recipe: claude-agent-acp 0.98.0 from npm, signed in to through
-/// the Claude Code it brings.
+/// The file Claude's patch changes, inside its install.
+const CLAUDE_PATCHED: &str = "node_modules/@agentclientprotocol/claude-agent-acp/dist/acp-agent.js";
+
+/// One edit of Claude's patch, by its name in `profiles/claude-0.98.0/patch/`:
+/// its `.find` and its `.replace`.
+macro_rules! claude_edit {
+    ($name:literal) => {
+        Edit::new(
+            include_str!(concat!("profiles/claude-0.98.0/patch/", $name, ".find")),
+            include_str!(concat!("profiles/claude-0.98.0/patch/", $name, ".replace")),
+        )
+    };
+}
+
+/// Claude's patch's edits, in order, each with its name in
+/// `profiles/claude-0.98.0/patch/`.
+fn claude_edits() -> Vec<(&'static str, Edit)> {
+    macro_rules! named {
+        ($($name:literal),*) => { vec![$(($name, claude_edit!($name))),*] };
+    }
+    named!(
+        "0-notice",
+        "1-version",
+        "2-scratch",
+        "3-reset",
+        "4-settle",
+        "5-fail",
+        "6-compact",
+        "7-stream",
+        "8-reply",
+        "9-limits",
+        "10-died"
+    )
+}
+
+/// What CAF changes in claude-agent-acp 0.98.0 as it installs it, at
+/// level 1: every report of the account's limits the adapter hears while
+/// the session lasts reaches CAF; one held as the session closes is lost.
+/// Claude Code reports them from a response's headers when they change,
+/// the first from its quota probe as it starts, which the adapter reads
+/// only once the first prompt is sent, before that prompt's turn is
+/// active; upstream drops a report that comes before a turn's context is
+/// measured, that one included. Patched, one that comes with no turn
+/// active is sent at once, and one during a turn before its context is
+/// measured is held until then, or until the turn's answer, all in order.
+/// One sent with nothing measured in the whole session says
+/// `_caf/limitsOnly`, its `used` meaning nothing. The adapter names its
+/// version `0.98.0+caf.1`, and the file says at its top that CAF changed
+/// it.
+fn claude_patch() -> Patch {
+    let edits = claude_edits().into_iter().map(|(_, edit)| edit).collect();
+    let file = FilePatch::new(
+        CLAUDE_PATCHED,
+        "12c05702b3295d80a838135ee15802dd25739f8871a19eae6e664efcf3e2ed0f",
+        "2a84915ca195ebaeaef0b773ccf94c3f6053bc62e6e3ed788cc8ac43788136d9",
+        edits,
+    );
+    Patch::new(1, vec![file])
+}
+
+/// Claude's recipe: claude-agent-acp 0.98.0 from npm, patched
+/// ([`claude_patch`]), signed in to through the Claude Code it brings.
 fn claude_recipe() -> Recipe {
     let adapter = |args: &[&str]| Bundled {
         program: Program::Adapter,
@@ -424,7 +484,7 @@ fn claude_recipe() -> Recipe {
     ];
     Recipe {
         version: "0.98.0".to_owned(),
-        patch: None,
+        patch: Some(claude_patch()),
         install: Install::Npm(NpmPackage {
             manifest: include_str!("profiles/claude-0.98.0/package.json").to_owned(),
             lockfile: include_str!("profiles/claude-0.98.0/package-lock.json").to_owned(),
@@ -820,6 +880,26 @@ impl ProfileChoice {
             #[cfg(feature = "fake")]
             Self::Builtin(Builtin::Fake) => claude_limits(update, now),
             Self::Cautious => None,
+        }
+    }
+
+    /// Whether a `usage_update`, `update`, of an adapter with this
+    /// profile says only its account's limits, and nothing of its memory:
+    /// CAF's patched Claude adapter ([`claude_patch`]), and the fake, say
+    /// so in `_meta._caf/limitsOnly` of one sent before the session's
+    /// context was ever measured, its `used` meaning nothing. A client
+    /// that isn't CAF reads that `used` as 0 until the first measure.
+    pub(crate) fn limits_only(&self, update: &Value) -> bool {
+        let caf = || update.pointer("/_meta/_caf~1limitsOnly") == Some(&Value::Bool(true));
+        match self {
+            Self::Builtin(Builtin::ClaudeAgentAcp) => caf(),
+            #[cfg(test)]
+            Self::Builtin(
+                Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain | Builtin::TestModels,
+            ) => false,
+            #[cfg(feature = "fake")]
+            Self::Builtin(Builtin::Fake) => caf(),
+            Self::Cautious => false,
         }
     }
 }
@@ -1392,10 +1472,14 @@ pub(crate) mod tests {
 
     #[test]
     fn the_claude_profile_is_checked_by_the_adapters_name_and_version() {
-        assert_eq!(
-            claude().check(adapter(CLAUDE_NAME, "0.98.0")).checked,
-            Checked::Yes
-        );
+        // CAF's patched adapter names its patch in build metadata.
+        for checked in ["0.98.0", "0.98.0+caf.1"] {
+            assert_eq!(
+                claude().check(adapter(CLAUDE_NAME, checked)).checked,
+                Checked::Yes,
+                "{checked}"
+            );
+        }
         let newer = claude().check(adapter(CLAUDE_NAME, "0.99.1"));
         assert_eq!((newer.checked, newer.profile), (Checked::Newer, claude()));
         for older in ["0.97.9", "0.98", "0.98.0-rc.1", "x", ""] {
@@ -1416,6 +1500,117 @@ pub(crate) mod tests {
                 .check(adapter(CLAUDE_NAME, "0.98.0"))
                 .checked,
             Checked::Cautious
+        );
+    }
+
+    /// The file Claude's patch changes as npm installs it, kept unchanged.
+    const CLAUDE_ORIGINAL: &[u8] = include_bytes!("profiles/claude-0.98.0/patch/acp-agent.js");
+
+    /// Claude's patch's one file.
+    fn claude_file_patch() -> FilePatch {
+        let patch = Builtin::ClaudeAgentAcp.recipe().patch.expect("a patch");
+        let [file] = patch.files.as_slice() else {
+            panic!("one file: {patch:?}");
+        };
+        file.clone()
+    }
+
+    #[test]
+    fn claudes_patch_is_of_the_file_npm_installs_and_makes_the_one_tested() {
+        use crate::install::PatchError;
+
+        let recipe = Builtin::ClaudeAgentAcp.recipe();
+        let level = recipe.patch.as_ref().expect("a patch").level;
+        assert_eq!(
+            recipe.installed_version(),
+            format!("{}+caf.{level}", recipe.version)
+        );
+        let file = claude_file_patch();
+        assert_eq!(file.path, CLAUDE_PATCHED);
+        let patched = file.apply(CLAUDE_ORIGINAL).expect("patched as tested");
+        // The adapter names its version as its install is named, and says
+        // at its top that CAF changed it.
+        let named = format!(r#"version: packageJson.version + "+caf.{level}","#);
+        let text = std::str::from_utf8(&patched).expect("text");
+        assert_eq!(text.matches(&named).count(), 1);
+        assert!(text.starts_with("// Modified by CAF"));
+        // A file changed by one byte isn't the one it's for.
+        let mut changed = CLAUDE_ORIGINAL.to_vec();
+        changed[CLAUDE_ORIGINAL.len() / 2] ^= 1;
+        assert_eq!(file.apply(&changed), Err(PatchError::NotAsPinned));
+    }
+
+    /// Node reads Claude's patched adapter: CAF's tests need Node, as the
+    /// adapter does, and never skip this for want of it.
+    #[test]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "a test that runs Node on the patched file: the core itself still does no I/O"
+    )]
+    fn claudes_patched_adapter_is_javascript_node_reads() {
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+
+        let patched = claude_file_patch().apply(CLAUDE_ORIGINAL).expect("patched");
+        let mut node = Command::new("node")
+            .args(["--check", "--input-type=module"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Node runs: CAF's tests need it");
+        (node.stdin.take().expect("its input"))
+            .write_all(&patched)
+            .expect("the file given");
+        let checked = node.wait_with_output().expect("Node ends");
+        assert!(
+            checked.status.success(),
+            "{}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+    }
+
+    /// Claude's patch's edits run as the adapter runs them
+    /// (`patch/edits.test.mjs`): each under "use strict", where only the
+    /// names the adapter's code has where it goes are declared, through a
+    /// report with no turn active, one held through a turn's start and
+    /// sent at each kind of measure, and one held to each kind of turn's
+    /// end; and the adapter names the version its install is named.
+    #[test]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "a test that runs Node on the patch's edits: the core itself still does no I/O"
+    )]
+    fn claudes_patch_edits_run_as_tested() {
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+
+        let edits: serde_json::Map<String, Value> = (claude_edits().into_iter())
+            .map(|(name, edit)| {
+                let edit = json!({ "find": edit.find, "replace": edit.replace });
+                (name.to_owned(), edit)
+            })
+            .collect();
+        let given = json!({
+            "version": Builtin::ClaudeAgentAcp.recipe().installed_version(),
+            "edits": edits,
+        });
+        let mut node = Command::new("node")
+            .args(["--input-type=module", "-e"])
+            .arg(include_str!("profiles/claude-0.98.0/patch/edits.test.mjs"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Node runs: CAF's tests need it");
+        (node.stdin.take().expect("its input"))
+            .write_all(given.to_string().as_bytes())
+            .expect("the edits given");
+        let ran = node.wait_with_output().expect("Node ends");
+        assert!(
+            ran.status.success(),
+            "{}",
+            String::from_utf8_lossy(&ran.stderr)
         );
     }
 
@@ -1640,6 +1835,23 @@ pub(crate) mod tests {
     /// What Claude's profile reads of `info`.
     fn claude_reads(info: Value) -> Option<AccountLimits> {
         claude().limits(&rate_limited(info), HEARD)
+    }
+
+    #[test]
+    fn claude_and_the_fake_say_when_a_report_is_of_the_limits_alone() {
+        let alone = |value: Value| {
+            json!({ "sessionUpdate": "usage_update", "used": 0, "size": 2,
+                "_meta": { "_claude/rateLimit": { "rateLimitType": "five_hour" }, "_caf/limitsOnly": value } })
+        };
+        assert!(claude().limits_only(&alone(json!(true))));
+        for not in [json!(false), json!("true"), json!(1), Value::Null] {
+            assert!(!claude().limits_only(&alone(not.clone())), "{not}");
+        }
+        assert!(!claude().limits_only(&rate_limited(json!({ "rateLimitType": "five_hour" }))));
+        assert!(!ProfileChoice::Builtin(Builtin::TestPlain).limits_only(&alone(json!(true))));
+        assert!(!ProfileChoice::Cautious.limits_only(&alone(json!(true))));
+        #[cfg(feature = "fake")]
+        assert!(ProfileChoice::Builtin(Builtin::Fake).limits_only(&alone(json!(true))));
     }
 
     #[test]

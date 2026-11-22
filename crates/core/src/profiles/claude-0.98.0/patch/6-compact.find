@@ -1,0 +1,9 @@
+                                session.contextUsedTokens = usedTokens;
+                                await sendUpdate({
+                                    sessionId: params.sessionId,
+                                    update: attachUsageModel({
+                                        sessionUpdate: "usage_update",
+                                        used: lastAssistantTotalUsage,
+                                        size: session.contextWindowSize,
+                                    }),
+                                });

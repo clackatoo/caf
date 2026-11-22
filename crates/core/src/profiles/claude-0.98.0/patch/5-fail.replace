@@ -1,0 +1,7 @@
+        const failActiveWithSessionFailure = async (kind, error, title) => {
+            // CAF: the limits still held go before the answer.
+            if (heldLimits.length > 0) {
+                await sendHeldLimits().catch((sendError) => {
+                    this.logger.error(`Session ${params.sessionId}: failed to send the limits held`, sendError);
+                });
+            }

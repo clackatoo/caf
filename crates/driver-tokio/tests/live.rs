@@ -316,7 +316,7 @@ async fn installing_claude_for_real_then_asking_whether_its_signed_in() {
         while let Some(statuses) = agents.next().await {
             match &statuses[0].install {
                 InstallState::Installed { version } => {
-                    assert_eq!(version, "0.98.0");
+                    assert_eq!(version, "0.98.0+caf.1");
                 }
                 InstallState::Cannot(why) => panic!("the install failed: {why:?}"),
                 _ => continue,
@@ -332,7 +332,7 @@ async fn installing_claude_for_real_then_asking_whether_its_signed_in() {
         .await
         .expect("installed, and asked whether it's signed in, within 20 minutes");
     eprintln!("Claude, installed: {:?}", statuses[0]);
-    let adapter = installs.join("claude-agent-acp-0.98.0/node_modules/.bin/claude-agent-acp");
+    let adapter = installs.join("claude-agent-acp-0.98.0+caf.1/node_modules/.bin/claude-agent-acp");
     assert!(adapter.exists(), "{} is there", adapter.display());
     let names: Vec<String> = std::fs::read_dir(&installs)
         .unwrap()
@@ -341,7 +341,7 @@ async fn installing_claude_for_real_then_asking_whether_its_signed_in() {
         .collect();
     assert_eq!(
         names,
-        ["claude-agent-acp-0.98.0"],
+        ["claude-agent-acp-0.98.0+caf.1"],
         "nothing half-built is left"
     );
 
@@ -946,4 +946,159 @@ async fn claude_says_its_account_limits() {
     if std::env::var_os("CAF_LIVE_RECORD").is_none() {
         let _ = std::fs::remove_dir_all(&folder);
     }
+}
+
+/// CAF's patched Claude adapter, `0.98.0+caf.1`, installed for real into
+/// a folder of the test's own, passes on Claude Code's first report of
+/// the account's limits, from its quota check as it starts, which comes
+/// before the first prompt's turn and which upstream's drops: one
+/// one-reply turn on Haiku brings it, and CAF keeps its limits, in a usage
+/// folder of the test's own. It downloads about 600 MB from npm, reads the machine's own
+/// Claude sign-in (`~/.claude`) without changing it, and spends a little
+/// usage. Prints what came of the reports' shape, never whose account it
+/// is.
+///
+/// ```text
+/// cargo test -p caf-driver-tokio --test live patched -- --ignored --nocapture
+/// ```
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "downloads Claude's adapter from npm, needs a signed-in Claude, and spends usage"]
+async fn claudes_patched_adapter_passes_on_claudes_first_limits_report() {
+    use caf_core::agent::InstallState;
+    use caf_driver_tokio::UsageConfig;
+
+    let folder = std::env::temp_dir().join(format!("caf-live-patched-{}", std::process::id()));
+    let mut folders = Folders(Vec::new());
+    folders.make(&folder);
+    let (installs, work) = (folder.join("installs"), folder.join("work"));
+    std::fs::create_dir_all(&work).unwrap();
+    let recording = std::env::var_os("CAF_LIVE_RECORD")
+        .map_or_else(|| folder.join("live.jsonl"), PathBuf::from);
+    let mut config = config_for(
+        Host::new("caf-live-test", "0.0.0"),
+        vec![AgentSpec::installed("claude", Builtin::ClaudeAgentAcp)],
+    );
+    let mut usage = UsageConfig::new(folder.join("usage"));
+    usage.fetch_prices = false;
+    config.usage = Some(usage);
+    config.installs = Some(installs.clone());
+    config.record = Some(recording.clone());
+    let (caf, running) = Caf::<caf_core::NoAppItems>::start(config);
+    let claude = AgentName("claude".into());
+
+    let mut agents = caf.watch_agents();
+    let surveyed = async {
+        while let Some(statuses) = agents.next().await {
+            if statuses[0].install != InstallState::Unknown {
+                return statuses;
+            }
+        }
+        panic!("CAF ended")
+    };
+    let statuses = tokio::time::timeout(PATIENCE, surveyed)
+        .await
+        .expect("a survey");
+    assert!(
+        matches!(statuses[0].install, InstallState::Missing { .. }),
+        "this machine can install it: {:?}",
+        statuses[0].install
+    );
+    caf.install(&claude).await.unwrap();
+    let installed = async {
+        while let Some(statuses) = agents.next().await {
+            match &statuses[0].install {
+                InstallState::Installed { version } => return version.clone(),
+                InstallState::Cannot(why) => panic!("the install failed: {why:?}"),
+                _ => {}
+            }
+        }
+        panic!("CAF ended")
+    };
+    let version = tokio::time::timeout(Duration::from_secs(20 * 60), installed)
+        .await
+        .expect("installed within 20 minutes");
+    assert_eq!(version, "0.98.0+caf.1");
+    let dist = installs.join(
+        "claude-agent-acp-0.98.0+caf.1/node_modules/@agentclientprotocol/claude-agent-acp/dist",
+    );
+    assert!(dist.join("acp-agent.js").exists());
+    assert!(dist.join("acp-agent.js.caf-original").exists());
+
+    let known = learned(&caf, &claude).await;
+    let models = choices(&known, SettingKind::Model).expect("Claude offers its models");
+    let haiku = (models.iter())
+        .find(|choice| choice.id.to_lowercase().contains("haiku"))
+        .unwrap_or_else(|| panic!("no Haiku among {models:#?}"))
+        .id
+        .clone();
+    let mut open = OpenChat::new("claude", &work);
+    open.settings = vec![SettingChoice::model(&haiku)];
+    let chat = caf.open_chat(open).await.unwrap();
+    let turn = ask(&chat, "Reply with exactly the word pong.").await;
+    assert_eq!(turn.life, TurnLife::Finished, "{turn:#?}");
+    let statuses = caf.watch_agents().next().await.expect("statuses");
+    let limits = statuses[0].limits.clone();
+    drop(chat);
+    tokio::time::timeout(PATIENCE, async {
+        caf.shutdown().await;
+        running.await;
+    })
+    .await
+    .expect("shutting down");
+
+    let text = std::fs::read_to_string(&recording).unwrap();
+    let mut versions = Vec::new();
+    let mut reports = Vec::new();
+    let mut alone = 0;
+    for line in text.lines() {
+        let line: serde_json::Value = serde_json::from_str(line).unwrap();
+        let mut found = Vec::new();
+        all_of(&line, "agentInfo", &mut found);
+        versions.extend(found.iter().map(|info| info["version"].clone()));
+        let mut found = Vec::new();
+        all_of(&line, "_claude/rateLimit", &mut found);
+        reports.extend(found.into_iter().cloned());
+        let mut found = Vec::new();
+        all_of(&line, "_caf/limitsOnly", &mut found);
+        alone += found.len();
+    }
+    assert!(!versions.is_empty(), "the adapter said what it is");
+    assert!(
+        versions.iter().all(|version| version == "0.98.0+caf.1"),
+        "{versions:?}"
+    );
+    let updates = text.matches("usage_update").count();
+    println!(
+        "{updates} usage updates, {} with limits, {alone} of the limits alone",
+        reports.len()
+    );
+    for info in &reports {
+        println!("  {}", shape_of(info));
+    }
+    let kinds: Vec<String> = (limits.windows.iter())
+        .map(|window| format!("{:?} {}%", window.kind, window.used))
+        .collect();
+    println!(
+        "kept: {kinds:?}, extra usage said: {}",
+        limits.extra_usage.is_some()
+    );
+    assert!(!reports.is_empty(), "Claude's first report came");
+    // It came before the turn first measured the agent's memory: the
+    // report from Claude's quota check as it starts, which upstream drops.
+    let first_report = text.find("_claude/rateLimit").expect("a report");
+    let first_measure = (text.match_indices(r#""sessionUpdate":"usage_update""#))
+        .map(|(at, _)| at)
+        .find(|&at| {
+            let end = text[at..].find('\n').map_or(text.len(), |end| at + end);
+            !text[at..end].contains("_claude/rateLimit")
+        })
+        .expect("a measure");
+    assert!(first_report < first_measure, "the report came first");
+    assert!(
+        !limits.windows.is_empty() || limits.extra_usage.is_some(),
+        "CAF kept what it said"
+    );
+    assert!(folder.join("usage/limits/claude-agent-acp.json").exists());
+    println!("recorded to {}", recording.display());
+    drop(folders);
 }

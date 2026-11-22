@@ -5,7 +5,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-license.workspace = true
+# Claude's patch's edits are Apache-2.0, derived from its adapter: see
+# src/profiles/claude-0.98.0/patch/NOTICE.
+license = "(MIT OR Apache-2.0) AND Apache-2.0"
 repository.workspace = true
 
 [dependencies]

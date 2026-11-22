@@ -69,6 +69,11 @@ jobs:
         with:
           shared-key: test
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # caf-core's tests check Claude's patched adapter with `node --check`,
+      # and the kit's install tests run npm: neither skips without them.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
       # The fake adapter is built first, so other crates' tests find it
       # rather than each building it.
       - run: cargo build -p caf-fake-agent --locked

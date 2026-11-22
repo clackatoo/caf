@@ -21,11 +21,24 @@ Only Claude says, for now, and only, as the Claude Agent SDK documents
 its `rate_limit_info` (type `SDKRateLimitInfo` in its `sdk.d.ts`, as
 bundled with `@agentclientprotocol/claude-agent-acp` 0.98.0), for
 "claude.ai subscription users": an account signed in with an API key
-should expect none. Its adapter tells a session
-of them in a
-`usage_update`, whenever a window's whole percent, reset or state
-changes, once the turn has had some of the agent's reply. An agent that
-never says has none.
+should expect none. Its adapter tells a session of them in a
+`usage_update`. An agent that never says has none.
+
+Claude reports them from a reply's rate-limit headers when they say
+something other than what that Claude process last heard, and first from
+a quota check it makes as it starts. Upstream's adapter drops that first
+report, which arrives before the first prompt's turn has begun, and any
+that arrives before a turn has had a reply; and as the turn's own reply
+then says nothing new, a new chat may never show its limits. CAF installs
+Claude's adapter patched
+([Installing and Signing In](~caf/getting-started/installing-and-signing-in)),
+as `0.98.0+caf.1`, and that passes on every report it hears while the
+session lasts (one still held as the session closes is lost): so a chat
+hears the limits with its first prompt, as a live run confirms. A host that runs
+upstream's adapter itself, by its own command, may never hear them.
+
+After that, a report comes only when something changes, which may be
+rarely: show limits as news when they come, and say how old they are.
 
 Each window has:
 
