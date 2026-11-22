@@ -87,14 +87,14 @@ fn every_agent_stands_somewhere_in_the_order_offered_and_a_survey_says_where() {
     assert_eq!(
         script.agents(),
         json!([
-            { "name": "claude", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" } },
-            { "name": "plain", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" } },
-            { "name": "npm-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" } },
-            { "name": "dl-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" } },
-            { "name": "npm-twin", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" } },
-            { "name": "npm-host", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" } },
-            { "name": "dl-host", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" } },
-            { "name": "claude-npx", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" } },
+            { "name": "claude", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" }, "limits": { "windows": [], "extra_usage": null, "cleared": null } },
+            { "name": "plain", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" }, "limits": { "windows": [], "extra_usage": null, "cleared": null } },
+            { "name": "npm-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" }, "limits": { "windows": [], "extra_usage": null, "cleared": null } },
+            { "name": "dl-agent", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" }, "limits": { "windows": [], "extra_usage": null, "cleared": null } },
+            { "name": "npm-twin", "install": { "type": "Unknown" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" }, "limits": { "windows": [], "extra_usage": null, "cleared": null } },
+            { "name": "npm-host", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" }, "limits": { "windows": [], "extra_usage": null, "cleared": null } },
+            { "name": "dl-host", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" }, "limits": { "windows": [], "extra_usage": null, "cleared": null } },
+            { "name": "claude-npx", "install": { "type": "Host" }, "sign_in": { "type": "Unknown" }, "can_sign_in": false, "own_tools_off": true, "settings": { "type": "Unknown" }, "limits": { "windows": [], "extra_usage": null, "cleared": null } },
         ])
     );
     let out = script.surveyed(&["test-download-1.4.0", "someone-else-1.0.0"]);

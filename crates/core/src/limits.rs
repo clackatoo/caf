@@ -136,7 +136,9 @@ pub enum WindowKind {
     /// A week, for every model. Claude's `seven_day`.
     Week,
     /// A week for one model, by the agent's name for it, lower case:
-    /// `opus`, `sonnet`. Claude's `seven_day_opus` and the like.
+    /// `opus`, `sonnet`. Claude's `seven_day_<name>`, for any name, as
+    /// its CLI knows more models than its SDK lists (`fable`), but
+    /// `seven_day_overage_included`, which is [`ExtraWeek`](WindowKind::ExtraWeek).
     ModelWeek(String),
     /// A week with extra usage counted in. Claude's
     /// `seven_day_overage_included`.
@@ -205,7 +207,11 @@ impl AccountLimits {
     /// every window, and `extra_usage`, heard before it dropped. `extra_usage`
     /// is replaced as a window is. Whether anything changed.
     ///
-    /// The same in any order: `a.merge(b)` and `b.merge(a)` end alike.
+    /// Two of a kind heard at the same moment, as two apps may, are told
+    /// apart the cautious way: the more used wins, then the worse state
+    /// (`Refused`, then `Warning`, then `Fine`), then the later reset; and
+    /// extra usage in use wins over not. So it's the same in any order:
+    /// `a.merge(b)` and `b.merge(a)` end alike.
     pub fn merge(&mut self, news: &AccountLimits) -> bool {
         let _ = news;
         todo!()

@@ -17,8 +17,9 @@ use crate::time::Now;
 impl<A: AppItem, D: AppData> Core<A, D> {
     /// An agent's account limits, as its profile's are now.
     pub(super) fn agent_limits(&self, agent: &AgentName) -> AccountLimits {
+        // Drafted: none, until the builder keeps them.
         let _ = agent;
-        todo!()
+        AccountLimits::default()
     }
 
     /// The usage driver gave what it keeps, `limits`: each is merged into

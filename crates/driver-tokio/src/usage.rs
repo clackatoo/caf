@@ -309,7 +309,10 @@ impl UsageDriver {
     /// the merged limits are reported, for the core
     /// ([`Event::Limits`](caf_core::Event::Limits)). Not tried again: the
     /// next save has news as fresh.
-    #[allow(clippy::boxed_local, reason = "drafted: the builder sends it on to the thread")]
+    #[allow(
+        clippy::boxed_local,
+        reason = "drafted: the builder sends it on to the thread"
+    )]
     pub(crate) fn save_limits(&mut self, limits: Box<ProfileLimits>) {
         let _ = limits;
         todo!()
