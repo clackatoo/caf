@@ -50,9 +50,11 @@ spent, and CAF records it on the turn: its tokens by kind (input, cache
 read and written, output, and how much of the output was thinking), one row
 per model, and its cost if the agent reports one. Claude's adapter splits
 the tokens by model, counting the subagents and compaction the turn set off
-too; an agent that doesn't gets one row, against the model the turn was
-sent on. A turn's cost is how much the agent says its session's cost rose
-over it. An agent that says nothing gives no record.
+too; an agent that doesn't gets one row, against the model it said it used
+during the turn, or else the model the turn was sent on. A turn's cost is
+how much the agent says its session's cost rose over it, if it says so
+during the turn; otherwise the turn is estimated like any other. An agent
+that says nothing gives no record.
 
 The chat adds up its turns' records as what it has **spent**: tokens,
 the cost the agent reported, and an estimate, from a table of prices, for

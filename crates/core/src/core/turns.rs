@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use super::clean::agent_text;
 use super::frames::Reply;
 use super::procs::Cause;
+use super::spending::Heard;
 use super::state::{Open, Purpose, Running};
 use super::{Core, Refused, report};
 use crate::acp::RpcError;
@@ -137,6 +138,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 id,
                 stop_by: None,
                 sent,
+                heard: Heard::default(),
             });
         }
         self.set_life(now, chat, turn, TurnLife::Running);
@@ -196,7 +198,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.end_turn(now, chat, turn, life);
         // What it spent, if the agent said, whether it finished or not.
         if let Reply::Result(result) = &reply {
-            self.turn_spent(now, chat, turn, result, running.sent, out);
+            self.turn_spent(now, chat, turn, result, (running.sent, running.heard), out);
         }
         self.pump(now, chat, out);
     }
