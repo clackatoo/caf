@@ -119,8 +119,10 @@ pub struct Config {
     /// A file to record the run in, so it can be replayed into a fresh
     /// [`Core`] as a test. `None` by default. The file must not exist yet.
     ///
-    /// It's JSON lines, of version 3. The first holds the host and the
-    /// agents: `{"caf_recording": 3, "host": …, "agents": […]}`; a reader
+    /// It's JSON lines, of version 3
+    /// ([`RECORDING_VERSION`](caf_core::event::RECORDING_VERSION)). The
+    /// first holds the host and the agents:
+    /// `{"caf_recording": 3, "host": …, "agents": […]}`; a reader
     /// checks the version before reading the rest: an older version's
     /// recording isn't read, as CAF isn't released yet. Each line
     /// after it is one event the core was given, with its time, in order:
@@ -2687,7 +2689,7 @@ impl Recorder {
             })
             .collect();
         let header = Header {
-            caf_recording: 3,
+            caf_recording: caf_core::event::RECORDING_VERSION,
             host,
             agents,
         };
