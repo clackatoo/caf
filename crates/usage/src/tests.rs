@@ -1024,14 +1024,16 @@ fn a_failed_compression_doesnt_stop_the_line() {
     let left = std::fs::read_to_string(file(folder.path(), APP, "2026-10")).expect("it's there");
     assert_eq!(left, october, "October's lines are as they were");
 
-    // Not tried again by this ledger, even once it could be.
+    // Not tried again by this ledger the same day, even once it could be.
     std::fs::remove_file(folder.path().join(APP).join("2026-10.jsonl.zst")).expect("it's gone");
     ledger
-        .record(&read(line("2026-11-22T11:00:00Z", 1, 3)))
+        .record(&read(line("2026-11-22T23:59:59Z", 1, 3)))
         .expect("it's written");
     assert!(file(folder.path(), APP, "2026-10").exists());
-    // A new one, as after a restart, does.
-    record(folder.path(), APP, [line("2026-11-22T12:00:00Z", 1, 4)]);
+    // The next day's first line tries again.
+    ledger
+        .record(&read(line("2026-11-23T00:00:00Z", 1, 4)))
+        .expect("it's written");
     assert_eq!(
         names(folder.path(), APP),
         ["2026-10.jsonl.zst", "2026-11.jsonl"]
@@ -1187,6 +1189,8 @@ fn a_zone_ahead_of_utc_reads_across_the_month() {
         [
             // 1 December, 01:00 in Auckland, but November in UTC.
             line("2026-11-30T12:00:00Z", 1, 1),
+            // 18:00 that day, in December's file.
+            line("2026-12-01T05:00:00Z", 1, 3),
             line("2026-12-01T12:00:00Z", 1, 2),
         ],
     );
@@ -1202,7 +1206,7 @@ fn a_zone_ahead_of_utc_reads_across_the_month() {
         .iter()
         .map(|bucket| (bucket.start, bucket.turns))
         .collect();
-    assert_eq!(starts, [(wall("2026-11-30T11:00:00Z"), 1)]);
+    assert_eq!(starts, [(wall("2026-11-30T11:00:00Z"), 2)]);
 }
 
 #[test]
@@ -1224,4 +1228,111 @@ fn a_ledger_that_cant_be_listed_is_named() {
     set(0o700);
     assert!(summary.buckets.is_empty());
     assert_eq!(summary.unreadable, ["."]);
+}
+
+#[test]
+fn a_restarted_ledger_tries_a_failed_compression_again() {
+    let folder = Folder::new("compress-restart");
+    put(
+        folder.path(),
+        APP,
+        "2026-10.jsonl",
+        text(&line("2026-10-30T10:00:00Z", 1, 1)).as_bytes(),
+    );
+    put(folder.path(), APP, "2026-10.jsonl.zst", b"not zstd");
+    record(folder.path(), APP, [line("2026-11-22T10:00:00Z", 1, 2)]);
+    std::fs::remove_file(folder.path().join(APP).join("2026-10.jsonl.zst")).expect("it's gone");
+    record(folder.path(), APP, [line("2026-11-22T11:00:00Z", 1, 3)]);
+    assert_eq!(
+        names(folder.path(), APP),
+        ["2026-10.jsonl.zst", "2026-11.jsonl"]
+    );
+}
+
+#[test]
+fn a_compressed_month_cut_short_is_named_and_kept() {
+    let folder = Folder::new("zst-unended");
+    let good = text(&line("2026-10-30T10:00:00Z", 1, 1));
+    let unended = line("2026-10-30T11:00:00Z", 1, 2).to_string();
+    let packed = zstd::encode_all(format!("{good}{unended}").as_bytes(), 3).expect("it packs");
+    put(folder.path(), APP, "2026-10.jsonl.zst", &packed);
+    let october = |folder: &Path| {
+        summary(
+            folder,
+            "2026-10-01T00:00:00Z",
+            "2026-11-01T00:00:00Z",
+            "UTC",
+            Resolution::Day,
+        )
+    };
+    let before = october(folder.path());
+    assert_eq!(turns(&before), 1);
+    assert_eq!(before.unreadable, ["clackatoo/2026-10.jsonl.zst"]);
+
+    // Never joined, so never cut shorter.
+    record(
+        folder.path(),
+        APP,
+        [
+            line("2026-10-30T12:00:00Z", 1, 3),
+            line("2026-11-01T10:00:00Z", 1, 4),
+        ],
+    );
+    let after =
+        std::fs::read(folder.path().join(APP).join("2026-10.jsonl.zst")).expect("it's there");
+    assert_eq!(after, packed);
+    assert_eq!(turns(&october(folder.path())), 2);
+}
+
+#[test]
+fn joining_drops_a_turn_only_for_a_line_that_reads() {
+    let folder = Folder::new("join-unreadable");
+    let mut bad = line("2026-10-30T10:00:00Z", 1, 1);
+    bad["usage"]["models"][0]["tokens"]["input"] = json!(1_u64 << 53);
+    let packed = zstd::encode_all(text(&bad).as_bytes(), 3).expect("it packs");
+    put(folder.path(), APP, "2026-10.jsonl.zst", &packed);
+    // The same turn, sound, late.
+    record(
+        folder.path(),
+        APP,
+        [
+            line("2026-10-30T10:00:00Z", 1, 1),
+            line("2026-11-01T10:00:00Z", 1, 2),
+        ],
+    );
+    assert_eq!(
+        names(folder.path(), APP),
+        ["2026-10.jsonl.zst", "2026-11.jsonl"]
+    );
+    let october = summary(
+        folder.path(),
+        "2026-10-01T00:00:00Z",
+        "2026-11-01T00:00:00Z",
+        "UTC",
+        Resolution::Day,
+    );
+    assert_eq!(turns(&october), 1, "the sound line is kept");
+    assert_eq!(october.unreadable, ["clackatoo/2026-10.jsonl.zst"]);
+}
+
+#[test]
+fn a_line_with_no_models_is_refused_and_unreadable() {
+    let folder = Folder::new("no-models");
+    let mut empty = line("2026-11-22T10:00:00Z", 1, 1);
+    empty["usage"]["models"] = json!([]);
+    let error = Ledger::new(folder.path().to_owned(), APP)
+        .record(&read(empty.clone()))
+        .expect_err("it's refused");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+    let good = text(&line("2026-11-22T10:00:00Z", 1, 2));
+    put(
+        folder.path(),
+        APP,
+        "2026-11.jsonl",
+        format!("{}{good}", text(&empty)).as_bytes(),
+    );
+    let summary = november(folder.path());
+    assert_eq!(turns(&summary), 1);
+    assert_eq!(summary.unreadable, ["clackatoo/2026-11.jsonl"]);
 }
