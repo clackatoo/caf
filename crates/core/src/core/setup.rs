@@ -400,7 +400,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             (Work::Status, SetupEvent::Status(how)) => {
                 self.setup.jobs.remove(&ticket);
                 let state = how.map_or(SignInState::SignedOut, SignInState::SignedIn);
-                self.set_sign_in(&agent, state);
+                self.found_signed_in(now, &agent, state, out);
             }
             (
                 work @ (Work::Remove { .. } | Work::SignOut | Work::Status),
@@ -1199,6 +1199,31 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     fn sign_in_state(&self, agent: &AgentName) -> SignInState {
         (self.setup.agents.get(agent))
             .map_or(SignInState::Unknown, |standing| standing.sign_in.clone())
+    }
+
+    /// `agent`'s status command found it signed in as `state` says. Found
+    /// signed out once known signed in, it was signed out elsewhere, such
+    /// as with `claude /logout`, perhaps to sign in to another account:
+    /// its limits are cleared. Not when the adapter says so by itself
+    /// (Claude's `_auth/status_update`): it may, as a token fails to
+    /// refresh offline, and its limits, which come seldom, would go from
+    /// every app. So for Claude, which says so by itself first, a
+    /// `claude /logout` outside CAF mostly clears nothing: by the time a
+    /// status command runs, it's no longer known signed in.
+    fn found_signed_in(
+        &mut self,
+        now: Now,
+        agent: &AgentName,
+        state: SignInState,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
+        let was_in = (self.setup.agents.get(agent))
+            .is_some_and(|standing| matches!(standing.sign_in, SignInState::SignedIn(_)));
+        let out_now = state == SignInState::SignedOut;
+        self.set_sign_in(agent, state);
+        if was_in && out_now {
+            self.account_changed(now, agent, out);
+        }
     }
 
     /// Sets `agent`'s sign-in state, as something reported it. While a

@@ -1,6 +1,9 @@
 //! Account limits: what agents say of them, kept per profile, given to
 //! every agent's status, forgotten as their windows reset, cleared as the
 //! account is signed out of or in to, and kept by the usage driver.
+//!
+//! The core only changes what [`Core::agents`](crate::Core::agents)
+//! gives: the driver, which compares it after each call, tells viewers.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -14,7 +17,12 @@ use crate::directive::{Directive, UsageDirective};
 use crate::ids::AgentName;
 use crate::limits::{AccountLimits, ProfileLimits};
 use crate::profiles::{Builtin, ProfileChoice};
-use crate::time::{Mono, Now};
+use crate::time::{Mono, Now, Wall};
+
+/// The longest the core waits on the steady clock for a window to
+/// reset. The steady clock stops while the machine sleeps, so a reset
+/// that passed meanwhile is found within this long of waking.
+const MOST_WAIT: Duration = Duration::from_secs(5 * 60);
 
 /// Every profile's account limits, and when the core next wakes to forget
 /// one.
@@ -23,9 +31,15 @@ use crate::time::{Mono, Now};
 pub(super) struct Limits {
     /// Each profile's, by its [slug](Builtin::slug).
     kept: BTreeMap<&'static str, AccountLimits>,
-    /// When the earliest window of any resets, on the steady clock, as of
-    /// the last call: one of the core's deadlines.
+    /// When to wake next, on the steady clock: at the earliest reset of
+    /// any window, or [`MOST_WAIT`] from when it was worked out if that's
+    /// sooner. One of the core's deadlines.
     pub(super) wake: Option<Mono>,
+    /// The earliest reset `wake` was worked out for. It's worked out
+    /// again only when that changes, or at `wake`: worked out on every
+    /// call, the two clocks' readings, never quite in step, would move it
+    /// by a little each time.
+    wake_for: Option<Wall>,
 }
 
 impl<A: AppItem, D: AppData> Core<A, D> {
@@ -37,19 +51,24 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .unwrap_or_default()
     }
 
-    /// The usage driver gave what it keeps, `limits`: each is merged into
-    /// its profile's, and the agents' statuses are told again if any
-    /// changed. Never saved back.
-    pub(super) fn limits_given(&mut self, limits: Vec<ProfileLimits>) {
-        for given in limits {
+    /// The usage driver gave what it keeps, `limits`, at `now`: each is
+    /// merged into its profile's, as news from the agent is, so what
+    /// [`Core::agents`](crate::Core::agents) gives changes if any did.
+    /// Never saved back.
+    pub(super) fn limits_given(&mut self, now: Now, limits: Vec<ProfileLimits>) {
+        for mut given in limits {
+            not_after(&mut given.limits, now.wall);
             let kept = self.limits.kept.entry(given.profile.slug()).or_default();
             kept.merge(&given.limits);
+            kept.forget_passed(now.wall);
         }
     }
 
     /// An agent of `profile` said something of its limits, in a
-    /// `usage_update`, `update`: merged in, saved, and the agents'
-    /// statuses told again, if it changed anything.
+    /// `usage_update`, `update`: merged in, saved if that changed
+    /// anything, then any window already reset forgotten. Saved before
+    /// it's forgotten, so a report of a window that has reset replaces
+    /// the earlier one kept, and every app forgets it alike.
     pub(super) fn limits_heard(
         &mut self,
         now: Now,
@@ -57,20 +76,18 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         update: &Value,
         out: &mut Vec<Directive<A, D>>,
     ) {
-        let Some(mut news) = ProfileChoice::Builtin(profile).limits(update, now.wall) else {
+        let Some(news) = ProfileChoice::Builtin(profile).limits(update, now.wall) else {
             return;
         };
-        // A window already reset is no news.
-        news.forget_passed(now.wall);
         let kept = self.limits.kept.entry(profile.slug()).or_default();
         if kept.merge(&news) {
             save(profile, kept, out);
         }
+        kept.forget_passed(now.wall);
     }
 
     /// `profile`'s account was signed out of, or a sign-in to it
-    /// finished: its limits are cleared as of `now`, saved, and the
-    /// agents' statuses told again.
+    /// finished: its limits are cleared as of `now`, and saved.
     pub(super) fn limits_cleared(
         &mut self,
         now: Now,
@@ -86,8 +103,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         save(profile, kept, out);
     }
 
-    /// `agent` was signed out of, or in to: its profile's limits are
-    /// cleared, if it has one.
+    /// `agent` was signed out of, or in to, or found signed out: its
+    /// profile's limits are cleared, if it has one.
     pub(super) fn account_changed(
         &mut self,
         now: Now,
@@ -101,23 +118,64 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
     }
 
-    /// The core woke, or a call ended: every window whose reset has
-    /// passed is forgotten, and the agents' statuses told again if any
-    /// was. The earliest reset left is one of the core's deadlines.
+    /// A call ends: every window whose reset has passed is forgotten, and
+    /// the wake-up worked out again if the earliest reset left changed.
+    pub(super) fn limits_tidied(&mut self, now: Now) {
+        let next = self.forget_passed(now);
+        if next != self.limits.wake_for {
+            self.wake_for_reset(now, next);
+        }
+    }
+
+    /// The core woke for the limits: every window whose reset has passed
+    /// is forgotten, and the wake-up worked out again, as the wall clock
+    /// may say the earliest hasn't yet.
     pub(super) fn limits_woken(&mut self, now: Now) {
+        let next = self.forget_passed(now);
+        self.wake_for_reset(now, next);
+    }
+
+    /// Forgets every window whose reset has passed: the earliest reset
+    /// left.
+    fn forget_passed(&mut self, now: Now) -> Option<Wall> {
         for kept in self.limits.kept.values_mut() {
             kept.forget_passed(now.wall);
         }
-        // Measured on the steady clock from now, as the wall clock may
-        // jump: on waking, the wall clock is asked again.
-        self.limits.wake = (self.limits.kept.values())
+        (self.limits.kept.values())
             .filter_map(AccountLimits::next_reset)
             .min()
-            .map(|resets| {
-                let left = u64::try_from(resets.0.saturating_sub(now.wall.0)).unwrap_or(0);
-                now.mono.after(Duration::from_millis(left))
-            });
     }
+
+    /// Wakes the core for the reset at `next`, measured on the steady
+    /// clock from now, but never more than [`MOST_WAIT`] away.
+    fn wake_for_reset(&mut self, now: Now, next: Option<Wall>) {
+        self.limits.wake_for = next;
+        self.limits.wake = next.map(|resets| {
+            let left = u64::try_from(resets.0.saturating_sub(now.wall.0)).unwrap_or(0);
+            now.mono.after(Duration::from_millis(left).min(MOST_WAIT))
+        });
+    }
+}
+
+/// Takes `limits` as heard no later than `now`: news from a clock ahead
+/// would otherwise outrank every later report.
+///
+/// The usage driver holds what it keeps to a little past its own now
+/// (in caf-usage, a minute for what's heard, seconds for a clearing), as
+/// it must keep another app's news as it was. Each of the core's calls
+/// takes it as now, and never saves it back, so the two agree once the
+/// driver's now has passed it: within that minute. Till then, a window
+/// from such a clock may outrank the agent's news of it in the file, and
+/// so in the core, but nothing goes round: what the driver gives is never
+/// saved.
+fn not_after(limits: &mut AccountLimits, now: Wall) {
+    for window in &mut limits.windows {
+        window.heard = window.heard.min(now);
+    }
+    if let Some(extra) = limits.extra_usage.as_mut() {
+        extra.heard = extra.heard.min(now);
+    }
+    limits.cleared = limits.cleared.map(|cleared| cleared.min(now));
 }
 
 /// Tells the usage driver to keep `profile`'s limits, `limits`.

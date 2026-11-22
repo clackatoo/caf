@@ -7,7 +7,6 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::limits::{AccountLimits, ExtraUsage, LimitState, LimitWindow, WindowKind};
-use crate::profiles::Builtin;
 use crate::time::Wall;
 
 /// An hour, in milliseconds.
@@ -325,20 +324,28 @@ impl Dice {
     fn limits(&mut self) -> AccountLimits {
         let kinds = every_kind();
         let states = [LimitState::Fine, LimitState::Warning, LimitState::Refused];
-        let windows = (0..self.roll(4))
+        // Now and then a crowd of models' weeks and others, more than a
+        // profile keeps, heard over a while for a clearing to fall among.
+        let crowd = self.roll(3) == 0;
+        let (count, times) = if crowd { (60, 8) } else { (4, 4) };
+        let windows = (0..self.roll(count))
             .map(|_| LimitWindow {
-                kind: kinds[usize::try_from(self.roll(5)).expect("small")].clone(),
+                kind: match self.roll(if crowd { 10 } else { 5 }) {
+                    at @ 0..5 => kinds[usize::try_from(at).expect("small")].clone(),
+                    5..7 => WindowKind::ModelWeek(format!("m{}", self.roll(20))),
+                    _ => WindowKind::Other(format!("o{}", self.roll(16))),
+                },
                 used: u8::try_from(self.roll(3) * 40).expect("small"),
                 resets: (self.roll(3) > 0).then(|| Wall(RESETS + self.small(2))),
                 state: states[usize::try_from(self.roll(3)).expect("small")],
-                heard: Wall(self.small(4)),
+                heard: Wall(self.small(times)),
             })
             .collect();
         let extra_usage = (self.roll(2) == 0).then(|| ExtraUsage {
             in_use: self.roll(2) == 0,
             heard: Wall(self.small(4)),
         });
-        let cleared = (self.roll(3) == 0).then(|| Wall(self.small(4)));
+        let cleared = (self.roll(3) == 0).then(|| Wall(self.small(8)));
         AccountLimits {
             windows,
             extra_usage,
@@ -365,7 +372,121 @@ fn orders<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
 }
 
 #[test]
+fn a_merge_keeps_shares_to_100_and_resets_to_2020_to_2100() {
+    let mut kept = AccountLimits::default();
+    kept.merge(&limits(vec![
+        window(WindowKind::FiveHours, 250, Some(RESETS), 1000),
+        window(WindowKind::Week, 10, Some(1000), 1000),
+        window(WindowKind::ExtraWeek, 10, Some(4_102_444_800_000), 1000),
+        window(WindowKind::Other("x".into()), 10, Some(1 << 60), 1000),
+        window(
+            WindowKind::Other("y".into()),
+            10,
+            Some(1_577_836_800_000),
+            1000,
+        ),
+    ]));
+    let read: Vec<(u8, Option<Wall>)> = (kept.windows.iter())
+        .map(|window| (window.used, window.resets))
+        .collect();
+    assert_eq!(
+        read,
+        [
+            (100, Some(Wall(RESETS))),
+            (10, None),
+            (10, None),
+            (10, None),
+            (10, Some(Wall(1_577_836_800_000))),
+        ]
+    );
+}
+
+/// The names of `limits`' windows of `class`, as `name` reads them.
+fn named(limits: &AccountLimits, name: impl Fn(&WindowKind) -> Option<&str>) -> Vec<String> {
+    (limits.windows.iter())
+        .filter_map(|window| name(&window.kind).map(str::to_owned))
+        .collect()
+}
+
+/// An other window's name.
+fn other(kind: &WindowKind) -> Option<&str> {
+    match kind {
+        WindowKind::Other(name) => Some(name),
+        _ => None,
+    }
+}
+
+/// A model's week's name.
+fn model(kind: &WindowKind) -> Option<&str> {
+    match kind {
+        WindowKind::ModelWeek(name) => Some(name),
+        _ => None,
+    }
+}
+
+#[test]
+fn a_profile_keeps_16_models_weeks_and_13_others_at_most_the_latest_heard() {
+    let mut kept = AccountLimits::default();
+    let mut news = vec![
+        window(WindowKind::FiveHours, 1, None, 0),
+        window(WindowKind::Week, 1, None, 0),
+        window(WindowKind::ExtraWeek, 1, None, 0),
+    ];
+    news.extend((0..20).map(|at| window(WindowKind::ModelWeek(format!("m{at:02}")), 1, None, at)));
+    news.extend((0..3000).map(|at| window(WindowKind::Other(format!("o{at:04}")), 1, None, at)));
+    kept.merge(&limits(news));
+    assert_eq!(kept.windows.len(), 32);
+    // Every window of a kind CAF knows, never dropped.
+    assert_eq!(kept.windows[0].kind, WindowKind::FiveHours);
+    assert_eq!(kept.windows[1].kind, WindowKind::Week);
+    assert_eq!(
+        named(&kept, model),
+        (4..20).map(|at| format!("m{at:02}")).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        named(&kept, other),
+        (2987..3000)
+            .map(|at| format!("o{at:04}"))
+            .collect::<Vec<_>>()
+    );
+    // Heard at once, the first by name are kept.
+    let mut kept = AccountLimits::default();
+    kept.merge(&limits(
+        (0..20)
+            .map(|at| window(WindowKind::Other(format!("o{at:02}")), 1, None, 5))
+            .collect(),
+    ));
+    assert_eq!(
+        named(&kept, other),
+        (0..13).map(|at| format!("o{at:02}")).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_clearing_and_a_full_profile_end_the_same_in_either_order() {
+    let mut full = vec![window(WindowKind::Week, 1, None, 0)];
+    full.extend((0..32).map(|at| window(WindowKind::Other(format!("o{at:02}")), 1, None, 10)));
+    let full = limits(full);
+    let clearing = AccountLimits {
+        cleared: Some(Wall(5)),
+        ..AccountLimits::default()
+    };
+    let mut first = AccountLimits::default();
+    first.merge(&full);
+    first.merge(&clearing);
+    let mut second = AccountLimits::default();
+    second.merge(&clearing);
+    second.merge(&full);
+    assert_eq!(first, second);
+    assert_eq!(
+        named(&first, other),
+        (0..13).map(|at| format!("o{at:02}")).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn merging_ends_the_same_in_any_order() {
+    let mut capped = 0;
     for seed in 1..=300_u64 {
         let mut dice = Dice(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let news: Vec<AccountLimits> = (0..5).map(|_| dice.limits()).collect();
@@ -395,7 +516,22 @@ fn merging_ends_the_same_in_any_order() {
             assert!(window.state != LimitState::Refused || window.used == 100);
             assert!(first.cleared.is_none_or(|cleared| window.heard >= cleared));
         }
+        // A class full, with a clearing that dropped some of its news.
+        let full = |class: &dyn Fn(&WindowKind) -> Option<&str>, most| {
+            named(&first, class).len() == most
+                && first.cleared.is_some_and(|cleared| {
+                    (news.iter().flat_map(|each| &each.windows))
+                        .any(|window| class(&window.kind).is_some() && window.heard < cleared)
+                })
+        };
+        if full(&other, 13) || full(&model, 16) {
+            capped += 1;
+        }
     }
+    assert!(
+        capped > 10,
+        "some seeds fill a class of window past a clearing: {capped}"
+    );
 }
 
 #[test]
@@ -446,23 +582,6 @@ fn the_next_reset_is_the_earliest() {
         limits(vec![window(WindowKind::Week, 1, None, 0)]).next_reset(),
         None
     );
-}
-
-#[test]
-fn a_profile_is_found_by_its_slug() {
-    for profile in [
-        Builtin::ClaudeAgentAcp,
-        Builtin::TestNpm,
-        Builtin::TestDownload,
-        Builtin::TestPlain,
-        Builtin::TestModels,
-        #[cfg(feature = "fake")]
-        Builtin::Fake,
-    ] {
-        assert_eq!(Builtin::from_slug(profile.slug()), Some(profile));
-    }
-    assert_eq!(Builtin::from_slug("claude"), None);
-    assert_eq!(Builtin::from_slug(""), None);
 }
 
 /// `fixtures/pace.json`: the pace and length of a window of every kind at

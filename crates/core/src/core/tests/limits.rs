@@ -259,8 +259,9 @@ fn limits_given_before_any_agent_says_are_on_the_statuses_from_the_start() {
     assert!(saved(&out).is_empty());
     assert_eq!(script.limits("claude"), kept);
     assert_eq!(script.limits("claude-npx"), kept);
-    // And the core wakes for its reset.
-    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 86_400_000 })]);
+    // And the core wakes for its reset, looking again every five
+    // minutes, as the steady clock stops while the machine sleeps.
+    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 300_000 })]);
 }
 
 #[test]
@@ -275,7 +276,11 @@ fn no_window_outlives_its_reset() {
         },
     }));
     let out = script.update(PROC, SESSION, &report);
-    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 3_600_000 })]);
+    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 301_000 })]);
+    // Each five minutes, it looks again.
+    script.at(301_000);
+    let out = script.woken();
+    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 601_000 })]);
     // Not yet.
     script.at(3_599_999);
     script.woken();
@@ -294,7 +299,7 @@ fn no_window_outlives_its_reset() {
     );
     // Forgetting isn't news to save: every app forgets it alike.
     assert!(saved(&out).is_empty());
-    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 86_400_000 })]);
+    assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 3_900_000 })]);
     // Woken late, by anything: the one with no reset stays.
     script.at(90_000_000);
     let out = script.update(
@@ -311,13 +316,18 @@ fn no_window_outlives_its_reset() {
 }
 
 #[test]
-fn a_window_already_reset_is_no_news_from_the_agent_or_the_usage_driver() {
+fn a_window_already_reset_is_never_shown_from_the_agent_or_the_usage_driver() {
     let mut script = Script::with_claude();
     script.at(10_000);
     let info = json!({ "unifiedWindows": { "five_hour": { "utilization": 0.4, "resetsAt": seconds(5000) } } });
     let out = script.update(PROC, SESSION, &limited(info));
-    assert!(saved(&out).is_empty());
     assert_eq!(script.limits("claude")["windows"], json!([]));
+    // Saved as heard all the same, for the file to replace any earlier
+    // report of it, and forget it.
+    assert_eq!(
+        saved(&out)[0]["limits"]["windows"],
+        json!([window("FiveHours", 40, Some(5000), "Fine", 10_000)])
+    );
     let stale = json!({
         "windows": [window("FiveHours", 40, Some(5000), "Fine", 1000)],
         "extra_usage": null, "cleared": null,
@@ -492,7 +502,7 @@ fn woken_before_the_wall_clock_says_a_reset_has_passed_the_core_waits_again() {
         mono: Mono(0),
     };
     core.handle(start, given(&kept), &mut out);
-    assert_eq!(wake_in(&out), Some(Mono(60 * minute)));
+    assert_eq!(wake_in(&out), Some(Mono(5 * minute)));
     // The steady clock says an hour has gone, the wall clock a minute
     // less: the window stays, and the core waits that minute.
     let mut out = Vec::new();
@@ -545,4 +555,303 @@ fn history_a_session_replays_says_nothing_of_limits() {
         script.limits("claude")["windows"].as_array().map(Vec::len),
         Some(2)
     );
+}
+
+/// A core of its own, given the usage driver's `kept` at `now`: what it
+/// gave out, and the core.
+fn core_given(
+    kept: &Value,
+    now: crate::time::Now,
+) -> (crate::core::Core, Vec<crate::directive::Directive>) {
+    let mut core: crate::core::Core =
+        crate::core::Core::starting_ids_at(host(), super::harness::agents(), 1000);
+    let mut out = Vec::new();
+    core.handle(now, given(kept), &mut out);
+    (core, out)
+}
+
+/// The wake-up `out` asks for, if it asks for one.
+fn wake_asked(out: &[crate::directive::Directive]) -> Option<Option<crate::time::Mono>> {
+    use crate::directive::{Directive, TimerDirective};
+    (out.iter()).find_map(|directive| match directive {
+        Directive::Timer(TimerDirective::WakeAt(at)) => Some(*at),
+        _ => None,
+    })
+}
+
+/// A minute on the steady clock, in nanoseconds.
+const MINUTE: u64 = 60_000_000_000;
+
+#[test]
+fn a_reset_missed_while_the_machine_slept_is_caught_within_five_minutes_of_waking() {
+    use crate::time::{Mono, Now};
+
+    let kept = json!({
+        "windows": [window("Week", 64, Some(86_400_000), "Fine", 0)],
+        "extra_usage": null, "cleared": null,
+    });
+    let start = Now {
+        wall: Wall(EPOCH),
+        mono: Mono(0),
+    };
+    let (mut core, out) = core_given(&kept, start);
+    // Never more than five minutes off on the steady clock, as it stops
+    // while the machine sleeps.
+    assert_eq!(wake_asked(&out), Some(Some(Mono(5 * MINUTE))));
+    // Asleep for two days: the steady clock moved five minutes, the wall
+    // clock past the reset.
+    let mut out = Vec::new();
+    let woke = Now {
+        wall: Wall(EPOCH + 2 * 86_400_000),
+        mono: Mono(5 * MINUTE),
+    };
+    core.handle(woke, Event::Woken, &mut out);
+    assert!(core.agents()[0].limits.windows.is_empty());
+    // Awake, it waits for the next five minutes again.
+    let kept = json!({
+        "windows": [window("Week", 64, Some(4 * 86_400_000), "Fine", 0)],
+        "extra_usage": null, "cleared": null,
+    });
+    let mut out = Vec::new();
+    core.handle(woke, given(&kept), &mut out);
+    assert_eq!(wake_asked(&out), Some(Some(Mono(10 * MINUTE))));
+    let mut out = Vec::new();
+    let later = Now {
+        wall: Wall(EPOCH + 2 * 86_400_000 + 5 * 60_000),
+        mono: Mono(10 * MINUTE),
+    };
+    core.handle(later, Event::Woken, &mut out);
+    assert_eq!(core.agents()[0].limits.windows.len(), 1);
+    assert_eq!(wake_asked(&out), Some(Some(Mono(15 * MINUTE))));
+}
+
+#[test]
+fn clocks_a_little_apart_from_call_to_call_ask_for_no_new_wake_up() {
+    use crate::time::{Mono, Now};
+
+    let kept = json!({
+        "windows": [window("FiveHours", 40, Some(120_000), "Fine", 0)],
+        "extra_usage": null, "cleared": null,
+    });
+    let (mut core, out) = core_given(
+        &kept,
+        Now {
+            wall: Wall(EPOCH),
+            mono: Mono(0),
+        },
+    );
+    assert_eq!(wake_asked(&out), Some(Some(Mono(2 * MINUTE))));
+    // Each call's two readings a fraction of a millisecond apart from
+    // the last's.
+    for step in 1..50_u64 {
+        let now = Now {
+            wall: Wall(EPOCH + i64::try_from(step * 100).expect("small")),
+            mono: Mono(step * 100_000_000 + (step % 7) * 130_000),
+        };
+        let mut out = Vec::new();
+        core.handle(now, Event::Limits(Vec::new()), &mut out);
+        assert_eq!(wake_asked(&out), None, "step {step}");
+    }
+}
+
+#[test]
+fn the_core_wakes_for_the_earliest_reset_of_any_profile() {
+    use crate::time::{Mono, Now};
+
+    let mut core: crate::core::Core =
+        crate::core::Core::starting_ids_at(host(), super::harness::agents(), 1000);
+    let limits = |profile, resets: i64| {
+        let kept = json!({
+            "windows": [window("FiveHours", 40, Some(resets), "Fine", 0)],
+            "extra_usage": null, "cleared": null,
+        });
+        ProfileLimits {
+            profile,
+            limits: serde_json::from_value(kept).expect("limits read"),
+        }
+    };
+    let mut out = Vec::new();
+    let now = Now {
+        wall: Wall(EPOCH),
+        mono: Mono(0),
+    };
+    core.handle(
+        now,
+        Event::Limits(vec![
+            limits(Builtin::ClaudeAgentAcp, 180_000),
+            limits(Builtin::TestModels, 120_000),
+        ]),
+        &mut out,
+    );
+    assert_eq!(wake_asked(&out), Some(Some(Mono(2 * MINUTE))));
+    let mut out = Vec::new();
+    let then = Now {
+        wall: Wall(EPOCH + 120_000),
+        mono: Mono(2 * MINUTE),
+    };
+    core.handle(then, Event::Woken, &mut out);
+    assert_eq!(wake_asked(&out), Some(Some(Mono(3 * MINUTE))));
+    assert_eq!(
+        core.inspect()["limits"]["kept"]["test-models"]["windows"],
+        json!([])
+    );
+}
+
+#[test]
+fn news_from_the_future_is_taken_as_heard_now() {
+    let mut script = Script::new(host());
+    script.at(1000);
+    let ahead = json!({
+        "windows": [window("Week", 64, Some(86_400_000), "Fine", 50_000_000)],
+        "extra_usage": { "in_use": true, "heard": EPOCH + 50_000_000 },
+        "cleared": EPOCH + 40_000_000,
+    });
+    script.event(given(&ahead));
+    let limits = script.limits("claude");
+    assert_eq!(limits["windows"][0]["heard"], EPOCH + 1000);
+    assert_eq!(limits["extra_usage"]["heard"], EPOCH + 1000);
+    assert_eq!(limits["cleared"], EPOCH + 1000);
+    // So the agent's news, heard later, isn't lost to it.
+    script.at(2000);
+    script.open_claude();
+    script.update(
+        PROC,
+        SESSION,
+        &five_and_week(0.2, 3_600_000, 0.3, 86_400_000),
+    );
+    assert_eq!(script.limits("claude")["windows"][1]["used"], 30);
+}
+
+#[test]
+fn a_later_report_of_a_window_already_reset_forgets_it_as_the_usage_drivers_would() {
+    let mut script = Script::with_claude();
+    script.at(1000);
+    script.update(
+        PROC,
+        SESSION,
+        &five_and_week(0.2, 3_600_000, 0.3, 86_400_000),
+    );
+    script.at(10_000);
+    let info = json!({ "unifiedWindows": { "five_hour": { "utilization": 0.4, "resetsAt": seconds(5000) } } });
+    let out = script.update(PROC, SESSION, &limited(info));
+    assert_eq!(
+        script.limits("claude")["windows"],
+        json!([window("Week", 30, Some(86_400_000), "Fine", 1000)])
+    );
+    // Saved as merged, before it's forgotten, so the file holds the later
+    // report and every app forgets it alike, rather than taking back the
+    // earlier one.
+    assert_eq!(
+        saved(&out)[0]["limits"]["windows"],
+        json!([
+            window("FiveHours", 40, Some(5000), "Fine", 10_000),
+            window("Week", 30, Some(86_400_000), "Fine", 1000),
+        ])
+    );
+    // The same from the usage driver.
+    let mut script = Script::with_claude();
+    script.at(1000);
+    script.update(
+        PROC,
+        SESSION,
+        &five_and_week(0.2, 3_600_000, 0.3, 86_400_000),
+    );
+    script.at(10_000);
+    let reset = json!({
+        "windows": [window("FiveHours", 40, Some(5000), "Fine", 9000)],
+        "extra_usage": null, "cleared": null,
+    });
+    script.event(given(&reset));
+    assert_eq!(
+        script.limits("claude")["windows"],
+        json!([window("Week", 30, Some(86_400_000), "Fine", 1000)])
+    );
+}
+
+#[test]
+fn a_sign_in_or_out_command_that_couldnt_run_clears_nothing() {
+    let mut script = Script::with_claude();
+    script.at(1000);
+    script.update(
+        PROC,
+        SESSION,
+        &five_and_week(0.2, 3_600_000, 0.3, 86_400_000),
+    );
+    let sign_in = ticket(&script.sign_in("claude").1, "sign_in");
+    let out = script.setup(sign_in, SetupEvent::Failed("no such file".into()));
+    assert!(saved(&out).is_empty());
+    let run = ticket(&script.sign_out("claude").1, "run");
+    let out = script.setup(run, SetupEvent::Failed("no such file".into()));
+    assert!(saved(&out).is_empty());
+    assert_eq!(
+        script.limits("claude")["windows"].as_array().map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(script.limits("claude")["cleared"], Value::Null);
+}
+
+#[test]
+fn an_agent_that_says_by_itself_its_signed_out_clears_nothing() {
+    let mut script = Script::with_claude();
+    let push = |kind: &str| json!({ "jsonrpc": "2.0", "method": "_auth/status_update", "params": { "authStatus": { "kind": kind } } });
+    script.at(1000);
+    script.says(PROC, &push("account"));
+    script.update(
+        PROC,
+        SESSION,
+        &five_and_week(0.2, 3_600_000, 0.3, 86_400_000),
+    );
+    // Claude may say it's signed out as a token fails to refresh,
+    // offline: that's no sign the account changed, so its limits, which
+    // come seldom, are kept.
+    script.at(2000);
+    let out = script.says(PROC, &push("none"));
+    assert_eq!(
+        script.agent_status("claude")["sign_in"],
+        json!({ "type": "SignedOut" })
+    );
+    assert!(saved(&out).is_empty());
+    assert_eq!(
+        script.limits("claude")["windows"].as_array().map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(script.limits("claude")["cleared"], Value::Null);
+}
+
+#[test]
+fn a_status_command_that_finds_an_agent_signed_out_clears_its_limits() {
+    use crate::install::SignedInAs;
+
+    let mut script = Script::new(host());
+    let survey = ticket(&script.check_agents(), "survey");
+    let out = script.setup(survey, super::setup::found(&["test-download-1.4.0"]));
+    let status = ticket(&out, "status");
+    script.setup(status, SetupEvent::Status(Some(SignedInAs::Account)));
+    script.at(1000);
+    let kept = json!({
+        "windows": [window("Week", 64, Some(86_400_000), "Fine", 1000)],
+        "extra_usage": null, "cleared": null,
+    });
+    let limits: AccountLimits = serde_json::from_value(kept).expect("limits read");
+    script.event(Event::Limits(vec![ProfileLimits {
+        profile: Builtin::TestDownload,
+        limits,
+    }]));
+    assert_eq!(
+        script.limits("dl-agent")["windows"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    // Signed out elsewhere: the next look finds it.
+    script.at(2000);
+    let survey = ticket(&script.check_agents(), "survey");
+    let out = script.setup(survey, super::setup::found(&["test-download-1.4.0"]));
+    let status = ticket(&out, "status");
+    let out = script.setup(status, SetupEvent::Status(None));
+    assert_eq!(
+        script.limits("dl-agent"),
+        json!({ "windows": [], "extra_usage": null, "cleared": EPOCH + 2000 })
+    );
+    assert_eq!(saved(&out).len(), 1);
 }

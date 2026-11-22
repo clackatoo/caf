@@ -30,7 +30,7 @@ fn ticket_of(out: &[Value], key: &str) -> u64 {
 
 /// What a survey of a Linux x86_64 machine with Node 22 and npm finds,
 /// with `installed`.
-fn found(installed: &[&str]) -> SetupEvent {
+pub(super) fn found(installed: &[&str]) -> SetupEvent {
     found_on(installed, Some(22), true, "x86_64")
 }
 

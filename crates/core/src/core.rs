@@ -69,6 +69,13 @@ const MOST_MISFIT: usize = 1024;
 /// `A` is the app's own kind of item ([`AppItem`]) and `D` its data on
 /// each chat ([`AppData`]); an app with neither leaves them out.
 ///
+/// It asks to be woken ([`TimerDirective::WakeAt`](crate::directive::TimerDirective::WakeAt))
+/// at its earliest deadline, on the steady clock. While any agent's
+/// account [limits](crate::limits) have a window that resets, that's
+/// never more than five minutes off: the steady clock stops while the
+/// machine sleeps, so a reset that passed meanwhile is found within five
+/// minutes of waking.
+///
 /// With the feature `inspect`, it's `Clone`, so a debugging tool can keep
 /// copies of a replay along the way and start again from the nearest. A
 /// copy is a core of its own: given the same events, it does what the
@@ -370,7 +377,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Event::Storage { ticket, event } => self.storage_event(now, ticket, event, out),
             Event::Setup { ticket, event } => self.setup_event(now, ticket, event, out),
             Event::Prices(prices) => self.prices_given(prices),
-            Event::Limits(limits) => self.limits_given(limits),
+            Event::Limits(limits) => self.limits_given(now, limits),
         }
         self.finish(now, out);
     }
@@ -1045,7 +1052,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 ));
             }
         }
-        self.limits_woken(now);
+        self.limits_tidied(now);
         let next = self.next_deadline();
         if next != self.wake {
             self.wake = next;

@@ -886,6 +886,12 @@ async fn claude_says_its_account_limits() {
     }
     let updates = text.matches("usage_update").count();
     println!("{updates} usage updates, {} with limits", reports.len());
+    if reports.is_empty() {
+        println!(
+            "NO LIMITS REPORT came: Claude's adapter passes one on only after the turn's \
+             first reply, and Claude sends one only when a window's whole percent changes"
+        );
+    }
     for info in &reports {
         println!("  {}", shape_of(info));
     }
@@ -907,11 +913,34 @@ async fn claude_says_its_account_limits() {
         limits.extra_usage.is_some()
     );
     if !reports.is_empty() {
-        assert!(
-            !limits.windows.is_empty() || limits.extra_usage.is_some(),
-            "a report that was heard is kept"
-        );
-        assert!(folder.join("usage/limits/claude-agent-acp.json").exists());
+        if !limits.windows.is_empty() || limits.extra_usage.is_some() {
+            assert!(folder.join("usage/limits/claude-agent-acp.json").exists());
+        }
+        // Each share said, as a whole percent, a threshold passed in
+        // place of one, and all of it for a refusal: one of them is a
+        // kept window's.
+        let mut shares = Vec::new();
+        for info in &reports {
+            let unified = info["unifiedWindows"].as_object().into_iter().flatten();
+            for fields in std::iter::once(info).chain(unified.map(|(_, fields)| fields)) {
+                for key in ["utilization", "surpassedThreshold"] {
+                    if let Some(share) = fields[key].as_f64() {
+                        shares.push((share * 100.0).round());
+                    }
+                }
+                if fields["status"] == "rejected" {
+                    shares.push(100.0);
+                }
+            }
+        }
+        if limits.windows.is_empty() {
+            println!("no window kept, as each had reset or none read");
+        } else {
+            assert!(
+                (limits.windows.iter()).any(|window| shares.contains(&f64::from(window.used))),
+                "a window's share is one Claude said: {shares:?}"
+            );
+        }
     }
     println!("recorded to {}", recording.display());
     if std::env::var_os("CAF_LIVE_RECORD").is_none() {

@@ -167,6 +167,8 @@
 //! `models-acp` lists only its models, the older way, as Gemini's adapter
 //! did: in the unstable `models` field, set with `session/set_model`.
 
+use std::collections::BTreeMap;
+
 use agent_client_protocol_schema::v1 as acp;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -177,7 +179,9 @@ use crate::install::{
     Bundled, Install, LinkFrom, Needs, NpmPackage, Program, Recipe, SignIn, SignedInAs, Status,
     StatusCommand,
 };
-use crate::limits::{AccountLimits, ExtraUsage, LimitState, LimitWindow, WindowKind};
+use crate::limits::{
+    AccountLimits, EARLIEST_RESET, ExtraUsage, LATEST_RESET, LimitState, LimitWindow, WindowKind,
+};
 use crate::time::Wall;
 use crate::usage::Tokens;
 
@@ -806,34 +810,58 @@ impl ProfileChoice {
     }
 }
 
-/// The earliest reset CAF keeps: 2020-01-01, UTC.
-const EARLIEST_RESET: Wall = Wall(1_577_836_800_000);
-
-/// The first reset CAF doesn't keep: 2100-01-01, UTC.
-const LATEST_RESET: Wall = Wall(4_102_444_800_000);
-
 /// The longest name of a window CAF keeps, in bytes.
 const MOST_WINDOW_NAME: usize = 64;
+
+/// The most windows CAF takes from one report.
+const MOST_REPORTED: usize = 16;
 
 /// What Claude's adapter says of its account's limits in a `usage_update`,
 /// `update`, heard at `now`: `_meta._claude/rateLimit`, the Claude Agent
 /// SDK's `rate_limit_info`. `unifiedWindows`' windows, then the limit
 /// itself if it's of a kind they don't hold; and whether extra usage is in
 /// use. `None` if nothing in it reads.
+///
+/// At most [`MOST_REPORTED`] windows: the limit's own, and the rest in
+/// the order [`WindowKind`] lists them. Two of a kind, such as a model's
+/// week named in two cases, are told apart as a merge does.
 fn claude_limits(update: &Value, now: Wall) -> Option<AccountLimits> {
     let info = update.pointer("/_meta/_claude~1rateLimit")?;
+    let limit = (info.get("rateLimitType").and_then(Value::as_str)).and_then(claude_window_kind);
+    let own = limits_own(info);
+    let mut windows: BTreeMap<WindowKind, LimitWindow> = BTreeMap::new();
     let unified = (info.get("unifiedWindows").and_then(Value::as_object))
         .into_iter()
-        .flatten()
-        .filter_map(|(name, window)| claude_window(name, window, now));
-    let itself = (info.get("rateLimitType").and_then(Value::as_str))
-        .and_then(|name| claude_window(name, info, now));
-    let mut windows: Vec<LimitWindow> = Vec::new();
-    for window in unified.chain(itself) {
-        if windows.iter().all(|kept| kept.kind != window.kind) {
-            windows.push(window);
+        .flatten();
+    for (name, fields) in unified {
+        let Some(kind) = claude_window_kind(name) else {
+            continue;
+        };
+        let fields = if limit.as_ref() == Some(&kind) {
+            with_limits_own(fields, &own)
+        } else {
+            fields.clone()
+        };
+        let Some(window) = claude_window(kind, &fields, now) else {
+            continue;
+        };
+        match windows.get(&window.kind) {
+            Some(kept) if kept.rank() >= window.rank() => {}
+            _ => {
+                windows.insert(window.kind.clone(), window);
+            }
         }
     }
+    if let Some(kind) = limit.clone()
+        && !windows.contains_key(&kind)
+        && let Some(window) = claude_window(kind, &own, now)
+    {
+        windows.insert(window.kind.clone(), window);
+    }
+    let own = limit.and_then(|kind| windows.remove(&kind));
+    let room = MOST_REPORTED - usize::from(own.is_some());
+    let mut windows: Vec<LimitWindow> = windows.into_values().take(room).collect();
+    windows.extend(own);
     windows.sort_by(|one, other| one.kind.cmp(&other.kind));
     let extra_usage = (info.get("isUsingOverage").and_then(Value::as_bool))
         .map(|in_use| ExtraUsage { in_use, heard: now });
@@ -847,20 +875,62 @@ fn claude_limits(update: &Value, now: Wall) -> Option<AccountLimits> {
     })
 }
 
-/// One of Claude's windows, `name`, as `fields` say it: its share used
-/// (`utilization`, 0 to 1), its reset (`resetsAt`, in seconds) and its
-/// `status`. `None` for `overage`, a name that isn't plain, or a window
-/// with no share that reads and not refused.
-fn claude_window(name: &str, fields: &Value, now: Wall) -> Option<LimitWindow> {
-    let plain = |name: &str| {
-        !name.is_empty()
-            && name.len() <= MOST_WINDOW_NAME
-            && (name.bytes()).all(|byte| byte.is_ascii_alphanumeric() || b"_-.".contains(&byte))
+/// What the limit itself says of its window, in `info`: its share, reset
+/// and status. With no share, the threshold of it the account has passed
+/// (`surpassedThreshold`, 0 to 1), if it says, stands in: at least that
+/// much is used.
+fn limits_own(info: &Value) -> Value {
+    let mut own = serde_json::Map::new();
+    for key in ["utilization", "resetsAt", "status"] {
+        if let Some(value) = info.get(key) {
+            own.insert(key.to_owned(), value.clone());
+        }
+    }
+    if own.get("utilization").and_then(Value::as_f64).is_none()
+        && let Some(passed) = info
+            .get("surpassedThreshold")
+            .filter(|passed| passed.is_number())
+    {
+        own.insert("utilization".to_owned(), passed.clone());
+    }
+    Value::Object(own)
+}
+
+/// A unified window's `fields`, with what the limit itself, `limit`, of
+/// its kind says in place of what they don't: its share, its reset, and
+/// its status. The limit refused is never hidden, whatever the window
+/// says of its status.
+fn with_limits_own(fields: &Value, limit: &Value) -> Value {
+    let mut fields = fields.clone();
+    let Some(each) = fields.as_object_mut() else {
+        return fields;
     };
-    if !plain(name) {
+    for key in ["utilization", "resetsAt"] {
+        if each.get(key).and_then(Value::as_f64).is_none()
+            && let Some(own) = limit.get(key).filter(|own| own.is_number())
+        {
+            each.insert(key.to_owned(), own.clone());
+        }
+    }
+    let status = limit.get("status").and_then(Value::as_str);
+    if let Some(status) = status
+        && (status == "rejected" || each.get("status").and_then(Value::as_str).is_none())
+    {
+        each.insert("status".to_owned(), Value::from(status));
+    }
+    fields
+}
+
+/// The window Claude names `name`: `None` for `overage`, or a name that
+/// isn't plain.
+fn claude_window_kind(name: &str) -> Option<WindowKind> {
+    let plain = !name.is_empty()
+        && name.len() <= MOST_WINDOW_NAME
+        && (name.bytes()).all(|byte| byte.is_ascii_alphanumeric() || b"_-.".contains(&byte));
+    if !plain {
         return None;
     }
-    let kind = match name {
+    Some(match name {
         "overage" => return None,
         "five_hour" => WindowKind::FiveHours,
         "seven_day" => WindowKind::Week,
@@ -872,7 +942,15 @@ fn claude_window(name: &str, fields: &Value, now: Wall) -> Option<LimitWindow> {
             Some(model) => WindowKind::ModelWeek(model.to_ascii_lowercase()),
             None => WindowKind::Other(name.to_owned()),
         },
-    };
+    })
+}
+
+/// A window of Claude's, of `kind`, as `fields` say it: its share used
+/// (`utilization`, 0 to 1), its reset (`resetsAt`, in seconds, or in
+/// milliseconds if it's above 10^11, which no time in seconds is before
+/// the year 5000) and its `status`. `None` if it has no share that reads
+/// and isn't refused.
+fn claude_window(kind: WindowKind, fields: &Value, now: Wall) -> Option<LimitWindow> {
     let state = match fields.get("status").and_then(Value::as_str) {
         Some("allowed_warning") => LimitState::Warning,
         Some("rejected") => LimitState::Refused,
@@ -896,8 +974,14 @@ fn claude_window(name: &str, fields: &Value, now: Wall) -> Option<LimitWindow> {
         _ => share?,
     };
     let resets = (fields.get("resetsAt").and_then(Value::as_f64))
-        .filter(|seconds| seconds.is_finite())
-        .map(|seconds| (seconds * 1000.0).round())
+        .filter(|at| at.is_finite())
+        .map(|at| {
+            if at > 1e11 {
+                at.round()
+            } else {
+                (at * 1000.0).round()
+            }
+        })
         .filter(|millis| (EARLIEST_RESET.0 as f64..LATEST_RESET.0 as f64).contains(millis))
         .map(|millis| {
             #[expect(clippy::cast_possible_truncation, reason = "kept to 2020-2100 first")]
@@ -1587,14 +1671,45 @@ pub(crate) mod tests {
     #[test]
     fn a_window_both_hold_is_unified_windows_and_the_limit_fills_the_rest() {
         let info = json!({
-            "status": "rejected", "rateLimitType": "five_hour", "utilization": 1.0,
-            "unifiedWindows": { "five_hour": { "utilization": 0.97, "status": "allowed_warning" } },
+            "status": "allowed", "rateLimitType": "five_hour", "utilization": 0.9, "resetsAt": 1_795_300_000_i64,
+            "unifiedWindows": { "five_hour": { "utilization": 0.97, "resetsAt": 1_795_010_000_i64, "status": "allowed_warning" } },
         });
         let limits = claude_reads(info).expect("they read");
         assert_eq!(
             limits.windows,
-            [read(WindowKind::FiveHours, 97, None, LimitState::Warning)]
+            [read(
+                WindowKind::FiveHours,
+                97,
+                Some(1_795_010_000),
+                LimitState::Warning
+            )]
         );
+        // A unified window that doesn't say its status takes the limit's,
+        // if the limit is of its kind, and only then.
+        let info = json!({
+            "status": "allowed_warning", "rateLimitType": "seven_day", "utilization": 0.8,
+            "unifiedWindows": { "five_hour": { "utilization": 0.5 }, "seven_day": { "utilization": 0.81 } },
+        });
+        assert_eq!(
+            claude_reads(info).expect("they read").windows,
+            [
+                read(WindowKind::FiveHours, 50, None, LimitState::Fine),
+                read(WindowKind::Week, 81, None, LimitState::Warning),
+            ]
+        );
+        // The limit refused is never hidden by its unified window, whatever
+        // that says.
+        for status in [json!("allowed"), json!(null)] {
+            let info = json!({
+                "status": "rejected", "rateLimitType": "five_hour", "utilization": 1.0,
+                "unifiedWindows": { "five_hour": { "utilization": 0.97, "status": status } },
+            });
+            assert_eq!(
+                claude_reads(info).expect("they read").windows,
+                [read(WindowKind::FiveHours, 100, None, LimitState::Refused)],
+                "{status}"
+            );
+        }
         // With no unified windows, the limit itself.
         let info = json!({ "status": "allowed", "rateLimitType": "seven_day", "utilization": 0.3, "resetsAt": 1_795_300_000_i64 });
         assert_eq!(
@@ -1731,11 +1846,28 @@ pub(crate) mod tests {
             resets(json!(4_102_444_799_i64)),
             Some(Wall(4_102_444_799_000))
         );
+        // Above 10^11, milliseconds: no time in seconds is, before the
+        // year 5000.
+        assert_eq!(
+            resets(json!(1_795_010_000_123_i64)),
+            Some(Wall(1_795_010_000_123))
+        );
+        assert_eq!(
+            resets(json!(1_577_836_800_000_i64)),
+            Some(Wall(1_577_836_800_000))
+        );
+        let unified = json!({ "unifiedWindows": { "seven_day": { "utilization": 0.1, "resetsAt": 1_795_010_000_000_i64 } } });
+        assert_eq!(
+            claude_reads(unified).expect("they read").windows[0].resets,
+            Some(Wall(1_795_010_000_000))
+        );
         for nonsense in [
             json!(4_102_444_800_i64),
             json!(1_577_836_799_i64),
-            // Milliseconds, not seconds.
-            json!(1_795_010_000_000_i64),
+            json!(4_102_444_800_000_i64),
+            json!(1_577_836_799_999_i64),
+            // At most 10^11 is seconds, so this is past 2100.
+            json!(100_000_000_000_i64),
             json!(-1),
             json!(0),
             json!(1e300),
@@ -1785,6 +1917,145 @@ pub(crate) mod tests {
         assert_eq!(
             ProfileChoice::Builtin(Builtin::Fake).limits(&update, HEARD),
             claude().limits(&update, HEARD)
+        );
+    }
+
+    #[test]
+    fn a_profile_is_found_by_its_slug() {
+        for profile in [
+            Builtin::ClaudeAgentAcp,
+            Builtin::TestNpm,
+            Builtin::TestDownload,
+            Builtin::TestPlain,
+            Builtin::TestModels,
+            #[cfg(feature = "fake")]
+            Builtin::Fake,
+        ] {
+            assert_eq!(Builtin::from_slug(profile.slug()), Some(profile));
+        }
+        assert_eq!(Builtin::from_slug("claude"), None);
+        assert_eq!(Builtin::from_slug(""), None);
+    }
+
+    #[test]
+    fn one_report_gives_16_windows_at_most_the_limits_own_always_among_them() {
+        let mut unified = serde_json::Map::new();
+        for at in 0..5000 {
+            unified.insert(format!("w{at:04}"), json!({ "utilization": 0.5 }));
+        }
+        unified.insert("five_hour".into(), json!({ "utilization": 0.1 }));
+        let info = json!({ "rateLimitType": "seven_day_zz", "utilization": 0.3, "unifiedWindows": unified });
+        let windows = claude_reads(info).expect("they read").windows;
+        assert_eq!(windows.len(), 16);
+        let kinds: Vec<WindowKind> = windows.iter().map(|window| window.kind.clone()).collect();
+        assert_eq!(kinds[0], WindowKind::FiveHours);
+        assert_eq!(kinds[1], WindowKind::ModelWeek("zz".into()));
+        assert_eq!(kinds[2], WindowKind::Other("w0000".into()));
+        assert_eq!(kinds[15], WindowKind::Other("w0013".into()));
+    }
+
+    #[test]
+    fn a_limit_with_no_share_but_a_threshold_passed_reads_as_at_least_that() {
+        let info = json!({ "status": "allowed_warning", "rateLimitType": "seven_day_opus",
+            "surpassedThreshold": 0.75, "resetsAt": 1_795_400_000_i64 });
+        assert_eq!(
+            claude_reads(info).expect("they read").windows,
+            [read(
+                WindowKind::ModelWeek("opus".into()),
+                75,
+                Some(1_795_400_000),
+                LimitState::Warning
+            )]
+        );
+        // A share said wins over it, and a unified window of its kind
+        // with none takes it.
+        let info =
+            json!({ "rateLimitType": "five_hour", "utilization": 0.8, "surpassedThreshold": 0.5 });
+        assert_eq!(claude_reads(info).expect("they read").windows[0].used, 80);
+        let info = json!({ "rateLimitType": "seven_day", "surpassedThreshold": 0.9,
+            "unifiedWindows": { "seven_day": { "resetsAt": 1_795_300_000_i64 } } });
+        assert_eq!(
+            claude_reads(info).expect("they read").windows,
+            [read(
+                WindowKind::Week,
+                90,
+                Some(1_795_300_000),
+                LimitState::Fine
+            )]
+        );
+        // Refused is still all used.
+        let info = json!({ "status": "rejected", "rateLimitType": "five_hour", "surpassedThreshold": 0.9 });
+        assert_eq!(claude_reads(info).expect("they read").windows[0].used, 100);
+        // A unified window's own threshold isn't read as its share: it
+        // says less than it has.
+        let info = json!({ "unifiedWindows": { "five_hour": { "surpassedThreshold": 0.5 } } });
+        assert_eq!(claude_reads(info), None);
+        // Nor is a threshold that isn't a number.
+        let info = json!({ "rateLimitType": "five_hour", "surpassedThreshold": "0.5" });
+        assert_eq!(claude_reads(info), None);
+    }
+
+    #[test]
+    fn a_models_week_named_twice_in_different_cases_is_read_the_cautious_way() {
+        for (first, second) in [(0.2, 0.9), (0.9, 0.2)] {
+            let info = json!({ "unifiedWindows": {
+                "seven_day_OPUS": { "utilization": first },
+                "seven_day_opus": { "utilization": second },
+            } });
+            let windows = claude_reads(info).expect("they read").windows;
+            assert_eq!(
+                windows,
+                [read(
+                    WindowKind::ModelWeek("opus".into()),
+                    90,
+                    None,
+                    LimitState::Fine
+                )]
+            );
+        }
+        let info = json!({ "unifiedWindows": {
+            "seven_day_Opus": { "utilization": 0.5, "status": "rejected" },
+            "seven_day_opus": { "utilization": 0.99 },
+        } });
+        assert_eq!(
+            claude_reads(info).expect("they read").windows[0].state,
+            LimitState::Refused
+        );
+    }
+
+    #[test]
+    fn a_unified_window_missing_its_reset_or_share_takes_the_limits_own() {
+        let info = json!({
+            "status": "allowed", "rateLimitType": "five_hour", "utilization": 0.4, "resetsAt": 1_795_010_000_i64,
+            "unifiedWindows": {
+                "five_hour": { "utilization": 0.42 },
+                "seven_day": { "utilization": 0.6 },
+            },
+        });
+        assert_eq!(
+            claude_reads(info).expect("they read").windows,
+            [
+                read(
+                    WindowKind::FiveHours,
+                    42,
+                    Some(1_795_010_000),
+                    LimitState::Fine
+                ),
+                read(WindowKind::Week, 60, None, LimitState::Fine),
+            ]
+        );
+        let info = json!({
+            "status": "allowed_warning", "rateLimitType": "seven_day", "utilization": 0.85, "resetsAt": 1_795_300_000_i64,
+            "unifiedWindows": { "seven_day": { "resetsAt": "soon" } },
+        });
+        assert_eq!(
+            claude_reads(info).expect("they read").windows,
+            [read(
+                WindowKind::Week,
+                85,
+                Some(1_795_300_000),
+                LimitState::Warning
+            )]
         );
     }
 
