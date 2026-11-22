@@ -2133,9 +2133,16 @@ pub(crate) mod tests {
                         sha256,
                         unpack,
                     } = artifact;
+                    // Named here, not by `Debug`, which may change: a pin
+                    // never does.
+                    let unpack = match unpack {
+                        Unpack::No => "No",
+                        Unpack::Zip => "Zip",
+                        Unpack::TarGz => "TarGz",
+                    };
                     hash.update(
                         format!(
-                            "{} {} {url} {sha256} {unpack:?}\n",
+                            "{} {} {url} {sha256} {unpack}\n",
                             platform.os, platform.arch
                         )
                         .as_bytes(),

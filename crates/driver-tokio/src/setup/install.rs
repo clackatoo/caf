@@ -608,22 +608,24 @@ fn clean(root: &Path) {
 
 /// Removes a folder and all in it, if it's there: an install's, built or
 /// whole, whose folders may be any permissions, so each is first made the
-/// user's to change.
+/// user's to change, as far as it can be. What can't be is left for the
+/// removal itself to fail on, saying why.
 fn remove_all(path: &Path) -> io::Result<()> {
     let mut folders = vec![path.to_owned()];
     while let Some(folder) = folders.pop() {
-        match fs::symlink_metadata(&folder) {
-            Ok(found) if found.is_dir() => {
-                let mode = found.permissions().mode() | 0o700;
-                fs::set_permissions(&folder, fs::Permissions::from_mode(mode))?;
-            }
-            Ok(_) => continue,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error),
+        let Ok(found) = fs::symlink_metadata(&folder) else {
+            continue;
+        };
+        if !found.is_dir() {
+            continue;
         }
-        for entry in fs::read_dir(&folder)? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
+        let mode = found.permissions().mode() | 0o700;
+        let _ = fs::set_permissions(&folder, fs::Permissions::from_mode(mode));
+        let Ok(entries) = fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
                 folders.push(entry.path());
             }
         }
@@ -1630,6 +1632,26 @@ fn io_failure(error: &io::Error, network: bool) -> InstallFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_removal_that_cant_be_made_says_why() {
+        // Its permissions are made the user's to change, but not the
+        // folder it's in: it can't be taken out of that, and says so.
+        let at = std::env::temp_dir().join(format!("caf-remove-{}", std::process::id()));
+        let (parent, folder) = (at.join("parent"), at.join("parent/install"));
+        fs::create_dir_all(folder.join("bin")).unwrap();
+        fs::set_permissions(folder.join("bin"), fs::Permissions::from_mode(0o555)).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o555)).unwrap();
+        let removed = remove_all(&folder);
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+        // Root may remove it anyway.
+        if !rustix::process::geteuid().is_root() {
+            let failed = removed.expect_err("its folder can't be written in");
+            assert_eq!(failed.kind(), io::ErrorKind::PermissionDenied);
+        }
+        remove_all(&at).unwrap();
+        assert!(!at.exists());
+    }
 
     #[test]
     fn install_names_are_plain_and_never_private() {

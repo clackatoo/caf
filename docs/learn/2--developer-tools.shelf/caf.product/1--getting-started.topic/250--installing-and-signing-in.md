@@ -165,7 +165,8 @@ is untouched.
   with the messages waiting for it stopped, as for an install that failed.
   If CAF can't look, it downloads.
 
-CAF never tries to make one level from an earlier one twice in a run.
+Once making a level from an earlier one has failed, CAF doesn't try it
+again this run.
 
 An earlier patch level of the version your program pins counts as an older
 version, and is removed as one is. A later level, which another program
