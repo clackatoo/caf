@@ -316,13 +316,18 @@ fn no_window_outlives_its_reset() {
 }
 
 #[test]
-fn a_window_already_reset_is_no_news_from_the_agent_or_the_usage_driver() {
+fn a_window_already_reset_is_never_shown_from_the_agent_or_the_usage_driver() {
     let mut script = Script::with_claude();
     script.at(10_000);
     let info = json!({ "unifiedWindows": { "five_hour": { "utilization": 0.4, "resetsAt": seconds(5000) } } });
     let out = script.update(PROC, SESSION, &limited(info));
-    assert!(saved(&out).is_empty());
     assert_eq!(script.limits("claude")["windows"], json!([]));
+    // Saved as heard all the same, for the file to replace any earlier
+    // report of it, and forget it.
+    assert_eq!(
+        saved(&out)[0]["limits"]["windows"],
+        json!([window("FiveHours", 40, Some(5000), "Fine", 10_000)])
+    );
     let stale = json!({
         "windows": [window("FiveHours", 40, Some(5000), "Fine", 1000)],
         "extra_usage": null, "cleared": null,
@@ -733,7 +738,16 @@ fn a_later_report_of_a_window_already_reset_forgets_it_as_the_usage_drivers_woul
         script.limits("claude")["windows"],
         json!([window("Week", 30, Some(86_400_000), "Fine", 1000)])
     );
-    assert_eq!(saved(&out)[0]["limits"], script.limits("claude"));
+    // Saved as merged, before it's forgotten, so the file holds the later
+    // report and every app forgets it alike, rather than taking back the
+    // earlier one.
+    assert_eq!(
+        saved(&out)[0]["limits"]["windows"],
+        json!([
+            window("FiveHours", 40, Some(5000), "Fine", 10_000),
+            window("Week", 30, Some(86_400_000), "Fine", 1000),
+        ])
+    );
     // The same from the usage driver.
     let mut script = Script::with_claude();
     script.at(1000);
@@ -777,30 +791,31 @@ fn a_sign_in_or_out_command_that_couldnt_run_clears_nothing() {
 }
 
 #[test]
-fn an_agent_found_signed_out_that_was_signed_in_has_its_limits_cleared() {
+fn an_agent_that_says_by_itself_its_signed_out_clears_nothing() {
     let mut script = Script::with_claude();
     let push = |kind: &str| json!({ "jsonrpc": "2.0", "method": "_auth/status_update", "params": { "authStatus": { "kind": kind } } });
     script.at(1000);
-    // Not known signed in: found signed out, nothing is cleared.
-    let out = script.says(PROC, &push("none"));
-    assert!(saved(&out).is_empty());
     script.says(PROC, &push("account"));
     script.update(
         PROC,
         SESSION,
         &five_and_week(0.2, 3_600_000, 0.3, 86_400_000),
     );
-    // Signed out elsewhere, as with `claude /logout`.
+    // Claude may say it's signed out as a token fails to refresh,
+    // offline: that's no sign the account changed, so its limits, which
+    // come seldom, are kept.
     script.at(2000);
     let out = script.says(PROC, &push("none"));
-    let cleared = json!({ "windows": [], "extra_usage": null, "cleared": EPOCH + 2000 });
-    assert_eq!(script.limits("claude"), cleared);
-    assert_eq!(saved(&out)[0]["limits"], cleared);
-    // Found signed out again: nothing more.
-    script.at(3000);
-    let out = script.says(PROC, &push("none"));
+    assert_eq!(
+        script.agent_status("claude")["sign_in"],
+        json!({ "type": "SignedOut" })
+    );
     assert!(saved(&out).is_empty());
-    assert_eq!(script.limits("claude")["cleared"], EPOCH + 2000);
+    assert_eq!(
+        script.limits("claude")["windows"].as_array().map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(script.limits("claude")["cleared"], Value::Null);
 }
 
 #[test]

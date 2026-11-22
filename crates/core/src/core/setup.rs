@@ -763,7 +763,6 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// adapter whose profile says it reports so.
     pub(super) fn status_pushed(
         &mut self,
-        now: Now,
         proc: Ticket,
         params: &Value,
         out: &mut Vec<Directive<A, D>>,
@@ -791,7 +790,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 );
             }
         };
-        self.found_signed_in(now, &agent, state, out);
+        self.set_sign_in(&agent, state);
     }
 
     /// A process of `agent`'s answered `initialize`. One of the host's own
@@ -1202,10 +1201,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map_or(SignInState::Unknown, |standing| standing.sign_in.clone())
     }
 
-    /// A status check found `agent` signed in as `state` says. Found
+    /// `agent`'s status command found it signed in as `state` says. Found
     /// signed out once known signed in, it was signed out elsewhere, such
     /// as with `claude /logout`, perhaps to sign in to another account:
-    /// its limits are cleared.
+    /// its limits are cleared. Not when the adapter says so by itself
+    /// (Claude's `_auth/status_update`): it may, as a token fails to
+    /// refresh offline, and its limits, which come seldom, would go from
+    /// every app.
     fn found_signed_in(
         &mut self,
         now: Now,

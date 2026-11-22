@@ -54,9 +54,12 @@
 //! - **A report changes only the windows it names**, each replacing the
 //!   one of its kind if it was heard later ([`AccountLimits::merge`]).
 //!   News is merged in, then any window already reset forgotten, from
-//!   the agent and the usage driver alike; news heard, or cleared, after
-//!   now, by a clock ahead, is taken as of now. A profile keeps 32
-//!   windows at most.
+//!   the agent and the usage driver alike; the agent's is saved as
+//!   merged, before that, so a report of a window that has reset replaces
+//!   the one kept, and every app forgets it. News heard, or cleared, after
+//!   now, by a clock ahead, is taken as of now. A profile keeps every
+//!   window of the kinds CAF knows, and at most 16 models' weeks and 13
+//!   others, the latest heard.
 //! - **A window is forgotten once its reset has passed**: the core wakes
 //!   for the earliest, drops those passed, and the agents' statuses change
 //!   ([`AccountLimits::forget_passed`]). One with no reset stays until
@@ -66,12 +69,15 @@
 //!   five minutes of waking.
 //! - **Signing out, and a sign-in finishing, clears them**, as the account
 //!   may change: [`AccountLimits::cleared`] says when, so a window heard
-//!   before it is never taken back from a saved copy. So does a status
-//!   check finding the agent signed out once it was known signed in, as
-//!   with `claude /logout`. An account changed outside CAF with no
-//!   sign-out it sees, such as `claude /login` to another account while
-//!   signed in, isn't noticed: its limits show the old account's until
-//!   the agent next says, window by window.
+//!   before it is never taken back from a saved copy. So does the
+//!   agent's status command finding it signed out once it was known
+//!   signed in, as after `claude /logout`; but not the agent saying so by
+//!   itself (Claude's `_auth/status_update`), as it may when a token fails
+//!   to refresh offline, which would lose every app's limits, which come
+//!   seldom, for no change of account. So an account changed outside CAF
+//!   with no sign-out it sees, such as `claude /login` to another account,
+//!   isn't noticed: its limits show the old account's until the agent
+//!   next says, window by window.
 //! - **A limit reset early** by the provider, or raised by a new plan,
 //!   shows as it was until the agent next says, with the next turn: CAF
 //!   can't ask. [`LimitWindow::heard`] lets a viewer say how old it is.
@@ -98,6 +104,7 @@
 //! 3. **Refused is always 100% used.**
 //! 4. **Limits never stop a message being sent.**
 
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -215,8 +222,11 @@ pub(crate) const EARLIEST_RESET: Wall = Wall(1_577_836_800_000);
 /// The first reset CAF doesn't keep: 2100-01-01, UTC.
 pub(crate) const LATEST_RESET: Wall = Wall(4_102_444_800_000);
 
-/// The most windows a profile's limits keep.
-pub(crate) const MOST_WINDOWS: usize = 32;
+/// The most models' weeks a profile's limits keep.
+const MOST_MODEL_WEEKS: usize = 16;
+
+/// The most windows of kinds CAF doesn't know a profile's limits keep.
+const MOST_OTHERS: usize = 13;
 
 /// Five hours.
 const FIVE_HOURS: Duration = Duration::from_secs(5 * 60 * 60);
@@ -288,19 +298,6 @@ impl LimitWindow {
             (self.resets).filter(|resets| (EARLIEST_RESET..LATEST_RESET).contains(resets));
         self
     }
-
-    /// What keeps a window when a profile has more than
-    /// [`MOST_WINDOWS`], the greater kept: windows of the kinds CAF knows
-    /// first, then models' weeks, then others; each by when it was
-    /// heard, then the first by name.
-    fn keeping(&self) -> (u8, Wall, std::cmp::Reverse<&WindowKind>) {
-        let kind = match self.kind {
-            WindowKind::Other(_) => 0,
-            WindowKind::ModelWeek(_) => 1,
-            _ => 2,
-        };
-        (kind, self.heard, std::cmp::Reverse(&self.kind))
-    }
 }
 
 impl AccountLimits {
@@ -323,8 +320,12 @@ impl AccountLimits {
     ///
     /// Whoever wrote them, windows are made whole: a share of at most
     /// 100, all of it if refused, and a reset only between 2020 and 2100.
-    /// At most 32 are kept: past that, the others CAF doesn't know are
-    /// dropped first, then models' weeks, each the oldest heard first.
+    /// Every window of the kinds CAF knows is kept, and at most 16
+    /// models' weeks and 13 others: past that, the oldest heard of their
+    /// kind are dropped, then the last by name. So one dropped was heard
+    /// no later than any kept of its kind, and a clearing drops it, before
+    /// or after, whenever it drops any of them: merging is the same in any
+    /// order still.
     pub fn merge(&mut self, news: &AccountLimits) -> bool {
         // Both sides are taken as they come, each window against every
         // other of its kind, so limits read from anywhere, unsorted or
@@ -346,11 +347,16 @@ impl AccountLimits {
             .collect();
         // The cap picks among each kind's latest, by an order of its own:
         // so it's the same in any order too.
-        if windows.len() > MOST_WINDOWS {
-            windows.sort_by(|one, other| other.keeping().cmp(&one.keeping()));
-            windows.truncate(MOST_WINDOWS);
-            windows.sort_by(|one, other| one.kind.cmp(&other.kind));
-        }
+        keep_latest(
+            &mut windows,
+            |kind| matches!(kind, WindowKind::ModelWeek(_)),
+            MOST_MODEL_WEEKS,
+        );
+        keep_latest(
+            &mut windows,
+            |kind| matches!(kind, WindowKind::Other(_)),
+            MOST_OTHERS,
+        );
         let extra_usage = (self.extra_usage.into_iter().chain(news.extra_usage))
             .max_by_key(|extra| (extra.heard, extra.in_use))
             .filter(|extra| fresh(extra.heard));
@@ -378,6 +384,24 @@ impl AccountLimits {
     pub fn next_reset(&self) -> Option<Wall> {
         self.windows.iter().filter_map(|window| window.resets).min()
     }
+}
+
+/// Keeps at most `most` of `windows` whose kind is of a `class`: the
+/// latest heard, then the first by name.
+fn keep_latest(windows: &mut Vec<LimitWindow>, class: fn(&WindowKind) -> bool, most: usize) {
+    let mut of_class: Vec<(Wall, Reverse<&WindowKind>)> = (windows.iter())
+        .filter(|window| class(&window.kind))
+        .map(|window| (window.heard, Reverse(&window.kind)))
+        .collect();
+    if of_class.len() <= most {
+        return;
+    }
+    of_class.sort_unstable_by(|one, other| other.cmp(one));
+    let (heard, Reverse(kind)) = of_class[most - 1];
+    let kind = kind.clone();
+    windows.retain(|window| {
+        !class(&window.kind) || (window.heard, Reverse(&window.kind)) >= (heard, Reverse(&kind))
+    });
 }
 
 #[cfg(test)]

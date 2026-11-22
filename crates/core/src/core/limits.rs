@@ -65,8 +65,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// An agent of `profile` said something of its limits, in a
-    /// `usage_update`, `update`: merged in, then any window already reset
-    /// forgotten, and saved if that changed anything.
+    /// `usage_update`, `update`: merged in, saved if that changed
+    /// anything, then any window already reset forgotten. Saved before
+    /// it's forgotten, so a report of a window that has reset replaces
+    /// the earlier one kept, and every app forgets it alike.
     pub(super) fn limits_heard(
         &mut self,
         now: Now,
@@ -78,12 +80,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return;
         };
         let kept = self.limits.kept.entry(profile.slug()).or_default();
-        let before = kept.clone();
-        kept.merge(&news);
-        kept.forget_passed(now.wall);
-        if *kept != before {
+        if kept.merge(&news) {
             save(profile, kept, out);
         }
+        kept.forget_passed(now.wall);
     }
 
     /// `profile`'s account was signed out of, or a sign-in to it
@@ -159,6 +159,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
 /// Takes `limits` as heard no later than `now`: news from a clock ahead
 /// would otherwise outrank every later report.
+///
+/// The usage driver holds what it keeps to a little past its own now
+/// (in caf-usage, a minute for what's heard, seconds for a clearing), as
+/// it must keep another app's news as it was. Each of the core's calls
+/// takes it as now, and never saves it back, so the two agree once the
+/// driver's now has passed it: within that minute. Till then, a window
+/// from such a clock may outrank the agent's news of it in the file, and
+/// so in the core, but nothing goes round: what the driver gives is never
+/// saved.
 fn not_after(limits: &mut AccountLimits, now: Wall) {
     for window in &mut limits.windows {
         window.heard = window.heard.min(now);
