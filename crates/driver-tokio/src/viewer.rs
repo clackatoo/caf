@@ -415,7 +415,7 @@ impl<A: AppItem, D: AppData> Link<A, D> {
             },
             // Read while the link goes on: a summary reads files, and
             // mustn't hold up the viewer's other requests.
-            // At most SUMMARIES at once: the rest wait their turn.
+            // At most SUMMARIES at once: the rest wait until one is free.
             FromViewer::Usage { request, query } if rules.usage => {
                 let reading = caf.usage(query);
                 let summary = in_turn(Arc::clone(&self.summaries), async move {
@@ -579,8 +579,9 @@ fn next_of<A: AppItem>(mut watch: Watch<A>) -> Next<A> {
 /// How many summaries one viewer's link reads at once.
 const SUMMARIES: usize = 4;
 
-/// Does `work` once it has one of `turns`, in the order asked, so no more
-/// than there are turns are done at once.
+/// Does `work` once it has one of `turns`, so no more than there are
+/// turns are done at once: the rest wait until one is free, and none is
+/// refused.
 async fn in_turn<T>(turns: Arc<Semaphore>, work: impl Future<Output = T>) -> T {
     // Never closed.
     let _turn = turns.acquire_owned().await;

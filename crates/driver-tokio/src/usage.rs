@@ -19,7 +19,8 @@
 //! for the core ([`Event::Prices`](caf_core::Event::Prices)), as they're
 //! first read and whenever they differ from what it was last given. Only
 //! one reading for a summary is under way at a time: those asked for
-//! meanwhile share it.
+//! meanwhile wait for one more, after it, so a price set while it was
+//! under way is never missed.
 //!
 //! Looking is another thread's, so a slow download never holds a line up:
 //! it looks as it starts and then every hour, fetching first, if it's
@@ -36,6 +37,9 @@
 //!   when they come;
 //! - a reading for a summary that hasn't come in that time is answered
 //!   with the prices the core has, with a report;
+//! - a price set that hasn't been in that time is answered that the
+//!   ledger didn't answer ([`Error::Price`]), and one waiting as the
+//!   driver finishes is let go, which its asker hears as CAF gone;
 //! - finishing waits for it for at most [`FINISH_WITHIN`], then reports
 //!   how many lines may be lost, and leaves it.
 //!
@@ -95,26 +99,37 @@ pub(crate) enum Report {
         reply: oneshot::Sender<Result<(), Error>>,
         result: Result<(), String>,
     },
-    /// The prices were read again, as asked: after them, if they changed,
-    /// so whoever asked is answered once the core has them. Or they
+    /// The prices were read again for those waiting: after them, if they
+    /// changed, so each is answered once the core has them. Or they
     /// weren't in time, and the core's are as good as it gets.
-    Reloaded,
+    Reloaded(Vec<oneshot::Sender<crate::caf::Priced>>),
 }
 
 /// What the ledger's thread tells the driver.
 enum Told {
     Report(Report),
+    /// The price set with this number was, or why not.
+    PriceSet {
+        set: u64,
+        result: Result<(), String>,
+    },
     /// The prices were read again, as asked with this number.
     Reloaded(u64),
 }
+
+/// Whoever set a price, waiting to hear if it was.
+type SetReply = oneshot::Sender<Result<(), Error>>;
+
+/// What a price set the ledger didn't answer in time is answered.
+const NO_ANSWER: &str = "the usage ledger didn't answer";
 
 /// Work for the ledger's thread.
 enum Work {
     Record(Box<LedgerLine>),
     SetPrice {
+        set: u64,
         model: String,
         price: Option<ModelPrice>,
-        reply: oneshot::Sender<Result<(), Error>>,
     },
     /// The prices may have changed on disk: read them again, and say so if
     /// asked to, with this number. Every hour, also try the lines kept.
@@ -172,9 +187,18 @@ pub(crate) struct UsageDriver {
     first: Option<Pin<Box<Sleep>>>,
     /// The reading asked for a summary, by its number, and when to go on
     /// without it.
-    reloading: Option<(u64, Pin<Box<Sleep>>)>,
+    reloading: Option<(u64, Instant)>,
     /// The last reading's number.
     reloads: u64,
+    /// Those waiting for the reading under way.
+    reading: Vec<oneshot::Sender<crate::caf::Priced>>,
+    /// Those who asked while it was under way: they wait for the next.
+    after: Vec<oneshot::Sender<crate::caf::Priced>>,
+    /// The prices set, by number, oldest first, each with whoever asked
+    /// and when to stop waiting.
+    setting: VecDeque<(u64, SetReply, Instant)>,
+    /// The last price set's number.
+    sets: u64,
     prices_within: Duration,
     finish_within: Duration,
 }
@@ -259,6 +283,10 @@ impl UsageDriver {
             first: Some(Box::pin(tokio::time::sleep(options.prices_within))),
             reloading: None,
             reloads: 0,
+            reading: Vec::new(),
+            after: Vec::new(),
+            setting: VecDeque::new(),
+            sets: 0,
             prices_within: options.prices_within,
             finish_within: options.finish_within,
         }
@@ -278,7 +306,8 @@ impl UsageDriver {
     }
 
     /// Sets a price of the user's own, answering `reply` once the prices
-    /// it changed are reported. With no ledger, it's
+    /// it changed are reported, or if the ledger doesn't answer in
+    /// [`PRICES_WITHIN`], [`Error::Price`]. With no ledger, it's
     /// [`Error::NoLedger`].
     pub(crate) fn set_price(
         &mut self,
@@ -290,25 +319,44 @@ impl UsageDriver {
             let _ = reply.send(Err(Error::NoLedger));
             return;
         }
-        self.send(Work::SetPrice {
-            model,
-            price,
-            reply,
-        });
+        self.sets += 1;
+        let set = self.sets;
+        self.setting
+            .push_back((set, reply, Instant::now() + self.prices_within));
+        self.send(Work::SetPrice { set, model, price });
     }
 
-    /// Reads the prices again, as they may have changed on disk, and
-    /// reports [`Report::Reloaded`] once the core has them, if they did,
-    /// or in [`PRICES_WITHIN`] if not by then. While one reading is under
-    /// way, another isn't asked for: the one under way is reported.
-    pub(crate) fn reload(&mut self) {
+    /// Reads the prices again, as they may have changed on disk, for
+    /// `reply`: [`Report::Reloaded`] gives it back once the core has them,
+    /// if they changed, or in [`PRICES_WITHIN`] if they aren't read by
+    /// then. One asked for while a reading is under way waits for another
+    /// after it, which those asked for meanwhile share.
+    pub(crate) fn reload(&mut self, reply: oneshot::Sender<crate::caf::Priced>) {
         if self.reloading.is_some() {
+            self.after.push(reply);
             return;
         }
+        self.reading.push(reply);
+        self.read_again();
+    }
+
+    /// Asks the thread to read the prices again, for those waiting.
+    fn read_again(&mut self) {
         self.reloads += 1;
-        let within = Box::pin(tokio::time::sleep(self.prices_within));
-        self.reloading = Some((self.reloads, within));
+        self.reloading = Some((self.reloads, Instant::now() + self.prices_within));
         self.send(Work::Reload(Some(self.reloads)));
+    }
+
+    /// The reading under way is over: those waiting for it, and the next
+    /// started for those waiting after it, if any.
+    fn read(&mut self) -> Report {
+        self.reloading = None;
+        let read = std::mem::take(&mut self.reading);
+        if !self.after.is_empty() {
+            self.reading = std::mem::take(&mut self.after);
+            self.read_again();
+        }
+        Report::Reloaded(read)
     }
 
     /// Hands the thread work. Once it has gone, which it does only as the
@@ -323,22 +371,17 @@ impl UsageDriver {
     /// The driver's next report. Cancel-safe.
     pub(crate) async fn next(&mut self) -> Report {
         loop {
+            let reload_late = at(self.reloading.as_ref().map(|(_, at)| *at));
+            let set_late = at(self.setting.front().map(|(_, _, at)| *at));
             let Self {
                 told,
                 looked,
                 first,
-                reloading,
                 ..
             } = self;
             let first_late = async {
                 match first {
                     Some(first) => first.as_mut().await,
-                    None => std::future::pending().await,
-                }
-            };
-            let reload_late = async {
-                match reloading {
-                    Some((_, within)) => within.as_mut().await,
                     None => std::future::pending().await,
                 }
             };
@@ -353,8 +396,13 @@ impl UsageDriver {
                     // One asked for before, and given up on, is let be.
                     Told::Reloaded(reload) => {
                         if self.reloading.as_ref().is_some_and(|(asked, _)| *asked == reload) {
-                            self.reloading = None;
-                            return Report::Reloaded;
+                            return self.read();
+                        }
+                    }
+                    Told::PriceSet { set, result } => {
+                        let at = self.setting.iter().position(|(asked, ..)| *asked == set);
+                        if let Some((_, reply, _)) = at.and_then(|at| self.setting.remove(at)) {
+                            return Report::PriceSet { reply, result };
                         }
                     }
                 },
@@ -369,13 +417,22 @@ impl UsageDriver {
                     return Report::Prices(prices::bundled());
                 }
                 () = reload_late => {
-                    self.reloading = None;
                     log::warn!(
                         target: "caf",
                         "the prices weren't read again in {} s: a summary is priced as they were",
                         self.prices_within.as_secs()
                     );
-                    return Report::Reloaded;
+                    return self.read();
+                }
+                () = set_late => {
+                    if let Some((_, reply, _)) = self.setting.pop_front() {
+                        log::warn!(
+                            target: "caf",
+                            "the usage ledger didn't set a price in {} s",
+                            self.prices_within.as_secs()
+                        );
+                        return Report::PriceSet { reply, result: Err(NO_ANSWER.to_owned()) };
+                    }
                 }
             }
         }
@@ -387,6 +444,10 @@ impl UsageDriver {
     /// and leaves it. A fetch under way isn't waited for, and keeps
     /// nothing from now on.
     pub(crate) async fn finish(mut self) {
+        // Those waiting hear CAF has gone, not after the thread.
+        self.setting.clear();
+        self.reading.clear();
+        self.after.clear();
         self.looking = None;
         self.work = None;
         let Some(thread) = self.thread.take() else {
@@ -416,6 +477,14 @@ impl UsageDriver {
                 self.unwritten.load(Ordering::Relaxed)
             );
         }
+    }
+}
+
+/// Resolves at `at`, or never with none.
+async fn at(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at.into()).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -463,19 +532,15 @@ fn keep(
                     kept.try_writing(ledger);
                 }
             }
-            Work::SetPrice {
-                model,
-                price,
-                reply,
-            } => {
+            Work::SetPrice { set, model, price } => {
+                // Never given without one.
                 let Some(ledger) = ledger else {
-                    let _ = reply.send(Err(Error::NoLedger));
                     continue;
                 };
-                let set = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let written = std::panic::catch_unwind(AssertUnwindSafe(|| {
                     prices::set_own(ledger.folder(), &model, price)
                 }));
-                let result = match set {
+                let result = match written {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(error)) => Err(error.to_string()),
                     Err(_) => Err("setting it panicked".to_owned()),
@@ -483,7 +548,7 @@ fn keep(
                 if result.is_ok() {
                     give(read_prices(Some(ledger)));
                 }
-                report(Report::PriceSet { reply, result });
+                let _ = tell.send(Told::PriceSet { set, result });
             }
             Work::Reload(asked) => {
                 if let Some(ledger) = ledger {

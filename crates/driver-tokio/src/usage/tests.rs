@@ -384,8 +384,8 @@ async fn with_the_thread_stuck_the_bundled_prices_are_given_and_the_rest_when_it
         "after a while"
     );
     // A reading for a summary isn't waited for for ever either.
-    driver.reload();
-    assert!(matches!(next(&mut driver).await, Report::Reloaded));
+    driver.reload(oneshot::channel().0);
+    assert!(matches!(next(&mut driver).await, Report::Reloaded(_)));
     drop(unstick);
     let read = prices(&mut driver).await;
     assert!(read.find("claude-test-1").is_some(), "the prices read");
@@ -530,16 +530,16 @@ async fn prices_read_again_for_a_summary_are_sent_first_if_they_changed() {
     let dir = Dir::new("reload");
     let mut driver = UsageDriver::start(Some(dir.0.clone()), "caf-test".into(), None, CHECK_EVERY);
     prices(&mut driver).await;
-    driver.reload();
+    driver.reload(oneshot::channel().0);
     assert!(
-        matches!(next(&mut driver).await, Report::Reloaded),
+        matches!(next(&mut driver).await, Report::Reloaded(_)),
         "unchanged, so no prices first"
     );
     prices::set_own(&dir.0, "claude-test-1", Some(ModelPrice::new(9.0, 9.0))).unwrap();
-    driver.reload();
+    driver.reload(oneshot::channel().0);
     let table = prices(&mut driver).await;
     assert!(table.find("claude-test-1").is_some());
-    assert!(matches!(next(&mut driver).await, Report::Reloaded));
+    assert!(matches!(next(&mut driver).await, Report::Reloaded(_)));
     driver.finish().await;
 }
 
@@ -626,4 +626,82 @@ async fn lines_kept_behind_a_lock_are_written_once_it_is_let_go() {
     drop(lock);
     driver.finish().await;
     assert_eq!(turns_in(&dir.0), 2);
+}
+
+#[tokio::test]
+async fn a_price_set_the_stuck_thread_doesnt_answer_is_answered_that_it_didnt() {
+    let dir = Dir::new("stuck-set");
+    let (mut driver, unstick) = stuck(&dir, Duration::from_millis(50));
+    assert_eq!(prices(&mut driver).await, prices::bundled());
+    let (reply, _answer) = oneshot::channel();
+    driver.set_price(
+        "claude-test-1".into(),
+        Some(ModelPrice::new(1.0, 2.0)),
+        reply,
+    );
+    let Report::PriceSet { result, .. } = next(&mut driver).await else {
+        panic!("the price set")
+    };
+    assert_eq!(result, Err(NO_ANSWER.into()));
+    // Once the thread goes on, its own answer is let be.
+    drop(unstick);
+    let more = tokio::time::timeout(Duration::from_millis(300), async {
+        loop {
+            if let Report::PriceSet { .. } = driver.next().await {
+                return;
+            }
+        }
+    });
+    assert!(more.await.is_err(), "answered once");
+    driver.finish().await;
+}
+
+#[tokio::test]
+async fn a_price_set_still_waiting_as_the_driver_finishes_hears_it_has_gone() {
+    let dir = Dir::new("stuck-set-finish");
+    let (unstick, stuck) = std::sync::mpsc::channel();
+    let options = Options {
+        finish_within: Duration::from_millis(50),
+        stuck: Some(stuck),
+        ..Options::default()
+    };
+    let mut driver = UsageDriver::launch(Some(dir.0.clone()), "caf-test".into(), None, options);
+    let (reply, answer) = oneshot::channel();
+    driver.set_price("claude-test-1".into(), None, reply);
+    driver.finish().await;
+    assert!(answer.await.is_err(), "let go");
+    drop(unstick);
+}
+
+#[tokio::test]
+async fn a_reading_asked_for_while_one_is_under_way_waits_for_another_after_it() {
+    let dir = Dir::new("reading-after");
+    let (unstick, stuck) = std::sync::mpsc::channel();
+    let options = Options {
+        prices_within: PATIENCE,
+        stuck: Some(stuck),
+        ..Options::default()
+    };
+    let mut driver = UsageDriver::launch(Some(dir.0.clone()), "caf-test".into(), None, options);
+    let (first, _first) = oneshot::channel();
+    driver.reload(first);
+    let (second, _second) = oneshot::channel();
+    driver.reload(second);
+    let (third, _third) = oneshot::channel();
+    driver.reload(third);
+    drop(unstick);
+    let mut batches = Vec::new();
+    while batches.len() < 2 {
+        if let Report::Reloaded(waiting) = next(&mut driver).await {
+            batches.push(waiting.len());
+        }
+    }
+    assert_eq!(
+        batches,
+        [1, 2],
+        "the first reading, then one more for the rest"
+    );
+    let more = tokio::time::timeout(Duration::from_millis(200), driver.next()).await;
+    assert!(more.is_err(), "and no more");
+    driver.finish().await;
 }

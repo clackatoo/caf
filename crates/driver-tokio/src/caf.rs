@@ -629,7 +629,6 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
             usage,
             priced: false,
             unpriced: Vec::new(),
-            reloading: Vec::new(),
             policy: config.policy,
             deciding: JoinSet::new(),
             tickets: HashMap::new(),
@@ -1688,8 +1687,6 @@ struct Task<A: AppItem, D: AppData> {
     priced: bool,
     /// Those waiting for the first prices.
     unpriced: Vec<oneshot::Sender<Priced>>,
-    /// Those waiting for the prices to be read again.
-    reloading: Vec<oneshot::Sender<Priced>>,
     policy: Box<dyn Policy>,
     /// The policy's decisions under way.
     deciding: JoinSet<PolicyAnswer>,
@@ -1927,11 +1924,7 @@ impl<A: AppItem, D: AppData> Task<A, D> {
             }
             // The first prices are read fresh.
             Command::Prices { reply, .. } if !self.priced => self.unpriced.push(reply),
-            // Those asked for meanwhile share a reading under way.
-            Command::Prices { fresh: true, reply } => {
-                self.reloading.push(reply);
-                self.usage.reload();
-            }
+            Command::Prices { fresh: true, reply } => self.usage.reload(reply),
             Command::Prices { reply, .. } => {
                 let _ = reply.send(self.priced_now());
             }
@@ -2156,9 +2149,9 @@ impl<A: AppItem, D: AppData> Task<A, D> {
             UsageReport::PriceSet { reply, result } => {
                 let _ = reply.send(result.map_err(Error::Price));
             }
-            UsageReport::Reloaded => {
-                for waiting in std::mem::take(&mut self.reloading) {
-                    let _ = waiting.send(self.priced_now());
+            UsageReport::Reloaded(waiting) => {
+                for reply in waiting {
+                    let _ = reply.send(self.priced_now());
                 }
             }
         }
