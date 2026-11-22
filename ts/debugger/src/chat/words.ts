@@ -5,6 +5,7 @@
 // the ones this version knows, but a new one still comes through.
 
 import type {
+  BadQuery,
   CannotInstall,
   CannotRestore,
   ChatId,
@@ -404,11 +405,27 @@ export function errorText(error: unknown): string {
         return 'The link to CAF dropped before the answer came.'
       case 'NoCommonVersion':
         return 'This viewer and CAF have no version of the wire in common.'
+      case 'NoLedger':
+        return 'The app keeps no record of usage, so there is none to show.'
+      case 'BadQuery':
+        return badQueryText(why.value)
       default:
         return `It wasn't done (${tagOf(why)}).`
     }
   }
   return error instanceof Error ? error.message : String(error)
+}
+
+/** Why usage over a period can't be summed up. */
+export function badQueryText(why: DeepReadonly<BadQuery>): string {
+  switch (why.type) {
+    case 'Zone':
+      return `CAF doesn't know the time zone ${why.value}, so it can't say where days begin.`
+    case 'Period':
+      return "CAF can't sum up usage over that period."
+    default:
+      return `CAF can't sum up usage like that (${tagOf(why)}).`
+  }
 }
 
 /** Why a saved chat can't be restored, finishing "It can't be restored: ". */

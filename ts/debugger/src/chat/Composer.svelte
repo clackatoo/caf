@@ -1,7 +1,9 @@
 <script lang="ts">
   // Where the user writes. Enter sends, Shift+Enter starts a new line.
   // While a turn runs, a message sent waits behind it (CAF queues it), so
-  // Send stays on; Stop stops the running turn.
+  // Send stays on; Stop stops the running turn. Beside the buttons, the
+  // app may put something of the chat's: the context ring.
+  import type { Snippet } from 'svelte'
   import { attempt } from './actions.ts'
   import { errorText } from './words.ts'
 
@@ -11,6 +13,7 @@
     disabled,
     send,
     stop,
+    beside,
   }: {
     /** A turn is running, so a message would wait, and Stop is on. */
     running: boolean
@@ -20,6 +23,8 @@
     disabled: boolean
     send: (text: string) => Promise<unknown> | void
     stop: () => Promise<unknown> | void
+    /** Drawn before the buttons, and never disabled: it only shows. */
+    beside?: Snippet | undefined
   } = $props()
 
   let text = $state('')
@@ -73,6 +78,7 @@
       aria-label="Message"
       placeholder={disabled ? '' : running ? 'Message: it waits for the running turn' : 'Message'}
     ></textarea>
+    {@render beside?.()}
     <div class="buttons">
       <button type="submit" class="send" disabled={disabled || sending || text.trim() === ''}>Send</button>
       {#if running}

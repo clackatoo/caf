@@ -2,9 +2,10 @@
 // in CAF's words, names a reason it doesn't know by its tag, and does
 // nothing while read-only.
 
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/svelte'
-import { afterEach, describe, expect, it } from 'vitest'
-import { CafError } from '@clackatoo/caf'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { CafError, type Spend } from '@clackatoo/caf'
+import ChatView from '../../src/chat/ChatView.svelte'
 import { actions, chat, chatId, draw, item, life, lost, question, turn, words } from './build.ts'
 
 afterEach(cleanup)
@@ -533,17 +534,90 @@ describe('the composer', () => {
 })
 
 describe('usage', () => {
-  it('shows how full the memory is, and the cost', () => {
-    const { container } = draw(chat({ usage: { used: 50_000, size: 200_000, cost: { amount: 1.25, currency: 'USD' } } }))
-    const meter = container.querySelector('meter') as HTMLMeterElement
-    expect(Number(meter.getAttribute('value'))).toBeCloseTo(0.25)
-    expect(container.querySelector('.usage')?.textContent).toContain('25%')
-    expect(container.querySelector('.usage .cost')?.textContent).toContain('1.25')
+  const spend = (fields: Partial<Spend> = {}): Spend => ({
+    tokens: { input: 1_200_000, cache_read: 800_000, cache_write: 50_000, output: 60_000, thinking: null },
+    reported: 1.5,
+    estimated: 0,
+    unpriced: 0,
+    turns: 3,
+    ...fields,
+  })
+  const ring = () => screen.getByRole('button', { name: /This chat's usage/ })
+  const popover = () => screen.queryByRole('dialog', { name: "This chat's usage" })
+
+  it('shows how full the memory is on the ring, amber past 80% and red past 95%', () => {
+    const { container } = draw(chat({ usage: { used: 50_000, size: 200_000, cost: null } }))
+    expect(ring().getAttribute('aria-label')).toBe("This chat's usage: context 25% full")
+    expect(ring().textContent?.trim()).toBe('25%')
+    expect(ring().dataset.tone).toBeUndefined()
+    expect(container.querySelector('.ring .used')?.getAttribute('stroke-dasharray')).toMatch(/^24\.3/)
   })
 
-  it("shows a cost in a currency the browser doesn't know", () => {
-    const { container } = draw(chat({ usage: { used: 1, size: 10, cost: { amount: 3, currency: 'zz' } } }))
-    expect(container.querySelector('.usage .cost')?.textContent).toBe('3 zz')
+  it.each([
+    [170_000, 'caution'],
+    [195_000, 'warning'],
+  ])('a ring %d of 200,000 full is %s', (used, tone) => {
+    draw(chat({ usage: { used, size: 200_000, cost: null } }))
+    expect(ring().dataset.tone).toBe(tone)
+  })
+
+  it("is an empty ring before the agent says", () => {
+    const { container } = draw(chat())
+    expect(ring().getAttribute('aria-label')).toBe("This chat's usage")
+    expect(container.querySelector('.ring .used')).toBeNull()
+  })
+
+  it('opens what the chat has used and spent, and closes again', async () => {
+    draw(chat({ usage: { used: 195_000, size: 1_000_000, cost: null }, spend: spend() }))
+    expect(popover()).toBeNull()
+    await fireEvent.click(ring())
+    const shown = popover()!
+    expect(text(shown)).toContain('This chat')
+    expect(text(shown)).toContain('Context 195K / 1M')
+    expect(shown.querySelector('.cost')?.textContent?.trim()).toBe('$1.50')
+    expect(text(shown)).toContain('As the agent reported it.')
+    expect(shown.querySelector('.estimate')).toBeNull()
+    expect(shown.querySelector('.processed')?.textContent?.trim()).toBe('2.1M')
+    expect(shown.querySelector('.processed')?.getAttribute('title')).toBe('2,110,000 tokens, over 3 turns')
+    // No usage page to go to.
+    expect(screen.queryByRole('button', { name: /Open usage/ })).toBeNull()
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(popover()).toBeNull()
+    await fireEvent.click(ring())
+    await fireEvent.pointerDown(document.body)
+    expect(popover()).toBeNull()
+  })
+
+  it('marks a cost estimated at API prices, and says what no price covered', async () => {
+    draw(chat({ spend: spend({ reported: 1, estimated: 0.84, unpriced: 40_000 }) }))
+    await fireEvent.click(ring())
+    const shown = popover()!
+    expect(shown.querySelector('.cost')?.textContent?.trim()).toBe('$1.84 API estimate')
+    expect(text(shown)).toContain('$1.00 as the agent reported it, $0.84 estimated at API prices.')
+    expect(text(shown)).toContain("40K tokens on models with no known price aren't in it.")
+    expect(text(shown)).toContain('Context Not said yet')
+  })
+
+  it('says nothing has been spent before a turn has a record', async () => {
+    draw(chat())
+    await fireEvent.click(ring())
+    expect(popover()!.querySelector('.cost')?.textContent?.trim()).toBe('Nothing yet')
+    expect(popover()!.querySelector('.processed')?.textContent?.trim()).toBe('0')
+  })
+
+  it('opens the usage page, if the app has one', async () => {
+    const openUsage = vi.fn()
+    render(ChatView, { chat: chat({ spend: spend() }), actions: actions(), openUsage })
+    await fireEvent.click(ring())
+    await fireEvent.click(screen.getByRole('button', { name: /Open usage/ }))
+    expect(openUsage).toHaveBeenCalledOnce()
+    expect(popover()).toBeNull()
+  })
+
+  it('opens while read-only: it only shows', async () => {
+    draw(chat({ spend: spend() }), { readOnly: true })
+    await fireEvent.click(ring())
+    expect(popover()).not.toBeNull()
   })
 })
 
@@ -562,7 +636,8 @@ describe('read-only', () => {
     )
     expect(text(container)).toContain('Working')
     expect(text(container)).toContain('As it was then')
-    const buttons = [...container.querySelectorAll('button')]
+    // All but the context ring, which only shows.
+    const buttons = [...container.querySelectorAll('button')].filter((each) => !each.classList.contains('ring'))
     expect(buttons.length).toBeGreaterThan(0)
     for (const each of buttons) expect(each.disabled, each.textContent ?? '').toBe(true)
     expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).disabled).toBe(true)
