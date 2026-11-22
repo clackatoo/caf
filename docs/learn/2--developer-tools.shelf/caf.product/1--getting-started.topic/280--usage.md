@@ -109,8 +109,9 @@ caf.set_price("claude-haiku-5-5".into(), None).await?; // the next layer prices 
 `ModelPrice::new` gives input and output prices, with the cache prices the
 same as input's; set its fields for the rest. A price set is in force for
 every chat once `set_price` returns. Another app sharing the folder takes
-it when it next reads its prices: as it starts, sets a price of its own,
-or fetches.
+it within the hour, as each app reads its prices again every hour, and
+before every summary it reads, so a summary is always priced as the
+prices are now.
 
 ## Summaries
 

@@ -43,8 +43,10 @@
 //!
 //! Asking for the prices ([`Caf::prices`], and [`Caf::usage`], which
 //! prices a summary with them) waits for the usage driver's first table,
-//! so a summary asked for as CAF starts is never priced with none. A
-//! summary is then read on a blocking thread, apart from the task. A price
+//! so a summary asked for as CAF starts is never priced with none. Before
+//! a summary, the usage driver reads the prices again, as another app may
+//! have set one, and the core is given them if they changed; the summary
+//! is then read on a blocking thread, apart from the task. A price
 //! set ([`Caf::set_price`]) is answered once the core has the prices it
 //! changed.
 //!
@@ -396,14 +398,17 @@ impl<A: AppItem, D: AppData> WeakCaf<A, D> {
     }
 
     /// The ledger's folder, if there is one, and the prices in force,
-    /// once the core has the usage driver's first: keeping CAF running only
-    /// while it asks.
-    pub(crate) fn priced(&self) -> impl Future<Output = Result<Priced, Error>> + Send + 'static {
+    /// once the core has the usage driver's first, and if `fresh`, read
+    /// again: keeping CAF running only while it asks.
+    pub(crate) fn priced(
+        &self,
+        fresh: bool,
+    ) -> impl Future<Output = Result<Priced, Error>> + Send + 'static {
         let commands = self.commands.clone();
         async move {
             let (reply, answer) = oneshot::channel();
             let commands = commands.upgrade().ok_or(Error::Gone)?;
-            let sent = commands.send(Command::Prices { reply }).await;
+            let sent = commands.send(Command::Prices { fresh, reply }).await;
             drop(commands);
             sent.map_err(|_| Error::Gone)?;
             // The task drops the reply when it's shutting down.
@@ -418,7 +423,8 @@ impl<A: AppItem, D: AppData> WeakCaf<A, D> {
         &self,
         query: UsageQuery,
     ) -> impl Future<Output = Result<Summary, Error>> + Send + 'static {
-        let priced = self.priced();
+        // Read again, so a price another app set is taken.
+        let priced = self.priced(true);
         async move {
             let (folder, prices) = priced.await?;
             let folder = folder.ok_or(Error::NoLedger)?;
@@ -901,7 +907,10 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     /// Usage over a period, from every CAF app's lines in the ledger: what
     /// a usage page is drawn from. Read on a blocking thread, apart from
     /// CAF's task, so a summary never holds up a chat; turns that ended a
-    /// moment ago may not be in it yet. See [`caf_usage::summarise`].
+    /// moment ago may not be in it yet. It's priced with the prices as
+    /// they are on disk, so a price another app set counts, and every
+    /// chat's spend is worked out again with them if they changed. See
+    /// [`caf_usage::summarise`].
     ///
     /// # Errors
     ///
@@ -931,7 +940,7 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     ///
     /// [`Error::Gone`].
     pub async fn prices(&self) -> Result<PriceTable, Error> {
-        let (_, prices) = self.downgrade().priced().await?;
+        let (_, prices) = self.downgrade().priced(false).await?;
         Ok(prices)
     }
 
@@ -1437,8 +1446,10 @@ enum Command<D: AppData> {
         reply: oneshot::Sender<Result<D, Refused>>,
     },
     /// Answered once the usage driver has given the core its first
-    /// prices.
+    /// prices; if `fresh`, once it has read them again, as another app
+    /// may have changed them, and given them to the core if they changed.
     Prices {
+        fresh: bool,
         reply: oneshot::Sender<Priced>,
     },
     /// Answered once the core has the prices it changed.
@@ -1451,7 +1462,7 @@ enum Command<D: AppData> {
 
 /// The ledger's folder, if there is one, and the prices in force: what a
 /// summary is read with.
-type Priced = (Option<PathBuf>, PriceTable);
+pub(crate) type Priced = (Option<PathBuf>, PriceTable);
 
 /// Something a handle asks the task to do about an agent.
 enum AgentCall {
@@ -1911,12 +1922,11 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 );
                 let _ = reply.send(result);
             }
-            Command::Prices { reply } => {
-                if self.priced {
-                    let _ = reply.send(self.priced_now());
-                } else {
-                    self.unpriced.push(reply);
-                }
+            // The first prices are read fresh.
+            Command::Prices { reply, .. } if !self.priced => self.unpriced.push(reply),
+            Command::Prices { fresh: true, reply } => self.usage.reload(reply),
+            Command::Prices { reply, .. } => {
+                let _ = reply.send(self.priced_now());
             }
             Command::SetPrice {
                 model,
@@ -2138,6 +2148,9 @@ impl<A: AppItem, D: AppData> Task<A, D> {
             }
             UsageReport::PriceSet { reply, result } => {
                 let _ = reply.send(result.map_err(Error::Price));
+            }
+            UsageReport::Reloaded(reply) => {
+                let _ = reply.send(self.priced_now());
             }
         }
     }

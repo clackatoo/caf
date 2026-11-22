@@ -235,3 +235,27 @@ async fn a_ledger_that_cant_be_written_never_holds_up_a_chat() {
     let shut = tokio::time::timeout(Duration::from_secs(30), shut_down(&caf, running));
     shut.await.expect("shut down");
 }
+
+#[tokio::test]
+async fn a_summary_takes_a_price_another_app_set() {
+    let dir = Dir::new();
+    let given = Prices::default();
+    let config = config_with_ledger(&dir, host(), Vec::new());
+    let (caf, running) = Caf::start_watching(config, given.clone());
+    let model = "claude-test-1";
+    assert!(caf.prices().await.unwrap().find(model).is_none());
+    // Another app sets one.
+    let price = Some(ModelPrice::new(5.0, 6.0));
+    caf_usage::prices::set_own(&dir.path("usage"), model, price).unwrap();
+    caf.usage(lately()).await.unwrap();
+    let prices = caf.prices().await.unwrap();
+    assert_eq!(
+        prices.find(model).map(|own| own.layer),
+        Some(PriceLayer::Own)
+    );
+    assert_eq!(given.given().last(), Some(&prices), "the core has it");
+    let before = given.given().len();
+    caf.usage(lately()).await.unwrap();
+    assert_eq!(given.given().len(), before, "not sent again unchanged");
+    shut_down(&caf, running).await;
+}

@@ -86,7 +86,7 @@ async fn next(driver: &mut UsageDriver) -> Report {
 async fn prices(driver: &mut UsageDriver) -> PriceTable {
     match next(driver).await {
         Report::Prices(prices) => prices,
-        Report::PriceSet { .. } => panic!("prices, not a price set"),
+        _ => panic!("prices"),
     }
 }
 
@@ -162,7 +162,7 @@ async fn a_line_the_ledger_cant_take_is_kept_and_written_with_the_next() {
             assert!(result.is_err(), "the folder is a file");
             let _ = reply.send(result.map_err(Error::Price));
         }
-        Report::Prices(_) => panic!("no prices changed"),
+        _ => panic!("no prices changed"),
     }
     assert!(matches!(answer.await.unwrap(), Err(Error::Price(_))));
     std::fs::remove_file(&folder).unwrap();
@@ -408,4 +408,45 @@ fn a_fetch_that_finds_nothing_says_so() {
         fetch(&url, false),
         Err("the machine seems to be offline".into())
     );
+}
+
+#[tokio::test]
+async fn a_price_another_app_set_is_taken_at_the_next_look() {
+    let dir = Dir::new("another-app");
+    let mut driver = UsageDriver::start(
+        Some(dir.0.clone()),
+        "caf-test".into(),
+        None,
+        Duration::from_millis(5),
+    );
+    prices(&mut driver).await;
+    // Looking every few milliseconds, prices that haven't changed aren't
+    // sent again.
+    let more = tokio::time::timeout(Duration::from_millis(100), driver.next()).await;
+    assert!(more.is_err(), "nothing changed");
+    prices::set_own(&dir.0, "claude-test-1", Some(ModelPrice::new(9.0, 9.0))).unwrap();
+    let table = prices(&mut driver).await;
+    let own = table.find("claude-test-1").expect("the other app's");
+    assert_eq!(own.layer, PriceLayer::Own);
+    driver.finish().await;
+}
+
+#[tokio::test]
+async fn prices_read_again_for_a_summary_are_sent_first_if_they_changed() {
+    let dir = Dir::new("reload");
+    let mut driver = UsageDriver::start(Some(dir.0.clone()), "caf-test".into(), None, CHECK_EVERY);
+    prices(&mut driver).await;
+    let (reply, _answer) = oneshot::channel();
+    driver.reload(reply);
+    assert!(
+        matches!(next(&mut driver).await, Report::Reloaded(_)),
+        "unchanged, so no prices first"
+    );
+    prices::set_own(&dir.0, "claude-test-1", Some(ModelPrice::new(9.0, 9.0))).unwrap();
+    let (reply, _answer) = oneshot::channel();
+    driver.reload(reply);
+    let table = prices(&mut driver).await;
+    assert!(table.find("claude-test-1").is_some());
+    assert!(matches!(next(&mut driver).await, Report::Reloaded(_)));
+    driver.finish().await;
 }

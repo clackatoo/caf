@@ -9,14 +9,18 @@
 //! does holds up a chat. Once it's finishing, what's still kept is tried
 //! once more, and any left is reported lost.
 //!
-//! The prices are read as the thread starts, and again whenever they
-//! change: a price of the user's own set ([`prices::set_own`]), or
-//! LiteLLM's table fetched. Each time, the whole table goes to the task,
-//! for the core ([`Event::Prices`](caf_core::Event::Prices)). Fetching is
-//! another thread's, so a slow download never holds a line up: it looks
-//! as it starts and then every hour, and fetches if the table every CAF
-//! app shares ([`prices::fetched_at`]) is a day old, or was never
-//! fetched. A failed fetch is reported, and tried again in an hour.
+//! The prices are read as the thread starts, and again when they may have
+//! changed: a price of the user's own set ([`prices::set_own`]),
+//! LiteLLM's table fetched, every hour, and before each summary, so a
+//! price another app set is taken too. The whole table goes to the task,
+//! for the core ([`Event::Prices`](caf_core::Event::Prices)), as they're
+//! first read and whenever they differ from what it was last given.
+//!
+//! Looking is another thread's, so a slow download never holds a line up:
+//! it looks as it starts and then every hour, fetching first, if it's
+//! asked to, when the table every CAF app shares
+//! ([`prices::fetched_at`]) is a day old, or was never fetched. A failed
+//! fetch is reported, and tried again in an hour.
 //!
 //! With no ledger, the prices are the bundled snapshot's, and lines are
 //! dropped.
@@ -59,6 +63,9 @@ pub(crate) enum Report {
         reply: oneshot::Sender<Result<(), Error>>,
         result: Result<(), String>,
     },
+    /// The prices were read again for whoever is waiting: after them, if
+    /// they changed, so it's answered once the core has them.
+    Reloaded(oneshot::Sender<crate::caf::Priced>),
 }
 
 /// Work for the ledger's thread.
@@ -69,12 +76,13 @@ enum Work {
         price: Option<ModelPrice>,
         reply: oneshot::Sender<Result<(), Error>>,
     },
-    /// The prices changed on disk: read them again.
-    Reload,
+    /// The prices may have changed on disk: read them again, and answer
+    /// whoever waits, if anyone.
+    Reload(Option<oneshot::Sender<crate::caf::Priced>>),
 }
 
-/// Keeps the ledger and the prices on a thread of its own, and fetches
-/// prices on another, if asked to.
+/// Keeps the ledger and the prices on a thread of its own, and looks at
+/// the prices every hour on another, fetching them if asked to.
 pub(crate) struct UsageDriver {
     /// The ledger's folder, if there is one.
     folder: Option<PathBuf>,
@@ -84,10 +92,10 @@ pub(crate) struct UsageDriver {
     /// closes.
     reports: mpsc::UnboundedReceiver<Report>,
     _tell: mpsc::UnboundedSender<Report>,
-    /// Each fetch kept, from the fetching thread.
-    fetched: mpsc::UnboundedReceiver<()>,
-    /// Dropped to stop the fetching thread.
-    fetching: Option<std::sync::mpsc::Sender<()>>,
+    /// Each look at the prices, from the looking thread.
+    looked: mpsc::UnboundedReceiver<()>,
+    /// Dropped to stop the looking thread.
+    looking: Option<std::sync::mpsc::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -101,8 +109,8 @@ impl UsageDriver {
         Self::start(usage.map(|usage| usage.folder), app, fetcher, CHECK_EVERY)
     }
 
-    /// A driver for the ledger in `folder`, or none, fetching prices with
-    /// `fetcher` if given, looking every `every`.
+    /// A driver for the ledger in `folder`, or none, looking at the prices
+    /// every `every`, and fetching them with `fetcher` if given.
     pub(crate) fn start(
         folder: Option<PathBuf>,
         app: String,
@@ -117,26 +125,23 @@ impl UsageDriver {
             .name("caf-usage".into())
             .spawn(move || keep(ledger.as_ref(), &inbox, &telling))
             .expect("a thread for the usage ledger");
-        let (kept, fetched) = mpsc::unbounded_channel();
-        let fetching = match (&folder, fetcher) {
-            (Some(folder), Some(fetcher)) => {
-                let (stop, stopped) = std::sync::mpsc::channel();
-                let folder = folder.clone();
-                std::thread::Builder::new()
-                    .name("caf-prices".into())
-                    .spawn(move || fetch_now_and_then(&folder, fetcher, &kept, &stopped, every))
-                    .expect("a thread for fetching prices");
-                Some(stop)
-            }
-            _ => None,
-        };
+        let (looks, looked) = mpsc::unbounded_channel();
+        let looking = folder.as_ref().map(|folder| {
+            let (stop, stopped) = std::sync::mpsc::channel();
+            let folder = folder.clone();
+            std::thread::Builder::new()
+                .name("caf-prices".into())
+                .spawn(move || look_now_and_then(&folder, fetcher, &looks, &stopped, every))
+                .expect("a thread for the prices");
+            stop
+        });
         Self {
             folder,
             work: Some(work),
             reports,
             _tell: tell,
-            fetched,
-            fetching,
+            looked,
+            looking,
             thread: Some(thread),
         }
     }
@@ -173,6 +178,13 @@ impl UsageDriver {
         });
     }
 
+    /// Reads the prices again, as they may have changed on disk, and
+    /// answers `reply`, once the core has them if they did. With no
+    /// ledger, there's nothing to read again.
+    pub(crate) fn reload(&mut self, reply: oneshot::Sender<crate::caf::Priced>) {
+        self.send(Work::Reload(Some(reply)));
+    }
+
     /// Hands the thread work. Once it has gone, which it does only as the
     /// driver finishes, there's nobody to do it: a reply in it is dropped,
     /// which its asker hears as CAF gone.
@@ -187,17 +199,17 @@ impl UsageDriver {
         loop {
             tokio::select! {
                 Some(report) = self.reports.recv() => return report,
-                Some(()) = self.fetched.recv() => self.send(Work::Reload),
+                Some(()) = self.looked.recv() => self.send(Work::Reload(None)),
                 else => std::future::pending().await,
             }
         }
     }
 
-    /// Stops fetching, and ends the ledger's thread once it has written
-    /// what it was given, and waits for it. A fetch under way isn't waited
-    /// for: it keeps nothing once it's stopped.
+    /// Stops looking at the prices, and ends the ledger's thread once it
+    /// has written what it was given, and waits for it. A fetch under way
+    /// isn't waited for: it keeps nothing once it's stopped.
     pub(crate) async fn finish(mut self) {
-        self.fetching = None;
+        self.looking = None;
         self.work = None;
         if let Some(thread) = self.thread.take() {
             let _ = tokio::task::spawn_blocking(move || thread.join()).await;
@@ -226,7 +238,15 @@ fn keep(
     tell: &mpsc::UnboundedSender<Report>,
 ) {
     // Once the task has gone, nobody needs a report.
-    let _ = tell.send(Report::Prices(read_prices(ledger)));
+    let mut given = read_prices(ledger);
+    let _ = tell.send(Report::Prices(given.clone()));
+    // Gives the task the prices if they changed.
+    let mut give = |now: PriceTable| {
+        if now != given {
+            given = now.clone();
+            let _ = tell.send(Report::Prices(now));
+        }
+    };
     let mut kept = Kept::default();
     while let Ok(work) = inbox.recv() {
         match work {
@@ -254,12 +274,17 @@ fn keep(
                     Err(_) => Err("setting it panicked".to_owned()),
                 };
                 if result.is_ok() {
-                    let _ = tell.send(Report::Prices(read_prices(Some(ledger))));
+                    give(read_prices(Some(ledger)));
                 }
                 let _ = tell.send(Report::PriceSet { reply, result });
             }
-            Work::Reload => {
-                let _ = tell.send(Report::Prices(read_prices(ledger)));
+            Work::Reload(reply) => {
+                if ledger.is_some() {
+                    give(read_prices(ledger));
+                }
+                if let Some(reply) = reply {
+                    let _ = tell.send(Report::Reloaded(reply));
+                }
             }
         }
     }
@@ -338,20 +363,23 @@ impl Kept {
     }
 }
 
-/// Fetches LiteLLM's table now, if it's due, and then every `every`,
-/// until `stopped` is dropped, telling `kept` each time one is kept.
-fn fetch_now_and_then(
+/// Looks at the prices now and then every `every`, until `stopped` is
+/// dropped, telling `looks` each time, so they're read again: another app
+/// may have changed them. Each time, first fetches LiteLLM's table with
+/// `fetcher`, if given and it's due.
+fn look_now_and_then(
     folder: &std::path::Path,
-    mut fetcher: Fetcher,
-    kept: &mpsc::UnboundedSender<()>,
+    mut fetcher: Option<Fetcher>,
+    looks: &mpsc::UnboundedSender<()>,
     stopped: &std::sync::mpsc::Receiver<()>,
     every: Duration,
 ) {
     let mut failing = false;
     loop {
-        let now = wall_now();
-        if due(prices::fetched_at(folder), now) {
-            let fetched = std::panic::catch_unwind(AssertUnwindSafe(&mut fetcher))
+        if let Some(fetcher) = &mut fetcher
+            && due(prices::fetched_at(folder), wall_now())
+        {
+            let fetched = std::panic::catch_unwind(AssertUnwindSafe(fetcher))
                 .unwrap_or_else(|_| Err("fetching it panicked".to_owned()));
             // Nothing is kept once the driver has finished.
             if !matches!(
@@ -370,7 +398,6 @@ fn fetch_now_and_then(
                         log::info!(target: "caf", "LiteLLM's price table was fetched again");
                     }
                     failing = false;
-                    let _ = kept.send(());
                 }
                 Err(why) => {
                     // Once in a row, so a machine offline isn't told every
@@ -389,6 +416,7 @@ fn fetch_now_and_then(
                 }
             }
         }
+        let _ = looks.send(());
         match stopped.recv_timeout(every) {
             Err(RecvTimeoutError::Timeout) => {}
             _ => return,
