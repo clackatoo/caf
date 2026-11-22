@@ -68,10 +68,15 @@
   const DEFAULTS = {
     agent: 'claude',
     text: '', running: false, stopping: false, waiting: 0, waitingFor: 'this turn', waitingNote: null, problem: null, gate: false,
-    // A string, or { text, icon: 'lock' | 'unplug', bold }: nothing can be sent.
+    // A string, or { text, icon: 'lock' | 'unplug', bold, action }: nothing can be sent.
+    // An action, such as Unarchive, is the one thing to do, as a button.
     blocked: null,
-    // known | unknown | learning | none
-    settings: 'known', model: 'Opus 5.5', effort: 'High', fast: true, held: {},
+    // known | unknown | learning | failed | none
+    settings: 'known',
+    // Why CAF couldn't learn the settings, as the composer page words it, and
+    // what the system or the agent said ({ by: 'system' | 'agent', text }),
+    // and whether trying again could help.
+    learnWhy: "Claude couldn't be started.", learnSaid: null, learnAgain: true, model: 'Opus 5.5', effort: 'High', fast: true, held: {},
     menu: false, filter: 'agent', menuAgent: null,
     // Percent of the context used, or null before there's any (a new chat).
     // The ring's dot for an account limit: false, or the lowest window's lowness, 'low' or 'out'.
@@ -123,7 +128,11 @@
       return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note"><b>${what}</b><br>Choose it, and this chat will offer to ${a.needs === 'Not installed' ? 'install it' : 'sign you in'} once you send. Its models show here once it's ready.<br><span class="si-btn si-primary si-act">Use ${AGENT_NAME[a.id]}</span></div></div></div>`
     }
     if (s.settings === 'failed') {
-      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF couldn't learn which models and settings ${name} offers. It tries again when the chat opens, or now.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
+      const said = !s.learnSaid ? '' : s.learnSaid.by === 'agent'
+        ? `<div class="si-quote"><b>${name} said:</b> “${s.learnSaid.text}”</div>`
+        : `<div class="si-sys">${s.learnSaid.text}</div>`
+      const again = s.learnAgain ? ` It tries again when the chat opens, or now.${said || '<br>'}<span class="si-btn" style="margin-top:8px">Learn them now</span>` : said
+      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF couldn't learn which models and settings ${name} offers. <b>${s.learnWhy}</b>${again}</div></div></div>`
     }
     if (s.settings === 'unknown') {
       return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF doesn't know yet which models and settings ${name} offers. It finds out when the chat opens, or now, without sending a message.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
@@ -159,7 +168,7 @@
     h += `<div class="si-box${joined}">`
     if (s.blocked) {
       const b = typeof s.blocked === 'string' ? { text: s.blocked } : s.blocked
-      h += `<div class="si-locked">${icon[b.icon || 'lock']}<span>${b.bold ? `<b>${b.bold}</b> ` : ''}${b.text}</span></div>`
+      h += `<div class="si-locked">${icon[b.icon || 'lock']}<span>${b.bold ? `<b>${b.bold}</b> ` : ''}${b.text}</span>${b.action ? `<span class="si-spacer"></span><span class="si-btn si-primary">${b.action}</span>` : ''}</div>`
       if (b.controls !== false) h += `<div class="si-controls"><span class="si-control si-quiet">${mark(s.agent)}<span class="si-label">${s.settings === 'known' ? s.model + ' · ' + s.effort : name}</span></span><span class="si-spacer"></span>${ring(s)}</div>`
       return h + `</div>${s.after}</div></div>`
     }

@@ -175,6 +175,9 @@
 .si-menu .si-note { padding: 6px 6px 4px; color: var(--muted); font-size: 13.5px; }
 .si-menu .si-note b { color: var(--text); }
 .si-menu .si-note .si-act { display: inline-flex; margin-top: 10px; }
+.si-menu .si-note .si-sys { margin: 8px 0 0; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 12.5px; white-space: pre-wrap; }
+.si-menu .si-note .si-quote { margin: 8px 0 0; padding-left: 10px; border-left: 2px solid var(--raised-edge); font-size: 13px; }
+.si-menu .si-note .si-quote b { color: var(--muted); font-weight: 600; }
 .si-learn { color: var(--link); }
 .si-effort { border-top: 1px solid var(--palette-edge); margin-top: 10px; padding-top: 8px; }
 .si-heading { display: flex; justify-content: space-between; padding: 0 8px; font-size: 13px; color: var(--muted); }
@@ -457,10 +460,15 @@
   const DEFAULTS = {
     agent: 'claude',
     text: '', running: false, stopping: false, waiting: 0, waitingFor: 'this turn', waitingNote: null, problem: null, gate: false,
-    // A string, or { text, icon: 'lock' | 'unplug', bold }: nothing can be sent.
+    // A string, or { text, icon: 'lock' | 'unplug', bold, action }: nothing can be sent.
+    // An action, such as Unarchive, is the one thing to do, as a button.
     blocked: null,
-    // known | unknown | learning | none
-    settings: 'known', model: 'Opus 5.5', effort: 'High', fast: true, held: {},
+    // known | unknown | learning | failed | none
+    settings: 'known',
+    // Why CAF couldn't learn the settings, as the composer page words it, and
+    // what the system or the agent said ({ by: 'system' | 'agent', text }),
+    // and whether trying again could help.
+    learnWhy: "Claude couldn't be started.", learnSaid: null, learnAgain: true, model: 'Opus 5.5', effort: 'High', fast: true, held: {},
     menu: false, filter: 'agent', menuAgent: null,
     // Percent of the context used, or null before there's any (a new chat).
     // The ring's dot for an account limit: false, or the lowest window's lowness, 'low' or 'out'.
@@ -512,7 +520,11 @@
       return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note"><b>${what}</b><br>Choose it, and this chat will offer to ${a.needs === 'Not installed' ? 'install it' : 'sign you in'} once you send. Its models show here once it's ready.<br><span class="si-btn si-primary si-act">Use ${AGENT_NAME[a.id]}</span></div></div></div>`
     }
     if (s.settings === 'failed') {
-      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF couldn't learn which models and settings ${name} offers. It tries again when the chat opens, or now.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
+      const said = !s.learnSaid ? '' : s.learnSaid.by === 'agent'
+        ? `<div class="si-quote"><b>${name} said:</b> “${s.learnSaid.text}”</div>`
+        : `<div class="si-sys">${s.learnSaid.text}</div>`
+      const again = s.learnAgain ? ` It tries again when the chat opens, or now.${said || '<br>'}<span class="si-btn" style="margin-top:8px">Learn them now</span>` : said
+      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF couldn't learn which models and settings ${name} offers. <b>${s.learnWhy}</b>${again}</div></div></div>`
     }
     if (s.settings === 'unknown') {
       return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF doesn't know yet which models and settings ${name} offers. It finds out when the chat opens, or now, without sending a message.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
@@ -548,7 +560,7 @@
     h += `<div class="si-box${joined}">`
     if (s.blocked) {
       const b = typeof s.blocked === 'string' ? { text: s.blocked } : s.blocked
-      h += `<div class="si-locked">${icon[b.icon || 'lock']}<span>${b.bold ? `<b>${b.bold}</b> ` : ''}${b.text}</span></div>`
+      h += `<div class="si-locked">${icon[b.icon || 'lock']}<span>${b.bold ? `<b>${b.bold}</b> ` : ''}${b.text}</span>${b.action ? `<span class="si-spacer"></span><span class="si-btn si-primary">${b.action}</span>` : ''}</div>`
       if (b.controls !== false) h += `<div class="si-controls"><span class="si-control si-quiet">${mark(s.agent)}<span class="si-label">${s.settings === 'known' ? s.model + ' · ' + s.effort : name}</span></span><span class="si-spacer"></span>${ring(s)}</div>`
       return h + `</div>${s.after}</div></div>`
     }
@@ -641,15 +653,17 @@
   }
   const appMark = a => `<span class="appmark" style="background:${APPS[a].colour}">${APPS[a].letter}</span>`
 
-  // Models, by the agent's id for each, as CAF gives them. The last has no price.
+  // Models, by the agent's id for each, as CAF gives them, and the name
+  // `Summary.names` pairs with it, if any: Claude's profile names its
+  // models, and a model with no name is shown by its id. The last has no price.
   const MODELS = [
-    { p: 'claude', id: 'claude-opus-5-5', cost: 30.1, tokens: 33.2e6, unpriced: 0 },
+    { p: 'claude', id: 'claude-opus-5-5', name: 'Opus 5.5', cost: 30.1, tokens: 33.2e6, unpriced: 0 },
     { p: 'codex', id: 'gpt-6.1-sol', cost: 8.3, tokens: 13.1e6, unpriced: 0 },
-    { p: 'claude', id: 'claude-sonnet-5-5', cost: 7.4, tokens: 9.6e6, unpriced: 0 },
+    { p: 'claude', id: 'claude-sonnet-5-5', name: 'Sonnet 5.5', cost: 7.4, tokens: 9.6e6, unpriced: 0 },
     { p: 'codex', id: 'gpt-6-astra', cost: 2.39, tokens: 3.0e6, unpriced: 0 },
     { p: 'gemini', id: 'gemini-3-pro', cost: 1.55, tokens: 3.3e6, unpriced: 0 },
-    { p: 'claude', id: 'claude-haiku-5-5', cost: 1.14, tokens: 2.7e6, unpriced: 0 },
-    { p: 'claude', id: 'claude-opus-4-8', cost: 0, tokens: 0.6e6, unpriced: 0.6e6 },
+    { p: 'claude', id: 'claude-haiku-5-5', name: 'Haiku 5.5', cost: 1.14, tokens: 2.7e6, unpriced: 0 },
+    { p: 'claude', id: 'claude-opus-4-8', name: 'Opus 4.8', cost: 0, tokens: 0.6e6, unpriced: 0.6e6 },
   ]
   // What priced claude-opus-5-5, as the summary's `prices` and `matched` say.
   const PRICE = { entry: 'anthropic/claude-opus-5-5', rates: [['Input', '$5'], ['Cache read', '$0.50'], ['Cache write', '$6.25'], ['Output', '$25']], fast: '×2' }
@@ -843,11 +857,11 @@
       const models = MODELS.map(m => ({ ...m, cost: m.cost * k, tokens: m.tokens * k, unpriced: m.unpriced * k }))
       const peak = Math.max(...models.map(m => cost ? m.cost : m.tokens))
       const tot = sum(models.map(m => cost ? m.cost : m.tokens))
-      h += `<div class="tabsrow"><h3 style="margin:0">Breakdown${caf('Bucket.model')}</h3>${tabs}</div><table><thead><tr><th>#</th><th style="text-align:left">Model</th><th>Cost</th><th>Share</th><th>Tokens</th></tr></thead><tbody>` +
+      h += `<div class="tabsrow"><h3 style="margin:0">Breakdown${caf('Bucket.model, Summary.names')}</h3>${tabs}</div><table><thead><tr><th>#</th><th style="text-align:left">Model</th><th>Cost</th><th>Share</th><th>Tokens</th></tr></thead><tbody>` +
         models.slice().sort((a, b) => cost ? b.cost - a.cost || b.tokens - a.tokens : b.tokens - a.tokens).map((m, i) => {
           const v = cost ? m.cost : m.tokens
           const open = s.price === m.id
-          let r = `<tr class="${open ? 'chosen' : ''}"><td class="num">${i + 1}</td><td class="model"><div class="name">${MARK[m.p]}${m.id}</div>${v ? `<div class="mbar" style="width:${v / peak * 100}%;background:${PROVIDERS[m.p].colour}"></div>` : ''}</td>` +
+          let r = `<tr class="${open ? 'chosen' : ''}"><td class="num">${i + 1}</td><td class="model"><div class="name" title="${m.id}">${MARK[m.p]}${m.name || m.id}</div>${v ? `<div class="mbar" style="width:${v / peak * 100}%;background:${PROVIDERS[m.p].colour}"></div>` : ''}</td>` +
             `<td class="num">${m.unpriced >= m.tokens && m.cost === 0 ? '<span class="unpriced">Unpriced</span>' : usd(m.cost)}</td><td class="num">${v ? pct(v / tot) : '–'}</td><td class="num">${tok(m.tokens)}</td></tr>`
           if (open) r += `<tr class="detail"><td></td><td colspan="4">${priceCard(m.id)}</td></tr>`
           return r

@@ -168,6 +168,9 @@
 .si-menu .si-note { padding: 6px 6px 4px; color: var(--muted); font-size: 13.5px; }
 .si-menu .si-note b { color: var(--text); }
 .si-menu .si-note .si-act { display: inline-flex; margin-top: 10px; }
+.si-menu .si-note .si-sys { margin: 8px 0 0; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 12.5px; white-space: pre-wrap; }
+.si-menu .si-note .si-quote { margin: 8px 0 0; padding-left: 10px; border-left: 2px solid var(--raised-edge); font-size: 13px; }
+.si-menu .si-note .si-quote b { color: var(--muted); font-weight: 600; }
 .si-learn { color: var(--link); }
 .si-effort { border-top: 1px solid var(--palette-edge); margin-top: 10px; padding-top: 8px; }
 .si-heading { display: flex; justify-content: space-between; padding: 0 8px; font-size: 13px; color: var(--muted); }

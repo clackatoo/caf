@@ -237,11 +237,11 @@ warning colour.
 *Claude can't be installed here: it needs Node 22 or newer, and this machine has Node 18.*,
 or *…and this machine has no Node.* when it has none. Then
 *Install a newer Node, then check again. Messages wait until it's installed.*
-**Check again** has CAF look again (`Core::check_agents`); if the machine
-now has what's needed, the banner turns to Install. CAF never installs Node
-itself. Only the app can ask CAF to look again: a viewer has no way to, so
-a UI that's a viewer leaves Check again out, and the app looks again
-itself, such as when its window comes to the front.
+**Check again** has CAF look again (`Core::check_agents`, or a viewer's
+`CheckAgain`); if the machine now has what's needed, the banner turns to
+Install. It looks at what's installed and what the machine has for every
+agent, not only this one. CAF never installs Node itself. The app may also
+look again by itself, such as when its window comes to the front.
 
 ![Can't: npm](agents-npm.webp "The machine has no npm")
 
@@ -376,7 +376,7 @@ has its own.
 | **Install · 627 MB** | Installs the agent (`Core::install`). Pressing it while it's already installing does nothing more. |
 | **Try again** | The same, after a failed install. It downloads afresh. |
 | **Stop** (installing) | Stops the install, for every chat (`Core::stop_install`). The agent reads as not installed. Messages waiting for it are stopped, with the note *Claude isn't installed, so the message that waited for it was stopped.* |
-| **Check again** | Has CAF look again at what's installed and what the machine has (`Core::check_agents`). Only the app can. |
+| **Check again** | Has CAF look again at what's installed and what the machine has, for every agent (`Core::check_agents`, or a viewer's `CheckAgain`, with the `agents` right). |
 | **Not now** | Drops this chat's waiting messages, as the composer's Stop would (`Core::stop`). Where nothing waits, on a signed-out agent, it only hides the banner. |
 | **Sign in** | Starts the agent's sign-in (`Core::sign_in`). Pressed while one is under way, it does nothing more. |
 | **Send the code** | Passes what was pasted to the sign-in (`Core::paste`), trimmed. Unlit while the box is empty. |
@@ -436,7 +436,7 @@ can't tell whether the link has come. The banner has a spinner:
 **Not now** needs only the right to act (`Rights.act`), as it drops the
 viewer's own chat's messages, so this viewer keeps it wherever a message
 waits. A viewer without `act` can't write, so has no Not now, and its tray
-has no note. The failure states show their words with no Try again, and
+has no note. The failure states show their words with no Try again or Check again, and
 the signed-out banner isn't shown at all.
 
 ## The agents panel
@@ -478,6 +478,7 @@ The agents panel lists every agent the app offers, in the app's order
 | Not known yet (`Unknown`), after 10 seconds | **Install**, primary, with no size |
 | Installing | **Stop** |
 | Its last install failed (`Cannot(Failed)`) | **Try again**, primary |
+| Can't be installed for want of Node or npm (`Cannot(Node)`, `Cannot(Npm)`) | **Check again** |
 | Can't be installed otherwise (`Cannot`) | None: why is in the row |
 | Being signed in to | **Stop**, with the steps under the row |
 | Signed out or not known, and `can_sign_in` | **Sign in**, primary |
@@ -499,7 +500,7 @@ says at its foot
 
 | What the banner or panel shows | Where it comes from |
 | --- | --- |
-| Whether the banner shows | The agent's status: `install` neither `Installed` nor `Host`; `SignInState::SigningIn`; or `SignInState::SignedOut` with `can_sign_in`. In any chat but a `Closed` one. |
+| Whether the banner shows | The agent's status: `install` neither `Installed` nor `Host`; `SignInState::SigningIn`; or `SignInState::SignedOut` with `can_sign_in`. In any chat but an archived one (`Chat.archived`). |
 | Whether messages wait | The chat's `ChatState::WaitingForAgent`. |
 | Every agent's status | `Core::agents`, and a viewer's `ToViewer::Agents`, again each time any of it changes. |
 | The install states | `AgentStatus.install`: `Host`, `Unknown`, `Missing { size }`, `Installing { done, size }`, `Installed { version }`, `Cannot(why)`. |
@@ -510,7 +511,7 @@ says at its foot
 | *Uses only this app's tools* | `AgentStatus.own_tools_off`. |
 | The notes in the chat | `Note::NotInstalled`, `Note::InstallFailed`, `Note::SignedIn`. |
 | A refusal | `Refused`, or a viewer's `Outcome::NotAllowed`, as the table above gives them. |
-| Who may do what | The viewer's `agents` right for installing and signing in, and its `act` right for Not now. |
+| Who may do what | The viewer's `agents` right for installing, signing in and Check again, and its `act` right for Not now. |
 
 See [Installing and signing in](~caf/getting-started/installing-and-signing-in)
 for the calls, and [Agents and profiles](~caf/concepts/agents-and-profiles)

@@ -175,6 +175,9 @@
 .si-menu .si-note { padding: 6px 6px 4px; color: var(--muted); font-size: 13.5px; }
 .si-menu .si-note b { color: var(--text); }
 .si-menu .si-note .si-act { display: inline-flex; margin-top: 10px; }
+.si-menu .si-note .si-sys { margin: 8px 0 0; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 12.5px; white-space: pre-wrap; }
+.si-menu .si-note .si-quote { margin: 8px 0 0; padding-left: 10px; border-left: 2px solid var(--raised-edge); font-size: 13px; }
+.si-menu .si-note .si-quote b { color: var(--muted); font-weight: 600; }
 .si-learn { color: var(--link); }
 .si-effort { border-top: 1px solid var(--palette-edge); margin-top: 10px; padding-top: 8px; }
 .si-heading { display: flex; justify-content: space-between; padding: 0 8px; font-size: 13px; color: var(--muted); }
@@ -365,10 +368,15 @@
   const DEFAULTS = {
     agent: 'claude',
     text: '', running: false, stopping: false, waiting: 0, waitingFor: 'this turn', waitingNote: null, problem: null, gate: false,
-    // A string, or { text, icon: 'lock' | 'unplug', bold }: nothing can be sent.
+    // A string, or { text, icon: 'lock' | 'unplug', bold, action }: nothing can be sent.
+    // An action, such as Unarchive, is the one thing to do, as a button.
     blocked: null,
-    // known | unknown | learning | none
-    settings: 'known', model: 'Opus 5.5', effort: 'High', fast: true, held: {},
+    // known | unknown | learning | failed | none
+    settings: 'known',
+    // Why CAF couldn't learn the settings, as the composer page words it, and
+    // what the system or the agent said ({ by: 'system' | 'agent', text }),
+    // and whether trying again could help.
+    learnWhy: "Claude couldn't be started.", learnSaid: null, learnAgain: true, model: 'Opus 5.5', effort: 'High', fast: true, held: {},
     menu: false, filter: 'agent', menuAgent: null,
     // Percent of the context used, or null before there's any (a new chat).
     // The ring's dot for an account limit: false, or the lowest window's lowness, 'low' or 'out'.
@@ -420,7 +428,11 @@
       return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note"><b>${what}</b><br>Choose it, and this chat will offer to ${a.needs === 'Not installed' ? 'install it' : 'sign you in'} once you send. Its models show here once it's ready.<br><span class="si-btn si-primary si-act">Use ${AGENT_NAME[a.id]}</span></div></div></div>`
     }
     if (s.settings === 'failed') {
-      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF couldn't learn which models and settings ${name} offers. It tries again when the chat opens, or now.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
+      const said = !s.learnSaid ? '' : s.learnSaid.by === 'agent'
+        ? `<div class="si-quote"><b>${name} said:</b> “${s.learnSaid.text}”</div>`
+        : `<div class="si-sys">${s.learnSaid.text}</div>`
+      const again = s.learnAgain ? ` It tries again when the chat opens, or now.${said || '<br>'}<span class="si-btn" style="margin-top:8px">Learn them now</span>` : said
+      return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF couldn't learn which models and settings ${name} offers. <b>${s.learnWhy}</b>${again}</div></div></div>`
     }
     if (s.settings === 'unknown') {
       return `<div class="si-menu" style="width:min(440px, calc(100% - 44px))">${rail(s, false)}<div class="si-main"><div class="si-note">CAF doesn't know yet which models and settings ${name} offers. It finds out when the chat opens, or now, without sending a message.<br><span class="si-btn" style="margin-top:8px">Learn them now</span></div></div></div>`
@@ -456,7 +468,7 @@
     h += `<div class="si-box${joined}">`
     if (s.blocked) {
       const b = typeof s.blocked === 'string' ? { text: s.blocked } : s.blocked
-      h += `<div class="si-locked">${icon[b.icon || 'lock']}<span>${b.bold ? `<b>${b.bold}</b> ` : ''}${b.text}</span></div>`
+      h += `<div class="si-locked">${icon[b.icon || 'lock']}<span>${b.bold ? `<b>${b.bold}</b> ` : ''}${b.text}</span>${b.action ? `<span class="si-spacer"></span><span class="si-btn si-primary">${b.action}</span>` : ''}</div>`
       if (b.controls !== false) h += `<div class="si-controls"><span class="si-control si-quiet">${mark(s.agent)}<span class="si-label">${s.settings === 'known' ? s.model + ' · ' + s.effort : name}</span></span><span class="si-spacer"></span>${ring(s)}</div>`
       return h + `</div>${s.after}</div></div>`
     }
@@ -506,7 +518,9 @@
     { id: 'switched-turn', label: 'Model changed · next turn', what: "<b>The first turn on Sonnet 5.5.</b> A divider marks where the model changed. The view draws it wherever a turn's model (<code>Turn.model</code>, from <code>Change::TurnModel</code>) differs from the turn before, so it needs nothing new from CAF, shows up in restored chats too, and sits exactly where answers start coming from the new model.", s: { model: 'Sonnet 5.5', nextTurn: true, running: true } },
     { id: 'switched-menu', label: 'Model changed · menu', what: "<b>The menu after the change.</b> Effort has Sonnet's levels, and the fast mode row is gone because Sonnet doesn't offer it. If the old choice isn't offered any more, CAF falls back and puts a note in the transcript (<code>Note::NotOffered</code>).", s: { model: 'Sonnet 5.5', menu: true } },
     { id: 'learn-failed', label: "Couldn't learn them", what: "<b>CAF tried to learn the settings and couldn't.</b> The control says so; its menu says why and offers to try again.", s: { settings: 'failed', fresh: true, context: null } },
-    { id: 'learn-failed-menu', label: "Couldn't learn · menu", what: "<b>The menu, after CAF couldn't learn the settings.</b>", s: { settings: 'failed', fresh: true, context: null, menu: true } },
+    { id: 'learn-failed-menu', label: "Couldn't learn · menu", what: "<b>The menu, after CAF couldn't learn the settings.</b> It says why, in the composer page's words for each reason, then what the system said, in its own words, and offers to try again.", s: { settings: 'failed', fresh: true, context: null, menu: true, learnSaid: { by: 'system', text: 'No such file or directory (os error 2)' } } },
+    { id: 'learn-failed-agent', label: "Couldn't learn · Claude said", what: "<b>Claude refused,</b> and said why: its words are quoted apart, as Claude's, never as CAF's.", s: { settings: 'failed', fresh: true, context: null, menu: true, learnWhy: 'Claude refused to open a chat.', learnSaid: { by: 'agent', text: 'Internal error: the model list is unavailable.' } } },
+    { id: 'learn-failed-never', label: "Couldn't learn · for good", what: "<b>Trying again can't help</b>, as CAF can't use the agent: the menu says why, and offers nothing.", s: { settings: 'failed', fresh: true, context: null, menu: true, learnWhy: "Claude can't be used: its own tools can't be turned off.", learnAgain: false } },
     { id: 'unknown', label: 'Not known yet', what: "<b>Before a chat opens, CAF may not know what the agent offers.</b> The control says so and nothing more. <i>Learn them now</i> is in its menu, for a viewer with the <code>agents</code> right.", s: { settings: 'unknown', fresh: true, context: null } },
     { id: 'unknown-menu', label: 'Not known · menu', what: '<b>The menu, opened while the settings are unknown.</b>', s: { settings: 'unknown', menu: true, fresh: true, context: null } },
     { id: 'learning', label: 'Learning', what: '<b>CAF is learning the settings</b> without sending a message.', s: { settings: 'learning', fresh: true, context: null } },
@@ -514,7 +528,8 @@
     { group: 'The chat' },
     { id: 'gate', label: 'Agent not ready', what: "<b>The chat is waiting for Claude to be installed.</b> The agent banner attaches to the box, as questions do (see the agents page), and the box says messages will wait.", s: { gate: true } },
     { id: 'filling', label: 'Context filling', what: '<b>The context is 86% full,</b> so the ring turns amber (red past 95%).', s: { context: 86 } },
-    { id: 'blocked', label: "Can't write", what: "<b>A viewer without the <code>act</code> right, or a closed chat.</b> The box stays in place, says why, and has no controls.", s: { blocked: 'You can follow this chat, but not write in it.' } },
+    { id: 'blocked', label: "Can't write", what: "<b>A viewer without the <code>act</code> right.</b> The box stays in place, says why, and has no controls.", s: { blocked: 'You can follow this chat, but not write in it.' } },
+    { id: 'archived', label: 'Archived', what: "<b>An archived chat,</b> restored or not: it stays archived until it's unarchived. The box is locked, says so, and offers Unarchive, which makes it an ordinary chat again.", s: { blocked: { bold: 'This chat is archived.', text: 'Unarchive it to carry it on.', action: 'Unarchive' } } },
   ]
 
   // The agent banner, as agents.html draws it, attached to the box.

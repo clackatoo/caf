@@ -349,8 +349,13 @@ from the ledger every CAF app on the computer shares.
 
 **Up to the app**, within these rules. Agents are named as
 [above](#where-the-numbers-come-from). An app is named by its host's name
-(*clackatoo*), and a model by the agent's id for it (*claude-opus-5-5*),
-shown as it comes. Each agent and app has a colour of its own, the same
+(*clackatoo*). A model is named by its name, *Opus 5.5*, as the agent's
+profile names the agent's id for it (`Summary.names`, which the TypeScript
+SDK's `modelName` looks up), and by the id itself, as it comes
+(*gpt-6.1-sol*), where it has none, as for an agent whose profile doesn't
+name its models. Where the id matters, as a price goes by it, the id
+follows the name: its tooltip in the breakdown, and in brackets where a
+price names the model. Each agent and app has a colour of its own, the same
 wherever it appears. It's identity, not a colour role, so, as the
 [overview](~caf/standard-interface/overview) says, it appears only in marks
 and to tell them apart in charts: the dot by a share, the chart's stacks, a
@@ -362,8 +367,8 @@ why the *All agents* and *All apps* menus carry no coloured dots.
 ![The breakdown by model, a price opened](usage-price.webp "By model: a model opened shows its price and where it came from")
 
 **By model**, the default: *#*, *Model*, *Cost*, *Share*, *Tokens*, biggest
-first, each model with its agent's mark and a bar of its share in the
-agent's colour.
+first, each model by name, with its agent's mark and a bar of its share in
+the agent's colour.
 
 - A model whose tokens no price covered, and whose turns reported no cost,
   has *Unpriced* in place of its cost; one with some such tokens has its
@@ -382,14 +387,14 @@ if it has one), and buttons. Where it came from:
 | The user's own | *Your own price.* | *Change your price*, *Remove your price* |
 | LiteLLM's list, as fetched | *From LiteLLM's price list, fetched at 09:14.* | *Set your own price* |
 | The list that came with the app | *From the price list built into the app.* | *Set your own price* |
-| None | *No price is known for claude-opus-4-8, so turns on it that didn't report a cost aren't counted in the cost.* | *Set your own price* |
+| None | *No price is known for Opus 4.8 (`claude-opus-4-8`), so turns on it that didn't report a cost aren't counted in the cost.* | *Set your own price* |
 
 If the list names the model otherwise than the agent does, it says so:
 *…, as `anthropic/claude-opus-5-5`.*
 
 *Set your own price* opens a form of the four rates and the fast mode
-multiplier, headed *Your own price for claude-opus-5-5, in US dollars per
-million tokens. The other apps on this computer that share your usage record
+multiplier, headed *Your own price for Opus 5.5 (`claude-opus-5-5`), in US
+dollars per million tokens. The other apps on this computer that share your usage record
 use it too.*, with *Cancel* and *Save*. *Remove your price* takes the user's
 own away: a list's price applies again if a list has one, and otherwise the
 model is unpriced. The viewer can't tell beforehand which, as a summary
@@ -525,6 +530,7 @@ every other app says:
 | `group` | The buckets by app, agent, model or fast mode (*fast* or *standard*), each group's figures added up. Biggest first by the measure shown (cost, or tokens); on a tie, by the other measure; then by key, compared character code by character code, whatever the locale. By period: every period of the query, in time order, empty ones too. |
 | `split` | Every period of the query, in time order, empty ones too, each with its buckets grouped as `group` does, by cost. |
 | `price` | A model's price in a summary: the entry `Summary.matched` pairs with the agent's id for the model, found by name in `Summary.prices`; none if either is missing. |
+| `modelName` | A model's name to show: the name `Summary.names` pairs with the agent's id for it, else the id itself. |
 | `costByKind`, `cacheSavings` | As [Cost and Tokens](#cost-and-tokens) says: per bucket, at its model's `price`, times the price's `fast` multiplier if the bucket's `fast` is on; buckets with no price left out. `costByKind` is none if nothing was priced; `cacheSavings` is none if nothing priced was read from the cache. |
 
 A period starts where the query's zone says it does: an hour at the top of
@@ -551,6 +557,7 @@ its `start`.
 | Totals, shares, the chart, the breakdown | The summary's `buckets`, summed by the TypeScript SDK's `totals`, `group` (by `app`, `agent`, `model`, `period`, `fast`), `split`, `cost` and `total`. |
 | *Cost by type*, *Cache savings* | The TypeScript SDK's `costByKind` and `cacheSavings`, at the prices the summary used. |
 | Chats | `Summary.chats`: `all`, `by_app`, `by_agent`. |
+| A model's name | The TypeScript SDK's `modelName`, from `Summary.names`: the name each model's lines were recorded with, or the one its agent's profile gives now. A turn's own record names its models too (`TurnUsage.models`' `ModelTokens.name`). |
 | A model's price | The TypeScript SDK's `price`, from `Summary.prices` and `matched`: a `PricedModel`'s `price` (`ModelPrice`) and `layer` (`Own`, `Fetched`, `Bundled`), and `Summary.fetched`. |
 | Setting a price | `FromViewer::SetPrice`, answered `Done`, `PriceNotSet`, `NoLedger`, `NotAllowed` or `Gone`. |
 | *Some of the usage record couldn't be read* | `Summary.unreadable`: file names, or `.` for the folder. |
