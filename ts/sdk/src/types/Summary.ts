@@ -30,6 +30,13 @@ chats: ChatCounts,
  */
 prices: Array<PricedModel>, 
 /**
+ * Each model in it that has a price, by the agent's id for it, with
+ * the name of the entry in [`prices`](Self::prices) that priced it,
+ * sorted by the agent's id: so a viewer never repeats
+ * [`PriceTable::find`].
+ */
+matched: Array<[string, string]>, 
+/**
  * When LiteLLM's table was last fetched, if ever.
  */
 fetched: Wall | null, 
