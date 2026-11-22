@@ -116,6 +116,42 @@ What CAF does to install it:
   the old one for 14 days, and never while one still runs from it. So two
   programs pinning different versions don't remove each other's.
 
+## Patched adapters
+
+Sometimes an adapter needs a fix its upstream hasn't made yet. Rather than
+wait, CAF can patch it as it installs it: a profile's recipe may carry exact
+edits to files npm installed, kept in CAF's repository and compiled in,
+never downloaded. None of these fixes has been sent upstream yet.
+
+A patched install is of a version of its own: the upstream version, then
+`+caf.` and the patch's level, such as `claude-agent-acp-0.98.0+caf.1`.
+`Installed { version }` says `0.98.0+caf.1`.
+
+Patching is an install's last step, and each file is checked three ways:
+
+- it must be exactly the file the patch was written for, by its SHA-256;
+- each edit's text must be in it exactly once, as the edits before it left
+  it;
+- the result must be exactly the file CAF tested, by its SHA-256 again.
+
+The original is kept beside it, as `<file>.caf-original`, and the patched
+file written whole and renamed into place. If any check fails, the install
+fails with `InstallFailure::Patch`, saying which file and which check, and
+nothing of it is left: CAF never runs a half-patched adapter.
+
+A later CAF may patch the same upstream version again, at a higher level.
+If an earlier level of it is installed, CAF makes the new one from it,
+without asking, since nothing is downloaded: it links the earlier install's
+files into a new folder, puts back each original, and patches that. The
+agent shows `Installing`, then `Installed`. Nothing is changed in place, so
+the earlier install, and any program still running from it, is untouched.
+If this fails, the agent reads as `Missing`, and installing it, with the
+user's leave, downloads it as any other.
+
+An earlier patch level of the version your program pins counts as an older
+version, and is removed as one is. A later level, which another program
+may pin, never is.
+
 ## Sign in
 
 ```rust

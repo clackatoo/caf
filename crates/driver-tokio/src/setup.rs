@@ -10,7 +10,14 @@
 //!
 //! npm installs run `npm ci --ignore-scripts --no-audit --no-fund` from the
 //! profile's lockfile. Downloads are fetched by the driver itself, not by
-//! `curl`. Sign-in commands that open a browser are given a `BROWSER` of
+//! `curl`. An install with a [`Patch`] is patched in its hidden folder, as
+//! the last step before it's renamed into place: each file written whole
+//! and renamed over the original, which is kept as `<file>.caf-original`.
+//! A `Prepare` builds its hidden folder of hard links to the earlier
+//! install's files instead (copies where a link can't be made, and never
+//! its `.used`), renames each original back over its patched copy there,
+//! and patches that: only names in the new folder change, so the earlier
+//! install never does. Sign-in commands that open a browser are given a `BROWSER` of
 //! the driver's own, which hands their link back instead of opening
 //! anything.
 //!
@@ -78,6 +85,7 @@
 //! taken out of lines first, and lines longer than 64 KiB are skipped.
 //!
 //! [`AgentDirective::Start`]: caf_core::directive::AgentDirective::Start
+//! [`Patch`]: caf_core::install::Patch
 //! [`LinkFrom`]: caf_core::install::LinkFrom
 
 mod command;
