@@ -77,7 +77,7 @@ use serde_json::value::RawValue;
 #[serde(tag = "type", content = "value")]
 #[expect(
     clippy::large_enum_variant,
-    reason = "its big variant holds a chat, sent and dropped: boxing it would reshape a released message for one word"
+    reason = "its big variant holds a chat, sent and dropped: boxing it changes no wire, only Rust code matching it, for one word of size"
 )]
 pub enum ToInspector {
     /// The first message: what the server is doing.

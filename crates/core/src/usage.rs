@@ -109,7 +109,10 @@ pub struct TurnUsage {
     /// (or `unknown`, if the agent never said which). Never empty.
     pub models: Vec<ModelTokens>,
     /// What it cost, as the agent reported it, if it did: how much its
-    /// session's cost rose over the turn. Never an estimate.
+    /// session's cost rose over the turn. Never an estimate. A cost in a
+    /// currency other than US dollars is kept here as reported, but
+    /// counted as unreported in [`Spend`] and [`Summary`], which estimate
+    /// it instead: CAF converts no currency.
     pub cost: Option<Cost>,
     /// Whether fast mode was on, by the settings in effect when it was
     /// sent: what prices it at the fast rate.
@@ -129,7 +132,9 @@ impl TurnUsage {
 ///
 /// It's worked out by the core, with the prices it has now, and sent again
 /// ([`Change::Spend`](crate::Change::Spend)) whenever a turn adds to it or
-/// the prices change, so every viewer shows the same figure. Turns from
+/// the prices change, so every viewer shows the same figure. It's saved
+/// with the chat, but never trusted: a restored chat's is worked out again
+/// from its turns, so the turns stay the only record. Turns from
 /// before CAF recorded usage, and imported ones, have no record: it counts
 /// from when recording began.
 #[non_exhaustive]

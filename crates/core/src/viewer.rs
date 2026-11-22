@@ -240,7 +240,7 @@ pub enum AgentAction {
 #[serde(bound = "A: AppItem")]
 #[expect(
     clippy::large_enum_variant,
-    reason = "a picture is a whole chat, sent and dropped: boxing it would reshape a released message for one word"
+    reason = "a picture is a whole chat, sent and dropped: boxing it changes no wire, only Rust code matching it, for one word of size"
 )]
 pub enum ToViewer<A: AppItem = NoAppItems> {
     /// The answer to [`FromViewer::Hello`].
