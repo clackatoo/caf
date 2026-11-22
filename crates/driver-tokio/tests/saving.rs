@@ -16,7 +16,7 @@ use caf_core::settings::{SettingKind, SettingValue};
 use caf_core::viewer::{FromViewer, Outcome, RequestNo, ToViewer};
 use caf_core::{Core, Now, OpenChat, Refused, SettingChoice};
 use caf_driver_tokio::viewer::{ViewerRules, serve};
-use caf_driver_tokio::{Caf, Config, Error, Running, SavedWatch};
+use caf_driver_tokio::{Caf, Error, Running, SavedWatch};
 use caf_save::{FileStore, Store, StoreError, Stored};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -62,7 +62,7 @@ fn start_with<D: AppData>(
     store: Option<Box<dyn Store>>,
     record: Option<std::path::PathBuf>,
 ) -> (Caf<NoAppItems, D>, Running) {
-    let mut config = Config::new(host(), vec![fake(dir, script)]);
+    let mut config = config_for(host(), vec![fake(dir, script)]);
     config.store = store;
     config.record = record;
     Caf::start(config)
@@ -1141,7 +1141,7 @@ fn start_choosing(
 ) -> (Caf<NoAppItems, NoAppData>, Running) {
     let mut agent = fake(dir, script);
     agent.settings = defaults;
-    let mut config = Config::new(host(), vec![agent]);
+    let mut config = config_for(host(), vec![agent]);
     config.store = Some(Box::new(FileStore::new(root(dir))));
     Caf::start(config)
 }

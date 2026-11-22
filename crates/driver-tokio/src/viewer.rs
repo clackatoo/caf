@@ -28,6 +28,7 @@ use caf_core::chat::{AppData, AppItem};
 use caf_core::ids::AgentName;
 use caf_core::ids::{ChangeNo, ChatId, Shelf};
 use caf_core::save::RestoreChat;
+use caf_core::usage::Summary;
 use caf_core::viewer::{
     AgentAction, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer, VERSIONS,
 };
@@ -144,9 +145,19 @@ impl Default for ViewerRules {
 /// [`Outcome::CannotRestore`] saying why not. Meanwhile the link goes on:
 /// the store may take a while.
 ///
-/// Every request gets exactly one [`ToViewer::Done`], unless the link
-/// ends first: one made while CAF shuts down is answered
-/// [`Outcome::Gone`].
+/// A request for a usage summary ([`FromViewer::Usage`]) or to set a
+/// price ([`FromViewer::SetPrice`]) is done only if
+/// [`ViewerRules::usage`] allows it, and otherwise answered
+/// [`Outcome::NotAllowed`]. A summary reads the ledger's files, so the
+/// link goes on meanwhile: it's answered with [`ToViewer::Usage`] once
+/// it's read, or [`Outcome::NoLedger`] or [`Outcome::BadQuery`]. A price
+/// set is answered [`Outcome::Done`] once every chat's spend is worked out
+/// with it, or [`Outcome::NoLedger`] with no ledger, or if it couldn't be
+/// written, which is reported to the log.
+///
+/// Every request gets exactly one [`ToViewer::Done`], or one
+/// [`ToViewer::Usage`] for a summary, unless the link ends first: one
+/// made while CAF shuts down is answered [`Outcome::Gone`].
 ///
 /// `serve` takes messages already decoded, so it can't limit their size:
 /// the host's transport should refuse a message bigger than it means to
@@ -202,7 +213,7 @@ pub async fn serve<A: AppItem, D: AppData>(
         saved,
         gone: false,
         watches: Watches::default(),
-        restores: Restores::default(),
+        asked: Asked::default(),
     };
     link.run(from, &to).await;
 }
@@ -242,10 +253,11 @@ struct Link<A: AppItem, D: AppData> {
     agents: AgentsWatch,
     saved: SavedWatch,
     /// CAF has shut down: the link ends once every watch has, and every
-    /// restore under way is answered.
+    /// request under way is answered.
     gone: bool,
     watches: Watches<A>,
-    restores: Restores,
+    /// Restores, summaries and prices under way.
+    asked: Asked,
 }
 
 impl<A: AppItem, D: AppData> Link<A, D> {
@@ -254,7 +266,7 @@ impl<A: AppItem, D: AppData> Link<A, D> {
         // answer.
         let mut waiting = None;
         loop {
-            let idle = self.watches.is_empty() && self.restores.is_empty();
+            let idle = self.watches.is_empty() && self.asked.is_empty();
             if self.gone && idle {
                 return;
             }
@@ -275,7 +287,7 @@ impl<A: AppItem, D: AppData> Link<A, D> {
                     }
                     None => return,
                 },
-                // With no watched chat to say has ended, nor restore to
+                // With no watched chat to say has ended, nor request to
                 // answer, the link ends with CAF.
                 () = self.caf.ended(), if idle => return,
             };
@@ -304,10 +316,13 @@ impl<A: AppItem, D: AppData> Link<A, D> {
                     None => self.gone = true,
                 },
                 message = self.watches.next() => room.send(message),
-                (request, outcome) = self.restores.next() => {
-                    self.opened(&outcome);
-                    room.send(ToViewer::Done { request, outcome });
-                }
+                (request, answer) = self.asked.next() => match answer {
+                    Answer::Done(outcome) => {
+                        self.opened(&outcome);
+                        room.send(ToViewer::Done { request, outcome });
+                    }
+                    Answer::Usage(summary) => room.send(ToViewer::Usage { request, summary }),
+                },
             }
         }
     }
@@ -390,27 +405,38 @@ impl<A: AppItem, D: AppData> Link<A, D> {
                 shelf,
             } => match restoring(caf, rules, chat, &shelf) {
                 Ok(restore) => {
-                    self.restores.add(request, restore);
+                    self.asked.add(request, restore);
                     return;
                 }
                 Err(outcome) => (request, outcome),
             },
-            // Answered with ToViewer::Usage, or Done saying why not, on a
-            // task of its own: a summary reads files, and mustn't hold up
-            // the viewer's other requests. NotAllowed without
-            // ViewerRules::usage.
-            FromViewer::Usage { request, query } => {
-                let _ = (request, query);
-                todo!("feature 6: a summary for a viewer")
+            // Read while the link goes on: a summary reads files, and
+            // mustn't hold up the viewer's other requests.
+            FromViewer::Usage { request, query } if rules.usage => {
+                let reading = caf.usage(query);
+                let summary = async move {
+                    match reading.await {
+                        Ok(summary) => Answer::Usage(Box::new(summary)),
+                        Err(error) => Answer::Done(outcome(Err(error))),
+                    }
+                };
+                self.asked.add(request, Box::pin(summary));
+                return;
             }
-            // Done, NoLedger, or NotAllowed without ViewerRules::usage.
+            // Behind the ledger's writes, so not waited for either.
             FromViewer::SetPrice {
                 request,
                 model,
                 price,
-            } => {
-                let _ = (request, model, price);
-                todo!("feature 6: a price of the user's own, from a viewer")
+            } if rules.usage => {
+                let setting = caf.set_price(model, price);
+                let set =
+                    async move { Answer::Done(outcome(setting.await.map(|()| Outcome::Done))) };
+                self.asked.add(request, Box::pin(set));
+                return;
+            }
+            FromViewer::Usage { request, .. } | FromViewer::SetPrice { request, .. } => {
+                (request, Outcome::NotAllowed)
             }
             // A second Hello, or a message of a later version: there's
             // nothing to do.
@@ -463,7 +489,7 @@ fn restoring<A: AppItem, D: AppData>(
     rules: &ViewerRules,
     chat: ChatId,
     shelf: &Shelf,
-) -> Result<Restore, Outcome> {
+) -> Result<Pending, Outcome> {
     let restorer = &rules.restore;
     let restore = match std::panic::catch_unwind(AssertUnwindSafe(|| restorer(chat, shelf))) {
         Ok(Some(restore)) => restore,
@@ -475,7 +501,7 @@ fn restoring<A: AppItem, D: AppData>(
     };
     let restoring = caf.restore(restore);
     Ok(Box::pin(async move {
-        outcome(restoring.await.map(Outcome::Opened))
+        Answer::Done(outcome(restoring.await.map(Outcome::Opened)))
     }))
 }
 
@@ -528,6 +554,14 @@ fn outcome(result: Result<Outcome, Error>) -> Outcome {
         Ok(outcome) => outcome,
         Err(Error::Refused(refused)) => Outcome::Refused(refused),
         Err(Error::CannotRestore(why)) => Outcome::CannotRestore(why),
+        Err(Error::NoLedger) => Outcome::NoLedger,
+        Err(Error::BadQuery(why)) => Outcome::BadQuery(why),
+        // The wire has no outcome of its own for it: the ledger's folder
+        // can't be written, which is as good as none.
+        Err(Error::Price(why)) => {
+            log::warn!(target: "caf", "a viewer's price couldn't be set: {why}");
+            Outcome::NoLedger
+        }
         Err(_) => Outcome::Gone,
     }
 }
@@ -543,32 +577,42 @@ fn next_of<A: AppItem>(mut watch: Watch<A>) -> Next<A> {
     })
 }
 
-/// A restore under way: its outcome, once it's over.
-type Restore = Pin<Box<dyn Future<Output = Outcome> + Send>>;
-
-/// A viewer's restores under way, each with the viewer's number for it.
-#[derive(Default)]
-struct Restores {
-    each: Vec<(RequestNo, Restore)>,
+/// How a request answered while the link went on turned out.
+enum Answer {
+    /// Its outcome.
+    Done(Outcome),
+    /// The summary it asked for.
+    Usage(Box<Summary>),
 }
 
-impl Restores {
+/// A request under way: a restore, a summary or a price. Its answer, once
+/// it's over.
+type Pending = Pin<Box<dyn Future<Output = Answer> + Send>>;
+
+/// A viewer's requests answered while the link goes on, each with the
+/// viewer's number for it.
+#[derive(Default)]
+struct Asked {
+    each: Vec<(RequestNo, Pending)>,
+}
+
+impl Asked {
     fn is_empty(&self) -> bool {
         self.each.is_empty()
     }
 
-    fn add(&mut self, request: RequestNo, restore: Restore) {
-        self.each.push((request, restore));
+    fn add(&mut self, request: RequestNo, pending: Pending) {
+        self.each.push((request, pending));
     }
 
-    /// The next restore to be over, and its outcome. Never resolves while
+    /// The next request to be over, and its answer. Never resolves while
     /// none is under way. Cancel-safe.
-    async fn next(&mut self) -> (RequestNo, Outcome) {
+    async fn next(&mut self) -> (RequestNo, Answer) {
         std::future::poll_fn(|cx| {
             for at in 0..self.each.len() {
-                if let Poll::Ready(outcome) = self.each[at].1.as_mut().poll(cx) {
+                if let Poll::Ready(answer) = self.each[at].1.as_mut().poll(cx) {
                     let (request, _) = self.each.swap_remove(at);
-                    return Poll::Ready((request, outcome));
+                    return Poll::Ready((request, answer));
                 }
             }
             Poll::Pending

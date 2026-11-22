@@ -3,6 +3,7 @@
 mod common;
 
 use std::collections::VecDeque;
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::Arc;
 
 use caf_core::agent::AgentStatus;
@@ -11,12 +12,14 @@ use caf_core::chat::{ChatState, ItemKind, Lost, TurnLife, UserMessage};
 use caf_core::ids::{AgentName, ChangeNo, ChatId, QuestionId};
 use caf_core::question::{Answer, OptionId};
 use caf_core::settings::{KnownSettings, SettingKind, SettingValue};
+use caf_core::time::Wall;
+use caf_core::usage::{BadQuery, ModelPrice, PriceLayer, UsageQuery};
 use caf_core::viewer::{
     AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
 };
 use caf_core::{Chat, OpenChat, Refused, SettingChoice};
 use caf_driver_tokio::viewer::{ViewerRules, serve};
-use caf_driver_tokio::{Caf, Config, Running};
+use caf_driver_tokio::{Caf, Running};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -236,7 +239,7 @@ fn opening() -> ViewerRules {
 /// host opened.
 async fn started(dir: &Dir, steps: &[Value]) -> (Caf, Running, caf_driver_tokio::ChatHandle) {
     let script = dir.script("script.jsonl", &after_handshake(steps));
-    let (caf, running) = Caf::start(Config::new(host(), vec![fake(dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host(), vec![fake(dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     (caf, running, chat)
 }
@@ -333,16 +336,22 @@ async fn the_agents_come_right_after_the_welcome_while_chats_open_and_close() {
 async fn the_welcome_says_what_the_host_lets_the_viewer_do() {
     let dir = Dir::new();
     let (caf, running, _chat) = started(&dir, &[]).await;
-    for (act, agents) in [(true, true), (false, true), (false, false)] {
+    for (act, agents, usage) in [
+        (true, true, false),
+        (false, true, false),
+        (false, false, false),
+        (true, false, true),
+    ] {
         let mut rules = ViewerRules::default();
         rules.act = act;
         rules.agents = agents;
+        rules.usage = usage;
         let mut viewer = Viewer::connect(&caf, rules, 8);
         viewer.send(FromViewer::Hello { min: 1, max: 1 }).await;
         let Some(ToViewer::Welcome { may, .. }) = viewer.next().await else {
             panic!("a welcome")
         };
-        assert_eq!(may, Rights::new(act, agents));
+        assert_eq!(may, Rights::new(act, agents).with_usage(usage));
     }
     shut_down(&caf, running).await;
 }
@@ -415,7 +424,7 @@ async fn a_watch_since_resumes_or_starts_over() {
     let script = dir.script("script.jsonl", &after_handshake(&steps));
     let mut host = host();
     host.limits.kept_changes = 16;
-    let (caf, running) = Caf::start(Config::new(host, vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host, vec![fake(&dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     let (mut first, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 64).await;
@@ -483,7 +492,7 @@ async fn a_viewer_that_falls_behind_gets_a_picture() {
     let script = dir.script("script.jsonl", &after_handshake(&steps));
     let mut host = host();
     host.limits.kept_changes = 8;
-    let (caf, running) = Caf::start(Config::new(host, vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host, vec![fake(&dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     // Room for one message only, and the viewer stops reading.
@@ -651,7 +660,7 @@ async fn a_viewer_that_may_not_act_only_watches() {
 async fn a_viewer_hears_of_chats_others_open_and_close() {
     let dir = Dir::new();
     let script = dir.script("script.jsonl", &handshake("s1"));
-    let (caf, running) = Caf::start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host(), vec![fake(&dir, &script)]));
     let (mut opener, ..) = Viewer::welcomed(&caf, opening(), 8).await;
     let (mut other, _, chats) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
     assert!(chats.is_empty());
@@ -1017,7 +1026,7 @@ async fn a_request_while_caf_shuts_down_is_answered_gone() {
     );
     let mut host = host();
     host.timers.kill_after = std::time::Duration::from_secs(3);
-    let (caf, running) = Caf::start(Config::new(host, vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host, vec![fake(&dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     until(&chat, &mut watch, "the session", |chat| {
@@ -1096,7 +1105,7 @@ async fn viewers_that_stop_reading_dont_hold_caf_up() {
     let script = dir.script("script.jsonl", &after_handshake(&[prompt()]));
     let hold = Hold::default();
     let (caf, running) =
-        Caf::start_watching(Config::new(host(), vec![fake(&dir, &script)]), hold.clone());
+        Caf::start_watching(config_for(host(), vec![fake(&dir, &script)]), hold.clone());
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     until(&chat, &mut watch, "the session", |chat| {
@@ -1218,7 +1227,7 @@ async fn a_viewer_watches_only_as_many_chats_as_the_host_allows() {
             json!({"respond": {"result": {"sessionId": "s2"}}}),
         ]),
     );
-    let (caf, running) = Caf::start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host(), vec![fake(&dir, &script)]));
     let first = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let second = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     // Open, so nothing changes in them meanwhile.
@@ -1258,7 +1267,7 @@ async fn watching_a_chat_again_before_anything_comes_starts_it_once() {
     let script = dir.script("script.jsonl", &after_handshake(&hello_there()));
     let hold = Hold::default();
     let (caf, running) =
-        Caf::start_watching(Config::new(host(), vec![fake(&dir, &script)]), hold.clone());
+        Caf::start_watching(config_for(host(), vec![fake(&dir, &script)]), hold.clone());
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let (mut viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 8).await;
     let (_, before) = viewer.watch(chat.id).await;
@@ -1366,9 +1375,9 @@ async fn serve_ends_though_its_viewer_has_stopped_reading() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_viewer_hears_its_cafs_run_and_each_caf_has_its_own() {
-    let (one, one_running) = Caf::start(Config::new(host(), Vec::new()));
+    let (one, one_running) = Caf::start(config_for(host(), Vec::new()));
     let (other, other_running) =
-        Caf::start_watching(Config::new(host(), Vec::new()), Hold::default());
+        Caf::start_watching(config_for(host(), Vec::new()), Hold::default());
     assert_ne!(one.run(), other.run());
     for caf in [&one, &other] {
         let run = caf.run();
@@ -1440,7 +1449,7 @@ async fn a_viewer_chooses_a_setting_and_learns_an_agents_as_the_host_allows() {
         json!({"respond": {"result": {"sessionId": "learn", "configOptions": options("small", "high", true)}}}),
     ]);
     let script = dir.script("script.jsonl", &script);
-    let (caf, running) = Caf::start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = Caf::start(config_for(host(), vec![fake(&dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     until(&chat, &mut watch, "the session", |chat| {
@@ -1540,4 +1549,192 @@ async fn a_viewer_chooses_a_setting_and_learns_an_agents_as_the_host_allows() {
         "{:#?}",
         dir.record()
     );
+}
+
+/// Rules that let viewers read usage and set prices.
+fn usage_rules() -> ViewerRules {
+    let mut rules = ViewerRules::default();
+    rules.usage = true;
+    rules
+}
+
+/// January 2026, by day in London.
+fn january() -> UsageQuery {
+    UsageQuery::new(
+        Wall(1_767_225_600_000),
+        Wall(1_769_904_000_000),
+        "Europe/London",
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_viewer_reads_usage_and_sets_prices_only_if_the_host_lets_it() {
+    let dir = Dir::new();
+    let (caf, running) = Caf::start(config_with_ledger(&dir, host(), Vec::new()));
+    let model = "claude-viewer-1";
+    let (mut viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 64).await;
+    viewer
+        .send(FromViewer::Usage {
+            request: RequestNo(1),
+            query: january(),
+        })
+        .await;
+    assert_eq!(viewer.done(1).await, Outcome::NotAllowed);
+    let price = Some(ModelPrice::new(1.0, 2.0));
+    viewer
+        .send(FromViewer::SetPrice {
+            request: RequestNo(2),
+            model: model.into(),
+            price: price.clone(),
+        })
+        .await;
+    assert_eq!(viewer.done(2).await, Outcome::NotAllowed);
+    assert!(caf.prices().await.unwrap().find(model).is_none(), "not set");
+
+    let (mut viewer, ..) = Viewer::welcomed(&caf, usage_rules(), 64).await;
+    viewer
+        .send(FromViewer::SetPrice {
+            request: RequestNo(3),
+            model: model.into(),
+            price,
+        })
+        .await;
+    assert_eq!(viewer.done(3).await, Outcome::Done);
+    let prices = caf.prices().await.unwrap();
+    assert_eq!(
+        prices.find(model).map(|own| own.layer),
+        Some(PriceLayer::Own)
+    );
+    viewer
+        .send(FromViewer::Usage {
+            request: RequestNo(4),
+            query: january(),
+        })
+        .await;
+    match viewer.next().await {
+        Some(ToViewer::Usage {
+            request: RequestNo(4),
+            summary,
+        }) => {
+            assert_eq!(summary.query, january());
+            assert!(summary.buckets.is_empty(), "nothing was spent");
+        }
+        other => panic!("the summary, not {other:?}"),
+    }
+    shut_down(&caf, running).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_viewer_hears_there_is_no_ledger_or_that_a_query_is_bad() {
+    let dir = Dir::new();
+    let (caf, running) = Caf::start(config_for(host(), Vec::new()));
+    let (mut viewer, ..) = Viewer::welcomed(&caf, usage_rules(), 64).await;
+    viewer
+        .send(FromViewer::Usage {
+            request: RequestNo(1),
+            query: january(),
+        })
+        .await;
+    assert_eq!(viewer.done(1).await, Outcome::NoLedger);
+    viewer
+        .send(FromViewer::SetPrice {
+            request: RequestNo(2),
+            model: "claude-viewer-1".into(),
+            price: None,
+        })
+        .await;
+    assert_eq!(viewer.done(2).await, Outcome::NoLedger);
+    shut_down(&caf, running).await;
+
+    let (caf, running) = Caf::start(config_with_ledger(&dir, host(), Vec::new()));
+    let (mut viewer, ..) = Viewer::welcomed(&caf, usage_rules(), 64).await;
+    let mut query = january();
+    query.zone = "Nowhere/Atlantis".into();
+    viewer
+        .send(FromViewer::Usage {
+            request: RequestNo(1),
+            query,
+        })
+        .await;
+    assert_eq!(
+        viewer.done(1).await,
+        Outcome::BadQuery(BadQuery::Zone("Nowhere/Atlantis".into()))
+    );
+    let mut query = january();
+    query.until = query.since;
+    viewer
+        .send(FromViewer::Usage {
+            request: RequestNo(2),
+            query,
+        })
+        .await;
+    assert_eq!(viewer.done(2).await, Outcome::BadQuery(BadQuery::Period));
+    shut_down(&caf, running).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_slow_summary_never_holds_up_a_viewers_other_requests() {
+    let dir = Dir::new();
+    // January's file, as a pipe: reading it waits until something writes
+    // to it.
+    let app = dir.path("usage/blocked");
+    std::fs::create_dir_all(&app).unwrap();
+    let pipe = app.join("2026-01.jsonl");
+    let path = std::ffi::CString::new(pipe.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: a plain syscall, with a path that lives through it.
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    let (caf, running) = Caf::start(config_with_ledger(&dir, host(), Vec::new()));
+    let (mut viewer, ..) = Viewer::welcomed(&caf, usage_rules(), 64).await;
+    viewer
+        .send(FromViewer::Usage {
+            request: RequestNo(1),
+            query: january(),
+        })
+        .await;
+    viewer
+        .send(FromViewer::Open {
+            request: RequestNo(2),
+            open: OpenRequest::new("fake", &dir.0),
+        })
+        .await;
+    assert_eq!(
+        viewer.done(2).await,
+        Outcome::NotAllowed,
+        "answered at once"
+    );
+    viewer
+        .send(FromViewer::SetPrice {
+            request: RequestNo(3),
+            model: "claude-viewer-1".into(),
+            price: None,
+        })
+        .await;
+    assert_eq!(viewer.done(3).await, Outcome::Done, "so is a price");
+    assert!(
+        !(viewer.skipped.iter()).any(|message| matches!(message, ToViewer::Usage { .. })),
+        "the summary waits for the pipe"
+    );
+    // Something opens it to write, once the summary is reading it, and
+    // writes nothing: then the summary is read.
+    let opened = tokio::time::timeout(PATIENCE, async {
+        loop {
+            let writer = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&pipe);
+            match writer {
+                Ok(writer) => return drop(writer),
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            }
+        }
+    });
+    opened.await.expect("the summary reads the pipe");
+    match viewer.next().await {
+        Some(ToViewer::Usage {
+            request: RequestNo(1),
+            ..
+        }) => {}
+        other => panic!("the summary, not {other:?}"),
+    }
+    shut_down(&caf, running).await;
 }

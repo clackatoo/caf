@@ -253,7 +253,7 @@ async fn open_watch_send_and_the_words_stream_in() {
         json!({"update": {"session": "s1", "update": {"sessionUpdate": "usage_update", "used": 1200, "size": 200_000}}}),
         end_turn(),
     ]));
-    let (caf, running) = start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = start(common::config_for(host(), vec![fake(&dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     let Some(Update::Picture(first)) = watch.next().await else {
@@ -352,7 +352,7 @@ async fn a_permission_request_is_asked_and_answered() {
         end_turn(),
     ]));
     // AlwaysAsk is the default policy.
-    let (caf, running) = start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = start(common::config_for(host(), vec![fake(&dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     chat.send(UserMessage::text("List the files"))
@@ -405,7 +405,7 @@ async fn stop_mid_turn() {
             json!({"respond": {"to": "prompt", "result": {"stopReason": "cancelled"}}}),
         ]),
     );
-    let (caf, running) = start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = start(common::config_for(host(), vec![fake(&dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     until(&chat, &mut watch, "the session", |chat| {
@@ -448,7 +448,7 @@ async fn an_adapter_dying_mid_turn_is_started_again_by_the_next_message() {
     dir.script("second.jsonl", &second);
     let shell = r#"if [ -e "$DIR/started" ]; then script=second; else : > "$DIR/started"; script=first; fi
 exec "$FAKE" "$DIR/$script.jsonl" --record "$DIR/record.jsonl""#;
-    let (caf, running) = start(Config::new(host(), vec![fake_by_shell(&dir, shell)]));
+    let (caf, running) = start(common::config_for(host(), vec![fake_by_shell(&dir, shell)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     chat.send(UserMessage::text("First")).await.unwrap();
@@ -500,7 +500,7 @@ async fn a_slow_adapter_is_asked_about_and_waited_for() {
     ]);
     let mut host = host();
     host.timers.initialize = Duration::from_millis(300);
-    let (caf, running) = start(Config::new(host, vec![fake(&dir, &script)]));
+    let (caf, running) = start(common::config_for(host, vec![fake(&dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     chat.send(UserMessage::text("Hello?")).await.unwrap();
@@ -570,7 +570,7 @@ async fn two_chats_share_one_adapter() {
     steps.extend(prompt_to("s1", "for one"));
     steps.extend(prompt_to("s2", "for two"));
     let script = dir.script("script.jsonl", &steps);
-    let (caf, running) = start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = start(common::config_for(host(), vec![fake(&dir, &script)]));
     let first = caf.open_chat(OpenChat::new("fake", &one)).await.unwrap();
     let second = caf.open_chat(OpenChat::new("fake", &two)).await.unwrap();
     assert_ne!(first.id, second.id);
@@ -604,7 +604,7 @@ async fn shutting_down_leaves_no_processes() {
         ]),
     );
     let shell = r#"echo $$ > "$DIR/fake.pid"; exec "$FAKE" "$DIR/script.jsonl" --record "$DIR/record.jsonl""#;
-    let (caf, running) = start(Config::new(host(), vec![fake_by_shell(&dir, shell)]));
+    let (caf, running) = start(common::config_for(host(), vec![fake_by_shell(&dir, shell)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     chat.send(UserMessage::text("Work")).await.unwrap();
@@ -649,7 +649,7 @@ async fn a_watch_that_falls_behind_gets_a_fresh_picture() {
     let script = dir.script("script.jsonl", &after_handshake(&steps));
     let mut host = host();
     host.limits.kept_changes = 8;
-    let (caf, running) = start(Config::new(host, vec![fake(&dir, &script)]));
+    let (caf, running) = start(common::config_for(host, vec![fake(&dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut keeping_up = chat.watch();
     let mut behind = chat.watch();
@@ -739,7 +739,7 @@ async fn a_recorded_run_replays_to_the_same_state() {
         "sk-do-not-record".into(),
     ));
     command.args = vec!["--key".into(), "sk-arg-do-not-record".into()];
-    let mut config = Config::new(host(), vec![agent]);
+    let mut config = common::config_for(host(), vec![agent]);
     config.record = Some(recording.clone());
     let (caf, running) = start(config);
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
@@ -826,7 +826,7 @@ async fn a_recording_is_never_written_through_a_link() {
     let target = dir.path("target");
     std::fs::write(&target, "keep").unwrap();
     std::os::unix::fs::symlink(&target, dir.path("link")).unwrap();
-    let mut config = Config::new(host(), Vec::new());
+    let mut config = common::config_for(host(), Vec::new());
     config.record = Some(dir.path("link"));
     let (caf, running) = start(config);
     shut_down(&caf, running).await;
@@ -835,7 +835,7 @@ async fn a_recording_is_never_written_through_a_link() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn refusals_and_unknown_chats() {
-    let (caf, running) = start(Config::new(host(), Vec::new()));
+    let (caf, running) = start(common::config_for(host(), Vec::new()));
     let refused = caf.open_chat(OpenChat::new("nobody", "/tmp")).await;
     assert!(matches!(refused, Err(Error::Refused(_))));
     let nobody = caf.chat(ChatId::from_number(4242));
@@ -856,7 +856,7 @@ async fn refusals_and_unknown_chats() {
 async fn closing_a_chat_ends_its_watches() {
     let dir = Dir::new();
     let script = dir.script("script.jsonl", &handshake("s1"));
-    let (caf, running) = start(Config::new(host(), vec![fake(&dir, &script)]));
+    let (caf, running) = start(common::config_for(host(), vec![fake(&dir, &script)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     until(&chat, &mut watch, "the session", |chat| {
@@ -877,7 +877,7 @@ async fn dropping_every_handle_shuts_caf_down() {
     let dir = Dir::new();
     dir.script("script.jsonl", &handshake("s1"));
     let shell = r#"echo $$ > "$DIR/fake.pid"; exec "$FAKE" "$DIR/script.jsonl" --record "$DIR/record.jsonl""#;
-    let (caf, running) = start(Config::new(host(), vec![fake_by_shell(&dir, shell)]));
+    let (caf, running) = start(common::config_for(host(), vec![fake_by_shell(&dir, shell)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     until(&chat, &mut watch, "the session", |chat| {
@@ -901,7 +901,7 @@ fn the_driver_and_the_core_must_agree_on_a_too_big_line() {
         .build()
         .unwrap();
     runtime.block_on(async {
-        let mut config = Config::new(host(), Vec::new());
+        let mut config = common::config_for(host(), Vec::new());
         config.agent_limits.biggest_line = 1 << 20;
         let _ = start(config);
     });
@@ -991,7 +991,7 @@ async fn a_policy_that_panics_refuses() {
         json!({"await": {"to": "ask", "expect": {"result": {"outcome": {"outcome": "selected", "optionId": "reject"}}}, "timeout": 60_000}}),
         end_turn(),
     ]));
-    let mut config = Config::new(host(), vec![fake(&dir, &script)]);
+    let mut config = common::config_for(host(), vec![fake(&dir, &script)]);
     config.policy = Box::new(Panics);
     let (caf, running) = start(config);
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
@@ -1017,7 +1017,7 @@ async fn a_withdrawn_decision_is_stopped() {
             json!({"respond": {"to": "prompt", "result": {"stopReason": "cancelled"}}}),
         ]),
     );
-    let mut config = Config::new(host(), vec![fake(&dir, &script)]);
+    let mut config = common::config_for(host(), vec![fake(&dir, &script)]);
     let (dropped, decision_dropped) = tokio::sync::oneshot::channel();
     config.policy = Box::new(NeverDecides(Some(dropped)));
     let (caf, running) = start(config);
@@ -1063,7 +1063,7 @@ async fn a_policy_that_panics_in_decide_refuses_and_caf_goes_on() {
             end_turn(),
         ]),
     );
-    let mut config = Config::new(host(), vec![fake(&dir, &script)]);
+    let mut config = common::config_for(host(), vec![fake(&dir, &script)]);
     config.policy = Box::new(PanicsAtOnce);
     let (caf, running) = start(config);
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
@@ -1085,7 +1085,7 @@ async fn mcp_secrets_are_hidden_in_a_recording() {
     let dir = Dir::new();
     let script = dir.script("script.jsonl", &handshake("s1"));
     let recording = dir.path("run.jsonl");
-    let mut config = Config::new(host(), vec![fake(&dir, &script)]);
+    let mut config = common::config_for(host(), vec![fake(&dir, &script)]);
     config.record = Some(recording.clone());
     let (caf, running) = start(config);
     let mut open = OpenChat::new("fake", &dir.0);
@@ -1124,7 +1124,7 @@ async fn a_recording_never_replaces_a_file() {
     let there = dir.path("there.jsonl");
     std::fs::write(&there, "keep").unwrap();
     std::fs::set_permissions(&there, std::fs::Permissions::from_mode(0o644)).unwrap();
-    let mut config = Config::new(host(), Vec::new());
+    let mut config = common::config_for(host(), Vec::new());
     config.record = Some(there.clone());
     let (caf, running) = start(config);
     shut_down(&caf, running).await;
@@ -1151,7 +1151,7 @@ fn a_recording_never_waits_on_a_pipe() {
             .build()
             .unwrap();
         runtime.block_on(async {
-            let mut config = Config::new(host(), Vec::new());
+            let mut config = common::config_for(host(), Vec::new());
             config.record = Some(pipe);
             let (caf, running) = start(config);
             let _ = done.send(());
@@ -1169,7 +1169,7 @@ async fn a_watch_doesnt_keep_caf_running() {
     let dir = Dir::new();
     dir.script("script.jsonl", &handshake("s1"));
     let shell = r#"echo $$ > "$DIR/fake.pid"; exec "$FAKE" "$DIR/script.jsonl" --record "$DIR/record.jsonl""#;
-    let (caf, running) = start(Config::new(host(), vec![fake_by_shell(&dir, shell)]));
+    let (caf, running) = start(common::config_for(host(), vec![fake_by_shell(&dir, shell)]));
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut read = chat.watch();
     until(&chat, &mut read, "the session", |chat| {
@@ -1214,8 +1214,10 @@ async fn watches_left_partway_through_a_read_dont_hold_caf_up() {
     let dir = Dir::new();
     let script = dir.script("script.jsonl", &after_handshake(&[prompt()]));
     let hold = common::Hold::default();
-    let (caf, running) =
-        Caf::start_watching(Config::new(host(), vec![fake(&dir, &script)]), hold.clone());
+    let (caf, running) = Caf::start_watching(
+        common::config_for(host(), vec![fake(&dir, &script)]),
+        hold.clone(),
+    );
     let chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     let mut watch = chat.watch();
     until(&chat, &mut watch, "the session", |chat| {
@@ -1260,8 +1262,10 @@ async fn a_read_sent_before_a_command_is_answered_first() {
     let dir = Dir::new();
     let script = dir.script("script.jsonl", &handshake("s1"));
     let hold = common::Hold::default();
-    let (caf, running) =
-        Caf::start_watching(Config::new(host(), vec![fake(&dir, &script)]), hold.clone());
+    let (caf, running) = Caf::start_watching(
+        common::config_for(host(), vec![fake(&dir, &script)]),
+        hold.clone(),
+    );
     let mut chat = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
     for round in 0..40 {
         // Held up opening the next round's chat.

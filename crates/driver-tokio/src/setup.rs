@@ -85,7 +85,7 @@ mod install;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use install::{Lock, lock_file};
+pub(crate) use install::{Lock, lock_file, proxy_for};
 
 use std::collections::HashMap;
 use std::path::PathBuf;

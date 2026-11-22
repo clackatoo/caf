@@ -14,6 +14,7 @@ use caf_debugger::live::Live;
 use caf_debugger::replay::{self, BUDGET, Player};
 use caf_debugger::server::{self, App};
 use caf_debugger::{fake, live};
+use caf_driver_tokio::UsageConfig;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -44,6 +45,13 @@ impl Drop for Dir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+/// A usage ledger in `dir`, which never fetches prices: never the user's.
+fn ledger(dir: &Dir) -> Option<UsageConfig> {
+    let mut usage = UsageConfig::new(dir.0.join("usage"));
+    usage.fetch_prices = false;
+    Some(usage)
 }
 
 /// Opens a WebSocket as the app does.
@@ -190,7 +198,7 @@ impl Debugger {
             ProfileChoice::Builtin(Builtin::Fake),
         )];
         let recording = dir.0.join("run.jsonl");
-        let live = live::start(agents, Some(recording.clone()), store);
+        let live = live::start(agents, Some(recording.clone()), store, ledger(&dir));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let token = server::new_token();
@@ -649,7 +657,7 @@ async fn the_recording_check_passes_with_secrets_the_recording_hides() {
         ProfileChoice::Builtin(Builtin::Fake),
     )];
     let recording = dir.0.join("run.jsonl");
-    let live = live::start(agents, Some(recording.clone()), None);
+    let live = live::start(agents, Some(recording.clone()), None, ledger(&dir));
     assert_eq!(live.recording.as_ref(), Some(&recording));
 
     let mut open = caf_core::OpenChat::new("fake", &dir.0);
@@ -726,7 +734,12 @@ async fn a_recording_that_couldnt_be_made_is_none() {
         command,
         ProfileChoice::Builtin(Builtin::Fake),
     )];
-    let live = live::start(agents, Some(dir.0.join("no/such/folder/run.jsonl")), None);
+    let live = live::start(
+        agents,
+        Some(dir.0.join("no/such/folder/run.jsonl")),
+        None,
+        ledger(&dir),
+    );
     assert!(live.recording.is_none());
     assert!(live.book.file.is_none(), "Hello says there's none");
     live.caf.shutdown().await;

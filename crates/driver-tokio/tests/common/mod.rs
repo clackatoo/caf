@@ -14,7 +14,7 @@ use caf_core::chat::{AppData, AppItem, NoAppItems};
 use caf_core::chat::{ItemKind, Turn, TurnLife};
 use caf_core::host::Host;
 use caf_core::profiles::{Builtin, ProfileChoice};
-use caf_driver_tokio::{Caf, ChatHandle, Running, Step, Steps, Update, Watch};
+use caf_driver_tokio::{Caf, ChatHandle, Config, Running, Step, Steps, Update, UsageConfig, Watch};
 use serde_json::{Value, json};
 
 /// Long enough for anything a test waits for, on a loaded machine.
@@ -81,6 +81,30 @@ pub fn host() -> Host {
     host.timers.gone = Duration::from_millis(300);
     host.timers.kill_after = Duration::from_millis(500);
     host
+}
+
+/// A config for `host` offering `agents`, keeping no usage ledger: every
+/// test builds its config here, or with [`config_with_ledger`], so none
+/// ever writes to the user's.
+pub fn config_for(host: Host, agents: Vec<AgentSpec>) -> Config {
+    let mut config = Config::new(host, agents);
+    config.usage = None;
+    config
+}
+
+/// [`config_for`], with a usage ledger in the test's folder, which never
+/// fetches prices.
+pub fn config_with_ledger(dir: &Dir, host: Host, agents: Vec<AgentSpec>) -> Config {
+    let mut config = config_for(host, agents);
+    config.usage = Some(scratch_ledger(dir));
+    config
+}
+
+/// A usage ledger in the test's folder, which never fetches prices.
+pub fn scratch_ledger(dir: &Dir) -> UsageConfig {
+    let mut usage = UsageConfig::new(dir.path("usage"));
+    usage.fetch_prices = false;
+    usage
 }
 
 /// Refuses whatever the script doesn't expect, as an adapter does.

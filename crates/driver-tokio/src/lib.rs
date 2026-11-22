@@ -155,6 +155,7 @@ mod setup;
 mod steps;
 mod storage;
 mod timer;
+mod usage;
 pub mod viewer;
 
 pub use agent::{AgentDriver, AgentLimits};
