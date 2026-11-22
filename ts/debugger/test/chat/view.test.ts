@@ -542,23 +542,31 @@ describe('an archived chat', () => {
   // Restored, it's idle, and archived still: archiving sticks.
   const archived = () => chat({ state: { type: 'Idle' }, archived: NOON })
 
-  it('says so, locks the composer, and offers Unarchive in place of Close', async () => {
+  it('says so, and that sending brings it back, offering Unarchive in place of Close', async () => {
     const { container, actions } = draw(archived())
     expect(container.querySelector('header .state')?.textContent?.trim()).toBe('Archived')
-    expect(screen.queryByRole('textbox', { name: 'Message' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
-    expect(screen.getByText('This chat is archived.')).toBeTruthy()
-    // The ring stays: it only shows.
-    expect(container.querySelector('.composer .ring')).toBeTruthy()
+    expect(container.querySelector('.archived[role=status]')?.textContent).toContain(
+      'This chat is archived. Sending a message brings it back.',
+    )
     await fireEvent.click(button('Unarchive'))
     expect(actions.unarchive).toHaveBeenCalledOnce()
   })
 
-  it('can be written in again once unarchived, here or by a message sent to it elsewhere', async () => {
-    const { rerender } = draw(archived())
+  it('can be written in, as sending to it unarchives it', async () => {
+    const { actions } = draw(archived())
+    const box = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement
+    expect(box.disabled).toBe(false)
+    await fireEvent.input(box, { target: { value: 'Carry on' } })
+    await fireEvent.click(button('Send'))
+    expect(actions.send).toHaveBeenCalledWith({ parts: [{ type: 'Text', value: 'Carry on' }] })
+    expect(actions.unarchive).not.toHaveBeenCalled()
+  })
+
+  it('is an ordinary chat once unarchived, here or by a message sent to it', async () => {
+    const { container, rerender } = draw(archived())
     await rerender({ chat: { ...archived(), archived: null } })
-    expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy()
+    expect(container.querySelector('.archived')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Unarchive' })).toBeNull()
     expect(button('Close').disabled).toBe(false)
   })
@@ -586,9 +594,9 @@ describe('an archived chat', () => {
     expect(screen.queryByRole('button', { name: 'Unarchive' })).toBeNull()
     cleanup()
     const { unarchive: _, ...without } = actions()
-    draw(archived(), { actions: without })
+    const { container } = draw(archived(), { actions: without })
     expect(screen.queryByRole('button', { name: 'Unarchive' })).toBeNull()
-    expect(screen.getByText('This chat is archived.')).toBeTruthy()
+    expect(container.querySelector('.archived')?.textContent).toContain('This chat is archived.')
   })
 })
 

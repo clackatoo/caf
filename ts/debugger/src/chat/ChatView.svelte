@@ -174,6 +174,16 @@
   </div>
 
   <Questions questions={chat.questions} readOnly={!acting} answer={actions.answer} />
+  {#if archived}
+    <!-- Sending brings it back, so the composer stays: only its settings
+         wait, as CAF won't change them while it's archived. -->
+    <div class="archived" role="status">
+      <span>This chat is archived. Sending a message brings it back.</span>
+      {#if acting && actions.unarchive !== undefined}
+        <button type="button" class="unarchive" onclick={unarchive}>Unarchive</button>
+      {/if}
+    </div>
+  {/if}
   <SettingsBar
     settings={chat.settings}
     agent={chat.agent}
@@ -187,18 +197,12 @@
   <Composer
     running={running !== undefined}
     stopping={running?.life.type === 'Stopping'}
-    disabled={!acting || archived}
-    locked={archived ? 'This chat is archived.' : null}
+    disabled={!acting}
     send={(text) => actions.send({ parts: [{ type: 'Text', value: text }] })}
     stop={actions.stop}
   >
     {#snippet beside()}
       <Ring usage={chat.usage} spend={chat.spend} {openUsage} />
-    {/snippet}
-    {#snippet unlock()}
-      {#if acting && actions.unarchive !== undefined}
-        <button type="button" class="unarchive" onclick={unarchive}>Unarchive</button>
-      {/if}
     {/snippet}
   </Composer>
 </section>
@@ -273,8 +277,17 @@
     color: var(--caf-text);
     cursor: pointer;
   }
-  .unarchive {
-    align-self: center;
+  .archived {
+    display: flex;
+    align-items: center;
+    gap: 0.8em;
+    padding: 0.4em 0.9em;
+    border-top: 1px solid var(--caf-border);
+    font-size: 0.85em;
+    color: var(--caf-muted);
+  }
+  .archived span {
+    flex: 1;
   }
   .close:disabled {
     opacity: 0.5;

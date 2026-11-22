@@ -5,7 +5,7 @@
   // Live and following, the chat view shows `/viewer`'s chats, as any
   // host's does. Looking back, or replaying, it shows the chats as they
   // were, from the inspector channel's `Past` messages, read-only.
-  import type { AgentName, Answer, Chat, ChatId, DeepReadonly, QuestionId, SettingChoice, Shelf, UserMessage } from '@clackatoo/caf'
+  import type { AgentName, Answer, Chat, ChatId, Connection, DeepReadonly, QuestionId, SettingChoice, Shelf, UserMessage } from '@clackatoo/caf'
   import AgentsPanel, { type AgentActions } from './AgentsPanel.svelte'
   import {
     ChatList,
@@ -15,7 +15,7 @@
     openThenChoose,
     restoreOnceFree,
     showsAgent,
-    unarchiveOrRestore,
+    orRestored,
     type ChatActions,
     type ListActions,
     type SavedActions,
@@ -97,22 +97,27 @@
     inspector = connectInspector()
   }
 
+  /**
+   * Does something to the chat shown, restoring it first if it's saved and
+   * CAF no longer has it, as when it was put away as it was archived:
+   * sending to it, or unarchiving it, then finds it, archived still.
+   */
+  async function toChat<T>(act: (caf: Connection, chat: ChatId) => Promise<T>): Promise<T> {
+    if (live === null) throw new Error('Not live.')
+    const caf = live.caf
+    const chat = need(selected)
+    const at = saved.find((each) => each.header.chat === chat)
+    const restore = at === undefined ? undefined : () => restoreOnceFree(() => caf.restore(chat, at.shelf)).then(() => live?.watch(chat))
+    return orRestored(() => act(caf, chat), restore)
+  }
+
   const chatActions: ChatActions = {
-    send: (message: UserMessage) => live?.caf.send(need(selected), message),
+    send: (message: UserMessage) => toChat((caf, chat) => caf.send(chat, message)),
     stop: () => live?.caf.stop(need(selected)),
     answer: (question: QuestionId, answer: Answer) => live?.caf.answer(question, answer),
-    sendAgain: (message: DeepReadonly<UserMessage>) => live?.caf.send(need(selected), structuredClone(message) as UserMessage),
+    sendAgain: (message: DeepReadonly<UserMessage>) => toChat((caf, chat) => caf.send(chat, structuredClone(message) as UserMessage)),
     close: () => live?.caf.close(need(selected)),
-    unarchive: async () => {
-      if (live === null) throw new Error('Not live.')
-      const caf = live.caf
-      const chat = need(selected)
-      // Saved, it was put away as it was archived: restored, archived
-      // still, it's unarchived then.
-      const at = saved.find((each) => each.header.chat === chat)
-      const restore = at === undefined ? undefined : () => restoreOnceFree(() => caf.restore(chat, at.shelf)).then(() => live?.watch(chat))
-      await unarchiveOrRestore(() => caf.unarchive(chat), restore)
-    },
+    unarchive: () => toChat((caf, chat) => caf.unarchive(chat)),
     install: () => live?.caf.install(agentOf(chat)),
     stopInstall: () => live?.caf.stopInstall(agentOf(chat)),
     signIn: () => live?.caf.signIn(agentOf(chat)),

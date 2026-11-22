@@ -30,8 +30,8 @@ export interface ChatActions {
   /** Close the chat: archive it. */
   close(): Promise<unknown> | void
   /**
-   * Unarchive the chat. Without it, an archived chat offers no Unarchive.
-   * Sending to an archived chat unarchives it too.
+   * Unarchive the chat. Without it, an archived chat offers no Unarchive,
+   * only sending, which unarchives it too.
    */
   unarchive?: (() => Promise<unknown> | void) | undefined
   /** Install the chat's agent. */
@@ -112,23 +112,24 @@ export async function restoreOnceFree<T>(
 }
 
 /**
- * Unarchives a chat with `unarchive`, as a host's `ChatActions.unarchive`
- * does. A saved chat is put away as it's archived, so CAF no longer has it
- * and refuses with `NoSuchChat`: then, given `restore`, it's restored
- * first, archived still, and unarchived. Without `restore`, or for any
+ * Does something to a chat, `act`, such as unarchiving it or sending to
+ * it, as a host's `ChatActions` does, restoring it first if it must. A
+ * saved chat is put away as it's archived, so CAF no longer has it and
+ * refuses with `NoSuchChat`: then, given `restore`, it's restored,
+ * archived still, and `act` tried again. Without `restore`, or for any
  * other failure, the refusal is the caller's.
  */
-export async function unarchiveOrRestore(
-  unarchive: () => Promise<unknown>,
+export async function orRestored<T>(
+  act: () => Promise<T>,
   restore?: (() => Promise<unknown>) | undefined,
-): Promise<void> {
+): Promise<T> {
   try {
-    await unarchive()
+    return await act()
   } catch (error) {
     const gone = error instanceof CafError && error.why.type === 'Refused' && error.why.value.type === 'NoSuchChat'
     if (!gone || restore === undefined) throw error
     await restore()
-    await unarchive()
+    return await act()
   }
 }
 

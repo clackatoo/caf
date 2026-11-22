@@ -7,7 +7,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/sv
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CafError, type SavedChat, type ToViewer } from '@clackatoo/caf'
 import SavedList from '../../src/chat/SavedList.svelte'
-import { restoreOnceFree, unarchiveOrRestore } from '../../src/chat/actions.ts'
+import { orRestored, restoreOnceFree } from '../../src/chat/actions.ts'
 import { errorText, refusedText } from '../../src/chat/words.ts'
 import { chatId, NOON } from './build.ts'
 
@@ -284,35 +284,35 @@ describe('the words for restoring', () => {
   })
 })
 
-describe('unarchiving a chat', () => {
+describe('acting on a chat put away as it was archived', () => {
   const gone = () => new CafError({ type: 'Refused', value: { type: 'NoSuchChat' } })
 
-  it('unarchives one CAF has, restoring nothing', async () => {
-    const unarchive = vi.fn().mockResolvedValue(undefined)
+  it('acts on one CAF has, restoring nothing, and gives back what it did', async () => {
+    const unarchive = vi.fn().mockResolvedValue(1200)
     const restore = vi.fn()
-    await unarchiveOrRestore(unarchive, restore)
+    await expect(orRestored(unarchive, restore)).resolves.toBe(1200)
     expect(unarchive).toHaveBeenCalledOnce()
     expect(restore).not.toHaveBeenCalled()
   })
 
-  it('restores one put away as it was archived, then unarchives it', async () => {
+  it('restores one CAF no longer has, then acts on it again', async () => {
     const order: string[] = []
     const unarchive = vi.fn(async () => {
       order.push('unarchive')
       if (order.length === 1) throw gone()
     })
-    await unarchiveOrRestore(unarchive, async () => void order.push('restore'))
+    await orRestored(unarchive, async () => void order.push('restore'))
     expect(order).toEqual(['unarchive', 'restore', 'unarchive'])
   })
 
   it("leaves the refusal to the caller with nothing to restore, or for any other failure, or if restoring fails", async () => {
-    await expect(unarchiveOrRestore(vi.fn().mockRejectedValue(gone()))).rejects.toEqual(gone())
+    await expect(orRestored(vi.fn().mockRejectedValue(gone()))).rejects.toEqual(gone())
     const notAllowed = new CafError({ type: 'NotAllowed' })
     const restore = vi.fn()
-    await expect(unarchiveOrRestore(vi.fn().mockRejectedValue(notAllowed), restore)).rejects.toBe(notAllowed)
+    await expect(orRestored(vi.fn().mockRejectedValue(notAllowed), restore)).rejects.toBe(notAllowed)
     expect(restore).not.toHaveBeenCalled()
     const inUse = new CafError({ type: 'CannotRestore', value: { type: 'InUse' } })
-    await expect(unarchiveOrRestore(vi.fn().mockRejectedValue(gone()), vi.fn().mockRejectedValue(inUse))).rejects.toBe(inUse)
+    await expect(orRestored(vi.fn().mockRejectedValue(gone()), vi.fn().mockRejectedValue(inUse))).rejects.toBe(inUse)
   })
 })
 

@@ -59,7 +59,6 @@ test('a chat saved in one run is restored in the next, and carries on', async ({
     // at once, it comes back as soon as CAF has written it, still archived.
     await page.locator('.caf-chat header').getByRole('button', { name: 'Close' }).click()
     await expect(page.locator('.caf-chat > header .state')).toHaveText('Archived')
-    await expect(page.getByText('This chat is archived.')).toBeVisible()
     await expect(row).toHaveAttribute('data-state', 'Saved')
     await expect(row).toContainText('archived')
     await row.getByRole('button', { name: 'Restore hello' }).click()
@@ -67,9 +66,15 @@ test('a chat saved in one run is restored in the next, and carries on', async ({
     await expect(turns).toHaveCount(2)
     await expect(saved.getByRole('alert')).toHaveCount(0)
     await expect(page.locator('.caf-chat > header .state')).toHaveText('Archived')
-    await expect(page.getByText('This chat is archived.')).toBeVisible()
-    await expect(page.getByRole('textbox', { name: 'Message' })).toHaveCount(0)
+    await expect(page.getByText('This chat is archived. Sending a message brings it back.')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Unarchive' })).toBeVisible()
+
+    // Sent to, it's unarchived, and carries on.
+    await send(page, 'once more')
+    await expect(turns).toHaveCount(3)
+    await expect(turns.last().locator('.life')).toHaveText('Finished')
+    await expect(page.locator('.caf-chat > header .state')).not.toHaveText('Archived')
+    await expect(page.getByRole('button', { name: 'Unarchive' })).toHaveCount(0)
   } finally {
     await stop(again)
   }
