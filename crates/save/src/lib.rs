@@ -132,10 +132,18 @@ mod common;
 /// 4. what each turn spent ([`Turn::spent`](caf_core::chat::Turn::spent),
 ///    [`Change::TurnSpent`](caf_core::change::Change::TurnSpent)) and what
 ///    the chat has spent ([`Chat::spend`](caf_core::Chat::spend),
-///    [`Change::Spend`](caf_core::change::Change::Spend)).
+///    [`Change::Spend`](caf_core::change::Change::Spend));
+/// 5. when a chat was archived ([`Chat::archived`](caf_core::Chat::archived),
+///    [`Change::Archived`](caf_core::change::Change::Archived),
+///    [`Header::archived`]), each model's name in what a turn spent
+///    ([`ModelTokens::name`](caf_core::usage::ModelTokens::name)), and
+///    the agent's name for a choice in the notes about settings
+///    ([`Note::NotOffered`](caf_core::chat::Note::NotOffered) and the
+///    rest): a change of their shape, which a save of an older version is
+///    migrated from as it's read, with no name.
 ///
 /// [`FailureReason::SettingNotApplied`]: caf_core::chat::FailureReason::SettingNotApplied
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 /// How hard to compress.
 #[non_exhaustive]

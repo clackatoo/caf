@@ -96,8 +96,8 @@ struct Sample {
 /// A version's sample's values.
 fn sample(version: u32) -> Sample {
     match version {
-        1..=4 => Sample {
-            header: from(header(9)),
+        1..=5 => Sample {
+            header: from(header(version, 9)),
             before: before(),
             records: records(version),
             after: after(version),
@@ -280,7 +280,7 @@ fn before() -> Saved<Pin, Notes> {
         ),
     ];
     from(json!({
-        "header": header(4),
+        "header": header(1, 4),
         "chat": {
             "id": id(),
             "agent": "claude",
@@ -316,9 +316,10 @@ fn before() -> Saved<Pin, Notes> {
     }))
 }
 
-/// The chat's header, with `turns` turns.
-fn header(turns: u64) -> Value {
-    json!({
+/// The chat's header, with `turns` turns, as `version` wrote it after
+/// its journal: from version 5, archived, as the journal leaves it.
+fn header(version: u32, turns: u64) -> Value {
+    let mut header = json!({
         "chat": id(),
         "agent": "claude",
         "profile": "claude-agent-acp",
@@ -329,15 +330,22 @@ fn header(turns: u64) -> Value {
         "first": "Fix the tests",
         "turns": turns,
         "closed": false,
-    })
+    });
+    if version >= 5 {
+        header["closed"] = json!(true);
+        header["archived"] = json!(wall(1200));
+    }
+    header
 }
 
 /// What the journal adds, a record at a time: one of every kind of
 /// change, and of entry; from version 2, a chat lost as CAF can't turn
 /// off its agent's own tools; from version 3, the agent's settings, the
 /// model a turn was sent on, the notes about settings, and a message
-/// failed as a setting couldn't be applied; and from version 4, what a
-/// turn spent and what the chat has spent.
+/// failed as a setting couldn't be applied; from version 4, what a turn
+/// spent and what the chat has spent; and from version 5, the names of
+/// the choices in those notes and of the models a turn spent on, and the
+/// chat archived.
 fn records(version: u32) -> Vec<Vec<Entry<Pin, Notes>>> {
     let change = |change: Value| json!({ "type": "Change", "value": change });
     let own_tools = change(
@@ -353,14 +361,20 @@ fn records(version: u32) -> Vec<Vec<Entry<Pin, Notes>>> {
         last.push(own_tools);
     }
     if version >= 3 {
-        last.extend(settings().into_iter().map(change));
+        last.extend(settings(version).into_iter().map(change));
     }
     if version >= 4 {
-        last.extend(spent().into_iter().map(change));
+        last.extend(spent(version).into_iter().map(change));
     }
     last.push(change(
         json!({ "type": "State", "value": { "type": "Idle" } }),
     ));
+    if version >= 5 {
+        last.push(change(
+            json!({ "type": "State", "value": { "type": "Closed" } }),
+        ));
+        last.push(change(json!({ "type": "Archived", "value": wall(1200) })));
+    }
     from(json!([
         [
             change(json!({ "type": "Appended", "value": { "item": 80, "text": " on the docs." } })),
@@ -400,8 +414,9 @@ fn records(version: u32) -> Vec<Vec<Entry<Pin, Notes>>> {
 
 /// What version 3 added: the chat's settings, the model turn 8 was sent
 /// on, CAF's notes about settings, and the message waiting failed as a
-/// setting couldn't be applied.
-fn settings() -> Vec<Value> {
+/// setting couldn't be applied. The notes name their choices from version
+/// 5; an older version's read with no name.
+fn settings(version: u32) -> Vec<Value> {
     let choice = |id: &str, name: &str, group: Value| json!({ "id": id, "name": name, "description": null, "group": group });
     let offered = json!([
         {
@@ -428,6 +443,7 @@ fn settings() -> Vec<Value> {
         },
     ]);
     let note = |id: u64, note: Value| json!({ "type": "ItemAdded", "value": { "turn": 10, "item": item(id, None, json!({ "type": "Note", "value": note })) } });
+    let named = |choice: Value, name: &str| json!({ "choice": choice, "name": (version >= 5).then_some(name) });
     vec![
         json!({ "type": "Settings", "value": {
             "offered": offered,
@@ -441,15 +457,15 @@ fn settings() -> Vec<Value> {
         json!({ "type": "TurnModel", "value": { "turn": 8, "model": { "id": "sonnet", "name": "Sonnet 4.6" } } }),
         note(
             101,
-            json!({ "type": "AgentChanged", "value": { "kind": { "type": "Model" }, "value": { "type": "Choice", "value": "haiku" } } }),
+            json!({ "type": "AgentChanged", "value": named(json!({ "kind": { "type": "Model" }, "value": { "type": "Choice", "value": "haiku" } }), "Haiku") }),
         ),
         note(
             102,
-            json!({ "type": "NotOffered", "value": { "kind": { "type": "Fast" }, "value": { "type": "Switch", "value": true } } }),
+            json!({ "type": "NotOffered", "value": { "choice": { "kind": { "type": "Fast" }, "value": { "type": "Switch", "value": true } }, "name": null } }),
         ),
         note(
             103,
-            json!({ "type": "NotApplied", "value": { "kind": { "type": "Effort" }, "value": { "type": "Choice", "value": "high" } } }),
+            json!({ "type": "NotApplied", "value": named(json!({ "kind": { "type": "Effort" }, "value": { "type": "Choice", "value": "high" } }), "High") }),
         ),
         json!({ "type": "TurnLife", "value": {
             "turn": 9,
@@ -462,13 +478,14 @@ fn settings() -> Vec<Value> {
 }
 
 /// What version 4 added: what turn 8 spent, on two models, with the cost
-/// its agent reported, and what the chat has spent.
-fn spent() -> Vec<Value> {
+/// its agent reported, and what the chat has spent. From version 5, the
+/// first model is named.
+fn spent(version: u32) -> Vec<Value> {
     let tokens = |input: u64, thinking: Value| json!({ "input": input, "cache_read": 3000, "cache_write": 400, "output": 56, "thinking": thinking });
     vec![
         json!({ "type": "TurnSpent", "value": { "turn": 8, "usage": {
             "models": [
-                { "model": "claude-sonnet-5-5", "tokens": tokens(12, json!(7)) },
+                { "model": "claude-sonnet-5-5", "name": (version >= 5).then_some("Sonnet 5.5"), "tokens": tokens(12, json!(7)) },
                 { "model": "claude-haiku-5-5", "tokens": tokens(3, Value::Null) },
             ],
             "cost": { "amount": 0.0125, "currency": "USD" },
