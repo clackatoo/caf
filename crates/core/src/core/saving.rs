@@ -404,7 +404,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         if let Some(restore) = self.saving.restoring.remove(&ticket) {
             return match event {
-                StorageEvent::Loaded(saved) => self.restored(restore, *saved, out),
+                StorageEvent::Loaded(saved) => self.restored(now, restore, *saved, out),
                 StorageEvent::NotLoaded(why) => self.restore_failed(restore, why, false, out),
                 StorageEvent::Failed(why) => {
                     self.restore_failed(restore, CannotRestore::Store(why), false, out);
@@ -949,9 +949,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// The store read a chat for `restore`: it's tidied and loaded, idle,
-    /// with no agent started until a message is sent.
+    /// with no agent started until a message is sent; or archived, if it
+    /// was, on no connection until it's unarchived.
     fn restored(
         &mut self,
+        now: Now,
         restore: RestoreChat,
         saved: Saved<A, D>,
         out: &mut Vec<Directive<A, D>>,
@@ -1021,7 +1023,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         // made; and when it last changed is the later of the header's word
         // and the latest time the chat holds.
         let changed = last_change(&whole).map_or(header.changed, |at| at.max(header.changed));
-        let mut changes = tidy(&whole, changed);
+        let mut changes = tidy(&whole, changed, now.wall);
         // What it has spent is worked out again from its turns, with the
         // prices the core has now: the save's is never trusted.
         let spend = spend_of(&whole, &self.prices);
@@ -1092,6 +1094,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             self.record(id, change);
         }
         self.restored_choices(id);
+        // An archived chat is on no connection.
+        if (self.chats.get(&id)).is_some_and(|whole| whole.state == ChatState::Closed) {
+            if let Some(each) = self.conns.get_mut(&conn) {
+                each.chats.remove(&id);
+            }
+            self.tidy(conn);
+        }
         self.relist_loaded(id);
     }
 
@@ -1133,7 +1142,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         self.wind_down(now, chat, TurnLife::CutOff, out);
         let conn = self.let_go(now, chat, out);
-        self.set_state(chat, ChatState::Idle);
+        // An archived chat stays so.
+        if (self.chats.get(&chat)).is_some_and(|whole| whole.state != ChatState::Closed) {
+            self.set_state(chat, ChatState::Idle);
+        }
         self.put_away_now(now, chat, out);
         if let Some(conn) = conn {
             self.advance(now, conn, out);
@@ -1590,11 +1602,13 @@ fn saved_session<A: AppItem>(run: &Run<A>) -> Option<AgentSessionId> {
     session.clone()
 }
 
-/// The changes that tidy `chat`, last saved at `at`, as a restore finds
-/// it: turns running or stopping are cut off, their unfinished tool calls
-/// failed and their items ended, at `at`; messages waiting are stopped;
-/// questions go; and it's idle.
-pub(super) fn tidy<A: AppItem>(chat: &Chat<A>, at: Wall) -> Vec<Change<A>> {
+/// The changes that tidy `chat`, last saved at `at`, as a restore at
+/// `now` finds it: turns running or stopping are cut off, their
+/// unfinished tool calls failed and their items ended, at `at`; messages
+/// waiting are stopped; questions go; and it's idle, unless it was
+/// archived, which it stays: as of `now` if it was saved closed before
+/// CAF kept when.
+pub(super) fn tidy<A: AppItem>(chat: &Chat<A>, at: Wall, now: Wall) -> Vec<Change<A>> {
     let mut changes = Vec::new();
     // Never before it started, as a clock set back could have it.
     let end = |start: Option<Wall>| End::At(start.map_or(at, |start| start.max(at)));
@@ -1636,7 +1650,14 @@ pub(super) fn tidy<A: AppItem>(chat: &Chat<A>, at: Wall) -> Vec<Change<A>> {
             changes.push(Change::QuestionGone(question.id));
         }
     }
-    if chat.state != ChatState::Idle {
+    if chat.state == ChatState::Closed || chat.archived.is_some() {
+        if chat.state != ChatState::Closed {
+            changes.push(Change::State(ChatState::Closed));
+        }
+        if chat.archived.is_none() {
+            changes.push(Change::Archived(Some(now)));
+        }
+    } else if chat.state != ChatState::Idle {
         changes.push(Change::State(ChatState::Idle));
     }
     changes

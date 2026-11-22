@@ -146,7 +146,7 @@ fn a_live_claude_run_replays_to_its_end() {
     assert_eq!(
         chat["turns"][0]["spent"],
         json!({
-            "models": [{ "model": "claude-haiku-5-5", "tokens": tokens(1178, 12799, 12123, 18, json!(0)) }],
+            "models": [{ "model": "claude-haiku-5-5", "name": "Haiku 5.5", "tokens": tokens(1178, 12799, 12123, 18, json!(0)) }],
             "cost": { "amount": first, "currency": "USD" },
             "fast": false,
         })
@@ -154,7 +154,7 @@ fn a_live_claude_run_replays_to_its_end() {
     assert_eq!(
         chat["turns"][1]["spent"],
         json!({
-            "models": [{ "model": "claude-haiku-5-5", "tokens": tokens(2, 15847, 11185, 0, Value::Null) }],
+            "models": [{ "model": "claude-haiku-5-5", "name": "Haiku 5.5", "tokens": tokens(2, 15847, 11185, 0, Value::Null) }],
             "cost": null,
             "fast": false,
         })

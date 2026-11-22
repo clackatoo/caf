@@ -304,6 +304,14 @@ impl Script {
         )
     }
 
+    /// Unarchives `chat`.
+    pub(crate) fn unarchive(&mut self, chat: ChatId) -> (Result<(), Refused>, Vec<Value>) {
+        self.host_call(
+            |core, now, out| core.unarchive(now, chat, out),
+            |()| HostCommand::Unarchive { chat },
+        )
+    }
+
     /// Shuts everything down.
     pub(crate) fn shutdown(&mut self) -> Vec<Value> {
         let (_, out) = self.host_call(

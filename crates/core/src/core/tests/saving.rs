@@ -15,6 +15,7 @@ use crate::directive::StorageDirective;
 use crate::event::{AgentEvent, Exit, StorageEvent};
 use crate::ids::{ChatId, Shelf};
 use crate::save::{Entry, Header, RestoreChat, Saved};
+use crate::settings::SettingChoice;
 use crate::time::Wall;
 
 /// The shelf tests keep chats on.
@@ -617,7 +618,7 @@ fn a_failed_write_is_tried_again_whole_later() {
 fn a_restore_finds_what_was_under_way_and_tidies_it() {
     let chat: Chat = serde_json::from_value(mid_turn("claude")).expect("a chat");
     let at = Wall(EPOCH);
-    let changes = crate::core::saving::tidy(&chat, at);
+    let changes = crate::core::saving::tidy(&chat, at, at);
     let end = json!({ "type": "At", "value": EPOCH });
     assert_eq!(
         serde_json::to_value(&changes).expect("JSON"),
@@ -636,9 +637,9 @@ fn a_restore_finds_what_was_under_way_and_tidies_it() {
     for change in &changes {
         tidied.apply(change).expect("it fits");
     }
-    assert!(crate::core::saving::tidy(&tidied, at).is_empty());
+    assert!(crate::core::saving::tidy(&tidied, at, at).is_empty());
     // A turn never ends before it started, whatever the clock said.
-    let early = crate::core::saving::tidy(&chat, Wall(0));
+    let early = crate::core::saving::tidy(&chat, Wall(0), Wall(0));
     assert!(early.iter().all(|change| !matches!(
         change,
         crate::Change::TurnLife {
@@ -1117,30 +1118,220 @@ fn a_failed_put_away_is_tried_again_and_let_go_once_written() {
 }
 
 #[test]
-fn closing_a_saved_chat_puts_it_away_closed_and_restoring_it_brings_it_back_idle() {
+fn closing_a_saved_chat_archives_it_and_puts_it_away_and_restoring_it_brings_it_back_archived() {
     let mut script = Script::new(host());
     let mut store = Store::default();
     script.open_saved("claude");
     script.send(CHAT, "Hi").0.expect("sent");
+    script.at(500);
     let out = script.close(CHAT).1;
+    let archived = json!(EPOCH + 500);
     assert_has(
         &one_storage(&out),
         &json!({ "type": "Snapshot", "value": { "saved": {
-            "header": { "closed": true },
-            "chat": { "state": { "type": "Closed" }, "turns": [{ "life": { "type": "Stopped" } }] }
+            "header": { "closed": true, "archived": archived },
+            "chat": { "state": { "type": "Closed" }, "archived": archived, "turns": [{ "life": { "type": "Stopped" } }] }
         } } }),
     );
     assert!(script.core.chat(CHAT).is_none(), "put away");
     store.take(&out);
     script.serve(&mut store, false);
+    end_process(&mut script, PROC);
 
+    // Restored, it's archived as it was left, and on no connection.
+    script.at(2000);
     let out = script
         .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
         .1;
     store.take(&out);
+    let out = script.serve(&mut store, false);
+    assert!(storage(&out).is_empty(), "nothing to tidy");
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "state": { "type": "Closed" }, "archived": archived }),
+    );
+    let conns = script.state()["conns"].clone();
+    assert!(
+        (conns
+            .as_object()
+            .into_iter()
+            .flat_map(|conns| conns.values()))
+        .all(|conn| conn["chats"] == json!([])),
+        "{conns:#}"
+    );
+    assert_eq!(
+        script.set_setting(CHAT, SettingChoice::model("sonnet")).0,
+        Err(Refused::Closed)
+    );
+
+    // Sending to it unarchives it, and the message goes as to any other:
+    // its agent started, its session continued.
+    script.at(3000);
+    let (turn, out) = script.send(CHAT, "Again");
+    turn.expect("sent");
+    assert_eq!(with(&out, "start").len(), 1);
+    let proc = with(&out, "start")[0]["start"].as_u64().expect("a process");
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let out = script.answers(proc, init, &claude_init());
+    assert_eq!(sent(&out, "session/resume")["params"]["sessionId"], SESSION);
+    let whole = script.chat(CHAT);
+    assert_eq!(whole["archived"], Value::Null);
+    assert_ne!(whole["state"], json!({ "type": "Closed" }));
+    // Saved so.
+    script.at(4000);
+    let out = script.woken();
+    assert_has(
+        &one_storage(&out),
+        &json!({ "type": "Append", "value": { "header": { "closed": false, "archived": null } } }),
+    );
+    store.take(&out);
     script.serve(&mut store, false);
-    assert_eq!(script.chat(CHAT)["state"], json!({ "type": "Idle" }));
-    script.send(CHAT, "Again").0.expect("it can be sent to");
+    let saved = store
+        .read(&Shelf(SHELF.to_owned()), CHAT)
+        .expect("it's saved");
+    assert_eq!(saved.chat.archived, None);
+}
+
+#[test]
+fn unarchiving_a_restored_chat_makes_it_idle_and_saves_it_and_its_agent_starts_when_sent_to() {
+    let mut script = Script::new(host());
+    let mut store = Store::default();
+    script.open_saved("claude");
+    script.at(500);
+    store.take(&script.close(CHAT).1);
+    script.serve(&mut store, false);
+    end_process(&mut script, PROC);
+    script.at(2000);
+    store.take(
+        &script
+            .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
+            .1,
+    );
+    script.serve(&mut store, false);
+
+    script.at(3000);
+    let (done_, out) = script.unarchive(CHAT);
+    done_.expect("unarchived");
+    assert!(with(&out, "start").is_empty(), "no agent started");
+    assert_has(
+        &script.chat(CHAT),
+        &json!({ "state": { "type": "Idle" }, "archived": null }),
+    );
+    assert_eq!(
+        script
+            .change_kinds(CHAT)
+            .iter()
+            .rev()
+            .take(2)
+            .collect::<Vec<_>>(),
+        ["Archived", "State"],
+        "the state changes, then whether it's archived"
+    );
+    // A chat that isn't archived is left as it is.
+    let (done_, out) = script.unarchive(CHAT);
+    done_.expect("left alone");
+    assert!(out.is_empty(), "{out:#?}");
+    assert_eq!(
+        script.unarchive(ChatId::from_number(4242)).0,
+        Err(Refused::NoSuchChat)
+    );
+    script.at(4000);
+    let out = script.woken();
+    assert_has(
+        &one_storage(&out),
+        &json!({ "type": "Append", "value": { "entries": [
+            { "type": "Change", "value": { "type": "State", "value": { "type": "Idle" } } },
+            { "type": "Change", "value": { "type": "Archived", "value": null } }
+        ] } }),
+    );
+    store.take(&out);
+    script.serve(&mut store, false);
+
+    // Its choices can be made again, and sending starts its agent.
+    script
+        .set_setting(CHAT, SettingChoice::model("sonnet"))
+        .0
+        .expect("chosen");
+    let (turn, out) = script.send(CHAT, "Again");
+    turn.expect("sent");
+    assert_eq!(with(&out, "start").len(), 1);
+}
+
+#[test]
+fn a_chat_saved_closed_before_caf_kept_when_comes_back_archived_as_of_its_restore() {
+    let mut script = Script::new(host());
+    let (done_, out) = script.restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())));
+    done_.expect("restoring");
+    let load = ticket(&one_storage(&out));
+    script.at(100);
+    let mut chat = mid_turn("claude");
+    chat["state"] = json!({ "type": "Closed" });
+    let mut saved = saved(&chat, Some("old"), -40_000);
+    saved.header.closed = true;
+    let out = script.storage(load, StorageEvent::Loaded(Box::new(saved)));
+    assert!(with(&out, "start").is_empty(), "no agent started");
+    assert_has(
+        &script.chat(CHAT),
+        &json!({
+            "state": { "type": "Closed" },
+            "archived": EPOCH + 100,
+            "turns": [{}, { "life": { "type": "CutOff" } }, { "life": { "type": "Stopped" } }]
+        }),
+    );
+    // Tidying it is saved, being archived as of now with the rest.
+    let append = one_storage(&out);
+    assert_eq!(append["type"], "Append");
+    let entries = append["value"]["entries"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        entries.last(),
+        Some(&json!({ "type": "Change", "value": { "type": "Archived", "value": EPOCH + 100 } }))
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry["value"]["type"] == "State"),
+        "it stays closed: {entries:#?}"
+    );
+}
+
+#[test]
+fn an_archived_chat_put_away_or_closed_again_stays_archived_as_of_when_it_was() {
+    let mut script = Script::new(host());
+    let mut store = Store::default();
+    script.open_saved("claude");
+    script.at(500);
+    store.take(&script.close(CHAT).1);
+    script.serve(&mut store, false);
+    let archived = json!(EPOCH + 500);
+    for (at, put_away) in [(2000, true), (4000, false)] {
+        script.at(at);
+        store.take(
+            &script
+                .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
+                .1,
+        );
+        script.serve(&mut store, false);
+        script.at(at + 1000);
+        let (done_, out) = if put_away {
+            script.put_away(CHAT)
+        } else {
+            script.close(CHAT)
+        };
+        done_.expect("put away");
+        assert!(script.core.chat(CHAT).is_none(), "let go");
+        assert_has(
+            &one_storage(&out),
+            &json!({ "type": "Snapshot", "value": { "saved": {
+                "header": { "closed": true, "archived": archived },
+                "chat": { "state": { "type": "Closed" }, "archived": archived }
+            } } }),
+        );
+        store.take(&out);
+        script.serve(&mut store, false);
+    }
 }
 
 #[test]
@@ -1865,7 +2056,11 @@ fn random_script(seed: u64) -> [usize; 5] {
 
     // Restored, it's the chat, tidied as of when it was last changed.
     let mut tidied = live;
-    for change in crate::core::saving::tidy(&tidied.clone(), stored.header.changed) {
+    for change in crate::core::saving::tidy(
+        &tidied.clone(),
+        stored.header.changed,
+        stored.header.changed,
+    ) {
         tidied.apply(&change).expect("tidying fits");
     }
     let mut again = Script::new(super::harness::host());
