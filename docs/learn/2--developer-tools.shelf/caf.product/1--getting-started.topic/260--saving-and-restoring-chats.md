@@ -96,7 +96,8 @@ since.
 Each `SavedChat` has its `shelf`, its `header`, which is what to show
 without loading it (its id, agent, folder, when it was made and last
 changed, your `label` for it, the first line of its first message, how many
-turns it has, and whether it was closed), and its `state`: `Saved`,
+turns it has, whether it was closed, and when it was archived), and its
+`state`: `Saved`,
 `Restoring`, `Loaded`, or `Failed` with why the last restore failed.
 
 ## Restore a chat
@@ -157,8 +158,17 @@ and ends. Until it's written, which is at once unless a move of its shelf is
 under way, restoring it is refused as `Loaded`, though it's listed as
 saved: try again in a moment.
 
-**Close** a chat when the user is done with it. A saved chat is then put
-away, marked closed, and can still be restored.
+**Close** a chat when the user is done with it: it's archived, as of then
+(`Chat::archived`). A saved chat is then put away, marked closed, and can
+still be restored: archived, as it was left, with no agent started. One
+that isn't saved stays, archived, until CAF stops. An archived chat's
+settings can't be chosen (`Refused::Closed`). Unarchive it
+(`Core::unarchive`) and it's idle again, its agent started when a message
+is sent, as a restored chat's is. Sending a message to an archived chat
+unarchives it first, and the message goes as to any other; one refused,
+such as an empty message, leaves it archived. Putting an archived chat
+away, or closing it again, keeps when it was archived. A chat saved
+closed by a CAF from before archiving is restored archived as of then.
 
 **Delete** a chat for good, loaded or not: one that's loaded is closed and
 let go first.
@@ -323,5 +333,8 @@ what's saved, even a field added. So a CAF meeting a save from a newer one
 always knows, and leaves it untouched (`Newer`), rather than read it, lose
 what it doesn't know, and write it back without it. A newer CAF reads every
 older version's saves, and the first time it writes one, writes it whole in
-its own version. Every version has a sample chat, saved by it, that each
-release of CAF is tested against.
+its own version. A change of shape, rather than an addition, is migrated
+from every older version as a save is read: version 5's notes about
+settings, which name their choice, read from an older save with no name.
+Every version has a sample chat, saved by it, that each release of CAF is
+tested against.
