@@ -276,7 +276,7 @@ fn a_plain_agents_split_by_model_isnt_read_its_usage_is() {
 }
 
 #[test]
-fn a_turns_cost_is_how_much_its_sessions_rose_and_what_it_says_once_replaced() {
+fn a_turns_cost_is_how_much_its_sessions_rose_over_it_if_the_agent_said_during_it() {
     let mut script = Script::with_claude();
     let turn = |script: &mut Script, before: Option<f64>, after: &[Value]| {
         if let Some(before) = before {
@@ -305,10 +305,13 @@ fn a_turns_cost_is_how_much_its_sessions_rose_and_what_it_says_once_replaced() {
     turn(&mut script, Some(0.75), &[costing(1.0)]);
     // Down: the session was replaced.
     turn(&mut script, None, &[costing(0.125)]);
-    // Not said during the turn: it rose by nothing.
-    turn(&mut script, None, &[]);
+    // Said during the turn, but no higher: not reported, as Claude's
+    // adapter leaves a stopped turn out of its total.
+    turn(&mut script, None, &[costing(0.125)]);
+    // Not said during the turn, though it was before: it didn't say.
+    turn(&mut script, Some(0.125), &[]);
     let chat = script.chat(CHAT);
-    let costs: Vec<Value> = (0..5)
+    let costs: Vec<Value> = (0..6)
         .map(|at| chat["turns"][at]["spent"]["cost"]["amount"].clone())
         .collect();
     assert_eq!(
@@ -318,7 +321,8 @@ fn a_turns_cost_is_how_much_its_sessions_rose_and_what_it_says_once_replaced() {
             json!(0.25),
             json!(0.25),
             json!(0.125),
-            json!(0.0)
+            Value::Null,
+            Value::Null
         ]
     );
     assert_eq!(chat["spend"]["reported"], json!(1.125));
@@ -452,8 +456,7 @@ fn a_chats_spend_adds_up_its_turns_reported_estimated_and_unpriced() {
         row("made-up-1", 70, 0, 0, 7, 0),
     ]);
     script.answers(PROC, prompt, &answer("end_turn", usage(0, 0, 0, 0), split));
-    // Reported: once the agent says what its session costs, every turn
-    // after has a reported cost, if only of nothing.
+    // Reported.
     let prompt = script.prompt(CHAT, "Two");
     script.update(PROC, SESSION, &costing(0.5));
     script.answers(
@@ -461,11 +464,15 @@ fn a_chats_spend_adds_up_its_turns_reported_estimated_and_unpriced() {
         prompt,
         &answer("end_turn", usage(1, 2, 3, 4), json!([])),
     );
+    // With no cost said during it, estimated, though one was said before.
+    let prompt = script.prompt(CHAT, "Three");
+    let split = json!([row("claude-haiku-5-5", 1_000_000, 0, 0, 0, 0)]);
+    script.answers(PROC, prompt, &answer("end_turn", usage(0, 0, 0, 0), split));
     assert_eq!(
         script.chat(CHAT)["spend"],
         json!({
-            "tokens": { "input": 1_000_071, "cache_read": 2, "cache_write": 3, "output": 200_011, "thinking": 0 },
-            "reported": 0.5, "estimated": 2.0, "unpriced": 77, "turns": 2,
+            "tokens": { "input": 2_000_071, "cache_read": 2, "cache_write": 3, "output": 200_011, "thinking": 0 },
+            "reported": 0.5, "estimated": 3.0, "unpriced": 77, "turns": 3,
         })
     );
 }
@@ -579,4 +586,87 @@ fn a_restored_chats_spend_is_worked_out_again_from_its_turns() {
         })
     );
     assert_eq!(script.change_kinds(CHAT), ["Spend"]);
+}
+
+#[test]
+fn a_session_opened_again_counts_its_cost_afresh() {
+    let mut script = Script::with_claude();
+    let prompt = script.prompt(CHAT, "One");
+    script.update(PROC, SESSION, &costing(0.5));
+    script.answers(
+        PROC,
+        prompt,
+        &answer("end_turn", usage(1, 0, 0, 1), json!([])),
+    );
+    // The agent lost the session: it's resumed, and the message sent again.
+    let prompt = script.prompt(CHAT, "Two");
+    let out = script.fails(
+        PROC,
+        prompt,
+        &json!({ "code": -32002, "message": "Resource not found" }),
+    );
+    let resume = sent(&out, "session/resume")["id"].as_u64().expect("an id");
+    let out = script.answers(PROC, resume, &json!({}));
+    let prompt = sent(&out, "session/prompt")["id"].as_u64().expect("an id");
+    // Less than the old session had said, from a session that counts
+    // from nothing.
+    script.update(PROC, SESSION, &costing(0.75));
+    script.answers(
+        PROC,
+        prompt,
+        &answer("end_turn", usage(1, 0, 0, 1), json!([])),
+    );
+    assert_eq!(
+        script.chat(CHAT)["turns"][1]["spent"]["cost"],
+        json!({ "amount": 0.75, "currency": "USD" })
+    );
+}
+
+#[test]
+fn with_no_split_the_row_is_the_model_claude_said_during_the_turn_else_the_turns() {
+    let mut script = Script::new(host());
+    let (_, out) = script.open(OpenChat::new("claude", "/work"));
+    let out = script.answers(
+        PROC,
+        sent(&out, "initialize")["id"].as_u64().expect("an id"),
+        &claude_init(),
+    );
+    let options = json!([{ "id": "model", "name": "Model", "category": "model", "type": "select",
+        "currentValue": "haiku", "options": [{ "value": "haiku", "name": "Haiku" }] }]);
+    script.answers(
+        PROC,
+        sent(&out, "session/new")["id"].as_u64().expect("an id"),
+        &json!({ "sessionId": SESSION, "configOptions": options }),
+    );
+    let said = |model: &str| json!({ "sessionUpdate": "usage_update", "used": 1, "size": 2, "_meta": { "_claude/model": model } });
+    let prompt = script.prompt(CHAT, "One");
+    script.update(PROC, SESSION, &said("claude-sonnet-5-5"));
+    script.update(PROC, SESSION, &said("claude-haiku-5-5"));
+    script.answers(
+        PROC,
+        prompt,
+        &answer("end_turn", usage(1, 0, 0, 1), json!([])),
+    );
+    // Said before this turn, not during it: the turn's model.
+    let prompt = script.prompt(CHAT, "Two");
+    script.answers(
+        PROC,
+        prompt,
+        &answer("end_turn", usage(1, 0, 0, 1), json!([])),
+    );
+    // A split names its own models.
+    let prompt = script.prompt(CHAT, "Three");
+    script.update(PROC, SESSION, &said("claude-haiku-5-5"));
+    let split = json!([row("claude-opus-5-5", 1, 0, 0, 1, 0)]);
+    script.answers(PROC, prompt, &answer("end_turn", usage(1, 0, 0, 1), split));
+    let chat = script.chat(CHAT);
+    let model = |at: usize| chat["turns"][at]["spent"]["models"][0]["model"].clone();
+    assert_eq!(
+        [model(0), model(1), model(2)],
+        [
+            json!("claude-haiku-5-5"),
+            json!("haiku"),
+            json!("claude-opus-5-5")
+        ]
+    );
 }

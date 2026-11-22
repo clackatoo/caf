@@ -116,9 +116,11 @@
 //! to the prompt: ACP's `usage`, and the same split by model in
 //! `_meta.quota.model_usage`, which counts the subagents and compaction
 //! the turn set off too, and so is what CAF keeps; it's empty on a turn
-//! stopped, whose `usage` CAF keeps instead. Both count input uncached,
-//! and thinking as part of output. What the session has cost so far it
-//! says in `usage_update`, just before the answer.
+//! stopped, whose `usage` CAF keeps instead, against the model the
+//! adapter last named during the turn, in `usage_update`'s
+//! `_meta._claude/model`. Both count input uncached, and thinking as part
+//! of output. What the session has cost so far it says in `usage_update`,
+//! just before the answer.
 //!
 //! It declares **nothing of JetBrains AIR**. Any AIR key switches the
 //! adapter into AIR's shapes for the whole connection: reads and searches
@@ -150,8 +152,8 @@
 //! chats get no session, as any other adapter's.
 //!
 //! The fake reads what a turn spent as the Claude profile does, so a
-//! script can send a split by model; the test agents read only ACP's
-//! `usage`, as any agent might send.
+//! script can send a split by model and name its model in `usage_update`;
+//! the test agents read only ACP's `usage`, as any agent might send.
 //!
 //! The fake, and the test agents but one, list their settings as Claude
 //! does, as ACP's session config options, with fast mode the option
@@ -730,6 +732,27 @@ impl ProfileChoice {
             split => split,
         }
     }
+
+    /// The model an adapter with this profile says it's using, in a
+    /// `usage_update`, `update`: Claude's adapter, and the fake, name it in
+    /// `_meta._claude/model`. Uncleaned.
+    pub(crate) fn model_in_usage(&self, update: &Value) -> Option<String> {
+        let claude = || {
+            (update.pointer("/_meta/_claude~1model"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        };
+        match self {
+            Self::Builtin(Builtin::ClaudeAgentAcp) => claude(),
+            #[cfg(test)]
+            Self::Builtin(
+                Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain | Builtin::TestModels,
+            ) => None,
+            #[cfg(feature = "fake")]
+            Self::Builtin(Builtin::Fake) => claude(),
+            Self::Cautious => None,
+        }
+    }
 }
 
 /// What a turn spent, as its agent said it, read into CAF's terms but not
@@ -1271,6 +1294,27 @@ pub(crate) mod tests {
         assert_eq!(
             claude().spent(&json!({ "stopReason": "end_turn" })),
             Reported::Nothing
+        );
+    }
+
+    #[test]
+    fn claude_names_its_model_in_its_usage_updates_and_plain_agents_dont() {
+        let update = json!({ "sessionUpdate": "usage_update", "used": 1, "size": 2,
+            "_meta": { "_claude/model": "claude-haiku-5-5" } });
+        assert_eq!(
+            claude().model_in_usage(&update).as_deref(),
+            Some("claude-haiku-5-5")
+        );
+        let plain = ProfileChoice::Builtin(Builtin::TestPlain);
+        assert_eq!(plain.model_in_usage(&update), None);
+        let unnamed = json!({ "sessionUpdate": "usage_update", "used": 1, "size": 2 });
+        assert_eq!(claude().model_in_usage(&unnamed), None);
+        #[cfg(feature = "fake")]
+        assert_eq!(
+            ProfileChoice::Builtin(Builtin::Fake)
+                .model_in_usage(&update)
+                .as_deref(),
+            Some("claude-haiku-5-5")
         );
     }
 

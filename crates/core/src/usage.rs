@@ -9,13 +9,18 @@
 //!   agent that splits them by model says so too (`_meta.quota.model_usage`,
 //!   which Claude's and Codex's adapters both send). The split is the
 //!   fuller count, with subagents and compaction in it, so it's what CAF
-//!   keeps when there is one; otherwise one row, against the turn's model
+//!   keeps when there is one; otherwise one row, against the model the
+//!   agent said it used during the turn, or the turn's own
 //!   ([`TurnUsage::models`]). An agent that says nothing gives no record.
 //! - **Cost, as the agent reports it.** Claude says what its session has
 //!   cost so far ([`Usage::cost`](crate::chat::Usage::cost)); a turn's cost
-//!   is how much that rose between the turn's start and end. If it went
-//!   down, the session was replaced, and the turn's cost is what it says
-//!   at the end ([`TurnUsage::cost`]).
+//!   is how much that rose between the turn's start and end, if the agent
+//!   said it during the turn and it changed, and otherwise unreported: a
+//!   cost said again unchanged, as Claude's adapter does for a turn
+//!   stopped, whose tokens it leaves out of its total, is estimated
+//!   instead. A session opened, new or again, counts from nothing. If it
+//!   went down, the session was replaced, and the turn's cost is what it
+//!   says at the end ([`TurnUsage::cost`]).
 //! - **Cost, estimated.** A turn with no reported cost is priced from a
 //!   [`PriceTable`]: the user's own prices, then the table fetched from
 //!   LiteLLM, then the snapshot bundled with CAF. Estimates are never
@@ -117,11 +122,13 @@ pub struct ModelTokens {
 pub struct TurnUsage {
     /// Its tokens, one row per model. They're the agent's split by model,
     /// if it gave one, which counts the subagents and compaction the turn
-    /// set off; otherwise one row, of its totals, against the turn's model
-    /// (or `unknown`, if the agent never said which). Never empty.
+    /// set off; otherwise one row, of its totals, against the model the
+    /// agent said it used during the turn, else the turn's model (or
+    /// `unknown`, if the agent never said which). Never empty.
     pub models: Vec<ModelTokens>,
-    /// What it cost, as the agent reported it, if it did: how much its
-    /// session's cost rose over the turn. Never an estimate. A cost in a
+    /// What it cost, as the agent reported it, if it did during the turn:
+    /// how much its session's cost rose over the turn, `None` if it didn't
+    /// change. Never an estimate. A cost in a
     /// currency other than US dollars is kept here as reported, but
     /// counted as unreported in [`Spend`] and [`Summary`], which estimate
     /// it instead: CAF converts no currency.
@@ -294,32 +301,41 @@ pub struct Estimate {
 }
 
 impl PriceTable {
-    /// A model's price, by the agent's id for it: the table's entry of
-    /// that name; else one that's it with a provider before it
-    /// (`anthropic/claude-haiku-5-5`); else, if it ends in a date
+    /// A model's price, by the agent's id for it, from the first layer
+    /// that has one (the user's own, then LiteLLM's as fetched, then the
+    /// bundled snapshot), whatever form its name takes there. Within a
+    /// layer: the entry of that name; else one that's it with a provider
+    /// before it (`anthropic/claude-haiku-5-5`); else, if it ends in a date
     /// (`claude-haiku-5-5-20261001`), the same without it. A name that
-    /// matches more than one entry with a provider is priced by the first,
+    /// matches more than one entry with a provider is priced by the model's
+    /// maker (`anthropic`, `openai`, `gemini` or `xai`) before a reseller
+    /// (`azure`, `bedrock`, `vertex_ai` and the like), then by the first,
     /// sorted by name.
     #[must_use]
     pub fn find(&self, model: &str) -> Option<&PricedModel> {
-        self.find_as(model)
-            .or_else(|| undated(model).and_then(|model| self.find_as(model)))
+        [PriceLayer::Own, PriceLayer::Fetched, PriceLayer::Bundled]
+            .into_iter()
+            .find_map(|layer| {
+                self.find_as(layer, model)
+                    .or_else(|| undated(model).and_then(|model| self.find_as(layer, model)))
+            })
     }
 
-    /// The entry named `model`, else the first that's it with a provider
-    /// before it.
-    fn find_as(&self, model: &str) -> Option<&PricedModel> {
-        let provided = |entry: &&PricedModel| {
-            entry
-                .model
-                .strip_suffix(model)
-                .and_then(|provider| provider.strip_suffix('/'))
-                .is_some_and(|provider| !provider.is_empty() && !provider.contains('/'))
-        };
-        self.models
-            .iter()
-            .find(|entry| entry.model == model)
-            .or_else(|| self.models.iter().find(provided))
+    /// The entry of `layer` named `model`, else the best that's it with a
+    /// provider before it.
+    fn find_as(&self, layer: PriceLayer, model: &str) -> Option<&PricedModel> {
+        let entries = self.models.iter().filter(|entry| entry.layer == layer);
+        if let Some(exact) = entries.clone().find(|entry| entry.model == model) {
+            return Some(exact);
+        }
+        entries
+            .filter_map(|entry| {
+                let provider = entry.model.strip_suffix(model)?.strip_suffix('/')?;
+                (!provider.is_empty() && !provider.contains('/'))
+                    .then(|| (!MAKERS.contains(&provider), entry))
+            })
+            .min_by_key(|(reseller, _)| *reseller)
+            .map(|(_, entry)| entry)
     }
 
     /// What a turn would cost at these prices: each model's tokens at its
@@ -338,6 +354,10 @@ impl PriceTable {
         estimate
     }
 }
+
+/// The providers that make the models CAF's agents use, by LiteLLM's
+/// names for them: found before a reseller of the same model.
+const MAKERS: [&str; 4] = ["anthropic", "openai", "gemini", "xai"];
 
 /// A model's id without the date it ends in, such as `-20261001`, if it
 /// ends in one.

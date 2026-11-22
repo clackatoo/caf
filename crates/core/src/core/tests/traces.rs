@@ -132,10 +132,10 @@ fn a_live_claude_run_replays_to_its_end() {
     );
     // What each turn spent: the first by Claude's split, which counts
     // more than its usage does; the second, stopped, by its usage, as its
-    // split is empty, against the model it was sent on. Its session's cost
-    // didn't rise over it.
+    // split is empty, against the model Claude said it used during it. The
+    // session's cost was said during it, but no higher, as Claude's adapter
+    // leaves a stopped turn out of its total: not reported, so estimated.
     let tokens = |input: u64, read: u64, written: u64, output: u64, thinking: Value| json!({ "input": input, "cache_read": read, "cache_write": written, "output": output, "thinking": thinking });
-    let usd = |amount: f64| json!({ "amount": amount, "currency": "USD" });
     // As serde_json reads it from the trace.
     let first = &chat["turns"][0]["spent"]["cost"]["amount"];
     assert!(
@@ -154,8 +154,8 @@ fn a_live_claude_run_replays_to_its_end() {
     assert_eq!(
         chat["turns"][1]["spent"],
         json!({
-            "models": [{ "model": chat["turns"][1]["model"]["id"], "tokens": tokens(2, 15847, 11185, 0, Value::Null) }],
-            "cost": usd(0.0),
+            "models": [{ "model": "claude-haiku-5-5", "tokens": tokens(2, 15847, 11185, 0, Value::Null) }],
+            "cost": null,
             "fast": false,
         })
     );
