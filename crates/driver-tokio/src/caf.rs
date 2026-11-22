@@ -47,10 +47,12 @@
 //! most ten seconds, after which the core is given the bundled snapshot.
 //! Before a summary, the usage driver reads the prices again, as another
 //! app may have set one, and the core is given them if they changed; those
-//! asked for meanwhile share the reading, which is waited for for at most
-//! ten seconds too. The summary is then read on a blocking thread, apart
+//! asked for while a reading is under way wait for one more after it, so
+//! a price set meanwhile is never missed. A reading is waited for for at
+//! most ten seconds too. The summary is then read on a blocking thread, apart
 //! from the task. A price set ([`Caf::set_price`]) is answered once the
-//! core has the prices it changed. Shutting down waits for the usage
+//! core has the prices it changed, or, if the usage ledger doesn't answer
+//! in ten seconds, that it didn't. Shutting down waits for the usage
 //! ledger to be written for at most thirty seconds.
 //!
 //! Watches pull rather than being pushed to: a watch asks for what
@@ -927,8 +929,9 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     /// # Errors
     ///
     /// [`Error::NoLedger`] with no [`Config::usage`]; [`Error::Price`] if
-    /// it couldn't be written; or [`Error::Gone`]. One asked for as CAF
-    /// shuts down is [`Error::Gone`] even if the price was written.
+    /// it couldn't be written, or the usage ledger didn't answer in ten
+    /// seconds; or [`Error::Gone`]. One asked for as CAF shuts down is
+    /// [`Error::Gone`] even if the price was written.
     pub async fn set_price(&self, model: String, price: Option<ModelPrice>) -> Result<(), Error> {
         self.downgrade().set_price(model, price).await
     }
