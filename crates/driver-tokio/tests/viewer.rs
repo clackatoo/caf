@@ -1339,37 +1339,63 @@ async fn watching_a_chat_again_before_anything_comes_starts_it_once() {
 async fn serve_ends_though_its_viewer_has_stopped_reading() {
     let dir = Dir::new();
     let (caf, running, chat) = started(&dir, &[]).await;
-    // Each has room for one message, filled with an answer it never reads.
+    // Each has room for one message, filled by the host's opening a chat,
+    // before it sends anything: so nothing else can take the room first.
     let filled = async || {
         let (viewer, ..) = Viewer::welcomed(&caf, ViewerRules::default(), 1).await;
-        viewer
-            .send(FromViewer::Stop {
-                request: RequestNo(1),
-                chat: ChatId::from_number(999_999),
-            })
-            .await;
+        let _opened = caf.open_chat(OpenChat::new("fake", &dir.0)).await.unwrap();
+        let full = tokio::time::timeout(PATIENCE, async {
+            while viewer.from.is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        });
+        full.await.expect("the list of chats fills the room");
         viewer
     };
-    // One stops sending too.
+    let ends = async |served: JoinHandle<()>, why: &str| {
+        let served = tokio::time::timeout(PATIENCE, served).await;
+        assert!(matches!(served, Ok(Ok(()))), "{why}: {served:?}");
+    };
+    // One stops sending.
     let Viewer {
         to, from, served, ..
     } = filled().await;
     drop(to);
-    assert!(
-        matches!(tokio::time::timeout(PATIENCE, served).await, Ok(Ok(()))),
-        "serve ends when its viewer stops sending"
-    );
+    ends(served, "serve ends when its viewer stops sending").await;
     drop(from);
-    // One goes on as it is, watching nothing, until CAF shuts down.
+    // One sends a request it can't be answered, as there's no room, then
+    // stops sending: serve holds the request, so it hears the viewer has
+    // gone once it stops reading too, as a host whose transport breaks
+    // does.
+    let viewer = filled().await;
+    viewer
+        .send(FromViewer::Stop {
+            request: RequestNo(1),
+            chat: ChatId::from_number(999_999),
+        })
+        .await;
+    viewer.taken().await;
     let Viewer {
         to, from, served, ..
-    } = filled().await;
+    } = viewer;
+    drop(to);
+    drop(from);
+    ends(served, "serve ends when its viewer stops reading").await;
+    // One goes on as it is, holding a request, until CAF shuts down.
+    let viewer = filled().await;
+    viewer
+        .send(FromViewer::Stop {
+            request: RequestNo(1),
+            chat: ChatId::from_number(999_999),
+        })
+        .await;
+    viewer.taken().await;
+    let Viewer {
+        to, from, served, ..
+    } = viewer;
     drop(chat);
     shut_down(&caf, running).await;
-    assert!(
-        matches!(tokio::time::timeout(PATIENCE, served).await, Ok(Ok(()))),
-        "serve ends with CAF"
-    );
+    ends(served, "serve ends with CAF").await;
     drop((to, from));
 }
 
