@@ -99,13 +99,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             report(out, Level::Warn, message);
         };
         let (reported, split_unreadable) = self.profile_of_chat(chat).spent(result);
-        if split_unreadable {
-            warn(
-                out,
-                "the agent's split by model of what it spent can't be read: its usage is taken instead",
-            );
-        }
         let rows = match reported {
+            Reported::Nothing | Reported::Unreadable if split_unreadable => {
+                return warn(
+                    out,
+                    "neither the agent's split by model of what it spent nor its usage can be read: \
+                     it isn't recorded",
+                );
+            }
             Reported::Nothing => return,
             Reported::Unreadable => {
                 return warn(out, "what it spent can't be read: it isn't recorded");
@@ -116,7 +117,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     "the agent split what it spent between more than 64 models: it isn't recorded",
                 );
             }
-            Reported::Rows(rows) => rows,
+            Reported::Rows(rows) => {
+                if split_unreadable {
+                    warn(
+                        out,
+                        "the agent's split by model of what it spent can't be read: its usage is \
+                         taken instead",
+                    );
+                }
+                rows
+            }
         };
         // Every count the agent gave is below 2^53, its totals too, and so
         // is what the turn's are added up to.

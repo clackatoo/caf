@@ -825,3 +825,28 @@ fn a_split_of_more_than_64_models_gives_no_record_and_says_so() {
         Some(64)
     );
 }
+
+#[test]
+fn a_split_that_cant_be_read_with_no_usage_beside_it_says_neither_could_be() {
+    let mut script = Script::with_claude();
+    for usage in [
+        Value::Null,
+        json!({ "inputTokens": -1, "outputTokens": 1, "totalTokens": 0 }),
+    ] {
+        let prompt = script.prompt(CHAT, "Hello");
+        let answer = json!({ "stopReason": "end_turn", "usage": usage,
+            "_meta": { "quota": { "model_usage": [{ "model": 5 }] } } });
+        let out = script.answers(PROC, prompt, &answer);
+        assert!(ledger(&out).is_empty());
+        let warned: Vec<Value> = (with(&out, "report").into_iter())
+            .filter(|report| report["report"] == "Warn")
+            .map(|report| report["message"].clone())
+            .collect();
+        assert_eq!(warned.len(), 1, "{warned:?}");
+        let said = warned[0].as_str().expect("words");
+        assert!(
+            said.contains("neither") && !said.contains("instead"),
+            "{said}"
+        );
+    }
+}
