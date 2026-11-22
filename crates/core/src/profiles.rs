@@ -118,8 +118,11 @@
 //! the turn set off too, and so is what CAF keeps; it's empty on a turn
 //! stopped, whose `usage` CAF keeps instead, against the model the
 //! adapter last named during the turn, in `usage_update`'s
-//! `_meta._claude/model`. Both count input uncached, and thinking as part
-//! of output. What the session has cost so far it says in `usage_update`,
+//! `_meta._claude/model`. If no update named it, the row is against the
+//! model the turn was sent on as its setting names it, an alias such as
+//! `haiku` that a price table may not know: such a turn is unpriced, a
+//! gap CAF knows of. Both count input uncached, and thinking as part of
+//! output. What the session has cost so far it says in `usage_update`,
 //! just before the answer.
 //!
 //! It declares **nothing of JetBrains AIR**. Any AIR key switches the
@@ -715,8 +718,9 @@ impl ProfileChoice {
     /// Claude's adapter, and the fake, split it by model too
     /// (`_meta.quota.model_usage`), counting the subagents and compaction
     /// the turn set off, so the split is taken when it has rows. It's
-    /// empty on a turn stopped, whose `usage` still counts.
-    pub(crate) fn spent(&self, result: &Value) -> Reported {
+    /// empty on a turn stopped, whose `usage` still counts. A split that
+    /// can't be read gives way to `usage` too, and says so: `true`.
+    pub(crate) fn spent(&self, result: &Value) -> (Reported, bool) {
         let split = match self {
             Self::Builtin(Builtin::ClaudeAgentAcp) => split_by_model(result),
             #[cfg(test)]
@@ -728,8 +732,9 @@ impl ProfileChoice {
             Self::Cautious => Reported::Nothing,
         };
         match split {
-            Reported::Nothing => acp_usage(result),
-            split => split,
+            Reported::Nothing => (acp_usage(result), false),
+            Reported::Unreadable => (acp_usage(result), true),
+            split => (split, false),
         }
     }
 
@@ -801,9 +806,11 @@ fn acp_usage(result: &Value) -> Reported {
     }])
 }
 
-/// The split by model Claude's and Codex's adapters give, in the answer
-/// to a prompt, `result`: `_meta.quota.model_usage`. Its `inputTokens`
-/// are uncached too. `Nothing` if it isn't there or has no rows.
+/// The split by model Claude's adapter gives, in the answer to a prompt,
+/// `result`: `_meta.quota.model_usage`. Its `inputTokens` are uncached
+/// too. Codex's adapter is said to send the same, but no profile reads
+/// it, and what its `inputTokens` count is unchecked. `Nothing` if it
+/// isn't there or has no rows.
 fn split_by_model(result: &Value) -> Reported {
     /// A row of it.
     #[derive(Deserialize)]
@@ -1274,25 +1281,26 @@ pub(crate) mod tests {
         let split = json!([
             { "model": "claude-sonnet-5-5", "token_count": { "totalTokens": 18, "inputTokens": 3, "cachedInputTokens": 5,
               "cachedWriteTokens": 1, "outputTokens": 9, "reasoningOutputTokens": 2 } },
-            // Codex leaves out what it doesn't count.
+            // A row that leaves out what it doesn't count, as Codex's
+            // adapter may.
             { "model": "gpt-5.5", "token_count": { "totalTokens": 3, "inputTokens": 1, "outputTokens": 2 } },
         ]);
         assert_eq!(
-            claude().spent(&answered(split)),
+            claude().spent(&answered(split)).0,
             Reported::Rows(vec![
                 reckoned(Some("claude-sonnet-5-5"), [3, 5, 1, 9], Some(2)),
                 reckoned(Some("gpt-5.5"), [1, 0, 0, 2], None),
             ])
         );
         let usage = Reported::Rows(vec![reckoned(None, [2, 10, 0, 4], None)]);
-        assert_eq!(claude().spent(&answered(json!([]))), usage);
-        assert_eq!(claude().spent(&answered(Value::Null)), usage);
+        assert_eq!(claude().spent(&answered(json!([]))).0, usage);
+        assert_eq!(claude().spent(&answered(Value::Null)).0, usage);
         // Any agent's usage is read, but only Claude's split.
         let plain = ProfileChoice::Builtin(Builtin::TestPlain);
         let split = json!([{ "model": "m", "token_count": { "totalTokens": 2, "inputTokens": 1, "outputTokens": 1 } }]);
-        assert_eq!(plain.spent(&answered(split)), usage);
+        assert_eq!(plain.spent(&answered(split)).0, usage);
         assert_eq!(
-            claude().spent(&json!({ "stopReason": "end_turn" })),
+            claude().spent(&json!({ "stopReason": "end_turn" })).0,
             Reported::Nothing
         );
     }
@@ -1328,14 +1336,22 @@ pub(crate) mod tests {
             json!(u64::MAX as f64 * 2.0),
         ] {
             assert_eq!(
-                claude().spent(&usage(count.clone())),
+                claude().spent(&usage(count.clone())).0,
                 Reported::Unreadable,
                 "{count}"
             );
         }
+        // A split that can't be read gives way to the usage, saying so.
         let split = json!([{ "model": "m", "token_count": { "totalTokens": 1, "inputTokens": -1, "outputTokens": 1 } }]);
-        assert_eq!(claude().spent(&answered(split)), Reported::Unreadable);
-        assert_eq!(claude().spent(&answered(json!({}))), Reported::Unreadable);
+        let usage = Reported::Rows(vec![reckoned(None, [2, 10, 0, 4], None)]);
+        assert_eq!(claude().spent(&answered(split)), (usage, true));
+        let usage = Reported::Rows(vec![reckoned(None, [2, 10, 0, 4], None)]);
+        assert_eq!(claude().spent(&answered(json!({}))), (usage, true));
+        // Unreadable only if neither can be read.
+        let neither = json!({ "usage": { "inputTokens": -1, "outputTokens": 1, "totalTokens": 1 },
+            "_meta": { "quota": { "model_usage": {} } } });
+        assert_eq!(claude().spent(&neither), (Reported::Unreadable, true));
+        assert_eq!(claude().spent(&answered(json!([]))).1, false);
     }
 
     #[cfg(feature = "fake")]
@@ -1344,7 +1360,7 @@ pub(crate) mod tests {
         let fake = ProfileChoice::Builtin(Builtin::Fake);
         let split = json!([{ "model": "small", "token_count": { "totalTokens": 7, "inputTokens": 3, "outputTokens": 4 } }]);
         assert_eq!(
-            fake.spent(&answered(split)),
+            fake.spent(&answered(split)).0,
             Reported::Rows(vec![reckoned(Some("small"), [3, 0, 0, 4], None)])
         );
     }
