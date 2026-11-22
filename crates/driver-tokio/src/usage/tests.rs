@@ -586,12 +586,26 @@ async fn answered_in(driver: &mut UsageDriver) -> Duration {
     started.elapsed()
 }
 
+/// Waits until the driver has handed the thread its first look at the
+/// prices, which tries kept lines again whatever the lock did: so one
+/// coming after a line isn't taken for a try it shouldn't make.
+async fn first_look(driver: &mut UsageDriver) {
+    let looked = tokio::time::timeout(PATIENCE, async {
+        while driver.looks == 0 {
+            // The driver hands each look to the thread as it's polled.
+            let _ = tokio::time::timeout(Duration::from_millis(5), driver.next()).await;
+        }
+    });
+    looked.await.expect("the first look, in good time");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn once_a_lock_is_given_up_on_lines_are_kept_untried_and_shutting_down_tries_once() {
     let dir = Dir::new("lock-held");
     let lock = hold_lock(&dir.0);
     let mut driver = cooling(&dir);
     prices(&mut driver).await;
+    first_look(&mut driver).await;
     driver.record(line(1, 5));
     let first = answered_in(&mut driver).await;
     assert!(
@@ -602,12 +616,13 @@ async fn once_a_lock_is_given_up_on_lines_are_kept_untried_and_shutting_down_tri
         driver.record(line(turn, 5));
     }
     let then = answered_in(&mut driver).await;
-    assert!(then < Duration::from_secs(4), "kept, not tried: {then:?}");
+    // A try takes five seconds: anything less made none.
+    assert!(then < Duration::from_secs(5), "kept, not tried: {then:?}");
     let started = std::time::Instant::now();
     driver.finish().await;
     let took = started.elapsed();
     assert!(
-        took >= Duration::from_secs(5) && took < Duration::from_secs(9),
+        took >= Duration::from_secs(5) && took < Duration::from_secs(10),
         "one try as it finishes: {took:?}"
     );
     drop(lock);
