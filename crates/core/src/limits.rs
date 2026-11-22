@@ -13,15 +13,19 @@
 //! - **the limit itself** (`rateLimitType`, `utilization`, `resetsAt`,
 //!   `status`) is the one that matters most just then, and fills in any
 //!   window `unifiedWindows` doesn't hold, such as a model's own week.
-//!   For a window both hold, `unifiedWindows`' wins.
+//!   For a window both hold, `unifiedWindows`' share and reset win; its
+//!   status too, unless it says none, when the limit's stands in, or the
+//!   limit is refused, which is never hidden: the window is refused, and
+//!   all used.
 //!
 //! `overage` is never a window: it says whether extra usage is in use
 //! ([`AccountLimits::extra_usage`]), as `isUsingOverage` does. A window
-//! with no share that reads is skipped, unless refused; a share is kept
-//! to 0–100% and rounded, and a reset only between 2020 and 2100. A
-//! status CAF doesn't know reads as fine, and a window whose name isn't
-//! plain (letters, digits, `_`, `-` and `.`, 64 bytes at most) is
-//! skipped. Limits are heard only from what an agent says as it works,
+//! with no share that reads is skipped, unless refused; a share, from 0
+//! to 1, is kept to 0–100% and rounded. A reset is in seconds, or in
+//! milliseconds if it's above 10^11, as no time in seconds is before the
+//! year 5000, and is kept only between 2020 and 2100. A status CAF
+//! doesn't know reads as fine, and a window whose name isn't plain
+//! (letters, digits, `_`, `-` and `.`, 64 bytes at most) is skipped. Limits are heard only from what an agent says as it works,
 //! never from a session's history replayed, and a window already reset is
 //! no news. Agents whose profile says nothing of limits have none.
 //!
