@@ -10,6 +10,8 @@ import {
   type Item,
   type SavedChat,
   type Settings,
+  type Summary,
+  type UsageQuery,
   type Turn,
   type WatchEvent,
 } from "../src/index.ts";
@@ -99,6 +101,15 @@ describe("the handshake", () => {
     expect(caf.may).toStrictEqual(may);
   });
 
+  test("a Welcome from before usage was a right says the viewer may not", async () => {
+    const link = new FakeTransport();
+    const opening = Connection.open(link);
+    link.deliver({ ...welcome, value: { ...welcome.value, may: { act: true, agents: true } } });
+    link.deliver(agents);
+    const caf = await opening;
+    expect(caf.may).toStrictEqual({ act: true, agents: true, usage: false });
+  });
+
   test("no common version rejects, and ends the link", async () => {
     const link = new FakeTransport();
     const opening = Connection.open(link);
@@ -157,6 +168,10 @@ describe("the handshake", () => {
     [
       "a Welcome whose agents isn't a boolean",
       JSON.stringify({ ...welcome, value: { ...welcome.value, may: { act: true, agents: "yes" } } }),
+    ],
+    [
+      "a Welcome whose usage isn't a boolean",
+      JSON.stringify({ ...welcome, value: { ...welcome.value, may: { act: true, agents: true, usage: 1 } } }),
     ],
     [
       "a Welcome with a chat whose id is a number",
@@ -1199,6 +1214,134 @@ describe("what CAF sends", () => {
   });
 });
 
+describe("usage", () => {
+  const query: UsageQuery = {
+    since: 1_800_000_000_000,
+    until: 1_800_086_400_000,
+    zone: "Europe/London",
+    by: { type: "Hour" },
+    apps: [],
+    agents: [],
+  };
+  const summary: Summary = {
+    query,
+    buckets: [
+      {
+        start: 1_800_000_000_000,
+        app: "clackatoo",
+        agent: "claude-agent-acp",
+        model: "claude-haiku-5-5",
+        fast: false,
+        tokens: { input: 10, cache_read: 20, cache_write: 5, output: 7, thinking: null },
+        reported: 0.02,
+        estimated: 0,
+        unpriced: 0,
+        turns: 1,
+      },
+    ],
+    chats: { all: 1, by_app: [["clackatoo", 1]], by_agent: [["claude-agent-acp", 1]] },
+    prices: [],
+    fetched: null,
+    unreadable: [],
+  };
+
+  test("usage asks for a summary, and resolves with the one CAF sends", async () => {
+    const { caf, link } = await connected();
+    const asking = caf.usage(query);
+    expect(link.take()).toStrictEqual([{ type: "Usage", value: { request: 1, query } }]);
+    link.deliver({ type: "Usage", value: { request: 1, summary } });
+    await expect(asking).resolves.toStrictEqual(summary);
+    expect(link.closed).toBe(false);
+  });
+
+  test("usage rejects as not allowed, with no ledger, or saying why the query is bad, and the link goes on", async () => {
+    const { caf, link } = await connected();
+    const notAllowed = held(caf.usage(query));
+    const noLedger = held(caf.usage(query));
+    const zone = held(caf.usage({ ...query, zone: "Mars/Olympus" }));
+    const period = held(caf.usage({ ...query, until: query.since }));
+    const later = held(caf.usage(query));
+    const answer = (request: number, outcome: unknown) => link.deliver({ type: "Done", value: { request, outcome } });
+    answer(1, { type: "NotAllowed" });
+    answer(2, { type: "NoLedger" });
+    answer(3, { type: "BadQuery", value: { type: "Zone", value: "Mars/Olympus" } });
+    answer(4, { type: "BadQuery", value: { type: "Period" } });
+    // A later CAF's reason comes through by name.
+    answer(5, { type: "BadQuery", value: { type: "TooFar" } });
+    expect(await rejection(notAllowed)).toStrictEqual({ type: "NotAllowed" });
+    expect(await rejection(noLedger)).toStrictEqual({ type: "NoLedger" });
+    expect(await rejection(zone)).toStrictEqual({ type: "BadQuery", value: { type: "Zone", value: "Mars/Olympus" } });
+    expect(await rejection(period)).toStrictEqual({ type: "BadQuery", value: { type: "Period" } });
+    expect(await rejection(later)).toStrictEqual({ type: "BadQuery", value: { type: "TooFar" } });
+    expect(link.closed).toBe(false);
+  });
+
+  test("setPrice sets a model's price, or clears it, and resolves once done", async () => {
+    const { caf, link } = await connected();
+    const price = { input: 1, cache_read: 0.1, cache_write: 1.25, output: 5, fast: null };
+    const setting = caf.setPrice("claude-haiku-5-5", price);
+    const clearing = caf.setPrice("claude-haiku-5-5", null);
+    expect(link.take()).toStrictEqual([
+      { type: "SetPrice", value: { request: 1, model: "claude-haiku-5-5", price } },
+      { type: "SetPrice", value: { request: 2, model: "claude-haiku-5-5", price: null } },
+    ]);
+    link.deliver({ type: "Done", value: { request: 1, outcome: { type: "Done" } } });
+    link.deliver({ type: "Done", value: { request: 2, outcome: { type: "NoLedger" } } });
+    await expect(setting).resolves.toBeUndefined();
+    expect(await rejection(clearing)).toStrictEqual({ type: "NoLedger" });
+  });
+
+  test.each([
+    ["a usage request answered Done", () => ({ type: "Done", value: { request: 1, outcome: { type: "Done" } } })],
+    ["a usage request answered Sent", () => ({ type: "Done", value: { request: 1, outcome: { type: "Sent", value: 3 } } })],
+    ["a BadQuery without its reason", () => ({ type: "Done", value: { request: 1, outcome: { type: "BadQuery" } } })],
+    [
+      "a summary without its buckets",
+      () => ({ type: "Usage", value: { request: 1, summary: { ...summary, buckets: undefined } } }),
+    ],
+    [
+      "a summary whose bucket's cost isn't a number",
+      () => ({ type: "Usage", value: { request: 1, summary: { ...summary, buckets: [{ ...summary.buckets[0], reported: "1" }] } } }),
+    ],
+    [
+      "a summary whose bucket's tokens aren't counts",
+      () => ({
+        type: "Usage",
+        value: { request: 1, summary: { ...summary, buckets: [{ ...summary.buckets[0], tokens: { input: 1 } }] } },
+      }),
+    ],
+    ["a summary without its query", () => ({ type: "Usage", value: { request: 1, summary: { ...summary, query: null } } })],
+    ["a Usage without its request", () => ({ type: "Usage", value: { summary } })],
+  ])("%s ends the link", async (_, answer) => {
+    const { caf, link } = await connected();
+    const asking = held(caf.usage(query));
+    link.deliver(answer());
+    expect(await rejection(asking)).toStrictEqual({ type: "Disconnected" });
+    expect(link.closed).toBe(true);
+  });
+
+  test.each([
+    ["a summary for a request that isn't for one", { type: "Usage", value: { request: 1, summary } }],
+    ["NoLedger for a request that isn't for usage", { type: "Done", value: { request: 1, outcome: { type: "NoLedger" } } }],
+    [
+      "BadQuery for a price",
+      { type: "Done", value: { request: 1, outcome: { type: "BadQuery", value: { type: "Period" } } } },
+    ],
+  ])("%s ends the link", async (what, answer) => {
+    const { caf, link } = await connected();
+    const asking = held(what === "BadQuery for a price" ? caf.setPrice("m", null) : caf.stop(CHAT));
+    link.deliver(answer);
+    expect(await rejection(asking)).toStrictEqual({ type: "Disconnected" });
+    expect(link.closed).toBe(true);
+  });
+
+  test("a summary for nothing asked harms nothing", async () => {
+    const { link } = await connected();
+    link.deliver({ type: "Usage", value: { request: 9, summary } });
+    expect(link.closed).toBe(false);
+  });
+});
+
 describe("CafError", () => {
   test("names itself, and says why in its message", () => {
     const refused = new CafError({ type: "Refused", value: { type: "QueueFull" } });
@@ -1211,6 +1354,8 @@ describe("CafError", () => {
       "NoCommonVersion: CAF speaks versions 2 to 3",
     );
     expect(new CafError({ type: "Disconnected" }).message).toBe("Disconnected");
+    expect(new CafError({ type: "NoLedger" }).message).toBe("NoLedger");
+    expect(new CafError({ type: "BadQuery", value: { type: "Period" } }).message).toBe("BadQuery: Period");
   });
 });
 

@@ -75,6 +75,12 @@ export function apply(chat: RChat, change: Change): { chat: RChat } | { mismatch
     }
     case "Usage":
       return { chat: { ...chat, usage: change.value } };
+    case "TurnSpent": {
+      const { turn, usage } = change.value;
+      return withTurn(chat, turn, (each) => ({ ...each, spent: usage }));
+    }
+    case "Spend":
+      return { chat: { ...chat, spend: change.value } };
     case "QuestionAsked":
       return { chat: { ...chat, questions: [...chat.questions, change.value] } };
     case "QuestionGone": {

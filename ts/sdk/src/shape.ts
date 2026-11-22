@@ -2,7 +2,7 @@
 // looks things up, lists where it adds to them, and the type of whatever
 // it reads. What it never reads is the app's to draw, so isn't checked.
 
-import type { AgentStatus, Chat, ChatSummary, Item, Rights, SavedChat, Turn } from "./types.ts";
+import type { AgentStatus, Chat, ChatSummary, Item, Rights, SavedChat, Summary, Turn } from "./types.ts";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -77,9 +77,62 @@ export function isStatus(value: unknown): value is AgentStatus {
   );
 }
 
-/** What a viewer may do: an app offers what these say, so each must be a boolean. */
+/**
+ * What a viewer may do: an app offers what these say, so each must be a
+ * boolean. `usage` came later, so may be absent, which reads as `false`.
+ */
 export function isRights(value: unknown): value is Rights {
-  return isRecord(value) && typeof value.act === "boolean" && typeof value.agents === "boolean";
+  return (
+    isRecord(value) &&
+    typeof value.act === "boolean" &&
+    typeof value.agents === "boolean" &&
+    (value.usage === undefined || typeof value.usage === "boolean")
+  );
+}
+
+/** Token counts: what the usage helpers add up. */
+function isTokens(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNumber(value.input) &&
+    isNumber(value.cache_read) &&
+    isNumber(value.cache_write) &&
+    isNumber(value.output) &&
+    (value.thinking === null || isNumber(value.thinking))
+  );
+}
+
+/** One bucket of a summary: every figure the helpers add up, and every key they group by. */
+function isBucket(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNumber(value.start) &&
+    isString(value.app) &&
+    isString(value.agent) &&
+    isString(value.model) &&
+    typeof value.fast === "boolean" &&
+    isTokens(value.tokens) &&
+    isNumber(value.reported) &&
+    isNumber(value.estimated) &&
+    isNumber(value.unpriced) &&
+    isNumber(value.turns)
+  );
+}
+
+/**
+ * A usage summary: its buckets, and the query the helpers find its
+ * periods from. Its other parts are only the app's to draw.
+ */
+export function isUsageSummary(value: unknown): value is Summary {
+  if (!isRecord(value) || !isRecord(value.query) || !Array.isArray(value.buckets)) return false;
+  const query = value.query;
+  return (
+    isNumber(query.since) &&
+    isNumber(query.until) &&
+    isString(query.zone) &&
+    isTagged(query.by) &&
+    value.buckets.every(isBucket)
+  );
 }
 
 /**
@@ -112,6 +165,10 @@ export function isChange(value: unknown): boolean {
     case "ItemEnded":
       return isNumber(fields.item) && isTagged(fields.end);
     case "Usage":
+      return isRecord(held);
+    case "TurnSpent":
+      return isNumber(fields.turn) && isRecord(fields.usage);
+    case "Spend":
       return isRecord(held);
     case "QuestionAsked":
       return hasId(held);

@@ -3,6 +3,7 @@ import type {
   AgentName,
   AgentStatus,
   Answer,
+  BadQuery,
   CannotRestore,
   Chat,
   ChangeNo,
@@ -37,6 +38,7 @@ import {
   isString,
   isSummary,
   isTagged,
+  isUsageSummary,
 } from "./shape.ts";
 
 /** The versions of the viewer wire this SDK speaks. */
@@ -116,6 +118,10 @@ export class CafError extends Error {
       | { type: "Gone" }
       /** The saved chat couldn't be restored, and its save is as it was. */
       | { type: "CannotRestore"; value: CannotRestore }
+      /** CAF keeps no usage ledger, so has no summary to give, nor prices to set. */
+      | { type: "NoLedger" }
+      /** No summary can be made for the query asked, for this reason. */
+      | { type: "BadQuery"; value: BadQuery }
       /** It went in a way this SDK doesn't know, from a later version of CAF: `outcome` is its name. */
       | { type: "Unknown"; value: { outcome: string } }
       /** The link ended before the answer came. */
@@ -134,6 +140,8 @@ function describe(why: CafError["why"]): string {
       return `Refused: ${why.value.type}`;
     case "CannotRestore":
       return `CannotRestore: ${why.value.type}`;
+    case "BadQuery":
+      return `BadQuery: ${why.value.type}`;
     case "Unknown":
       return `Unknown: ${why.value.outcome}`;
     case "NoCommonVersion":
@@ -567,8 +575,7 @@ export class Connection {
    * answered. Ask again for newer figures: summaries aren't pushed.
    */
   usage(query: UsageQuery): Promise<Summary> {
-    void query;
-    throw new Error("todo: feature 6");
+    return this.#request("Summary", (no) => ({ type: "Usage", value: { request: no, query } }));
   }
 
   /**
@@ -578,9 +585,7 @@ export class Connection {
    * `may.usage`, or `NoLedger`.
    */
   setPrice(model: string, price: ModelPrice | null): Promise<void> {
-    void model;
-    void price;
-    throw new Error("todo: feature 6");
+    return this.#request("Done", (no) => ({ type: "SetPrice", value: { request: no, model, price } }));
   }
 
   /** Ends the link. */
@@ -673,6 +678,19 @@ export class Connection {
         this.#pending.delete(value.request);
         return this.#answer(pending, outcome.type, outcome.value);
       }
+      case "Usage": {
+        if (!isRecord(value) || !isNumber(value.request)) return this.#end();
+        const pending = this.#pending.get(value.request);
+        if (pending === undefined) return;
+        this.#pending.delete(value.request);
+        // A summary answers only a request for one, and must hold what
+        // the helpers read.
+        if (pending.expect !== "Summary" || !isUsageSummary(value.summary)) {
+          pending.reject(new CafError({ type: "Disconnected" }));
+          return this.#end();
+        }
+        return pending.resolve(value.summary);
+      }
       case "Welcome":
       case "NoCommonVersion":
         return this.#end();
@@ -705,7 +723,15 @@ export class Connection {
       case "CannotRestore":
         if (pending.asked !== "Restore" || !isTagged(value)) return broken();
         return pending.reject(new CafError({ type: "CannotRestore", value: value as CannotRestore }));
+      case "NoLedger":
+        if (pending.asked !== "Usage" && pending.asked !== "SetPrice") return broken();
+        return pending.reject(new CafError({ type: "NoLedger" }));
+      case "BadQuery":
+        if (pending.asked !== "Usage" || !isTagged(value)) return broken();
+        return pending.reject(new CafError({ type: "BadQuery", value: value as BadQuery }));
       case pending.expect:
+        // Not an outcome of this version's: a summary comes in a `Usage`.
+        if (pending.expect === "Summary") return pending.reject(new CafError({ type: "Unknown", value: { outcome: type } }));
         if (pending.expect === "Done") return pending.resolve(undefined);
         // A chat's id is a UUID's text; a turn's is a number.
         if (pending.expect === "Opened" ? !isString(value) : !isNumber(value)) return broken();
@@ -761,15 +787,21 @@ export class Connection {
   }
 }
 
-/** The outcomes a request may expect, and what each resolves with. */
-type Answered = "Opened" | "Sent" | "Done";
+/**
+ * The outcomes a request may expect, and what each resolves with. A
+ * `Summary` isn't an outcome: it comes in a `Usage` message of its own,
+ * in place of a `Done`.
+ */
+type Answered = "Opened" | "Sent" | "Done" | "Summary";
 type AnswerOf<E extends Answered> = E extends "Done"
   ? void
-  : Extract<Outcome, { type: E }> extends { value: infer V }
-    ? V
-    : never;
+  : E extends "Summary"
+    ? Summary
+    : Extract<Outcome, { type: E }> extends { value: infer V }
+      ? V
+      : never;
 
-/** A request waiting for its `Done`. */
+/** A request waiting for its answer: a `Done`, or for a summary, a `Usage`. */
 interface Pending {
   /** What was asked: an Open and a Restore both expect `Opened`, and only a Restore may be answered `CannotRestore`. */
   asked: FromViewer["type"];
@@ -845,10 +877,31 @@ class Watch implements Watching {
 }
 
 /** The outcomes this SDK knows. */
-const OUTCOMES = new Set(["Opened", "Sent", "Done", "Refused", "NotAllowed", "Gone", "CannotRestore"]);
+const OUTCOMES = new Set([
+  "Opened",
+  "Sent",
+  "Done",
+  "Refused",
+  "NotAllowed",
+  "Gone",
+  "CannotRestore",
+  "NoLedger",
+  "BadQuery",
+]);
 
 /** The message types of version 1 of the wire, from CAF. */
-const KNOWN = new Set(["Welcome", "NoCommonVersion", "Chats", "Picture", "Changes", "Ended", "Agents", "Saved", "Done"]);
+const KNOWN = new Set([
+  "Welcome",
+  "NoCommonVersion",
+  "Chats",
+  "Picture",
+  "Changes",
+  "Ended",
+  "Agents",
+  "Saved",
+  "Done",
+  "Usage",
+]);
 
 /** A message from CAF as far as `{ type, value }`, or null if it isn't one. */
 function parse(text: unknown): { type: string; value: unknown } | null {
