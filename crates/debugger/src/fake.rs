@@ -8,7 +8,11 @@
 //!   with it, as it would with a real agent. It has no memory, so
 //!   resuming is only saying yes.
 //! - **Any message** is answered at once by a handler: a line of thinking,
-//!   then a few words, each a chunk of its own, and the turn ends.
+//!   then a few words, each a chunk of its own, and the turn ends, saying
+//!   what it spent as Claude's adapter does: how full its context is and
+//!   what the session has cost so far, then the turn's tokens. It has no
+//!   memory, so it says the same cost every time: a chat's first turn
+//!   costs that, and every later one nothing.
 //! - **The message `fail`**, exactly, is answered at once with an error,
 //!   the first time in a chat: CAF fails the turn, offering Send again.
 //!   Sent again, it's answered as any message is, so Send again can be
@@ -166,7 +170,14 @@ fn reply() -> Value {
         json!({"think": {"session": SESSION, "text": "Nothing to think about: I'm the fake agent."}}),
     ];
     steps.extend(words(REPLY).map(|word| json!({"say": {"session": SESSION, "text": word}})));
-    steps.push(json!({"respond": {"result": {"stopReason": "end_turn"}}}));
+    steps.push(json!({"update": {"session": SESSION, "update": {
+        "sessionUpdate": "usage_update", "used": 24_928, "size": 200_000,
+        "cost": {"amount": 0.0125, "currency": "USD"},
+    }}}));
+    steps.push(json!({"respond": {"result": {"stopReason": "end_turn", "usage": {
+        "inputTokens": 2, "cachedReadTokens": 12_799, "cachedWriteTokens": 12_123,
+        "outputTokens": 4, "totalTokens": 24_928,
+    }}}}));
     Value::Array(steps)
 }
 
