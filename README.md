@@ -7,9 +7,10 @@ embedded in your own program.
 CAF speaks the [Agent Client Protocol](https://agentclientprotocol.com)
 to the agent, absorbs each agent's quirks, and keeps its own record of
 every conversation. It installs agents and signs the user in to them,
-saves chats so they carry on in the next run, and lets the user choose
+saves chats so they carry on in the next run, lets the user choose
 each agent's model, how hard it thinks and fast mode, in one shape for
-every agent. Your program describes what it can show, and draws the chat
+every agent, and records what every turn spends, in a usage ledger every
+CAF app on the machine shares. Your program describes what it can show, and draws the chat
 from CAF's record. CAF itself draws nothing.
 
 It grows out of the agent backend of
@@ -25,6 +26,8 @@ first user.
 - `crates/save` (`caf-save`): how chats are saved, so they carry on from
   one run to the next: the format, which stays readable forever, and a
   store that keeps chats in files.
+- `crates/usage` (`caf-usage`): the usage ledger every CAF app on the
+  machine shares, its summaries, and the prices cost is estimated with.
 - `ts/sdk` (`@clackatoo/caf`): the TypeScript caf-sdk.
 - `crates/debugger` and `ts/debugger` (`caf-debugger`): a reference chat
   view beside an inspector of every step CAF takes, with saved chats, a
