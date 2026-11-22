@@ -13,7 +13,10 @@ export type Recipe = {
 /**
  * The upstream version installed: the one the profile was checked at.
  * With [`patch`](Recipe::patch), the install is of a version of its
- * own ([`Recipe::installed_version`]).
+ * own ([`Recipe::installed_version`]). What's installed (`install`,
+ * such as its lockfile) changes only with it: a new patch level of
+ * the same version is made from an earlier level's install, keeping
+ * all of it ([`Patch`]).
  */
 version: string, 
 /**

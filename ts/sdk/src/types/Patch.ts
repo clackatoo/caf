@@ -3,8 +3,8 @@ import type { FilePatch } from "./FilePatch.ts";
 
 /**
  * How CAF changes an adapter once it's installed, to fix what upstream
- * hasn't yet: exact edits to files npm installed, kept in CAF's
- * repository and compiled in, never downloaded.
+ * hasn't yet: exact edits to files npm installed, or a download
+ * unpacked, kept in CAF's repository and compiled in, never downloaded.
  *
  * # Patching
  *
@@ -18,7 +18,9 @@ import type { FilePatch } from "./FilePatch.ts";
  * into place; only then is the install complete. One that stops on the
  * way fails ([`InstallFailure::Patch`](crate::agent::InstallFailure::Patch))
  * and is removed, as a failed download is: CAF never runs a half-patched
- * adapter.
+ * adapter. So is one whose patch names a file twice, or a file whose
+ * name holds `.caf-`, as CAF names the files it keeps beside one, or
+ * that already has a file named as its original beside it.
  *
  * # A new patch level
  *
@@ -30,6 +32,12 @@ import type { FilePatch } from "./FilePatch.ts";
  * in place of its patched copy, and the new patch made as above. Nothing
  * is ever changed in place, so the earlier install, and anything running
  * from it, is untouched.
+ *
+ * Everything else in it is the earlier install's: its whole
+ * `node_modules`, whatever the recipe's lockfile now says. So what a
+ * recipe installs (its lockfile, or its downloads) changes only with a
+ * new upstream [`version`](Recipe::version), never between patch levels
+ * of one; a test pins each built-in npm recipe's to its version.
  *
  * # Guarantees
  *

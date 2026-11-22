@@ -137,3 +137,55 @@ fn a_patched_install_is_of_a_version_of_its_own() {
     assert_eq!(recipe.installed_version(), "1.0.0+caf.12");
     assert_eq!(recipe.version, "1.0.0", "the upstream version stays");
 }
+
+#[test]
+fn an_edit_with_no_text_to_find_is_refused() {
+    // Empty text is everywhere: in an empty file, exactly once.
+    for original in [&b""[..], ORIGINAL.as_bytes()] {
+        let empty = FilePatch::new(
+            "a",
+            sha256(original),
+            sha256(b"x"),
+            vec![Edit::new("", "x")],
+        );
+        assert_eq!(
+            empty.apply(original),
+            Err(PatchError::NothingToFind { edit: 0 })
+        );
+    }
+}
+
+#[test]
+fn a_file_is_patched_as_bytes_whatever_they_hold() {
+    // Not UTF-8, around the edit: kept byte for byte.
+    let original = b"\xff\xfe head \x80 steer = false \xc3\x28 tail\x00";
+    let patched = b"\xff\xfe head \x80 steer = true \xc3\x28 tail\x00";
+    let patch = FilePatch::new(
+        "a",
+        sha256(original),
+        sha256(patched),
+        vec![Edit::new("steer = false", "steer = true")],
+    );
+    assert_eq!(patch.apply(original).as_deref(), Ok(&patched[..]));
+    // CRLF line endings: a line break is found only as the file has it,
+    // and the rest keep theirs.
+    let original = b"let a = 1;\r\nlet b = 2;\r\n";
+    let patched = b"let a = 1;\r\nlet b = 3;\r\n";
+    let crlf = FilePatch::new(
+        "a",
+        sha256(original),
+        sha256(patched),
+        vec![Edit::new("2;\r\n", "3;\r\n")],
+    );
+    assert_eq!(crlf.apply(original).as_deref(), Ok(&patched[..]));
+    let lf = FilePatch::new(
+        "a",
+        sha256(original),
+        sha256(patched),
+        vec![Edit::new("1;\nlet", "1;\nlet")],
+    );
+    assert_eq!(
+        lf.apply(original),
+        Err(PatchError::Found { edit: 0, times: 0 })
+    );
+}

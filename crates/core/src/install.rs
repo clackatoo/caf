@@ -37,7 +37,10 @@ use serde::{Deserialize, Serialize};
 pub struct Recipe {
     /// The upstream version installed: the one the profile was checked at.
     /// With [`patch`](Recipe::patch), the install is of a version of its
-    /// own ([`Recipe::installed_version`]).
+    /// own ([`Recipe::installed_version`]). What's installed (`install`,
+    /// such as its lockfile) changes only with it: a new patch level of
+    /// the same version is made from an earlier level's install, keeping
+    /// all of it ([`Patch`]).
     pub version: String,
     /// How to install it.
     pub install: Install,
@@ -176,8 +179,8 @@ pub enum Unpack {
 }
 
 /// How CAF changes an adapter once it's installed, to fix what upstream
-/// hasn't yet: exact edits to files npm installed, kept in CAF's
-/// repository and compiled in, never downloaded.
+/// hasn't yet: exact edits to files npm installed, or a download
+/// unpacked, kept in CAF's repository and compiled in, never downloaded.
 ///
 /// # Patching
 ///
@@ -191,7 +194,9 @@ pub enum Unpack {
 /// into place; only then is the install complete. One that stops on the
 /// way fails ([`InstallFailure::Patch`](crate::agent::InstallFailure::Patch))
 /// and is removed, as a failed download is: CAF never runs a half-patched
-/// adapter.
+/// adapter. So is one whose patch names a file twice, or a file whose
+/// name holds `.caf-`, as CAF names the files it keeps beside one, or
+/// that already has a file named as its original beside it.
 ///
 /// # A new patch level
 ///
@@ -203,6 +208,12 @@ pub enum Unpack {
 /// in place of its patched copy, and the new patch made as above. Nothing
 /// is ever changed in place, so the earlier install, and anything running
 /// from it, is untouched.
+///
+/// Everything else in it is the earlier install's: its whole
+/// `node_modules`, whatever the recipe's lockfile now says. So what a
+/// recipe installs (its lockfile, or its downloads) changes only with a
+/// new upstream [`version`](Recipe::version), never between patch levels
+/// of one; a test pins each built-in npm recipe's to its version.
 ///
 /// # Guarantees
 ///
@@ -245,7 +256,7 @@ pub struct FilePatch {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Edit {
     /// The text to find: it must appear exactly once, as the edits before
-    /// it left the file.
+    /// it left the file, and so can't be empty.
     pub find: String,
     /// What it becomes.
     pub replace: String,
@@ -269,6 +280,12 @@ pub enum PatchError {
     },
     /// The edits were made, but the result isn't the one tested.
     NotAsTested,
+    /// An edit's text, by its place in the list, from 0, is empty: it
+    /// would be found everywhere, and in an empty file exactly once.
+    NothingToFind {
+        /// The edit.
+        edit: usize,
+    },
 }
 
 /// What the original of a patched file is named with, beside it:
@@ -328,6 +345,9 @@ impl FilePatch {
         let mut text = original.to_vec();
         for (edit, Edit { find, replace }) in self.edits.iter().enumerate() {
             let find = find.as_bytes();
+            if find.is_empty() {
+                return Err(PatchError::NothingToFind { edit });
+            }
             let at = memchr::memmem::find(&text, find);
             let times = at.map_or(0, |at| times_in(&text[at..], find));
             let (Some(at), 1) = (at, times) else {

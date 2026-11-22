@@ -11,4 +11,8 @@ edit: number,
 /**
  * How many times its text appeared.
  */
-times: number, } } | { "type": "NotAsTested" };
+times: number, } } | { "type": "NotAsTested" } | { "type": "NothingToFind", "value": { 
+/**
+ * The edit.
+ */
+edit: number, } };

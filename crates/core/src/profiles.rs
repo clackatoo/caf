@@ -32,6 +32,13 @@
 //! > files, run commands or browse the web, except through tools
 //! > framewright gives you. Answer in Markdown.
 //!
+//! A recipe's `install`, such as an npm lockfile, changes only with its
+//! upstream `version`. A patch fixed or added at the same version is a
+//! new patch level, and a machine with an earlier level installed makes
+//! it from that, keeping its `node_modules` and all: a changed lockfile
+//! would never reach it (see [`Patch`](crate::install::Patch)). A test
+//! pins each npm recipe's manifest and lockfile to its version.
+//!
 //! Profiles are CAF's own. Apps choose one for each agent but never
 //! change one. Users will be able to add profiles as data in CAF's shared
 //! folder (*later*).
@@ -273,8 +280,12 @@ impl Builtin {
     /// The profile with this [slug](Builtin::slug), if any.
     #[must_use]
     pub fn from_slug(slug: &str) -> Option<Self> {
-        // Every profile in this build: one added is added here too.
-        let every = [
+        Self::every().into_iter().find(|each| each.slug() == slug)
+    }
+
+    /// Every profile in this build: one added is added here too.
+    pub(crate) fn every() -> Vec<Self> {
+        vec![
             Self::ClaudeAgentAcp,
             #[cfg(test)]
             Self::TestNpm,
@@ -286,8 +297,7 @@ impl Builtin {
             Self::TestModels,
             #[cfg(feature = "fake")]
             Self::Fake,
-        ];
-        every.into_iter().find(|each| each.slug() == slug)
+        ]
     }
 
     /// The name its adapter gives in `initialize`.
@@ -2098,6 +2108,126 @@ pub(crate) mod tests {
         assert_eq!(
             fake.spent(&answered(split)).0,
             Reported::Rows(vec![reckoned(Some("small"), [3, 0, 0, 4], None)])
+        );
+    }
+
+    /// The SHA-256, in hex, of what an npm recipe installs from: its
+    /// manifest, a NUL, and its lockfile.
+    fn npm_pin(package: &NpmPackage) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        hash.update(package.manifest.as_bytes());
+        hash.update([0]);
+        hash.update(package.lockfile.as_bytes());
+        hash.finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    #[test]
+    fn what_an_npm_recipe_installs_changes_only_with_its_upstream_version() {
+        // A new patch level is prepared from an earlier level's install,
+        // its `node_modules` and all, with nothing downloaded: so what's
+        // installed can't change while the upstream version stays.
+        let pinned = [
+            (
+                "claude-agent-acp",
+                "0.98.0",
+                "343c4766583f92f868d10739cb474f50aeeb81c905f55109e7a87e9afea86263",
+            ),
+            (
+                "test-npm",
+                "2.0.0",
+                "38d97fcbe7dbbb02a4a8894ca67f215ea7ed19d67df17d114eac604017bb11f6",
+            ),
+        ];
+        for builtin in Builtin::every() {
+            let recipe = builtin.recipe();
+            let Install::Npm(package) = &recipe.install else {
+                continue;
+            };
+            let (slug, version, found) =
+                (builtin.slug(), recipe.version.as_str(), npm_pin(package));
+            let pin = pinned
+                .iter()
+                .find(|(each, _, _)| *each == slug)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{slug} is installed with npm: pin its manifest and lockfile here, {found}"
+                    )
+                });
+            assert_eq!(
+                (pin.1, pin.2),
+                (version, found.as_str()),
+                "{slug}'s manifest or lockfile changed. That's allowed only with a new upstream \
+                 version (Recipe::version): a new patch level of the same version is \
+                 prepared from an earlier level's install, node_modules and all, so a machine \
+                 that has one would never install the change. With a new version, pin the new \
+                 hash here."
+            );
+        }
+    }
+
+    /// What's wrong with `patch`, for CAF to make it: nothing, if it can.
+    fn problems(patch: &crate::install::Patch) -> Vec<String> {
+        let mut problems = Vec::new();
+        if patch.level == 0 {
+            problems.push("patch levels start at 1".to_owned());
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for file in &patch.files {
+            let path = file.path.as_str();
+            if !seen.insert(path) {
+                problems.push(format!("{path} is patched twice"));
+            }
+            if !(path.split('/')).all(|part| !part.is_empty() && part != "." && part != "..") {
+                problems.push(format!("{path} isn't a plain path inside the install"));
+            }
+            // Names CAF keeps for the original beside it, and the patched
+            // file as it's written.
+            if path.rsplit('/').next().unwrap_or(path).contains(".caf-") {
+                problems.push(format!("{path} is named as CAF names its own files"));
+            }
+            if file.edits.iter().any(|edit| edit.find.is_empty()) {
+                problems.push(format!("an edit of {path} has no text to find"));
+            }
+        }
+        problems
+    }
+
+    #[test]
+    fn every_patch_is_one_caf_can_make() {
+        for builtin in Builtin::every() {
+            if let Some(patch) = builtin.recipe().patch {
+                assert_eq!(problems(&patch), Vec::<String>::new(), "{}", builtin.slug());
+            }
+        }
+        // What the check finds.
+        let file = |path: &str, find: &str| {
+            crate::install::FilePatch::new(path, "", "", vec![crate::install::Edit::new(find, "x")])
+        };
+        let bad = crate::install::Patch::new(
+            0,
+            vec![
+                file("dist/a.js", "a"),
+                file("dist/a.js", "a"),
+                file("dist/../a.js", "a"),
+                file("/a.js", "a"),
+                file("dist/a.js.caf-original", "a"),
+                file("b.js", ""),
+            ],
+        );
+        assert_eq!(
+            problems(&bad),
+            [
+                "patch levels start at 1",
+                "dist/a.js is patched twice",
+                "dist/../a.js isn't a plain path inside the install",
+                "/a.js isn't a plain path inside the install",
+                "dist/a.js.caf-original is named as CAF names its own files",
+                "an edit of b.js has no text to find",
+            ]
         );
     }
 }
