@@ -13,6 +13,8 @@ caf-core.workspace = true
 # Days in the user's own time zone: IANA zones from the system's database,
 # with a bundled copy where there's none (Windows).
 jiff.workspace = true
+# A file of limits written over, as it didn't read, is reported.
+log.workspace = true
 # flock: one line added at a time, across copies of an app.
 rustix.workspace = true
 serde.workspace = true

@@ -22,7 +22,7 @@
 //! | `Viewer(Changed)` | Wakes the chat's watches, which read with [`Core::read`] |
 //! | `Setup` | [`SetupDriver::apply`]; its reports come back as [`Event::Setup`] |
 //! | `Storage` | [`caf_save::carry_out`] with [`Config::store`], on a thread of its own, in order; its reports come back as [`Event::Storage`] |
-//! | `Usage` | [`caf_usage::Ledger::record`] with [`Config::usage`], on a thread of its own, in order; never answered. The prices, read on the same thread as it starts and whenever they change, come back as [`Event::Prices`] |
+//! | `Usage` | [`caf_usage::Ledger::record`] and [`caf_usage::limits::save`] with [`Config::usage`], on a thread of its own, in order. The prices, read on the same thread as it starts and whenever they change, come back as [`Event::Prices`]; the limits kept, read after them, and those a save found news in, as [`Event::Limits`] |
 //! | `Report` | The [`log`] facade, target `caf` |
 //!
 //! A [`Steps`] given to [`Caf::start_watching`] sees each event once the
@@ -2138,8 +2138,8 @@ impl<A: AppItem, D: AppData> Task<A, D> {
     }
 
     /// Gives the core the usage driver's prices, answering those waiting
-    /// for them; or answers whoever set a price, once the core has the
-    /// prices it changed.
+    /// for them, or the account limits it keeps; or answers whoever set a
+    /// price, once the core has the prices it changed.
     fn usage_report(&mut self, report: UsageReport) {
         match report {
             UsageReport::Prices(prices) => {
@@ -2157,6 +2157,7 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                     let _ = reply.send(self.priced_now());
                 }
             }
+            UsageReport::Limits(limits) => self.give(Event::Limits(limits)),
         }
     }
 
@@ -2453,7 +2454,7 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 Directive::Report(report) => log_report(&report),
                 Directive::Usage(UsageDirective::Record(line)) => self.usage.record(line),
                 Directive::Usage(UsageDirective::SaveLimits(limits)) => {
-                    self.usage.save_limits(limits)
+                    self.usage.save_limits(limits);
                 }
                 // No other kind is given yet.
                 Directive::Usage(_) => {}

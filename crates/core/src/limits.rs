@@ -183,6 +183,14 @@ pub struct ProfileLimits {
     pub limits: AccountLimits,
 }
 
+impl ProfileLimits {
+    /// `profile`'s account's limits.
+    #[must_use]
+    pub fn new(profile: Builtin, limits: AccountLimits) -> Self {
+        Self { profile, limits }
+    }
+}
+
 /// Five hours.
 const FIVE_HOURS: Duration = Duration::from_secs(5 * 60 * 60);
 

@@ -290,6 +290,27 @@ fn prices_kept_that_dont_read_are_left_alone() {
 }
 
 #[test]
+fn prices_files_far_bigger_than_theyd_be_arent_read() {
+    let folder = Folder::new("prices-big");
+    let prices = folder.path().join("prices");
+    std::fs::create_dir_all(&prices).expect("it's made");
+    // Each reads, but is bigger than any table CAF keeps.
+    let padding = " ".repeat(usize::try_from(super::MOST).unwrap());
+    let own = format!(
+        "{{\"models\": {{\"mine\": {{\"input\": 1, \"cache_read\": 1, \"cache_write\": 1, \"output\": 1}}}}}}{padding}"
+    );
+    std::fs::write(prices.join("own.json"), own).expect("it's written");
+    let fetched = format!("{{\"fetched\": 5, \"table\": {{}}}}{padding}");
+    std::fs::write(prices.join("litellm.json"), fetched).expect("it's written");
+
+    assert_eq!(load(folder.path()), bundled());
+    assert_eq!(fetched_at(folder.path()), None);
+    let error = set_own(folder.path(), "mine", None).expect_err("it refuses");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    crate::testing::names_only(&error, folder.path(), "prices/own.json");
+}
+
+#[test]
 fn a_price_that_isnt_one_is_refused() {
     let folder = Folder::new("own-bad");
     let negative = rates(1.0, -1.0, 1.0, 1.0, None);
