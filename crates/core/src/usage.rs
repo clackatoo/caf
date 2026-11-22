@@ -301,32 +301,41 @@ pub struct Estimate {
 }
 
 impl PriceTable {
-    /// A model's price, by the agent's id for it: the table's entry of
-    /// that name; else one that's it with a provider before it
-    /// (`anthropic/claude-haiku-5-5`); else, if it ends in a date
+    /// A model's price, by the agent's id for it, from the first layer
+    /// that has one (the user's own, then LiteLLM's as fetched, then the
+    /// bundled snapshot), whatever form its name takes there. Within a
+    /// layer: the entry of that name; else one that's it with a provider
+    /// before it (`anthropic/claude-haiku-5-5`); else, if it ends in a date
     /// (`claude-haiku-5-5-20261001`), the same without it. A name that
-    /// matches more than one entry with a provider is priced by the first,
+    /// matches more than one entry with a provider is priced by the model's
+    /// maker (`anthropic`, `openai`, `gemini` or `xai`) before a reseller
+    /// (`azure`, `bedrock`, `vertex_ai` and the like), then by the first,
     /// sorted by name.
     #[must_use]
     pub fn find(&self, model: &str) -> Option<&PricedModel> {
-        self.find_as(model)
-            .or_else(|| undated(model).and_then(|model| self.find_as(model)))
+        [PriceLayer::Own, PriceLayer::Fetched, PriceLayer::Bundled]
+            .into_iter()
+            .find_map(|layer| {
+                self.find_as(layer, model)
+                    .or_else(|| undated(model).and_then(|model| self.find_as(layer, model)))
+            })
     }
 
-    /// The entry named `model`, else the first that's it with a provider
-    /// before it.
-    fn find_as(&self, model: &str) -> Option<&PricedModel> {
-        let provided = |entry: &&PricedModel| {
-            entry
-                .model
-                .strip_suffix(model)
-                .and_then(|provider| provider.strip_suffix('/'))
-                .is_some_and(|provider| !provider.is_empty() && !provider.contains('/'))
-        };
-        self.models
-            .iter()
-            .find(|entry| entry.model == model)
-            .or_else(|| self.models.iter().find(provided))
+    /// The entry of `layer` named `model`, else the best that's it with a
+    /// provider before it.
+    fn find_as(&self, layer: PriceLayer, model: &str) -> Option<&PricedModel> {
+        let entries = self.models.iter().filter(|entry| entry.layer == layer);
+        if let Some(exact) = entries.clone().find(|entry| entry.model == model) {
+            return Some(exact);
+        }
+        entries
+            .filter_map(|entry| {
+                let provider = entry.model.strip_suffix(model)?.strip_suffix('/')?;
+                (!provider.is_empty() && !provider.contains('/'))
+                    .then(|| (!MAKERS.contains(&provider), entry))
+            })
+            .min_by_key(|(reseller, _)| *reseller)
+            .map(|(_, entry)| entry)
     }
 
     /// What a turn would cost at these prices: each model's tokens at its
@@ -345,6 +354,10 @@ impl PriceTable {
         estimate
     }
 }
+
+/// The providers that make the models CAF's agents use, by LiteLLM's
+/// names for them: found before a reseller of the same model.
+const MAKERS: [&str; 4] = ["anthropic", "openai", "gemini", "xai"];
 
 /// A model's id without the date it ends in, such as `-20261001`, if it
 /// ends in one.
