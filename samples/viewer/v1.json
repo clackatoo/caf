@@ -3235,6 +3235,12 @@
               }
             }
           ],
+          "matched": [
+            [
+              "claude-sonnet-5-5",
+              "anthropic/claude-sonnet-5-5"
+            ]
+          ],
           "fetched": 1800000000000,
           "unreadable": [
             "eyespy/2026-10.jsonl.zst"
