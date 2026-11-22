@@ -11,6 +11,7 @@
     ChatList,
     ChatView,
     SavedList,
+    UsagePage,
     openThenChoose,
     restoreOnceFree,
     showsAgent,
@@ -35,6 +36,9 @@
   /** The chat view's share of the width. */
   let split = $state(0.55)
   let saving = $state<HTMLDialogElement>()
+  let usageDialog = $state<HTMLDialogElement>()
+  /** The usage page is open: drawn only then, so it asks CAF only then. */
+  let showUsage = $state(false)
 
   function connectInspector(): Inspector {
     return new Inspector(new WebSocket(socketUrl('/inspect')))
@@ -177,6 +181,24 @@
     },
   }
 
+  /** The host lets this page read usage: without, there's no usage page, and no way to it. */
+  const usable = $derived(live !== null && live.may.usage === true)
+
+  function openUsage() {
+    if (!usable) return
+    showUsage = true
+    usageDialog?.showModal()
+  }
+
+  function closeUsage() {
+    usageDialog?.close()
+  }
+
+  // Taken away, as by a new connection that may not: close it.
+  $effect(() => {
+    if (!usable && showUsage) closeUsage()
+  })
+
   function agentOf(chat: DeepReadonly<Chat> | null): AgentName {
     if (chat === null) throw new Error('No chat is chosen.')
     return chat.agent
@@ -251,6 +273,9 @@
     {:else if link === 'closed'}<button type="button" onclick={reconnect}>Reconnect</button>{/if}
     {#if live?.problem}<span class="problem">{live.problem}</span>{/if}
     <span class="spacer"></span>
+    {#if usable}
+      <button type="button" onclick={openUsage}>Usage</button>
+    {/if}
     {#if mode === 'Live'}
       <button type="button" onclick={() => saving?.showModal()} disabled={!inspector.hello?.file}>Save bug report</button>
     {/if}
@@ -307,6 +332,7 @@
             readOnly={!actable}
             {readOnlyWhy}
             notice={!lookingBack && notice?.chat === chat.id && chat.state.type !== 'Closed' ? notice.text : null}
+            openUsage={usable ? openUsage : undefined}
           />
         {:else}
           <p class="empty">
@@ -340,6 +366,17 @@
   <Timeline {inspector} />
   {/if}
 </div>
+
+<dialog bind:this={usageDialog} class="usage" aria-label="Usage" onclose={() => (showUsage = false)}>
+  {#if showUsage && live !== null}
+    {@const caf = live}
+    <UsagePage
+      load={(query) => caf.caf.usage(query)}
+      setPrice={(model, price) => caf.caf.setPrice(model, price)}
+      close={closeUsage}
+    />
+  {/if}
+</dialog>
 
 <dialog bind:this={saving} class="save" aria-labelledby="save-title">
   <h2 id="save-title">Save a bug report</h2>
@@ -517,6 +554,19 @@
     color: var(--caf-text);
     padding: 1.2em 1.4em;
   }
+  .usage {
+    width: calc(100vw - 2.5em);
+    height: calc(100vh - 2.5em);
+    max-width: 1320px;
+    max-height: none;
+    padding: 0;
+    border: 1px solid var(--caf-border);
+    border-radius: 12px;
+    background: var(--caf-bg);
+    color: var(--caf-text);
+    overflow: hidden;
+  }
+  .usage::backdrop,
   .save::backdrop {
     background: rgb(0 0 0 / 0.35);
   }

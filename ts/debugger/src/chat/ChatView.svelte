@@ -16,8 +16,8 @@
   import Questions from './Questions.svelte'
   import SettingsBar from './SettingsBar.svelte'
   import StateBanner from './StateBanner.svelte'
+  import Ring from './Ring.svelte'
   import Turn from './Turn.svelte'
-  import Usage from './Usage.svelte'
   import { errorText, shortId, stateLabel } from './words.ts'
   import './theme.css'
 
@@ -31,6 +31,7 @@
     readOnlyWhy = 'As it was then: nothing can be done here.',
     appSummary = () => "An item of the app's own",
     notice = null,
+    openUsage,
   }: {
     chat: DeepReadonly<Chat>
     /** The app's line for the chat, such as its title, from its `ChatSummary`, if it has one. */
@@ -58,6 +59,11 @@
      * such as why its settings couldn't be chosen as it opened.
      */
     notice?: string | null
+    /**
+     * Opens the app's usage page, from the ring's popover. Give it only if
+     * the viewer `may.usage`: without it, the popover links nowhere.
+     */
+    openUsage?: (() => void) | undefined
   } = $props()
 
   /** The status of the chat's agent, if the host gave it, and it's this chat's agent's. */
@@ -109,7 +115,6 @@
       <!-- Cut from the left, so the end of the path shows. -->
       <span class="cwd" title={chat.cwd}><bdi>{chat.cwd}</bdi></span>
     </div>
-    {#if chat.usage !== null}<Usage usage={chat.usage} />{/if}
     <span class="state" data-state={chat.state.type}>{stateLabel(chat.state)}</span>
     {#if !closed && may.act}
       <button type="button" class="close" disabled={readOnly} onclick={close}>Close</button>
@@ -171,7 +176,11 @@
     disabled={!acting || closed}
     send={(text) => actions.send({ parts: [{ type: 'Text', value: text }] })}
     stop={actions.stop}
-  />
+  >
+    {#snippet beside()}
+      <Ring usage={chat.usage} spend={chat.spend} {openUsage} />
+    {/snippet}
+  </Composer>
 </section>
 {/key}
 

@@ -377,6 +377,52 @@ await caf.learnSettings("claude");
 A chat can't be opened with its settings from the page: open it, then
 choose them, before anything is sent.
 
+### Usage
+
+A chat's `spend` is what it has cost so far, over the turns that have a
+record: their tokens, the cost the agent `reported`, the cost `estimated`
+at API prices for turns it didn't, and the tokens no price covered
+(`unpriced`). CAF works it out and sends it again whenever a turn adds to
+it or the prices change, so every page shows the same figure. Each turn's
+`spent` is its own record. `usage` is how full the agent's context is, as
+it last said.
+
+```ts
+import { cost, total } from "@clackatoo/caf";
+
+cost(chat.spend); // reported and estimated, in US dollars
+total(chat.spend.tokens); // input, both cache counts and output
+```
+
+A page the host lets (`caf.may.usage`) can ask for a summary of every
+CAF app's usage on the machine over a period, and set prices of the
+user's own. A summary is buckets, one per period, app, agent, model and
+fast mode; the SDK's helpers add them up, so no page writes its own sums:
+
+```ts
+import { group, price, split, totals } from "@clackatoo/caf";
+
+const summary = await caf.usage({
+  since, until, zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  by: { type: "Day" }, apps: [], agents: [],
+});
+totals(summary); // every bucket added up
+group(summary, "agent"); // by agent, biggest cost first; or "app", "model", "fast"
+group(summary, "model", "tokens"); // biggest by tokens first
+group(summary, "period"); // in time order, every day of the period, empty ones too
+split(summary, "app"); // each day's groups: a stacked chart's bars
+price(summary, "claude-haiku-5-5"); // the entry that priced it, as the summary's `matched` says
+await caf.setPrice("claude-haiku-5-5", { input: 1, cache_read: 0.1, cache_write: 1.25, output: 5, fast: null });
+await caf.setPrice("claude-haiku-5-5", null); // the table's price again
+```
+
+Periods are worked out in the query's zone, so a day is the user's own,
+23 or 25 hours across a change of clocks. A summary isn't pushed: ask
+again for newer figures. It rejects with `NotAllowed` for a page the host
+doesn't let, `NoLedger` if CAF keeps no ledger, and `BadQuery` saying why
+for a zone CAF doesn't know or a period it can't sum. `unreadable` names
+any part of the record that couldn't be read: say the figures are short.
+
 ### When the link drops
 
 When the link ends, for any reason, every request still waiting rejects with
@@ -439,7 +485,7 @@ CAF's debugger draws its chats with a reference chat view, in Svelte, in
 `ts/debugger/src/chat/` of CAF's repository. It draws everything a chat
 holds: its state and why a session was lost, each turn with what started
 it and how it ended, words, thinking, tools, CAF's notes, items CAF
-couldn't read, the questions waiting, and how full the agent's memory is.
+couldn't read, the questions waiting, and the context ring.
 It says each of CAF's reasons in CAF's words, and names one it doesn't know
 by its `type`.
 
@@ -500,6 +546,25 @@ while a turn runs or the session isn't open, and "Changing to Sonnet…"
 otherwise. Before the session first opens, it offers what the agent's
 status knows, or, with `act` and `agents`, to learn it. Each turn names
 the model that answered it.
+
+By Send is the context ring: how full the agent's context is, amber
+past 80% and red past 95%. Clicking it shows what the chat has used and
+spent: the context, its cost so far, marked as an API estimate where any
+of it is, with the tokens no price covered, and the tokens processed.
+Given `openUsage`, it links to the page's usage page: give it only if
+`caf.may.usage`. `UsagePage` is one to copy, after CAF SI's: a period's
+total, each agent's or app's share and a chart of it by day (or hour),
+tokens by kind and what the cache saved, cost by kind and by speed, and a
+breakdown by model, app or day, with each model's price a click away and a
+price of the user's own:
+
+```svelte
+<UsagePage
+  load={(query) => caf.usage(query)}
+  setPrice={(model, price) => caf.setPrice(model, price)}
+  close={() => dialog.close()}
+/>
+```
 
 Given its `label`, from the chat's summary in `caf.chats`, the view heads
 the chat with it. Beside it, `ChatList` lists the open chats, by their

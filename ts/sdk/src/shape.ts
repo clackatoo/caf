@@ -2,7 +2,7 @@
 // looks things up, lists where it adds to them, and the type of whatever
 // it reads. What it never reads is the app's to draw, so isn't checked.
 
-import type { AgentStatus, Chat, ChatSummary, Item, Rights, SavedChat, Turn } from "./types.ts";
+import type { AgentStatus, Chat, ChatSummary, Item, Rights, SavedChat, Summary, Turn } from "./types.ts";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -77,9 +77,95 @@ export function isStatus(value: unknown): value is AgentStatus {
   );
 }
 
-/** What a viewer may do: an app offers what these say, so each must be a boolean. */
+/**
+ * What a viewer may do: an app offers what these say, so each must be a
+ * boolean. `usage` came later, so may be absent, which reads as `false`.
+ */
 export function isRights(value: unknown): value is Rights {
-  return isRecord(value) && typeof value.act === "boolean" && typeof value.agents === "boolean";
+  return (
+    isRecord(value) &&
+    typeof value.act === "boolean" &&
+    typeof value.agents === "boolean" &&
+    (value.usage === undefined || typeof value.usage === "boolean")
+  );
+}
+
+/** Token counts: what the usage helpers add up. */
+function isTokens(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNumber(value.input) &&
+    isNumber(value.cache_read) &&
+    isNumber(value.cache_write) &&
+    isNumber(value.output) &&
+    (value.thinking === null || isNumber(value.thinking))
+  );
+}
+
+/** One bucket of a summary: every figure the helpers add up, and every key they group by. */
+function isBucket(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNumber(value.start) &&
+    isString(value.app) &&
+    isString(value.agent) &&
+    isString(value.model) &&
+    typeof value.fast === "boolean" &&
+    isTokens(value.tokens) &&
+    isNumber(value.reported) &&
+    isNumber(value.estimated) &&
+    isNumber(value.unpriced) &&
+    isNumber(value.turns)
+  );
+}
+
+/** A model's price: every rate a number, fast mode's or null. */
+function isPriced(value: unknown): boolean {
+  if (!isRecord(value) || !isString(value.model) || !isTagged(value.layer) || !isRecord(value.price)) return false;
+  const price = value.price;
+  return (
+    isNumber(price.input) &&
+    isNumber(price.cache_read) &&
+    isNumber(price.cache_write) &&
+    isNumber(price.output) &&
+    (price.fast === null || isNumber(price.fast))
+  );
+}
+
+/** A name and its count, as a summary counts chats per app and agent. */
+function isCounted(value: unknown): boolean {
+  return Array.isArray(value) && value.length === 2 && isString(value[0]) && isNumber(value[1]);
+}
+
+/**
+ * A usage summary, whole: its query, buckets, chats, prices and which
+ * entry priced each model, which the helpers and every usage page read,
+ * and the files it couldn't read.
+ */
+export function isUsageSummary(value: unknown): value is Summary {
+  if (!isRecord(value) || !isRecord(value.query) || !isRecord(value.chats)) return false;
+  const { query, chats } = value;
+  return (
+    isNumber(query.since) &&
+    isNumber(query.until) &&
+    isString(query.zone) &&
+    isTagged(query.by) &&
+    isArrayOf(query.apps, isString) &&
+    isArrayOf(query.agents, isString) &&
+    Array.isArray(value.buckets) &&
+    value.buckets.every(isBucket) &&
+    isNumber(chats.all) &&
+    Array.isArray(chats.by_app) &&
+    chats.by_app.every(isCounted) &&
+    Array.isArray(chats.by_agent) &&
+    chats.by_agent.every(isCounted) &&
+    Array.isArray(value.prices) &&
+    value.prices.every(isPriced) &&
+    Array.isArray(value.matched) &&
+    value.matched.every((pair) => Array.isArray(pair) && pair.length === 2 && isString(pair[0]) && isString(pair[1])) &&
+    (value.fetched === null || isNumber(value.fetched)) &&
+    isArrayOf(value.unreadable, isString)
+  );
 }
 
 /**
@@ -112,6 +198,10 @@ export function isChange(value: unknown): boolean {
     case "ItemEnded":
       return isNumber(fields.item) && isTagged(fields.end);
     case "Usage":
+      return isRecord(held);
+    case "TurnSpent":
+      return isNumber(fields.turn) && isRecord(fields.usage) && Array.isArray(fields.usage.models);
+    case "Spend":
       return isRecord(held);
     case "QuestionAsked":
       return hasId(held);

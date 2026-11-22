@@ -30,7 +30,7 @@ export interface Setup {
   /**
    * An `agents.toml`, passed with `--agents`. `{fake}` in it becomes the
    * fake agent's program, and `{script}` the script the debugger writes
-   * for it.
+   * for it: the one saying what turns spent, as `--fake-usage` asks.
    */
   agents?: string
   /** What the fake agent's `auth` commands do (see caf-fake-agent's `Auth`), with `{state}` as the test's folder. */
@@ -51,11 +51,13 @@ export function start(args: string[], setup: Setup = {}): Promise<Server & { pro
   const fill = (text: string) =>
     text
       .replaceAll('{fake}', fake)
-      .replaceAll('{script}', join(state, 'caf', 'debugger', 'fake-agent.jsonl'))
+      .replaceAll('{script}', join(state, 'caf', 'debugger', 'fake-agent-usage.jsonl'))
       .replaceAll('{state}', state)
   // Live, its usage ledger is under $XDG_DATA_HOME too, and never fetches
-  // prices: a test never reaches the network.
-  const extra: string[] = args.includes('--replay') ? [] : ['--no-fetch-prices']
+  // prices: a test never reaches the network. The fake agent says what its
+  // turns spent, as the usage tests need: the ledger is the test's own, so
+  // its made-up figures count nowhere real.
+  const extra: string[] = args.includes('--replay') ? [] : ['--no-fetch-prices', '--fake-usage']
   if (setup.agents !== undefined) {
     writeFileSync(join(state, 'agents.toml'), fill(setup.agents))
     extra.push('--agents', join(state, 'agents.toml'))

@@ -9,6 +9,13 @@
 //!   resuming is only saying yes.
 //! - **Any message** is answered at once by a handler: a line of thinking,
 //!   then a few words, each a chunk of its own, and the turn ends.
+//! - **What a turn spent**, only if asked (`--fake-usage`), as Claude's
+//!   adapter says it: how full its context is and what the session has
+//!   cost so far, then the turn's tokens. It has no memory, so it says the
+//!   same cost every time: a chat's first turn costs that, and every later
+//!   one is estimated. Made-up figures, so off unless asked: the ledger
+//!   the debugger writes to is, by default, the one every CAF app shares,
+//!   and they would count in the user's real usage.
 //! - **The message `fail`**, exactly, is answered at once with an error,
 //!   the first time in a chat: CAF fails the turn, offering Send again.
 //!   Sent again, it's answered as any message is, so Send again can be
@@ -57,6 +64,12 @@ pub const SIGN_IN: &str = "sign in";
 /// any message is.
 const ROUNDS: u32 = 200;
 
+/// The script's file.
+pub const FILE: &str = "fake-agent.jsonl";
+
+/// The script's file when it says what each turn spent.
+pub const USAGE_FILE: &str = "fake-agent-usage.jsonl";
+
 /// The session the fake opens.
 const SESSION: &str = "fake-1";
 
@@ -69,9 +82,10 @@ const REPLY: &str = "This is CAF's fake agent, with no model behind it, so it sa
 /// The words before it asks.
 const ASKING: &str = "I'd like to run a command. Allow it, refuse it, or stop me.";
 
-/// The script, as the fake reads it.
+/// The script, as the fake reads it, saying what each turn spent if
+/// `usage`.
 #[must_use]
-pub fn script() -> String {
+pub fn script(usage: bool) -> String {
     let mut lines = vec![
         "# caf-debugger's fake agent: see `fake.rs` in caf-debugger.".to_owned(),
         // Stop ends the asking round's prompt. The name `prompt` is given
@@ -90,7 +104,7 @@ pub fn script() -> String {
                 {"respond": {"error": {"code": -32000, "message": "Authentication required: the fake agent wants a sign-in, as it was asked to."}}},
             ]}}),
         ),
-        line(&json!({"on": {"method": "session/prompt", "fallback": true, "do": reply()}})),
+        line(&json!({"on": {"method": "session/prompt", "fallback": true, "do": reply(usage)}})),
         // Anything else is refused, as an adapter refuses a method it
         // doesn't know.
         line(&json!({"on": {"fallback": true, "do": [
@@ -122,18 +136,22 @@ pub fn script() -> String {
     lines.join("\n") + "\n"
 }
 
-/// Writes the script into `dir`, replacing any there, and returns its
-/// path.
+/// Writes the script into `dir`, replacing any there, saying what each
+/// turn spent if `usage`, and returns its path. The one that says is a file
+/// of its own, `fake-agent-usage.jsonl`, never `fake-agent.jsonl`, so a
+/// debugger started with `--fake-usage` never makes another's fake, started
+/// without and sharing the folder, record made-up spend.
 ///
 /// # Errors
 ///
 /// If it can't be written.
-pub fn write(dir: &Path) -> std::io::Result<PathBuf> {
-    let path = dir.join("fake-agent.jsonl");
+pub fn write(dir: &Path, usage: bool) -> std::io::Result<PathBuf> {
+    let name = if usage { USAGE_FILE } else { FILE };
+    let path = dir.join(name);
     // Written beside it and moved into place, so a fake starting now
     // never reads half of it.
-    let partial = dir.join(format!("fake-agent.jsonl.{}", std::process::id()));
-    std::fs::write(&partial, script())?;
+    let partial = dir.join(format!("{name}.{}", std::process::id()));
+    std::fs::write(&partial, script(usage))?;
     std::fs::rename(&partial, &path)?;
     Ok(path)
 }
@@ -160,13 +178,26 @@ fn options() -> Value {
     ])
 }
 
-/// The answer to any message.
-fn reply() -> Value {
+/// The answer to any message, saying what the turn spent if `usage`.
+fn reply(usage: bool) -> Value {
     let mut steps = vec![
         json!({"think": {"session": SESSION, "text": "Nothing to think about: I'm the fake agent."}}),
     ];
     steps.extend(words(REPLY).map(|word| json!({"say": {"session": SESSION, "text": word}})));
-    steps.push(json!({"respond": {"result": {"stopReason": "end_turn"}}}));
+    if !usage {
+        steps.push(json!({"respond": {"result": {"stopReason": "end_turn"}}}));
+        return Value::Array(steps);
+    }
+    steps.push(json!({"update": {"session": SESSION, "update": {
+        "sessionUpdate": "usage_update", "used": 24_928, "size": 200_000,
+        "cost": {"amount": 0.0125, "currency": "USD"},
+    }}}));
+    steps.push(
+        json!({"respond": {"result": {"stopReason": "end_turn", "usage": {
+            "inputTokens": 2, "cachedReadTokens": 12_799, "cachedWriteTokens": 12_123,
+            "outputTokens": 4, "totalTokens": 24_928,
+        }}}}),
+    );
     Value::Array(steps)
 }
 
@@ -221,11 +252,40 @@ fn words(text: &str) -> impl Iterator<Item = String> + '_ {
 mod tests {
     use caf_fake_agent::Script;
 
-    use super::script;
+    use super::{script, write};
 
     #[test]
     fn the_fake_agents_script_reads() {
-        let text = script();
-        Script::parse(&text).expect("the script reads");
+        for usage in [false, true] {
+            Script::parse(&script(usage)).expect("the script reads");
+        }
+    }
+
+    #[test]
+    fn the_script_that_says_what_turns_spent_is_a_file_of_its_own() {
+        let dir = std::env::temp_dir().join(format!("caf-debugger-fake-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plain = write(&dir, false).unwrap();
+        let spending = write(&dir, true).unwrap();
+        // Written after, it leaves the plain one as it was.
+        let (plain_text, spending_text) = (
+            std::fs::read_to_string(&plain).unwrap(),
+            std::fs::read_to_string(&spending).unwrap(),
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_ne!(plain, spending);
+        assert_eq!(plain.file_name().unwrap(), super::FILE);
+        assert_eq!(spending.file_name().unwrap(), super::USAGE_FILE);
+        assert_eq!(plain_text, script(false));
+        assert_eq!(spending_text, script(true));
+    }
+
+    #[test]
+    fn the_fake_says_what_a_turn_spent_only_if_asked() {
+        // Made-up figures, which would count in the user's real usage.
+        assert!(!script(false).contains("usage_update"));
+        assert!(!script(false).contains("inputTokens"));
+        assert!(script(true).contains("usage_update"));
+        assert!(script(true).contains("inputTokens"));
     }
 }

@@ -227,12 +227,23 @@ Each turn's usage goes into the ledger every CAF program shares,
 `~/.local/share/caf/usage/` (under `$XDG_DATA_HOME` if that's set), as the
 app `caf-debugger`, or into the folder `--usage` names: real usage, as a
 chat with Claude here is a real chat. The fake agent's turns say nothing
-of what they spent, so they aren't recorded. Its page may read
-summaries of every app's usage and set prices of your own. Prices are
+of what they spent, so they aren't recorded, unless asked (below). Its
+page may read summaries of every app's usage and set prices of your own:
+**Usage**, in its bar, opens the usage page, and the context ring by Send
+shows what the chat itself has used and spent. Prices are
 fetched from LiteLLM once a day; `--no-fetch-prices` never fetches them:
 
 ```sh
 cargo run -p caf-debugger -- --usage /tmp/usage --no-fetch-prices
+```
+
+The fake agent says what its turns spent only with `--fake-usage`: it
+makes the figures up (a chat's first turn costs $0.0125), and with the
+shared ledger they would count in your real usage. Give it a ledger of its
+own to try the usage page with them:
+
+```sh
+cargo run -p caf-debugger -- --usage /tmp/usage --no-fetch-prices --fake-usage
 ```
 
 See [Usage](~caf/getting-started/usage).

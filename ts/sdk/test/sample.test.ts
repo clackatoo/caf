@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, test } from "vitest";
 
-import { CafError, Connection, type FromViewer, type ToViewer, type WatchEvent } from "../src/index.ts";
+import { CafError, Connection, type FromViewer, type ToViewer, type UsageQuery, type WatchEvent } from "../src/index.ts";
 import { FakeTransport } from "./transport.ts";
 
 const file = fileURLToPath(new URL("../../../samples/viewer/v1.json", import.meta.url));
@@ -19,6 +19,9 @@ const sample = JSON.parse(readFileSync(file, "utf8")) as {
 };
 const toViewer = <T extends ToViewer["type"]>(type: T) =>
   sample.to_viewer.filter((message): message is Extract<ToViewer, { type: T }> => message.type === type);
+
+/** A query, to ask for usage with. */
+const query: UsageQuery = { since: 1_800_000_000_000, until: 1_800_086_400_000, zone: "UTC", by: { type: "Day" }, apps: [], agents: [] };
 
 async function opened(): Promise<{ caf: Connection; link: FakeTransport }> {
   const link = new FakeTransport();
@@ -82,6 +85,29 @@ describe("version 1's sample", () => {
     expect(numbered(link.take())).toStrictEqual(numbered(expected));
   });
 
+  test("its usage requests are sent as CAF reads them", async () => {
+    const { caf, link } = await opened();
+    const expected = sample.from_viewer.filter((message) => message.type === "Usage" || message.type === "SetPrice");
+    expect(expected.map((message) => message.type)).toStrictEqual(["Usage", "SetPrice", "SetPrice"]);
+    for (const message of expected) {
+      if (message.type === "Usage") void caf.usage(message.value.query).catch(() => {});
+      else if (message.type === "SetPrice") void caf.setPrice(message.value.model, message.value.price).catch(() => {});
+    }
+    const numbered = (messages: FromViewer[]) =>
+      messages.map((message) => ({ ...message, value: { ...(message.value as object), request: 0 } }));
+    expect(numbered(link.take())).toStrictEqual(numbered(expected));
+  });
+
+  test("its summary is read whole, and answers the usage request it names", async () => {
+    const { caf, link } = await opened();
+    const [message] = toViewer("Usage");
+    const asking = caf.usage(message!.value.summary.query);
+    const [request] = link.take();
+    link.deliver({ type: "Usage", value: { ...message!.value, request: (request!.value as { request: number }).request } });
+    await expect(asking).resolves.toStrictEqual(message!.value.summary);
+    expect(link.closed).toBe(false);
+  });
+
   test("its chats are read, by their ids", async () => {
     const { caf, link } = await opened();
     const [picture] = toViewer("Picture");
@@ -143,7 +169,11 @@ describe("version 1's sample", () => {
           ? caf.restore(chat, "work")
           : outcome.type === "Sent"
             ? caf.send(chat, { parts: [] })
-            : caf.stop(chat);
+            : outcome.type === "NoLedger" || outcome.type === "BadQuery"
+              ? caf.usage(query)
+              : outcome.type === "PriceNotSet"
+                ? caf.setPrice("claude-haiku-5-5", null)
+                : caf.stop(chat);
       const [request] = link.take();
       link.deliver({ type: "Done", value: { ...value, request: (request!.value as { request: number }).request } });
       const settled = await asked.then(

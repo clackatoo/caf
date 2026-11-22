@@ -115,3 +115,18 @@ fn a_store_it_cant_write_in_stops_it_before_it_starts() {
     );
     assert!(!String::from_utf8_lossy(&output.stdout).contains("Open http"));
 }
+
+#[test]
+fn the_fake_saying_what_turns_spent_is_for_running_live() {
+    let output = Command::new(env!("CARGO_BIN_EXE_caf-debugger"))
+        .args(["--replay", "nowhere.jsonl", "--fake-usage"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        said.contains("--fake-usage is for running live, not replaying"),
+        "{said}"
+    );
+}

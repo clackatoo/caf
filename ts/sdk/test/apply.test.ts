@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { apply, type Change, type Chat, type Mismatch, type Settings } from "../src/index.ts";
+import { apply, type Change, type Chat, type Mismatch, type Settings, type Spend, type TurnUsage } from "../src/index.ts";
 import { busy, chat, model, question, tool, toolItem, turn, words } from "./chats.ts";
 
 /** Freezes a value all the way down, so any change to it throws. */
@@ -206,6 +206,43 @@ describe("apply", () => {
     const after = applied(before, { type: "Usage", value: usage });
     expect(after.usage).toStrictEqual(usage);
     expect(after.turns).toBe(before.turns);
+  });
+
+  test("TurnSpent records what a turn spent, sharing every other turn", () => {
+    const before = busy();
+    const spent: TurnUsage = {
+      models: [{ model: "claude-haiku-5-5", tokens: { input: 10, cache_read: 2, cache_write: 1, output: 5, thinking: null } }],
+      cost: { amount: 0.01, currency: "USD" },
+      fast: false,
+    };
+    const after = applied(before, { type: "TurnSpent", value: { turn: 1001, usage: spent } });
+    expect(after.turns[0]!.spent).toStrictEqual(spent);
+    expect(after.turns[0]!.items).toBe(before.turns[0]!.items);
+    expect(after.turns[1]).toBe(before.turns[1]);
+    expect(after.questions).toBe(before.questions);
+  });
+
+  test("TurnSpent for a turn the chat lacks is a mismatch", () => {
+    const spent: TurnUsage = { models: [], cost: null, fast: true };
+    expect(mismatch(busy(), { type: "TurnSpent", value: { turn: 1100, usage: spent } })).toStrictEqual({
+      type: "NoTurn",
+      value: 1100,
+    });
+  });
+
+  test("Spend replaces what the chat has spent whole, sharing everything else", () => {
+    const before = busy();
+    const spend: Spend = {
+      tokens: { input: 100, cache_read: 20, cache_write: 10, output: 50, thinking: 7 },
+      reported: 0.5,
+      estimated: 0.25,
+      unpriced: 3,
+      turns: 2,
+    };
+    const after = applied(before, { type: "Spend", value: spend });
+    expect(after.spend).toStrictEqual(spend);
+    expect(after.turns).toBe(before.turns);
+    expect(after.usage).toBe(before.usage);
   });
 
   test("Settings replaces the chat's settings whole, sharing everything else", () => {
