@@ -370,13 +370,13 @@ async fn the_viewer_is_live_only_and_locked_too() {
 async fn the_recording_downloads_in_whole_lines_with_the_token() {
     let dir = Dir::new("recording");
     let path = dir.0.join("2026-11-20T10-00-00Z.jsonl");
-    std::fs::write(&path, "{\"caf_recording\":2}\n{\"now\":").unwrap();
+    std::fs::write(&path, "{\"caf_recording\":3}\n{\"now\":").unwrap();
     let recording = path.clone();
     let server = Server::start(move |app| app.recording = Some(recording)).await;
     let target = format!("/recording?token={}", server.token);
     let (status, head, body) = server.get(&target, None).await;
     assert_eq!(status, 200, "a download link sends no Origin");
-    assert_eq!(body, b"{\"caf_recording\":2}\n");
+    assert_eq!(body, b"{\"caf_recording\":3}\n");
     assert!(
         head.contains(
             "content-disposition: attachment; filename=\"caf-2026-11-20t10-00-00z.jsonl\""
