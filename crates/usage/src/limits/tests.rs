@@ -377,6 +377,7 @@ fn a_pipe_where_limits_should_be_never_hangs() {
 
     // Nor a pipe where the lock should be.
     std::fs::remove_file(file(folder.path())).unwrap();
+    std::fs::remove_file(limits_folder.join(".lock")).unwrap();
     crate::testing::pipe(&limits_folder.join(".lock"));
     let path = folder.path().to_owned();
     let tried = crate::testing::within(limit, move || {
