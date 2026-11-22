@@ -1013,14 +1013,20 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         let agent = whole.agent.clone();
         // It's on no connection while archived: back on one, idle, as a
-        // restored chat is, its agent started when a message is sent.
-        let conn = self.conn_for(chat, &agent);
-        let old = self
-            .runs
-            .get_mut(&chat)
-            .map(|run| std::mem::replace(&mut run.conn, conn));
-        if let Some(old) = old.filter(|old| *old != conn) {
-            self.tidy(old);
+        // restored chat is, its agent started when a message is sent; but
+        // for an agent the host no longer offers, which no message can be
+        // sent to.
+        if self.agents.contains_key(&agent) {
+            let conn = self.conn_for(chat, &agent);
+            let old = (self.runs.get_mut(&chat)).map(|run| std::mem::replace(&mut run.conn, conn));
+            if let Some(old) = old.filter(|old| *old != conn) {
+                self.tidy(old);
+            }
+        }
+        // What its last session said of its settings is forgotten, as a
+        // restored chat's is: a choice is checked as its session opens.
+        if let Some(run) = self.runs.get_mut(&chat) {
+            run.choosing = Choosing::default();
         }
         self.set_state(chat, ChatState::Idle);
         self.record(chat, Change::Archived(None));

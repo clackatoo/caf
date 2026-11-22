@@ -318,7 +318,10 @@ end.
 A recording copied while CAF was still writing it may end partway through
 a line: the replay stops before it. Any other line that isn't one of CAF's
 events, such as one from a newer CAF, makes the debugger refuse the file,
-naming the line, since the replay would be wrong from there on.
+naming the line, since the replay would be wrong from there on. A
+recording of another version of the format is refused too, saying which:
+until CAF is released, only the debugger of the CAF that made a recording
+replays it.
 
 ### What a recording holds
 

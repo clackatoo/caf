@@ -1452,7 +1452,7 @@ fn traces_with(s: &mut Samples, live: &str) {
     let mut lines = live.lines();
     let header = lines.next().expect("a header");
     s.raw(
-        "{ caf_recording: 2, host: T.Host, agents: Array<T.AgentSpec> }",
+        "{ caf_recording: 3, host: T.Host, agents: Array<T.AgentSpec> }",
         header,
     );
     let header: Header = serde_json::from_str(header).expect("the header reads");

@@ -24,7 +24,8 @@ use super::state::{Conn, Learn, Open, Purpose, Standing};
 use super::{Core, Refused, report};
 use crate::change::Change;
 use crate::chat::{
-    AppData, AppItem, ChatState, Failure, FailureReason, ItemKind, Lost, Note, Remedy, TurnLife,
+    AppData, AppItem, ChatState, Failure, FailureReason, Incompatible, ItemKind, Lost, Note,
+    Remedy, TurnLife,
 };
 use crate::directive::{Directive, Level};
 use crate::host::Grouping;
@@ -936,6 +937,8 @@ pub(super) fn lost_why(lost: &Lost) -> LearnFailure {
         },
         Lost::Restarted => LearnFailure::Restarted,
         Lost::ShutDown => LearnFailure::ShutDown,
+        // Its answer to `initialize` couldn't be read.
+        Lost::Incompatible(Incompatible::BadAnswer) => LearnFailure::Unreadable,
         Lost::Incompatible(_) => LearnFailure::Incompatible,
         _ => LearnFailure::Stopped,
     }
