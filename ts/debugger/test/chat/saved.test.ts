@@ -58,6 +58,11 @@ const pair = (one: SavedChat['state'] = { type: 'Saved' }, two: SavedChat['state
 ]
 
 describe('the saved chats', () => {
+  it('marks a chat archived as of when it was', () => {
+    const { container } = draw([saved(1, { closed: true, archived: NOON - 1000 })])
+    expect(text(rows(container)[0]!)).toContain('3 turns · archived')
+  })
+
   it("names each by its label, or else its first line, with its agent, folder, when it changed and its turns", () => {
     const { container } = draw([
       saved(1, { label: 'Release notes' }),
@@ -70,9 +75,10 @@ describe('the saved chats', () => {
     expect(empty!.querySelector('.name')?.textContent?.trim()).toBe('Untitled')
     expect(text(first!)).toContain('claude · project')
     expect(text(first!)).toContain('3 turns')
-    expect(text(first!)).not.toContain('closed')
+    expect(text(first!)).not.toContain('archived')
     expect(text(empty!)).toContain('claude · site')
-    expect(text(empty!)).toContain('1 turn · closed')
+    // Saved before CAF kept when it was archived: closed is archived.
+    expect(text(empty!)).toContain('1 turn · archived')
     const when = first!.querySelector('time')!
     expect(when.getAttribute('datetime')).toBe(new Date(NOON).toISOString())
     expect(when.textContent?.trim()).toBe(new Date(NOON).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }))

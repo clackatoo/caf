@@ -11,7 +11,7 @@ import { openThenChoose } from '../../src/chat/actions.ts'
 import ChatView from '../../src/chat/ChatView.svelte'
 import { runs } from '../../src/chat/settings.ts'
 import { choiceText, failureText, noteText, refusedText } from '../../src/chat/words.ts'
-import { actions, chat, chatId, draw, item, life, status, turn } from './build.ts'
+import { actions, chat, chatId, draw, item, life, NOON, status, turn } from './build.ts'
 
 afterEach(cleanup)
 
@@ -209,8 +209,11 @@ describe("the agent's settings", () => {
     expect((screen.getByRole('checkbox', { name: 'Fast mode' }) as HTMLInputElement).disabled).toBe(true)
   })
 
-  it('chooses nothing in a closed chat', () => {
-    draw(chat({ state: { type: 'Closed' }, settings: { offered: offered(), chosen: [], own: [] } }))
+  it('chooses nothing in an archived chat, restored or not, as CAF refuses it', () => {
+    draw(chat({ state: { type: 'Closed' }, archived: NOON, settings: { offered: offered(), chosen: [], own: [] } }))
+    expect(select('Model').disabled).toBe(true)
+    cleanup()
+    draw(chat({ state: { type: 'Idle' }, archived: NOON, settings: { offered: offered(), chosen: [], own: [] } }))
     expect(select('Model').disabled).toBe(true)
   })
 
@@ -278,9 +281,9 @@ describe('before the session opens', () => {
     expect(learn.getAttribute('aria-disabled')).toBe('true')
     await fireEvent.click(learn)
     expect(actions.learnSettings).toHaveBeenCalledOnce()
-    await rerender({ agent: at({ type: 'Failed', value: { type: 'CouldNotStart', value: { error: 'It wouldn’t start.' } } }) })
+    await rerender({ agent: at({ type: 'Failed', value: { type: 'StartTimedOut' } }) })
     expect(container.querySelector('.caf-settings [role=status]')).toBe(said)
-    expect(said.textContent).toContain("couldn't be learned: it couldn't start: It wouldn’t start.")
+    expect(said.textContent).toBe("CAF couldn't learn which models and settings claude offers. claude didn't start in time.")
     await rerender({ agent: at({ type: 'Known', value: offered() }) })
     await waitFor(() => expect(document.activeElement).toBe(select('Model')))
   })
@@ -289,10 +292,45 @@ describe('before the session opens', () => {
     const learning = draw(opening, { agent: status({ type: 'Host' }, undefined, false, { type: 'Learning' }) })
     expect(learning.container.querySelector('.caf-settings [role=status]')?.textContent).toContain('Learning what the agent offers')
     cleanup()
-    const failed = draw(opening, { agent: status({ type: 'Host' }, undefined, false, { type: 'Failed', value: { type: 'CouldNotStart', value: { error: 'It wouldn’t start.' } } }) })
-    expect(failed.container.querySelector('.caf-settings')?.textContent).toContain("couldn't be learned: it couldn't start: It wouldn’t start.")
+    const failed = draw(opening, { agent: status({ type: 'Host' }, undefined, false, { type: 'Failed', value: { type: 'CouldNotStart', value: { error: 'No such file or directory (os error 2)' } } }) })
+    expect(failed.container.querySelector('.caf-settings [role=status]')?.textContent).toBe(
+      "CAF couldn't learn which models and settings claude offers. claude couldn't be started.",
+    )
+    // What the system said, apart, as its own.
+    expect(failed.container.querySelector('.caf-settings .said.system code')?.textContent).toBe('No such file or directory (os error 2)')
     await fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     expect(failed.actions.learnSettings).toHaveBeenCalledOnce()
+  })
+
+  it("quotes what the agent said refusing, as the agent's", () => {
+    const { container } = draw(opening, { agent: status({ type: 'Host' }, undefined, false, { type: 'Failed', value: { type: 'Refused', value: { message: 'Internal error' } } }) })
+    expect(container.querySelector('.caf-settings [role=status]')?.textContent).toContain('claude refused to open a chat.')
+    expect(container.querySelector('.caf-settings .said.agent')?.textContent).toBe('claude said: “Internal error”')
+  })
+
+  it.each([
+    [{ type: 'NotInstalled' }, "claude isn't installed.", true],
+    [{ type: 'NotLookedYet' }, "CAF hadn't checked yet whether claude is installed.", true],
+    [{ type: 'SigningIn' }, 'claude was being signed in to.', true],
+    [{ type: 'SignInNeeded' }, 'claude wants you to sign in first.', true],
+    [{ type: 'CouldNotStart', value: { error: '' } }, "claude couldn't be started.", true],
+    [{ type: 'Refused', value: { message: '' } }, 'claude refused to open a chat.', true],
+    [{ type: 'StartTimedOut' }, "claude didn't start in time.", true],
+    [{ type: 'OpenTimedOut' }, "claude didn't open a chat in time.", true],
+    [{ type: 'Unreadable' }, "claude's answer made no sense.", true],
+    [{ type: 'Restarted' }, 'claude was restarted meanwhile.', true],
+    [{ type: 'Stopped' }, 'claude stopped.', true],
+    [{ type: 'ShutDown' }, 'The app was closing.', false],
+    [{ type: 'Incompatible' }, "This version of claude can't talk to this app.", false],
+    [{ type: 'OwnTools' }, "claude can't be used: its own tools can't be turned off.", false],
+    [{ type: 'Moonset' }, "Why is a reason this viewer doesn't know (Moonset).", true],
+  ])("says why it couldn't learn them, %j, and offers to try again only where that could help", (why, says, again) => {
+    const { container } = draw(opening, { agent: status({ type: 'Host' }, undefined, false, { type: 'Failed', value: why as never }) })
+    expect(container.querySelector('.caf-settings [role=status]')?.textContent).toBe(
+      `CAF couldn't learn which models and settings claude offers. ${says}`,
+    )
+    expect(container.querySelector('.caf-settings .said')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Try again' }) !== null).toBe(again)
   })
 
   it('says why learning failed to start', async () => {
@@ -368,14 +406,20 @@ describe('the model each turn used', () => {
 
 describe('the words for settings', () => {
   it.each([
-    [{ type: 'AgentChanged', value: sonnet }, 'The agent changed by itself to the model sonnet, and this chat follows it.'],
+    // By the agent's name for the choice, where it said one, else by its id.
+    [{ type: 'AgentChanged', value: { choice: sonnet, name: 'Sonnet 4.6' } }, 'The agent changed by itself to the model Sonnet 4.6, and this chat follows it.'],
+    [{ type: 'AgentChanged', value: { choice: sonnet, name: null } }, 'The agent changed by itself to the model sonnet, and this chat follows it.'],
     [
-      { type: 'NotOffered', value: { kind: { type: 'Fast' }, value: { type: 'Switch', value: true } } },
+      { type: 'NotOffered', value: { choice: { kind: { type: 'Fast' }, value: { type: 'Switch', value: true } }, name: null } },
       "The agent doesn't offer fast mode, so that choice was dropped: the app's default, or else the agent's own, applies.",
     ],
     [
-      { type: 'NotApplied', value: { kind: { type: 'Effort' }, value: { type: 'Choice', value: 'max' } } },
-      "The agent refused the effort max, so that choice was dropped: the app's default, or else the agent's own, applies.",
+      { type: 'NotOffered', value: { choice: { kind: { type: 'Model' }, value: { type: 'Choice', value: 'claude-opus-4-8' } }, name: null } },
+      "The agent doesn't offer the model claude-opus-4-8, so that choice was dropped: the app's default, or else the agent's own, applies.",
+    ],
+    [
+      { type: 'NotApplied', value: { choice: { kind: { type: 'Effort' }, value: { type: 'Choice', value: 'max' } }, name: 'Max' } },
+      "The agent refused the effort Max, so that choice was dropped: the app's default, or else the agent's own, applies.",
     ],
   ])('draws the note %j', (note, says) => {
     const { container } = draw(chat({ turns: [turn({ items: [item({ type: 'Note', value: note as never })] })] }))

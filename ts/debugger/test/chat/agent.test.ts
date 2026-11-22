@@ -95,6 +95,13 @@ describe('a chat waiting for its agent', () => {
         await fireEvent.click(button('Try again'))
         expect(given.install).toHaveBeenCalledOnce()
       }
+      // Only what the user can put on the machine is worth looking again for.
+      const check = install.type === 'Cannot' && (install.value.type === 'Node' || install.value.type === 'Npm')
+      expect(screen.queryByRole('button', { name: 'Check again' }) !== null).toBe(check)
+      if (check) {
+        await fireEvent.click(button('Check again'))
+        expect(given.checkAgain).toHaveBeenCalledOnce()
+      }
       await fireEvent.click(button('Not now'))
       expect(given.stop).toHaveBeenCalledOnce()
     })
@@ -280,7 +287,7 @@ describe('what the host lets this viewer do', () => {
   const failed = life('Failed', { reason: { type: 'SignInNeeded' }, agent_said: null, remedy: { type: 'SignIn' } })
   const missing = status({ type: 'Missing', value: { size: 626_797_331 } }, { type: 'SignedOut' }, true)
 
-  it('without agents: says what is happening, but offers no Install, Try again, Stop or Sign in', () => {
+  it('without agents: says what is happening, but offers no Install, Try again, Check again, Stop or Sign in', () => {
     const may = { act: true, agents: false }
     const { container } = draw(chat({ state: waiting, turns: [turn({ life: failed })] }), { agent: missing, may })
     expect(text(container)).toContain("claude isn't installed. The app can install it, which downloads about 627 MB.")
@@ -300,6 +307,9 @@ describe('what the host lets this viewer do', () => {
       may,
     })
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+    cleanup()
+    draw(chat({ state: waiting }), { agent: status({ type: 'Cannot', value: { type: 'Npm' } }), may })
+    expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull()
   })
 
   it('without agents: a sign-in under way is said, with no link, code or paste box', () => {

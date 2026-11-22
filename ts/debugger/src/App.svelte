@@ -102,6 +102,7 @@
     answer: (question: QuestionId, answer: Answer) => live?.caf.answer(question, answer),
     sendAgain: (message: DeepReadonly<UserMessage>) => live?.caf.send(need(selected), structuredClone(message) as UserMessage),
     close: () => live?.caf.close(need(selected)),
+    unarchive: () => live?.caf.unarchive(need(selected)),
     install: () => live?.caf.install(agentOf(chat)),
     stopInstall: () => live?.caf.stopInstall(agentOf(chat)),
     signIn: () => live?.caf.signIn(agentOf(chat)),
@@ -116,6 +117,7 @@
       notice = kinds.length === 0 ? null : { ...notice, kinds }
     },
     learnSettings: () => live?.caf.learnSettings(agentOf(chat)),
+    checkAgain: () => live?.caf.checkAgain(agentOf(chat)),
   }
 
   const agentActions: AgentActions = {
@@ -125,6 +127,7 @@
     paste: (agent: AgentName, text: string) => live?.caf.paste(agent, text),
     stopSignIn: (agent: AgentName) => live?.caf.stopSignIn(agent),
     signOut: (agent: AgentName) => live?.caf.signOut(agent),
+    checkAgain: (agent: AgentName) => live?.caf.checkAgain(agent),
   }
 
   /** The agents on offer, live. Looking back, or replaying, there are none to show: a recording holds no statuses. */
@@ -162,9 +165,9 @@
    * that chat until each kind that failed is chosen, or it closes.
    */
   let notice = $state<{ chat: ChatId; kinds: string[]; text: string } | null>(null)
-  // A closed chat can't be chosen for: what it said is done with.
+  // An archived chat can't be chosen for: what it said is done with.
   $effect(() => {
-    if (notice !== null && chat?.id === notice.chat && !lookingBack && chat.state.type === 'Closed') notice = null
+    if (notice !== null && chat?.id === notice.chat && !lookingBack && chat.archived !== null) notice = null
   })
 
   /** A sentence as it reads after a colon: "The agent …." as "the agent …". */
@@ -331,7 +334,7 @@
             actions={chatActions}
             readOnly={!actable}
             {readOnlyWhy}
-            notice={!lookingBack && notice?.chat === chat.id && chat.state.type !== 'Closed' ? notice.text : null}
+            notice={!lookingBack && notice?.chat === chat.id && chat.archived === null ? notice.text : null}
             openUsage={usable ? openUsage : undefined}
           />
         {:else}

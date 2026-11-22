@@ -12,12 +12,15 @@
 
   let {
     model,
+    name = model,
     priced,
     fetched,
     setPrice,
   }: {
     /** The model, by the agent's id for it. */
     model: string
+    /** Its name to show, from the summary's `names`; its id, if it has none. */
+    name?: string
     /** Its price, if the summary had one. */
     priced: PricedModel | null
     /** When LiteLLM's table was last fetched, if ever. */
@@ -93,9 +96,15 @@
   }
 </script>
 
-<div class="price" role="group" aria-label="The price of {model}">
+<!-- A model is shown by its name, if it has one, then by the id its
+     price goes by. -->
+{#snippet named(id: string)}
+  {#if name !== model}{name} (<code>{id}</code>){:else}<code>{id}</code>{/if}
+{/snippet}
+
+<div class="price" role="group" aria-label="The price of {name}">
   {#if priced === null}
-    <p>CAF knows no price for <code>{model}</code>, so turns on it that didn't report a cost aren't counted in the cost.</p>
+    <p>CAF knows no price for {@render named(model)}, so turns on it that didn't report a cost aren't counted in the cost.</p>
   {:else}
     <p>
       {source}{#if priced.model !== model}, as <code>{priced.model}</code>{/if}. In US dollars per million tokens:
@@ -111,7 +120,7 @@
   {#if setPrice !== undefined}
     {#if editing}
       <form onsubmit={submit}>
-        <p class="hint">Your own price for <code>{target}</code>, in US dollars per million tokens. Every CAF app on this computer uses it.</p>
+        <p class="hint">Your own price for {@render named(target)}, in US dollars per million tokens. Every CAF app on this computer uses it.</p>
         <div class="fields">
           {#each KINDS as kind (kind.key)}
             <label>{kind.label}<input type="number" min="0" step="any" bind:value={draft[kind.key]} /></label>

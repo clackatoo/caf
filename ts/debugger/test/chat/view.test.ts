@@ -6,7 +6,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/sv
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CafError, type Spend } from '@clackatoo/caf'
 import ChatView from '../../src/chat/ChatView.svelte'
-import { actions, chat, chatId, draw, item, life, lost, question, turn, words } from './build.ts'
+import { actions, chat, chatId, draw, item, life, lost, NOON, question, turn, words } from './build.ts'
 
 afterEach(cleanup)
 
@@ -41,7 +41,7 @@ describe('the chat state', () => {
   })
 
   it('says the chat is closed, and offers no Close', () => {
-    const { container } = draw(chat({ state: { type: 'Closed' } }))
+    const { container } = draw(chat({ state: { type: 'Closed' }, archived: NOON }))
     expect(text(container)).toContain('This chat is closed.')
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
   })
@@ -530,6 +530,60 @@ describe('the composer', () => {
     const { actions } = draw(chat())
     await fireEvent.click(button('Close'))
     expect(actions.close).toHaveBeenCalled()
+  })
+})
+
+describe('an archived chat', () => {
+  // Restored, it's idle, and archived still: archiving sticks.
+  const archived = () => chat({ state: { type: 'Idle' }, archived: NOON })
+
+  it('says so, locks the composer, and offers Unarchive in place of Close', async () => {
+    const { container, actions } = draw(archived())
+    expect(container.querySelector('header .state')?.textContent?.trim()).toBe('Archived')
+    expect(screen.queryByRole('textbox', { name: 'Message' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
+    expect(screen.getByText('This chat is archived.')).toBeTruthy()
+    // The ring stays: it only shows.
+    expect(container.querySelector('.composer .ring')).toBeTruthy()
+    await fireEvent.click(button('Unarchive'))
+    expect(actions.unarchive).toHaveBeenCalledOnce()
+  })
+
+  it('can be written in again once unarchived, here or by a message sent to it elsewhere', async () => {
+    const { rerender } = draw(archived())
+    await rerender({ chat: { ...archived(), archived: null } })
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Unarchive' })).toBeNull()
+    expect(button('Close').disabled).toBe(false)
+  })
+
+  it("offers no settings to choose, nor what CAF knows of the agent's", () => {
+    const { container } = draw(archived(), {
+      agent: { name: 'claude', install: { type: 'Host' }, sign_in: { type: 'Unknown' }, can_sign_in: false, own_tools_off: true, limits: { windows: [], extra_usage: null, cleared: null }, settings: { type: 'Unknown' } },
+    })
+    expect(container.querySelector('.caf-settings')).toBeNull()
+  })
+
+  it('says why unarchiving failed', async () => {
+    const given = actions()
+    given.unarchive.mockRejectedValue(new CafError({ type: 'NotAllowed' }))
+    const { container } = draw(archived(), { actions: given })
+    await fireEvent.click(button('Unarchive'))
+    await waitFor(() => expect(container.querySelector('[role=alert]')).toBeTruthy())
+  })
+
+  it('offers no Unarchive to a viewer that may not act, while read-only, or to a host that gives none', () => {
+    draw(archived(), { may: { act: false, agents: true, usage: true } })
+    expect(screen.queryByRole('button', { name: 'Unarchive' })).toBeNull()
+    cleanup()
+    draw(archived(), { readOnly: true })
+    expect(screen.queryByRole('button', { name: 'Unarchive' })).toBeNull()
+    cleanup()
+    const { unarchive: _, ...without } = actions()
+    draw(archived(), { actions: without })
+    expect(screen.queryByRole('button', { name: 'Unarchive' })).toBeNull()
+    expect(screen.getByText('This chat is archived.')).toBeTruthy()
   })
 })
 

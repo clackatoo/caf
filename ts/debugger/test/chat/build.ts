@@ -70,13 +70,14 @@ export function question(kind: Question['kind']): Question {
 }
 
 /** Actions that resolve, and record their calls. */
-export function actions(): { [K in keyof ChatActions]: ReturnType<typeof vi.fn> } & ChatActions {
+export function actions(): { [K in keyof ChatActions]-?: ReturnType<typeof vi.fn> } & ChatActions {
   return {
     send: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
     answer: vi.fn(async () => {}),
     sendAgain: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
+    unarchive: vi.fn(async () => {}),
     install: vi.fn(async () => {}),
     stopInstall: vi.fn(async () => {}),
     signIn: vi.fn(async () => {}),
@@ -84,6 +85,7 @@ export function actions(): { [K in keyof ChatActions]: ReturnType<typeof vi.fn> 
     stopSignIn: vi.fn(async () => {}),
     setSetting: vi.fn(async () => {}),
     learnSettings: vi.fn(async () => {}),
+    checkAgain: vi.fn(async () => {}),
   }
 }
 

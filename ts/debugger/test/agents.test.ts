@@ -18,6 +18,7 @@ function actions(): { [K in keyof AgentActions]: ReturnType<typeof vi.fn> } & Ag
     paste: vi.fn(async () => {}),
     stopSignIn: vi.fn(async () => {}),
     signOut: vi.fn(async () => {}),
+    checkAgain: vi.fn(async () => {}),
   }
 }
 
@@ -70,9 +71,13 @@ describe('the Agents panel', () => {
     expect(text(row('agent-4'))).toContain('Installed, version 0.98.0')
     expect(text(row('agent-4'))).toContain('Signed in with an account')
     expect(buttons('agent-4')).toEqual(['Sign in', 'Sign out'])
-    // agent-5: can't, for want of Node.
+    // agent-5: can't, for want of Node, so CAF may look again once it's there.
     expect(text(row('agent-5'))).toContain('it needs Node 22 or newer, and this machine has Node 20.')
-    expect(buttons('agent-5')).toEqual([])
+    expect(buttons('agent-5')).toEqual(['Check again'])
+    // agent-7: can't, for want of npm, the same.
+    expect(buttons('agent-7')).toEqual(['Check again'])
+    // agent-8: there's no build for the machine, which nothing on it changes.
+    expect(buttons('agent-8')).not.toContain('Check again')
     // agent-9: CAF has no recipe for it.
     expect(text(row('agent-9'))).toContain('CAF has no recipe for installing it')
     expect(buttons('agent-9')).toEqual([])
@@ -97,6 +102,16 @@ describe('the Agents panel', () => {
     expect(given.stopInstall).toHaveBeenCalledWith('b')
     expect(given.signIn).toHaveBeenCalledWith('c')
     expect(given.signOut).toHaveBeenCalledWith('d')
+  })
+
+  it('checks again, by the agent, where the machine lacks what installing it needs, and only with the right', async () => {
+    const node: AgentStatus = { ...statuses().find((agent) => agent.name === 'agent-6')! }
+    const { actions: given } = draw([node])
+    await fireEvent.click(screen.getByRole('button', { name: 'Check again whether agent-6 can be installed' }))
+    expect(given.checkAgain).toHaveBeenCalledWith('agent-6')
+    cleanup()
+    draw([node], { may: false })
+    expect(buttons('agent-6')).toEqual([])
   })
 
   it('shows the link, the code, and takes a paste, for the agent being signed in to', async () => {

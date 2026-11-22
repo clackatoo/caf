@@ -69,7 +69,8 @@
   /** The status of the chat's agent, if the host gave it, and it's this chat's agent's. */
   const status = $derived(agent?.name === chat.agent ? agent : undefined)
   const running = $derived(chat.turns.find((turn) => turn.life.type === 'Running' || turn.life.type === 'Stopping'))
-  const closed = $derived(chat.state.type === 'Closed')
+  /** Archived, as it stays, restored or not, until it's unarchived or sent to. */
+  const archived = $derived(chat.archived !== null)
   /** Whether anything can be done in the chat: it isn't read-only, and the host lets this viewer act. */
   const acting = $derived(!readOnly && may.act)
   let problem = $state<string | null>(null)
@@ -102,6 +103,13 @@
     const error = await attempt(actions.close)
     if (error !== null) problem = errorText(error)
   }
+
+  async function unarchive() {
+    if (!acting || actions.unarchive === undefined) return
+    problem = null
+    const error = await attempt(actions.unarchive)
+    if (error !== null) problem = errorText(error)
+  }
 </script>
 
 <!-- Drawn afresh for another chat, so nothing typed or shown for one (a
@@ -115,8 +123,10 @@
       <!-- Cut from the left, so the end of the path shows. -->
       <span class="cwd" title={chat.cwd}><bdi>{chat.cwd}</bdi></span>
     </div>
-    <span class="state" data-state={chat.state.type}>{stateLabel(chat.state)}</span>
-    {#if !closed && may.act}
+    <span class="state" data-state={chat.state.type} data-archived={archived}>
+      {archived ? 'Archived' : stateLabel(chat.state)}
+    </span>
+    {#if !archived && chat.state.type !== 'Closed' && may.act}
       <button type="button" class="close" disabled={readOnly} onclick={close}>Close</button>
     {/if}
   </header>
@@ -141,6 +151,7 @@
       notNow={actions.stop}
       paste={actions.paste}
       stopSignIn={actions.stopSignIn}
+      checkAgain={actions.checkAgain}
     />
   {/if}
 
@@ -163,9 +174,10 @@
   <Questions questions={chat.questions} readOnly={!acting} answer={actions.answer} />
   <SettingsBar
     settings={chat.settings}
-    known={closed ? undefined : status?.settings}
+    agent={chat.agent}
+    known={archived ? undefined : status?.settings}
     held={running !== undefined || chat.state.type !== 'Open'}
-    disabled={!acting || closed}
+    disabled={!acting || archived}
     canLearn={acting && may.agents}
     set={actions.setSetting}
     learn={actions.learnSettings}
@@ -173,12 +185,18 @@
   <Composer
     running={running !== undefined}
     stopping={running?.life.type === 'Stopping'}
-    disabled={!acting || closed}
+    disabled={!acting || archived}
+    locked={archived ? 'This chat is archived.' : null}
     send={(text) => actions.send({ parts: [{ type: 'Text', value: text }] })}
     stop={actions.stop}
   >
     {#snippet beside()}
       <Ring usage={chat.usage} spend={chat.spend} {openUsage} />
+    {/snippet}
+    {#snippet unlock()}
+      {#if acting && actions.unarchive !== undefined}
+        <button type="button" class="unarchive" onclick={unarchive}>Unarchive</button>
+      {/if}
     {/snippet}
   </Composer>
 </section>
@@ -242,7 +260,8 @@
   .state[data-state='Lost'] {
     color: var(--caf-warn);
   }
-  .close {
+  .close,
+  .unarchive {
     font: inherit;
     font-size: 0.85em;
     padding: 0.2em 0.7em;
@@ -251,6 +270,9 @@
     background: var(--caf-bg);
     color: var(--caf-text);
     cursor: pointer;
+  }
+  .unarchive {
+    align-self: center;
   }
   .close:disabled {
     opacity: 0.5;

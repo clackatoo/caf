@@ -2,7 +2,9 @@
   // Where the user writes. Enter sends, Shift+Enter starts a new line.
   // While a turn runs, a message sent waits behind it (CAF queues it), so
   // Send stays on; Stop stops the running turn. Beside the buttons, the
-  // app may put something of the chat's: the context ring.
+  // app may put something of the chat's: the context ring. A chat nothing
+  // can be written in, such as an archived one, keeps the box, saying why,
+  // with what would let it be written in again, such as Unarchive.
   import type { Snippet } from 'svelte'
   import { attempt } from './actions.ts'
   import { errorText } from './words.ts'
@@ -11,20 +13,26 @@
     running,
     stopping,
     disabled,
+    locked = null,
     send,
     stop,
     beside,
+    unlock,
   }: {
     /** A turn is running, so a message would wait, and Stop is on. */
     running: boolean
     /** The running turn has been asked to stop. */
     stopping: boolean
-    /** Nothing can be sent: looking back, or the chat is closed. */
+    /** Nothing can be sent: looking back, or the chat is archived. */
     disabled: boolean
+    /** Why nothing can be written, said in the box in place of the message, such as "This chat is archived.". */
+    locked?: string | null
     send: (text: string) => Promise<unknown> | void
     stop: () => Promise<unknown> | void
     /** Drawn before the buttons, and never disabled: it only shows. */
     beside?: Snippet | undefined
+    /** Drawn after why it's locked, while it is: what would unlock it, such as Unarchive. */
+    unlock?: Snippet | undefined
   } = $props()
 
   let text = $state('')
@@ -70,23 +78,29 @@
 >
   {#if problem !== null}<div class="problem" role="alert">{problem}</div>{/if}
   <div class="row">
-    <textarea
-      bind:value={text}
-      {onkeydown}
-      {disabled}
-      rows="2"
-      aria-label="Message"
-      placeholder={disabled ? '' : running ? 'Message: it waits for the running turn' : 'Message'}
-    ></textarea>
-    {@render beside?.()}
-    <div class="buttons">
-      <button type="submit" class="send" disabled={disabled || sending || text.trim() === ''}>Send</button>
-      {#if running}
-        <button type="button" class="stop" disabled={disabled || stopping} onclick={halt}>
-          {stopping ? 'Stopping…' : 'Stop'}
-        </button>
-      {/if}
-    </div>
+    {#if locked !== null}
+      <div class="locked" role="status"><span class="lock" aria-hidden="true">🔒</span>{locked}</div>
+      {@render beside?.()}
+      {@render unlock?.()}
+    {:else}
+      <textarea
+        bind:value={text}
+        {onkeydown}
+        {disabled}
+        rows="2"
+        aria-label="Message"
+        placeholder={disabled ? '' : running ? 'Message: it waits for the running turn' : 'Message'}
+      ></textarea>
+      {@render beside?.()}
+      <div class="buttons">
+        <button type="submit" class="send" disabled={disabled || sending || text.trim() === ''}>Send</button>
+        {#if running}
+          <button type="button" class="stop" disabled={disabled || stopping} onclick={halt}>
+            {stopping ? 'Stopping…' : 'Stop'}
+          </button>
+        {/if}
+      </div>
+    {/if}
   </div>
 </form>
 
@@ -148,5 +162,14 @@
     color: var(--caf-error);
     font-size: 0.9em;
     margin-bottom: 0.4em;
+  }
+  .locked {
+    flex: 1;
+    align-self: center;
+    padding: 0.5em 0.7em;
+    color: var(--caf-muted);
+  }
+  .lock {
+    margin-right: 0.4em;
   }
 </style>

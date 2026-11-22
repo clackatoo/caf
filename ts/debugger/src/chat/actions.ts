@@ -27,8 +27,13 @@ export interface ChatActions {
   answer(question: QuestionId, answer: Answer): Promise<unknown> | void
   /** A failed turn's remedy, Send again: send its message once more. */
   sendAgain(message: DeepReadonly<UserMessage>): Promise<unknown> | void
-  /** Close the chat. */
+  /** Close the chat: archive it. */
   close(): Promise<unknown> | void
+  /**
+   * Unarchive the chat. Without it, an archived chat offers no Unarchive.
+   * Sending to an archived chat unarchives it too.
+   */
+  unarchive?: (() => Promise<unknown> | void) | undefined
   /** Install the chat's agent. */
   install(): Promise<unknown> | void
   /** Stop installing the chat's agent. */
@@ -43,6 +48,12 @@ export interface ChatActions {
   paste(text: string): Promise<unknown> | void
   /** Stop signing in to the chat's agent. */
   stopSignIn(): Promise<unknown> | void
+  /**
+   * Have CAF look at the machine again, as the user may have changed it,
+   * such as by installing Node. Without it, an agent that can't be
+   * installed for want of something on the machine offers no Check again.
+   */
+  checkAgain?: (() => Promise<unknown> | void) | undefined
   /**
    * Choose a setting of the chat's agent, such as its model, by the
    * agent's own id. The chat's settings show it waiting until the agent

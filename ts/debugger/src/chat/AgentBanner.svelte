@@ -15,7 +15,7 @@
   import type { AgentStatus, DeepReadonly } from '@clackatoo/caf'
   import { attempt } from './actions.ts'
   import SignIn from './SignIn.svelte'
-  import { bytes, canRetry, cannotText, errorText, installed, tagOf } from './words.ts'
+  import { bytes, canCheckAgain, canRetry, cannotText, errorText, installed, tagOf } from './words.ts'
 
   let {
     name,
@@ -29,6 +29,7 @@
     notNow,
     paste,
     stopSignIn,
+    checkAgain,
   }: {
     /** The agent's name, as the chat has it. */
     name: string
@@ -48,6 +49,8 @@
     notNow: () => Promise<unknown> | void
     paste: (text: string) => Promise<unknown> | void
     stopSignIn: () => Promise<unknown> | void
+    /** Have CAF look at the machine again, where the agent can't be installed for want of something on it. Without it, no Check again. */
+    checkAgain?: (() => Promise<unknown> | void) | undefined
   } = $props()
 
   let busy = $state(false)
@@ -111,6 +114,8 @@
       <div class="buttons">
         {#if agents && canRetry(standing)}
           <button type="button" disabled={readOnly || busy} onclick={() => run(install)}>Try again</button>
+        {:else if agents && checkAgain !== undefined && canCheckAgain(standing)}
+          <button type="button" disabled={readOnly || busy} onclick={() => run(checkAgain)}>Check again</button>
         {/if}
         {#if act}
           <button type="button" class="quiet" disabled={readOnly || busy} onclick={() => run(notNow)}>Not now</button>

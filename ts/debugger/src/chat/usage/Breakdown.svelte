@@ -3,7 +3,7 @@
   // a click away; by app; or by day (hour, for the past 24h), split by
   // agent or by app.
   import type { ModelPrice, Summary } from '@clackatoo/caf'
-  import { cost, group, price, split, total } from '@clackatoo/caf'
+  import { cost, group, modelName, price, split, total } from '@clackatoo/caf'
   import { count, percent, tokens, usd } from '../figures.ts'
   import PriceCard from './PriceCard.svelte'
   import Switch from './Switch.svelte'
@@ -102,8 +102,9 @@
               <button
                 type="button"
                 class="model"
+                title={row.key}
                 aria-expanded={chosen === row.key}
-                onclick={() => (chosen = chosen === row.key ? null : row.key)}>{row.key}</button
+                onclick={() => (chosen = chosen === row.key ? null : row.key)}>{modelName(summary, row.key)}</button
               >
             {:else}
               <span class="key"><i style:background={colours.app.get(row.key)}></i>{row.key}</span>
@@ -128,7 +129,13 @@
           <tr class="detail">
             <td></td>
             <td colspan="4">
-              <PriceCard model={row.key} priced={price(summary, row.key)} fetched={summary.fetched} {setPrice} />
+              <PriceCard
+                model={row.key}
+                name={modelName(summary, row.key)}
+                priced={price(summary, row.key)}
+                fetched={summary.fetched}
+                {setPrice}
+              />
             </td>
           </tr>
         {/if}
