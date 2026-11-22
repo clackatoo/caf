@@ -29,3 +29,45 @@ impl Drop for Folder {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
+/// Makes a named pipe at `path`: what a reader that waits for a writer
+/// would hang on.
+pub(crate) fn pipe(path: &Path) {
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        path,
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::from_raw_mode(0o600),
+        0,
+    )
+    .expect("the pipe is made");
+}
+
+/// What `work` gives, failing the test if it takes longer than `limit`:
+/// so a test of something that mustn't hang fails rather than hangs.
+pub(crate) fn within<T: Send + 'static>(
+    limit: std::time::Duration,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = send.send(work());
+    });
+    receive
+        .recv_timeout(limit)
+        .expect("it ends in time, not hanging")
+}
+
+/// Takes the lock file at `path`, exclusively, through a file of its own:
+/// another holder, as far as `flock` goes, though in this program.
+pub(crate) fn hold(path: &Path) -> std::fs::File {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .expect("the lock opens");
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive).expect("it's held");
+    file
+}
