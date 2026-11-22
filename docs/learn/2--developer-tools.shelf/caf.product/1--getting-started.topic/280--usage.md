@@ -67,6 +67,7 @@ for the whole machine, shared by every CAF app on it.
   eyespy/2026-11.jsonl
   prices/own.json
   prices/litellm.json
+  limits/claude-agent-acp.json
 ```
 
 Each app has a folder, named for its host (`Host::new("eyespy", …)`), and
@@ -84,6 +85,14 @@ in a row is reported to the log (target `caf`). By the time
 `Caf::shutdown` returns, every line is written, or reported lost. A disk
 that has hung holds shutting down up for thirty seconds at most: then how
 many lines may be lost is reported, and CAF stops without them.
+
+The folder also keeps each agent profile's account limits, how much of
+the subscription's five hours and week is used, as the agent last said:
+a file per profile in `limits/`, so CAF has them as it starts, before the
+agent says again. Each save is merged with the file, window by window, the
+latest heard winning, so two apps never undo each other's news, and an app
+that finds news another kept in it takes it in. One that can't be kept is
+reported to the log, and costs only keeping them across restarts.
 
 ## Prices
 
