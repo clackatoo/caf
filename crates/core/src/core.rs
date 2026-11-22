@@ -12,6 +12,7 @@ mod saving;
 mod sessions;
 mod settings;
 mod setup;
+mod spending;
 mod state;
 mod timers;
 mod turns;
@@ -107,6 +108,9 @@ pub struct Core<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     wake: Option<Mono>,
     /// Chats changed since viewers were last told.
     dirty: BTreeSet<ChatId>,
+    /// The prices to estimate cost with, as the usage driver last gave
+    /// them.
+    prices: crate::usage::PriceTable,
     /// The host asked for everything to stop: nothing is started again
     /// until it asks for something new.
     shutting_down: bool,
@@ -334,6 +338,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             wake: None,
             dirty: BTreeSet::new(),
             shutting_down: false,
+            prices: crate::usage::PriceTable::default(),
             misfits: Vec::new(),
             #[cfg(test)]
             applied: BTreeMap::new(),
@@ -360,10 +365,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Event::Policy { ticket, answer } => self.policy_answered(now, ticket, answer, out),
             Event::Storage { ticket, event } => self.storage_event(now, ticket, event, out),
             Event::Setup { ticket, event } => self.setup_event(now, ticket, event, out),
-            Event::Prices(prices) => {
-                let _ = prices;
-                todo!("feature 6: keep the prices, and send every chat's spend again")
-            }
+            Event::Prices(prices) => self.prices_given(prices),
         }
         self.finish(now, out);
     }
@@ -918,7 +920,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// gave them ([`Event::Prices`]): none until it has.
     #[must_use]
     pub fn prices(&self) -> &crate::usage::PriceTable {
-        todo!()
+        &self.prices
     }
 
     /// Every chat, oldest first, as lists of chats show them: with the
@@ -1084,6 +1086,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             "next_id": self.ids.next,
             "first_id": self.ids.first,
             "shutting_down": self.shutting_down,
+            "prices": self.prices,
             "host": self.host,
             "agents": self.agents,
             "setup": self.setup,

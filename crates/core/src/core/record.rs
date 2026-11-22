@@ -233,8 +233,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
     }
 
-    /// Sets how full the agent's memory is.
+    /// Sets how full the agent's memory is, and keeps what its session
+    /// has cost, if it says.
     pub(super) fn set_usage(&mut self, chat: ChatId, usage: Usage) {
+        if let (Some(run), Some(cost)) = (self.runs.get_mut(&chat), &usage.cost) {
+            run.cost = Some(cost.clone());
+        }
         let Some(whole) = self.chats.get(&chat) else {
             return;
         };
