@@ -29,10 +29,13 @@
 //!    know, is left out of what's loaded and written back as it was after
 //!    those it read, until it goes as one it read would: heard before a
 //!    clearing, past its reset, or one of its kind heard later. Extra usage
-//!    this CAF can't read is kept over that it can if heard later.
+//!    this CAF can't read is kept over that it can if heard later; if its
+//!    `heard` isn't a number, so it can't be timed, it gives way to one
+//!    this CAF can read.
 //! 5. **No clock set ahead wins for long:** a window or extra usage heard
-//!    later than a minute from now is taken as heard a minute from now,
-//!    and a clearing later than now as now, and kept so: so a clearing
+//!    later than a minute from now, whether this CAF can read it or not,
+//!    is taken as heard a minute from now, and a clearing later than ten
+//!    seconds from now as ten seconds from now, and kept so: so a clearing
 //!    from a clock set ahead never drops news heard since.
 //!
 //! Guarantees 2, 4 and 5 hold for a window, or extra usage, this CAF
@@ -61,10 +64,22 @@ use crate::{LIMITS, files};
 mod tests;
 
 /// How far past now a window or extra usage read or saved may be heard,
-/// in milliseconds: past it, it's taken as now and this. A clearing has
-/// none: one later than now is taken as now, as an earlier clearing only
-/// keeps more.
+/// in milliseconds: past it, it's taken as now and this.
 const SLACK: i64 = 60_000;
+
+/// How far past now a clearing read or saved may be, in milliseconds:
+/// past it, it's taken as now and this. Less than [`SLACK`], as a later
+/// clearing drops news heard before it, and one taken earlier only keeps
+/// more. But not none: a save's `now` is taken before it waits for the
+/// lock, for up to [`LOCK_WAIT`](files::LOCK_WAIT), and another app may
+/// save a clearing meanwhile, which must stay as it was, with a few
+/// seconds more for the two apps' clocks.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "five seconds"
+)]
+const CLEARED_SLACK: i64 = files::LOCK_WAIT.as_millis() as i64 + 5_000;
 
 /// The most a profile's file may be, in bytes: past that, it doesn't
 /// read. A few windows are a few hundred.
@@ -254,6 +269,13 @@ fn read(folder: &Path, profile: Builtin, now: Wall) -> io::Result<Option<Kept>> 
         }
     }
     limits.cleared = raw.cleared;
+    // Held to now, as what reads is.
+    let latest = now.0.saturating_add(SLACK);
+    for value in unread.iter_mut().chain(&mut unread_extra) {
+        if time(&value["heard"]).is_some_and(|heard| heard > latest) {
+            value["heard"] = latest.into();
+        }
+    }
     Ok(Some(Kept {
         limits: tidy(limits, now),
         unread,
@@ -262,13 +284,13 @@ fn read(folder: &Path, profile: Builtin, now: Wall) -> io::Result<Option<Kept>> 
     }))
 }
 
-/// A time in a window this CAF can't read, if it's one.
+/// A time in a window, or extra usage, this CAF can't read, if it's one.
 fn time(value: &Value) -> Option<i64> {
     value.as_i64()
 }
 
 /// `limits` as they're kept: heard no later than [`SLACK`] from `now`,
-/// cleared no later than `now`,
+/// cleared no later than [`CLEARED_SLACK`] from it,
 /// each window once, in order, with none past its reset at `now`, nor
 /// heard before they were cleared.
 fn tidy(mut limits: AccountLimits, now: Wall) -> AccountLimits {
@@ -279,7 +301,8 @@ fn tidy(mut limits: AccountLimits, now: Wall) -> AccountLimits {
     if let Some(extra) = &mut limits.extra_usage {
         extra.heard = extra.heard.min(latest);
     }
-    limits.cleared = limits.cleared.map(|cleared| cleared.min(now));
+    let cleared = Wall(now.0.saturating_add(CLEARED_SLACK));
+    limits.cleared = limits.cleared.map(|held| held.min(cleared));
     let mut tidy = AccountLimits::default();
     tidy.merge(&limits);
     tidy.forget_passed(now);

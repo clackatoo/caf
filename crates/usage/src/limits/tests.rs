@@ -540,7 +540,12 @@ fn a_time_from_a_clock_set_ahead_never_wins_for_long() {
         }),
     );
     let read = kept(folder.path());
-    assert_eq!(read.cleared, Some(NOW), "no later than now");
+    let cleared = Wall(NOW.0 + super::CLEARED_SLACK);
+    assert_eq!(
+        read.cleared,
+        Some(cleared),
+        "no later than now, near enough"
+    );
     let slack = Wall(NOW.0 + super::SLACK);
 
     write(
@@ -649,22 +654,89 @@ fn a_window_a_later_caf_wrote_heard_after_one_of_its_kind_is_kept_beside_it() {
 }
 
 #[test]
-fn a_clearing_from_a_clock_set_ahead_never_drops_news_heard_now() {
+fn a_clearing_from_a_clock_set_ahead_never_drops_news_heard_since() {
     let folder = Folder::new("limits-clock-cleared");
     write(
         folder.path(),
         &json!({"windows": [], "extra_usage": null, "cleared": at(24)}),
     );
-    assert_eq!(kept(folder.path()).cleared, Some(NOW), "no later than now");
-    let news = limits(vec![five_hours(40, NOW.0)], None);
-    let merged = saved(folder.path(), news).expect("the clearing is news");
-    assert_eq!(merged.cleared, Some(NOW));
+    let held = Wall(NOW.0 + super::CLEARED_SLACK);
+    assert_eq!(
+        kept(folder.path()).cleared,
+        Some(held),
+        "a few seconds from now"
+    );
+    // Kept as of then, by this app's next save.
+    let cleared = limits(Vec::new(), Some(held.0));
+    assert_eq!(
+        saved(folder.path(), AccountLimits::default()),
+        Some(cleared)
+    );
+    let news = limits(vec![five_hours(40, held.0 + 1000)], None);
+    let merged = save(folder.path(), &profile(news), held).unwrap();
+    let merged = merged.expect("the clearing is news");
+    assert_eq!(merged.cleared, Some(held));
     assert_eq!(
         merged.window(&WindowKind::FiveHours).map(|five| five.used),
         Some(40),
         "kept"
     );
-    assert_eq!(kept(folder.path()), merged);
+    let (read, _) = load(folder.path(), held);
+    assert_eq!(read, [profile(merged)]);
+}
+
+#[test]
+fn a_clearing_another_app_saved_while_this_one_waited_for_the_lock_stays() {
+    let folder = Folder::new("limits-clock-waited");
+    let soon = NOW.0 + 3000;
+    write(
+        folder.path(),
+        &json!({"windows": [], "extra_usage": null, "cleared": soon}),
+    );
+    assert_eq!(kept(folder.path()).cleared, Some(Wall(soon)));
+    // Heard before it, as this app's `now` was taken before the wait.
+    let news = limits(vec![five_hours(40, NOW.0)], None);
+    let merged = saved(folder.path(), news).expect("the clearing is news");
+    assert_eq!(merged, limits(Vec::new(), Some(soon)), "dropped");
+}
+
+#[test]
+fn what_this_caf_cant_read_heard_from_a_clock_set_ahead_is_held_to_now() {
+    let folder = Folder::new("limits-clock-unread");
+    let mut throttled = five_hours(40, at(24));
+    throttled["state"] = json!({"type": "Throttled"});
+    write(
+        folder.path(),
+        &json!({
+            "windows": [throttled],
+            "extra_usage": {"in_use": "partly", "heard": at(24)},
+            "cleared": null,
+        }),
+    );
+    let extra = |heard: i64| {
+        let limits = json!({
+            "windows": [],
+            "extra_usage": {"in_use": true, "heard": heard},
+            "cleared": null,
+        });
+        serde_json::from_value::<AccountLimits>(limits).unwrap()
+    };
+    saved(folder.path(), extra(at(-1)));
+    let held = NOW.0 + super::SLACK;
+    let file = written(folder.path());
+    assert_eq!(
+        file["extra_usage"],
+        json!({"in_use": "partly", "heard": held})
+    );
+    assert_eq!(file["windows"][0]["heard"], json!(held));
+    assert_eq!(file["windows"][0]["state"], json!({"type": "Throttled"}));
+
+    // News heard two minutes later replaces each.
+    let later = held + 120_000;
+    let mut news = extra(later);
+    news.merge(&limits(vec![five_hours(50, later)], None));
+    save(folder.path(), &profile(news.clone()), Wall(later)).unwrap();
+    assert_eq!(written(folder.path()), serde_json::to_value(&news).unwrap());
 }
 
 #[test]
