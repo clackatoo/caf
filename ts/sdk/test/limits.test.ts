@@ -132,6 +132,38 @@ describe("lowest", () => {
   });
 });
 
+describe("a kind or window newer than this SDK", () => {
+  // A newer CAF may send a kind this one doesn't know: it's never
+  // undefined, nor a NaN pace.
+  const newer = { type: "Fortnight" } as unknown as WindowKind;
+
+  test("has no length, and no pace", () => {
+    expect(length(newer)).toBeNull();
+    expect(pace(window({ kind: newer }), NOW)).toBeNull();
+  });
+
+  test("is named by its type", () => {
+    expect(label(newer)).toBe("Fortnight");
+  });
+
+  test("a pace that isn't a number is none", () => {
+    expect(pace(window(), Number.NaN)).toBeNull();
+    expect(pace(window({ resets: Number.NaN }), NOW)).toBeNull();
+    expect(pace(window(), Number.POSITIVE_INFINITY)).toBeNull();
+  });
+});
+
+describe("read-only windows, as a watch gives them", () => {
+  test("every helper takes them", () => {
+    const shown: DeepReadonly<LimitWindow> = window({ used: 85, resets: NOW + 3 * HOUR });
+    expect(left(shown)).toBe(15);
+    expect(lowness(shown)).toBe("low");
+    expect(pace(shown, NOW)).toBe(40);
+    expect(label(shown.kind)).toBe("5-hour");
+    expect(length(shown.kind)).toBe(5 * HOUR);
+  });
+});
+
 describe("label", () => {
   test.each<[WindowKind, string]>([
     [{ type: "FiveHours" }, "5-hour"],

@@ -17,8 +17,8 @@ export const OUT_LEFT = 10;
 const HOUR = 3_600_000;
 const WEEK = 7 * 24 * HOUR;
 
-/** How long a window of this kind is, in milliseconds: null for one CAF doesn't know. */
-export function length(kind: WindowKind): number | null {
+/** How long a window of this kind is, in milliseconds: null for one CAF doesn't know, or this SDK doesn't. */
+export function length(kind: DeepReadonly<WindowKind>): number | null {
   switch (kind.type) {
     case "FiveHours":
       return 5 * HOUR;
@@ -26,29 +26,30 @@ export function length(kind: WindowKind): number | null {
     case "ModelWeek":
     case "ExtraWeek":
       return WEEK;
-    case "Other":
+    default:
       return null;
   }
 }
 
 /**
  * How much of the window has gone by at `now`, as a whole percent, 0–100:
- * where `used` would be at an even pace. Null with no reset or no length.
+ * where `used` would be at an even pace. Null with no reset or no length,
+ * or a time that isn't a number.
  */
-export function pace(window: LimitWindow, now: Wall): number | null {
+export function pace(window: DeepReadonly<LimitWindow>, now: Wall): number | null {
   const long = length(window.kind);
   if (window.resets === null || long === null) return null;
-  const gone = now - (window.resets - long);
-  return Math.min(100, Math.max(0, Math.round((100 * gone) / long)));
+  const share = (100 * (now - (window.resets - long))) / long;
+  return Number.isFinite(share) ? Math.min(100, Math.max(0, Math.round(share))) : null;
 }
 
 /** How much of the window is left, as a whole percent. */
-export function left(window: LimitWindow): number {
+export function left(window: DeepReadonly<LimitWindow>): number {
   return window.state.type === "Refused" ? 0 : 100 - window.used;
 }
 
 /** How low the window is. A refused one is always `out`. */
-export function lowness(window: LimitWindow): Lowness {
+export function lowness(window: DeepReadonly<LimitWindow>): Lowness {
   const remaining = left(window);
   if (remaining <= OUT_LEFT) return "out";
   return remaining <= LOW_LEFT ? "low" : "fine";
@@ -66,8 +67,11 @@ export function lowest<W extends DeepReadonly<LimitWindow>>(limits: { readonly w
   return least;
 }
 
-/** A window's name for showing: "5-hour", "Weekly", "Weekly · Opus", "Weekly · extra included", or the agent's own. */
-export function label(kind: WindowKind): string {
+/**
+ * A window's name for showing: "5-hour", "Weekly", "Weekly · Opus", "Weekly · extra included", or the agent's own.
+ * A kind newer than this SDK is named by its type.
+ */
+export function label(kind: DeepReadonly<WindowKind>): string {
   switch (kind.type) {
     case "FiveHours":
       return "5-hour";
@@ -79,5 +83,7 @@ export function label(kind: WindowKind): string {
       return "Weekly · extra included";
     case "Other":
       return kind.value;
+    default:
+      return (kind as { readonly type: string }).type;
   }
 }
