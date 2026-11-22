@@ -7,6 +7,7 @@ related:
   - caf/getting-started/installing-and-signing-in
   - caf/getting-started/saving-and-restoring-chats
   - caf/getting-started/choosing-the-model
+  - caf/getting-started/usage
   - caf/concepts/the-core
   - caf/concepts/viewers
 ---
@@ -219,6 +220,20 @@ was.
 Ctrl-C saves every chat whole before the debugger stops, so the next run
 finds them as you left them. Replaying keeps no chats: nothing is saved or
 listed.
+
+## Usage
+
+Each turn's usage goes into the ledger every CAF program shares,
+`~/.local/share/caf/usage/` (under `$XDG_DATA_HOME` if that's set), as the
+app `caf-debugger`, or into the folder `--usage` names. Its page may read
+summaries of every app's usage and set prices of your own. Prices are
+fetched from LiteLLM once a day; `--no-fetch-prices` never fetches them:
+
+```sh
+cargo run -p caf-debugger -- --usage /tmp/usage --no-fetch-prices
+```
+
+See [Usage](~caf/getting-started/usage).
 
 ## The token
 

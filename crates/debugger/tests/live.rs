@@ -400,10 +400,16 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
         "the steps carry the directives: {writes} writes"
     );
 
-    // Looking back, then following again.
+    // Looking back to just after the chat was opened, then following
+    // again. What came before it, such as the prices, may come in any
+    // order.
+    let opened = (seen.steps.iter())
+        .position(|step| step["event"]["value"]["type"] == "OpenChat")
+        .expect("the chat was opened") as u64
+        + 1;
     send(
         &mut inspector,
-        json!({"type": "Seek", "value": {"step": 2}}),
+        json!({"type": "Seek", "value": {"step": opened}}),
     )
     .await;
     seen.until(&mut inspector, |message| {
@@ -412,12 +418,13 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
     .await;
     let Some(ToInspector::Position {
         live: false,
-        at: 2,
+        at,
         end: now,
     }) = seen.others.last()
     else {
-        panic!("looking back at 2: {:?}", seen.others.last());
+        panic!("looking back at {opened}: {:?}", seen.others.last());
     };
+    assert_eq!(*at, opened);
     assert!(*now >= end);
     seen.until(&mut inspector, |message| matches!(message, ToInspector::Past { message, .. } if serde_json::to_value(message).unwrap()["type"] == "Picture")).await;
     let follow = serde_json::to_value(FromInspector::Follow).unwrap();

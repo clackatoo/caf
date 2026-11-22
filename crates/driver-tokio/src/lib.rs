@@ -90,6 +90,29 @@
 //!
 //! [`OpenChat::shelf`]: caf_core::OpenChat::shelf
 //!
+//! # Usage
+//!
+//! Each turn records what it spent, if the agent says, and each chat adds
+//! its turns up ([`Chat::spend`]). Every turn also goes into a usage ledger
+//! every CAF app on the machine shares ([`Config::usage`], on by default),
+//! so a program can show how much the user has used across all of them:
+//!
+//! ```ignore
+//! let summary = caf.usage(UsageQuery::new(since, until, "Europe/London")).await?;
+//! caf.set_price("claude-haiku-5-5".into(), Some(ModelPrice::new(1.0, 5.0))).await?;
+//! ```
+//!
+//! - The ledger is written on a thread of its own, and never holds a chat
+//!   up. [`Caf::usage`] reads a summary on another.
+//! - Cost the agent didn't report is estimated from [`Caf::prices`]: the
+//!   user's own ([`Caf::set_price`]), then LiteLLM's table, fetched once a
+//!   day unless [`UsageConfig::fetch_prices`] is off, then a snapshot
+//!   bundled with CAF.
+//! - `config.usage = None` keeps no ledger: chats still record their
+//!   spend. Tests should set it, or a folder of their own.
+//!
+//! [`Chat::spend`]: caf_core::Chat::spend
+//!
 //! # Serving viewers
 //!
 //! A viewer is anything that shows chats from outside the host's own
