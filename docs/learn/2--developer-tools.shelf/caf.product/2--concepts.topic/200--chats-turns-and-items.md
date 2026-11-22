@@ -43,6 +43,31 @@ Questions waiting for an answer, such as the agent asking permission to run
 something, aren't items: they're a list on the chat, because they come and
 go.
 
+## What a turn spent
+
+When a turn's message is answered, however the turn ended (finished,
+stopped, or failed as the agent said), the answer says what it spent, and
+CAF records it on the turn: its tokens by kind (input, cache read and
+written, output, and how much of the output was thinking), one row per
+model, and its cost if the agent reports one. Claude's adapter splits
+the tokens by model, counting the subagents and compaction the turn set off
+too; an agent that doesn't gets one row, against the model it said it used
+during the turn, or else the model the turn was sent on. A turn's cost is
+how much the agent says its session's cost rose over it, if it says so
+during the turn; otherwise, or if the cost didn't change (Claude's adapter
+leaves a stopped turn out of its total, though it spent tokens), the turn is
+estimated like any other. An agent
+that says nothing gives no record.
+
+The chat adds up its turns' records as what it has **spent**: tokens,
+the cost the agent reported, and an estimate, from a table of prices, for
+turns it didn't report. Estimates are never stored on a turn or in the
+ledger, so when the prices change, every chat's figure is worked out again.
+The figure is saved with the chat, but never trusted: a chat restored from
+its save works it out again from its turns. Each turn's record also
+goes to a ledger every CAF program on the machine shares, so usage can be
+summed across them.
+
 ## The program's own items
 
 A program can add items of its own kind, such as eyespy's "the agent moved

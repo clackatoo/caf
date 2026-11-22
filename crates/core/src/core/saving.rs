@@ -26,6 +26,7 @@ use serde::Serialize;
 use super::record::Log;
 use super::sessions::{check_instructions, mcp_server};
 use super::settings::Choosing;
+use super::spending::{counted_within_bounds, spend_of};
 use super::state::{Open, Run};
 use super::{Core, Refused, report};
 use crate::change::Change;
@@ -966,6 +967,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Err(format!("it holds chat {} instead", whole.id))
         } else if !numbered_within_bounds(&whole) {
             Err("a turn or item in it is numbered too near 2^53".to_owned())
+        } else if !(whole.turns.iter())
+            .filter_map(|turn| turn.spent.as_deref())
+            .all(|usage| counted_within_bounds(usage.models.iter().map(|row| &row.tokens)))
+        {
+            Err("what a turn in it spent counts past 2^53".to_owned())
         } else {
             match whole.cwd.to_str() {
                 None => Err("its folder isn't UTF-8".to_owned()),
@@ -1015,7 +1021,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         // made; and when it last changed is the later of the header's word
         // and the latest time the chat holds.
         let changed = last_change(&whole).map_or(header.changed, |at| at.max(header.changed));
-        let changes = tidy(&whole, changed);
+        let mut changes = tidy(&whole, changed);
+        // What it has spent is worked out again from its turns, with the
+        // prices the core has now: the save's is never trusted.
+        let spend = spend_of(&whole, &self.prices);
+        if *whole.spend != spend {
+            changes.push(Change::Spend(Box::new(spend)));
+        }
         let mcp_sent = (restore.mcp_servers.iter())
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
@@ -1071,6 +1083,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 resent: None,
                 restored: true,
                 choosing: Choosing::default(),
+                cost: None,
             },
         );
         // Tidied as changes, so the store gets them as journal entries,
@@ -1568,6 +1581,10 @@ fn saved_session<A: AppItem>(run: &Run<A>) -> Option<AgentSessionId> {
         // Where it is with sending its settings is this run's: what's
         // chosen is in its record.
         choosing: _,
+        // What the session has cost is the agent's word in this run: a
+        // session opened again counts afresh, and a turn's cost reads it
+        // that way.
+        cost: _,
     } = run;
     session.clone()
 }

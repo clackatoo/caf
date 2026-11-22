@@ -4,23 +4,32 @@
 //!
 //! # Where it comes from
 //!
-//! - **Tokens, per turn.** When a turn ends, the agent's answer to the
-//!   prompt carries its tokens (ACP's `usage`, still unstable), and an
+//! - **Tokens, per turn.** When a turn's prompt is answered, however the
+//!   turn ended (finished, stopped, or failed as the agent said), the
+//!   answer carries its tokens (ACP's `usage`, still unstable), and an
 //!   agent that splits them by model says so too (`_meta.quota.model_usage`,
-//!   which Claude's and Codex's adapters both send). The split is the
+//!   which Claude's adapter sends). The split is the
 //!   fuller count, with subagents and compaction in it, so it's what CAF
-//!   keeps when there is one; otherwise one row, against the turn's model
+//!   keeps when there is one; otherwise one row, against the model the
+//!   agent said it used during the turn, or the turn's own
 //!   ([`TurnUsage::models`]). An agent that says nothing gives no record.
 //! - **Cost, as the agent reports it.** Claude says what its session has
 //!   cost so far ([`Usage::cost`](crate::chat::Usage::cost)); a turn's cost
-//!   is how much that rose between the turn's start and end. If it went
-//!   down, the session was replaced, and the turn's cost is what it says
-//!   at the end ([`TurnUsage::cost`]).
+//!   is how much that rose between the turn's start and end, if the agent
+//!   said it during the turn and it changed, and otherwise unreported: a
+//!   cost said again unchanged, as Claude's adapter does for a turn
+//!   stopped, whose tokens it leaves out of its total, is estimated
+//!   instead. A session opened, new or again, counts from nothing. If it
+//!   went down, the session was replaced, and the turn's cost is what it
+//!   says at the end ([`TurnUsage::cost`]).
 //! - **Cost, estimated.** A turn with no reported cost is priced from a
 //!   [`PriceTable`]: the user's own prices, then the table fetched from
 //!   LiteLLM, then the snapshot bundled with CAF. Estimates are never
-//!   stored: they're worked out when shown, with the prices of the time,
-//!   so a price corrected corrects every figure ([`Spend`], [`Summary`]).
+//!   stored on a turn or in the ledger: they're worked out when shown,
+//!   with the prices of the time, so a price corrected corrects every
+//!   figure ([`Spend`], [`Summary`]). A chat's spend, which holds one, is
+//!   saved with it, but never trusted: a restored chat's is worked out
+//!   again from its turns.
 //!
 //! # The ledger
 //!
@@ -36,13 +45,14 @@
 //!
 //! Each of these has a test.
 //!
-//! 1. **A turn's usage is recorded once, when it ends**, and only if the
-//!    agent said what it spent: on the turn, in the chat's [`Spend`], and
-//!    as one ledger line.
+//! 1. **A turn's usage is recorded once, when its prompt is answered**,
+//!    however it ended, and only if the agent said what it spent: on the
+//!    turn, in the chat's [`Spend`], and as one ledger line.
 //! 2. **A chat's spend is the sum of its turns' records**, priced with the
 //!    table the core has now: it's sent again whenever that changes.
 //! 3. **A reported cost is never replaced by an estimate**, and an estimate
-//!    is never stored.
+//!    is never stored on a turn or in the ledger; a chat's saved spend is
+//!    worked out again when it's restored.
 //! 4. **Every number here is below 2^53**, as everything CAF writes is: a
 //!    count an agent gives that isn't is unreadable, and the turn gets no
 //!    record, with a report.
@@ -110,18 +120,20 @@ pub struct ModelTokens {
 }
 
 /// What a turn spent: its [`spent`](crate::chat::Turn::spent), recorded
-/// when it ends, if the agent said.
+/// when its prompt is answered, however it ended, if the agent said.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TurnUsage {
     /// Its tokens, one row per model. They're the agent's split by model,
     /// if it gave one, which counts the subagents and compaction the turn
-    /// set off; otherwise one row, of its totals, against the turn's model
-    /// (or `unknown`, if the agent never said which). Never empty.
+    /// set off; otherwise one row, of its totals, against the model the
+    /// agent said it used during the turn, else the turn's model (or
+    /// `unknown`, if the agent never said which). Never empty.
     pub models: Vec<ModelTokens>,
-    /// What it cost, as the agent reported it, if it did: how much its
-    /// session's cost rose over the turn. Never an estimate. A cost in a
+    /// What it cost, as the agent reported it, if it did during the turn:
+    /// how much its session's cost rose over the turn, `None` if it didn't
+    /// change. Never an estimate. A cost in a
     /// currency other than US dollars is kept here as reported, but
     /// counted as unreported in [`Spend`] and [`Summary`], which estimate
     /// it instead: CAF converts no currency.

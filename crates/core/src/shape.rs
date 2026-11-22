@@ -24,7 +24,7 @@ use crate::chat::{
 use crate::core::{ConnectionInfo, OpenChat, Refused, SessionChoice};
 use crate::directive::{
     AgentDirective, Directive, Level, PermissionRequest, PolicyDirective, Report, SetupDirective,
-    Signal, StorageDirective, TimerDirective, ViewerDirective,
+    Signal, StorageDirective, TimerDirective, UsageDirective, ViewerDirective,
 };
 use crate::event::{AgentEvent, Event, Exit, HostCommand, PolicyAnswer, SetupEvent, StorageEvent};
 use crate::host::{Grouping, Host, Limits, Shows, Timers};
@@ -47,6 +47,10 @@ use crate::settings::{
     SettingValue, Settings,
 };
 use crate::time::{End, Mono, Now, Wall, Window};
+use crate::usage::{
+    BadQuery, Bucket, ChatCounts, Estimate, LedgerLine, ModelPrice, ModelTokens, PriceLayer,
+    PriceTable, PricedModel, Resolution, Spend, Summary, Tokens, TurnUsage, UsageQuery,
+};
 use crate::viewer::{
     AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
 };
@@ -243,6 +247,136 @@ pub(crate) fn usage() -> Usage {
             currency: "USD".into(),
         }),
     }
+}
+
+/// Tokens of every kind, thinking said.
+pub(crate) fn tokens() -> Tokens {
+    Tokens {
+        input: 12,
+        cache_read: 3000,
+        cache_write: 400,
+        output: 56,
+        thinking: Some(7),
+    }
+}
+
+/// What a turn spent: on two models, its cost reported.
+pub(crate) fn turn_usage() -> TurnUsage {
+    TurnUsage {
+        models: vec![
+            ModelTokens {
+                model: "claude-sonnet-5-5".into(),
+                tokens: tokens(),
+            },
+            ModelTokens {
+                model: "claude-haiku-5-5".into(),
+                tokens: Tokens {
+                    thinking: None,
+                    ..tokens()
+                },
+            },
+        ],
+        cost: Some(Cost {
+            amount: 0.0125,
+            currency: "USD".into(),
+        }),
+        fast: false,
+    }
+}
+
+/// What a chat has spent.
+pub(crate) fn spend() -> Spend {
+    Spend {
+        tokens: tokens(),
+        reported: 0.0125,
+        estimated: 0.5,
+        unpriced: 80,
+        turns: 2,
+    }
+}
+
+/// A model's price, with a fast rate.
+pub(crate) fn model_price() -> ModelPrice {
+    let mut price = ModelPrice::new(3.0, 15.0);
+    price.cache_read = 0.3;
+    price.cache_write = 3.75;
+    price.fast = Some(2.0);
+    price
+}
+
+/// The prices of two models.
+pub(crate) fn price_table() -> PriceTable {
+    PriceTable {
+        models: vec![
+            PricedModel::new(
+                "anthropic/claude-haiku-5-5",
+                ModelPrice::new(1.0, 5.0),
+                PriceLayer::Fetched,
+            ),
+            PricedModel::new(
+                "anthropic/claude-sonnet-5-5",
+                model_price(),
+                PriceLayer::Own,
+            ),
+        ],
+        fetched: Some(Wall(1_800_000_000_000)),
+    }
+}
+
+/// A usage ledger's line.
+fn ledger_line() -> LedgerLine {
+    LedgerLine {
+        at: Wall(1_800_000_000_000),
+        app: "clackatoo".into(),
+        chat: ChatId::from_number(1),
+        turn: TurnId(2),
+        agent: AgentName("claude".into()),
+        profile: Some("claude-agent-acp".into()),
+        usage: turn_usage(),
+    }
+}
+
+/// What a usage summary covers: one app, by hour.
+pub(crate) fn usage_query() -> UsageQuery {
+    let mut query = UsageQuery::new(
+        Wall(1_800_000_000_000),
+        Wall(1_800_086_400_000),
+        "Europe/London",
+    );
+    query.by = Resolution::Hour;
+    query.apps = vec!["clackatoo".into()];
+    query
+}
+
+/// A usage summary, of one bucket.
+pub(crate) fn summary() -> Summary {
+    let mut bucket = Bucket::new(
+        Wall(1_800_000_000_000),
+        "clackatoo",
+        "claude-agent-acp",
+        "claude-sonnet-5-5",
+        true,
+    );
+    bucket.tokens = tokens();
+    bucket.reported = 0.0125;
+    bucket.estimated = 0.5;
+    bucket.unpriced = 80;
+    bucket.turns = 2;
+    let mut summary = Summary::new(usage_query());
+    summary.buckets = vec![bucket];
+    summary.chats = ChatCounts {
+        all: 1,
+        by_app: vec![("clackatoo".into(), 1)],
+        by_agent: vec![("claude-agent-acp".into(), 1)],
+    };
+    summary.prices = price_table().models;
+    summary.matched = vec![(
+        "claude-sonnet-5-5".into(),
+        "anthropic/claude-sonnet-5-5".into(),
+    )];
+    summary.fetched = Some(Wall(1_800_000_000_000));
+    summary.unreadable = vec!["eyespy/2026-10.jsonl.zst".into()];
+    summary
 }
 
 pub(crate) fn chat() -> Chat {
@@ -672,6 +806,56 @@ pub(crate) fn every_type(s: &mut Samples) {
         id: "haiku".into(),
         name: None,
     });
+    // usage
+    s.both(&tokens());
+    s.both(&turn_usage().models[0]);
+    s.both(&turn_usage());
+    s.both(&spend());
+    s.both(&model_price());
+    s.both(&PriceLayer::Bundled);
+    s.both(&price_table().models[0]);
+    s.both(&price_table());
+    s.both(&Estimate {
+        usd: 0.5,
+        unpriced: 80,
+    });
+    s.both(&ledger_line());
+    s.both(&usage_query());
+    s.both(&Resolution::Day);
+    s.both(&BadQuery::Zone("Mars/Olympus".into()));
+    s.both(&summary());
+    s.both(&summary().buckets[0]);
+    s.both(&summary().chats);
+    s.both(&Change::<crate::chat::NoAppItems>::TurnSpent {
+        turn: TurnId(2),
+        usage: Box::new(turn_usage()),
+    });
+    s.both(&Change::<crate::chat::NoAppItems>::Spend(Box::new(spend())));
+    s.both(&FromViewer::Usage {
+        request: RequestNo(3),
+        query: usage_query(),
+    });
+    s.both(&FromViewer::SetPrice {
+        request: RequestNo(4),
+        model: "claude-sonnet-5-5".into(),
+        price: Some(model_price()),
+    });
+    s.both(&ToViewer::<crate::chat::NoAppItems>::Usage {
+        request: RequestNo(3),
+        summary: Box::new(summary()),
+    });
+    s.both(&Outcome::BadQuery(BadQuery::Period));
+    s.written(&UsageDirective::Record(Box::new(ledger_line())), true);
+    s.written(
+        &Directive::<crate::chat::NoAppItems>::Usage(UsageDirective::Record(Box::new(
+            ledger_line(),
+        ))),
+        true,
+    );
+    s.written(
+        &Event::<crate::chat::NoAppItems>::Prices(price_table()),
+        true,
+    );
     // save
     s.both(&Shelf("work".into()));
     s.both(&NoAppData);
@@ -995,7 +1179,8 @@ fn enums_are_type_then_value() {
                 "kind": { "type": "Words", "value": "On it." }
             }],
             "imported": false,
-            "model": { "id": "sonnet", "name": "Sonnet 4.6" }
+            "model": { "id": "sonnet", "name": "Sonnet 4.6" },
+            "spent": null
         } })
     );
     assert_eq!(

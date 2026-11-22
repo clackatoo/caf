@@ -2,7 +2,7 @@
 //! core. A bug becomes one of these, with what the core must give out
 //! and end as.
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::harness::{Script, assert_has, check_fixtures, host, render, with, writes};
 use super::stop::permission;
@@ -10,6 +10,7 @@ use super::{CHAT, PROC, SESSION};
 use crate::core::Core;
 use crate::event::PolicyAnswer;
 use crate::ids::ChatId;
+use crate::profiles::{Builtin, ProfileChoice, Reported};
 
 /// The scenario `traces/claude-turn.json` was recorded from.
 fn claude_turn() -> Script {
@@ -129,9 +130,50 @@ fn a_live_claude_run_replays_to_its_end() {
         Some(true),
         "{chat:#}"
     );
+    // What each turn spent: the first by Claude's split, which counts
+    // more than its usage does; the second, stopped, by its usage, as its
+    // split is empty, against the model Claude said it used during it. The
+    // session's cost was said during it, but no higher, as Claude's adapter
+    // leaves a stopped turn out of its total: not reported, so estimated.
+    let tokens = |input: u64, read: u64, written: u64, output: u64, thinking: Value| json!({ "input": input, "cache_read": read, "cache_write": written, "output": output, "thinking": thinking });
+    // As serde_json reads it from the trace.
+    let first = &chat["turns"][0]["spent"]["cost"]["amount"];
+    assert!(
+        first
+            .as_f64()
+            .is_some_and(|amount| (amount - 0.002_679_39).abs() < 1e-15)
+    );
+    assert_eq!(
+        chat["turns"][0]["spent"],
+        json!({
+            "models": [{ "model": "claude-haiku-5-5", "tokens": tokens(1178, 12799, 12123, 18, json!(0)) }],
+            "cost": { "amount": first, "currency": "USD" },
+            "fast": false,
+        })
+    );
+    assert_eq!(
+        chat["turns"][1]["spent"],
+        json!({
+            "models": [{ "model": "claude-haiku-5-5", "tokens": tokens(2, 15847, 11185, 0, Value::Null) }],
+            "cost": null,
+            "fast": false,
+        })
+    );
+    assert_eq!(chat["turns"][1]["model"]["id"], "haiku");
+    assert_eq!(chat["spend"]["turns"], 2);
+    let all: Vec<_> = outs.iter().flatten().cloned().collect();
+    assert_eq!(
+        (with(&all, "usage").iter())
+            .map(|line| line["usage"]["value"]["usage"].clone())
+            .collect::<Vec<_>>(),
+        [
+            chat["turns"][0]["spent"].clone(),
+            chat["turns"][1]["spent"].clone()
+        ],
+        "a ledger line for each"
+    );
     assert!(core.is_idle(), "every adapter stopped");
     // The stop was sent as a cancel, and the adapter's process let go.
-    let all: Vec<_> = outs.iter().flatten().cloned().collect();
     assert_eq!(
         writes(&all)
             .iter()
@@ -152,6 +194,34 @@ fn a_live_claude_run_replays_to_its_end() {
     let (again, outs_again) = replay_recording(CLAUDE_LIVE);
     assert_eq!(outs_again, outs);
     assert_eq!(again.inspect(), core.inspect());
+}
+
+/// Every count of what a turn spent in the live trace, as the Claude
+/// profile reads it, adds up to the total Claude gave: so input is
+/// uncached, and thinking is part of output, not counted beside it. An
+/// adapter that changed either would fail here.
+#[test]
+fn every_count_claude_gave_of_what_a_turn_spent_adds_up_to_its_total() {
+    let claude = ProfileChoice::Builtin(Builtin::ClaudeAgentAcp);
+    let mut rows = 0;
+    for line in CLAUDE_LIVE.lines() {
+        let line: Value = serde_json::from_str(line).expect("each line is JSON");
+        let response = line.pointer("/event/value/event/value/value/value");
+        let Some(result) = response.and_then(|response| response.pointer("/outcome/Ok")) else {
+            continue;
+        };
+        let (Reported::Rows(each), _) = claude.spent(result) else {
+            continue;
+        };
+        for row in each {
+            let tokens = &row.tokens;
+            let added = tokens.input + tokens.cache_read + tokens.cache_write + tokens.output;
+            assert_eq!(added, row.total, "{row:?}");
+            assert_eq!(added, tokens.total());
+            rows += 1;
+        }
+    }
+    assert_eq!(rows, 2, "one for each turn");
 }
 
 /// A copy of a core, taken partway through a replay, carries on as the
