@@ -542,3 +542,88 @@ async fn prices_read_again_for_a_summary_are_sent_first_if_they_changed() {
     assert!(matches!(next(&mut driver).await, Report::Reloaded));
     driver.finish().await;
 }
+
+/// Holds the ledger's lock for app `caf-test` in `folder`, as another
+/// program would, until the file is dropped.
+fn hold_lock(folder: &Path) -> std::fs::File {
+    let app = folder.join("caf-test");
+    std::fs::create_dir_all(&app).unwrap();
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(app.join(".lock"))
+        .unwrap();
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive).unwrap();
+    file
+}
+
+/// A driver for the ledger in `dir`, as CAF runs it: a minute without
+/// trying after a lock given up on, and an hour between looks.
+fn cooling(dir: &Dir) -> UsageDriver {
+    UsageDriver::launch(
+        Some(dir.0.clone()),
+        "caf-test".into(),
+        None,
+        Options::default(),
+    )
+}
+
+/// Sets no price, and says how long the ledger's thread took to answer:
+/// so how long the work before it took.
+async fn answered_in(driver: &mut UsageDriver) -> Duration {
+    let started = std::time::Instant::now();
+    let (reply, answer) = oneshot::channel();
+    driver.set_price("claude-test-1".into(), None, reply);
+    loop {
+        if let Report::PriceSet { reply, result } = next(driver).await {
+            let _ = reply.send(result.map_err(Error::Price));
+            break;
+        }
+    }
+    let _ = answer.await;
+    started.elapsed()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn once_a_lock_is_given_up_on_lines_are_kept_untried_and_shutting_down_tries_once() {
+    let dir = Dir::new("lock-held");
+    let lock = hold_lock(&dir.0);
+    let mut driver = cooling(&dir);
+    prices(&mut driver).await;
+    driver.record(line(1, 5));
+    let first = answered_in(&mut driver).await;
+    assert!(
+        first >= Duration::from_secs(5),
+        "the lock is tried for five seconds: {first:?}"
+    );
+    for turn in 2..=4 {
+        driver.record(line(turn, 5));
+    }
+    let then = answered_in(&mut driver).await;
+    assert!(then < Duration::from_secs(4), "kept, not tried: {then:?}");
+    let started = std::time::Instant::now();
+    driver.finish().await;
+    let took = started.elapsed();
+    assert!(
+        took >= Duration::from_secs(5) && took < Duration::from_secs(9),
+        "one try as it finishes: {took:?}"
+    );
+    drop(lock);
+    assert_eq!(turns_in(&dir.0), 0, "lost, as reported");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lines_kept_behind_a_lock_are_written_once_it_is_let_go() {
+    let dir = Dir::new("lock-let-go");
+    let lock = hold_lock(&dir.0);
+    let mut driver = cooling(&dir);
+    prices(&mut driver).await;
+    driver.record(line(1, 5));
+    driver.record(line(2, 5));
+    answered_in(&mut driver).await;
+    drop(lock);
+    driver.finish().await;
+    assert_eq!(turns_in(&dir.0), 2);
+}

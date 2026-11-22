@@ -6,7 +6,11 @@
 //! and every hour, so a ledger that fails for a while loses nothing; the
 //! first failure in a row is reported to the [`log`] facade, target
 //! `caf`, and so is the ledger taking lines again. It never answers the
-//! core, and nothing it does holds up a chat.
+//! core, and nothing it does holds up a chat. A lock another program
+//! holds costs five seconds a try ([`Ledger::record`]), so once one is
+//! given up on, lines are kept without being tried for
+//! [`LOCK_COOLDOWN`], or until the next hourly look, so reloads, prices
+//! and shutting down aren't held up behind them.
 //!
 //! The prices are read as the thread starts, and again when they may have
 //! changed: a price of the user's own set ([`prices::set_own`]),
@@ -45,7 +49,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use caf_core::time::Wall;
 use caf_core::usage::{LedgerLine, ModelPrice, PriceTable};
@@ -64,6 +68,10 @@ pub(crate) const PRICES_WITHIN: Duration = Duration::from_secs(10);
 
 /// How long finishing waits for the ledger's thread.
 pub(crate) const FINISH_WITHIN: Duration = Duration::from_secs(30);
+
+/// How long lines are kept without being tried once another program's
+/// lock was given up on.
+const LOCK_COOLDOWN: Duration = Duration::from_secs(60);
 
 /// The most LiteLLM's table may be, in bytes: past that, the fetch fails.
 /// It's about 1.5 MB.
@@ -121,6 +129,8 @@ pub(crate) struct Options {
     pub(crate) prices_within: Duration,
     /// [`FINISH_WITHIN`].
     pub(crate) finish_within: Duration,
+    /// [`LOCK_COOLDOWN`].
+    pub(crate) cooldown: Duration,
     /// For tests: the ledger's thread is stuck until this is dropped.
     pub(crate) stuck: Option<std::sync::mpsc::Receiver<()>>,
 }
@@ -131,6 +141,7 @@ impl Default for Options {
             every: CHECK_EVERY,
             prices_within: PRICES_WITHIN,
             finish_within: FINISH_WITHIN,
+            cooldown: LOCK_COOLDOWN,
             stuck: None,
         }
     }
@@ -210,13 +221,14 @@ impl UsageDriver {
         let unwritten = Arc::new(AtomicUsize::new(0));
         let counting = Arc::clone(&unwritten);
         let stuck = options.stuck;
+        let cooldown = options.cooldown;
         let thread = std::thread::Builder::new()
             .name("caf-usage".into())
             .spawn(move || {
                 if let Some(stuck) = stuck {
                     let _ = stuck.recv();
                 }
-                keep(ledger.as_ref(), &inbox, &telling, &counting);
+                keep(ledger.as_ref(), &inbox, &telling, &counting, cooldown);
             })
             .expect("a thread for the usage ledger");
         let keeping = Arc::new(Mutex::new(true));
@@ -427,6 +439,7 @@ fn keep(
     inbox: &std::sync::mpsc::Receiver<Work>,
     tell: &mpsc::UnboundedSender<Told>,
     unwritten: &AtomicUsize,
+    cooldown: Duration,
 ) {
     // Once the task has gone, nobody needs a report.
     let report = |report: Report| {
@@ -441,7 +454,7 @@ fn keep(
             report(Report::Prices(now));
         }
     };
-    let mut kept = Kept::new(unwritten);
+    let mut kept = Kept::new(unwritten, cooldown);
     while let Ok(work) = inbox.recv() {
         match work {
             Work::Record(line) => {
@@ -474,7 +487,9 @@ fn keep(
             }
             Work::Reload(asked) => {
                 if let Some(ledger) = ledger {
+                    // Every hour, whatever the lock did.
                     if asked.is_none() && !kept.lines.is_empty() {
+                        kept.cooling = None;
                         kept.try_writing(ledger);
                     }
                     give(read_prices(Some(ledger)));
@@ -485,6 +500,7 @@ fn keep(
             }
         }
     }
+    // Once, whatever the lock did.
     if let Some(ledger) = ledger
         && let Err(error) = kept.write(ledger)
     {
@@ -508,15 +524,22 @@ struct Kept<'a> {
     /// Lines were dropped since the ledger last took one, and that was
     /// reported.
     dropping: bool,
+    /// Another program's lock was given up on: lines aren't tried again
+    /// until then.
+    cooling: Option<Instant>,
+    /// [`LOCK_COOLDOWN`].
+    cooldown: Duration,
 }
 
 impl<'a> Kept<'a> {
-    fn new(unwritten: &'a AtomicUsize) -> Self {
+    fn new(unwritten: &'a AtomicUsize, cooldown: Duration) -> Self {
         Self {
             lines: VecDeque::new(),
             unwritten,
             failing: false,
             dropping: false,
+            cooling: None,
+            cooldown,
         }
     }
 
@@ -537,8 +560,14 @@ impl<'a> Kept<'a> {
     }
 
     /// Writes every line waiting, as [`Kept::write`] does, reporting the
-    /// first failure in a row, and the ledger taking lines again after.
+    /// first failure in a row, and the ledger taking lines again after;
+    /// unless another program's lock was given up on less than the
+    /// cooldown ago.
     fn try_writing(&mut self, ledger: &Ledger) {
+        if self.cooling.is_some_and(|until| Instant::now() < until) {
+            return;
+        }
+        self.cooling = None;
         match self.write(ledger) {
             Ok(()) => {
                 if self.failing {
@@ -548,6 +577,9 @@ impl<'a> Kept<'a> {
                 self.dropping = false;
             }
             Err(error) => {
+                if error.kind() == std::io::ErrorKind::TimedOut {
+                    self.cooling = Some(Instant::now() + self.cooldown);
+                }
                 if !self.failing {
                     log::warn!(
                         target: "caf",
