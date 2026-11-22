@@ -684,7 +684,7 @@ export function learnFailureText(why: DeepReadonly<LearnFailure>, agent: string)
     case 'OwnTools':
       return `${agent} can't be used: its own tools can't be turned off.`
     default:
-      return `Why is a reason this viewer doesn't know (${tagOf(why)}).`
+      return `The reason is one this viewer doesn't know (${tagOf(why)}).`
   }
 }
 

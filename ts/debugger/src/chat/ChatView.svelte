@@ -137,7 +137,9 @@
   {:else if !may.act}
     <div class="looking-back" role="status">The app lets this viewer watch this chat, not act in it.</div>
   {/if}
-  <StateBanner state={chat.state} />
+  <!-- An archived chat's composer says so, and nothing else about its
+       state matters until it's unarchived. -->
+  {#if !archived}<StateBanner state={chat.state} />{/if}
   {#if showsAgent(chat)}
     <AgentBanner
       name={chat.agent}

@@ -40,9 +40,14 @@ describe('the chat state', () => {
     expect(button('Close').disabled).toBe(false)
   })
 
-  it('says the chat is closed, and offers no Close', () => {
+  it('says a closed chat is archived, once, and offers no Close', () => {
     const { container } = draw(chat({ state: { type: 'Closed' }, archived: NOON }))
-    expect(text(container)).toContain('This chat is closed.')
+    expect(text(container).match(/This chat is archived\./g)).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
+    cleanup()
+    // Closed by a CAF from before archiving, with no time to say.
+    const old = draw(chat({ state: { type: 'Closed' } }))
+    expect(text(old.container)).toContain('This chat is archived.')
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
   })
 

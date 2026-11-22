@@ -323,7 +323,7 @@ describe('before the session opens', () => {
     [{ type: 'ShutDown' }, 'The app was closing.', false],
     [{ type: 'Incompatible' }, "This version of claude can't talk to this app.", false],
     [{ type: 'OwnTools' }, "claude can't be used: its own tools can't be turned off.", false],
-    [{ type: 'Moonset' }, "Why is a reason this viewer doesn't know (Moonset).", true],
+    [{ type: 'Moonset' }, "The reason is one this viewer doesn't know (Moonset).", true],
   ])("says why it couldn't learn them, %j, and offers to try again only where that could help", (why, says, again) => {
     const { container } = draw(opening, { agent: status({ type: 'Host' }, undefined, false, { type: 'Failed', value: why as never }) })
     expect(container.querySelector('.caf-settings [role=status]')?.textContent).toBe(
