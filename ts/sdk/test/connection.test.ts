@@ -82,14 +82,14 @@ describe("the handshake", () => {
     expect(caf.agents).toStrictEqual(agents.value);
     expect(caf.chats).toStrictEqual([{ id: CHAT, agent: "claude", cwd: "/home/me/project", label: null, shelf: null }]);
     expect(caf.run).toBe("run-1");
-    expect(caf.may).toStrictEqual({ act: true, agents: true });
+    expect(caf.may).toStrictEqual({ act: true, agents: true, usage: true });
     expect(link.closed).toBe(false);
   });
 
   test.each([
-    [{ act: false, agents: false }],
-    [{ act: true, agents: false }],
-    [{ act: false, agents: true }],
+    [{ act: false, agents: false, usage: false }],
+    [{ act: true, agents: false, usage: true }],
+    [{ act: false, agents: true, usage: false }],
   ])("says what the host lets this viewer do: %j", async (may) => {
     const link = new FakeTransport();
     const opening = Connection.open(link);

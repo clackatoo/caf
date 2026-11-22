@@ -14,6 +14,7 @@ use crate::ids::{ChangeNo, ChatId, Shelf, Ticket};
 use crate::install::{Install, LinkFrom, SignedInAs};
 use crate::save::{Entry, Header, Saved};
 use crate::time::{Mono, Wall};
+use crate::usage::LedgerLine;
 
 /// Work for a driver. `A` and `D` are the app's item and data types,
 /// which saving carries.
@@ -39,6 +40,8 @@ pub enum Directive<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     Storage(StorageDirective<A, D>),
     /// For the setup driver: installing agents and signing in to them.
     Setup(SetupDirective),
+    /// For the usage driver: the usage ledger.
+    Usage(UsageDirective),
     /// For the host's log.
     Report(Report),
 }
@@ -458,4 +461,37 @@ pub enum SetupDirective {
         /// Its ticket.
         ticket: Ticket,
     },
+}
+
+/// Work for the usage driver: keeping the usage ledger, which every CAF
+/// app on the machine shares, and the prices.
+///
+/// The driver's side of the contract:
+/// - **Lines go under one folder every CAF program shares**
+///   (`$XDG_DATA_HOME/caf/usage/`), in a folder per app, a file per month
+///   (`clackatoo/2026-11.jsonl`), each line whole: a lock is held while one
+///   is added, so two copies of an app never mix theirs. A file for a month
+///   that has ended is compressed (`2026-10.jsonl.zst`).
+/// - **Lines are only ever added**, never changed or removed, but for a
+///   turn's line written again: when a month's late lines are joined into
+///   its compressed file, one for a turn it already holds is dropped, and
+///   nothing else.
+/// - **A line it can't write is kept, and tried again** with the next one,
+///   and the failure reported to the host. Nothing it does ever holds up a
+///   chat, and it never answers the core: a ledger that fails costs only
+///   the summary, never a turn.
+/// - **It tells the core the prices** ([`Event::Prices`](crate::Event::Prices)):
+///   once as it starts, from what it has, and again whenever they change,
+///   because LiteLLM's table was fetched or the user set a price of their
+///   own.
+///
+/// A host that keeps no ledger drops these: its chats still record their
+/// usage and spend.
+#[non_exhaustive]
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum UsageDirective {
+    /// Add a turn's line to the ledger.
+    Record(Box<LedgerLine>),
 }

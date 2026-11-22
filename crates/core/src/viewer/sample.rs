@@ -99,6 +99,7 @@ fn turn(id: u64, starter: Starter, life: TurnLife, window: Window, items: Vec<It
         items,
         imported: false,
         model: None,
+        spent: None,
     }
 }
 
@@ -266,6 +267,7 @@ fn chat() -> Chat {
             },
         ],
         settings: settings(),
+        spend: Box::default(),
     }
 }
 

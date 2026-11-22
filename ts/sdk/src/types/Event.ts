@@ -2,6 +2,7 @@
 import type { AgentEvent } from "./AgentEvent.ts";
 import type { HostCommand } from "./HostCommand.ts";
 import type { PolicyAnswer } from "./PolicyAnswer.ts";
+import type { PriceTable } from "./PriceTable.ts";
 import type { SetupEvent } from "./SetupEvent.ts";
 import type { StorageEvent } from "./StorageEvent.ts";
 import type { Ticket } from "./Ticket.ts";
@@ -42,4 +43,4 @@ ticket: Ticket,
 /**
  * What happened.
  */
-event: SetupEvent, } };
+event: SetupEvent, } } | { "type": "Prices", "value": PriceTable };

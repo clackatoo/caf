@@ -21,7 +21,7 @@ export class Live {
   /** Every agent on offer, with whether it's installed and signed in. */
   agents = $state.raw<readonly DeepReadonly<AgentStatus>[]>([])
   /** What the host lets this page do, once connected. */
-  may = $state.raw<Readonly<Rights>>({ act: false, agents: false })
+  may = $state.raw<Readonly<Rights>>({ act: false, agents: false, usage: false })
   chats = $state.raw<readonly Readonly<ChatSummary>[]>([])
   /** The saved chats on the shelves the host lists, open or not. */
   saved = $state.raw<readonly DeepReadonly<SavedChat>[]>([])

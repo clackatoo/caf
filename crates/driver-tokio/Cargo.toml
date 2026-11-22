@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 caf-core.workspace = true
 caf-save.workspace = true
+caf-usage.workspace = true
 flate2.workspace = true
 libc.workspace = true
 memchr.workspace = true

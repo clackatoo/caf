@@ -70,7 +70,7 @@ mod tests {
     use crate::core::{ConnectionInfo, OpenChat, Refused, SessionChoice};
     use crate::directive::{
         AgentDirective, Directive, Level, PermissionRequest, PolicyDirective, Report,
-        SetupDirective, Signal, StorageDirective, TimerDirective, ViewerDirective,
+        SetupDirective, Signal, StorageDirective, TimerDirective, UsageDirective, ViewerDirective,
     };
     use crate::event::{
         AgentEvent, Event, Exit, HostCommand, PolicyAnswer, SetupEvent, StorageEvent,
@@ -96,6 +96,10 @@ mod tests {
     };
     use crate::shape::{Samples, every_type, traces};
     use crate::time::{End, Mono, Now, Wall, Window};
+    use crate::usage::{
+        BadQuery, Bucket, ChatCounts, Estimate, LedgerLine, ModelPrice, ModelTokens, PriceLayer,
+        PriceTable, PricedModel, Resolution, Spend, Summary, Tokens, TurnUsage, UsageQuery,
+    };
     use crate::viewer::{
         AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
     };
@@ -202,6 +206,7 @@ mod tests {
             PolicyDirective,
             Report,
             SetupDirective,
+            UsageDirective,
             Signal,
             StorageDirective,
             TimerDirective,
@@ -269,6 +274,23 @@ mod tests {
             Now,
             Wall,
             Window,
+            // usage
+            BadQuery,
+            Bucket,
+            ChatCounts,
+            Estimate,
+            LedgerLine,
+            ModelPrice,
+            ModelTokens,
+            PriceLayer,
+            PriceTable,
+            PricedModel,
+            Resolution,
+            Spend,
+            Summary,
+            Tokens,
+            TurnUsage,
+            UsageQuery,
             // viewer
             AgentAction,
             ChatSummary,

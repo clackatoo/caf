@@ -4,11 +4,13 @@ import type { AgentName } from "./AgentName.ts";
 import type { Answer } from "./Answer.ts";
 import type { ChangeNo } from "./ChangeNo.ts";
 import type { ChatId } from "./ChatId.ts";
+import type { ModelPrice } from "./ModelPrice.ts";
 import type { OpenRequest } from "./OpenRequest.ts";
 import type { QuestionId } from "./QuestionId.ts";
 import type { RequestNo } from "./RequestNo.ts";
 import type { SettingChoice } from "./SettingChoice.ts";
 import type { Shelf } from "./Shelf.ts";
+import type { UsageQuery } from "./UsageQuery.ts";
 import type { UserMessage } from "./UserMessage.ts";
 
 /**
@@ -120,4 +122,26 @@ agent: AgentName,
 /**
  * What to do.
  */
-action: AgentAction, } };
+action: AgentAction, } } | { "type": "Usage", "value": { 
+/**
+ * The viewer's number for this request.
+ */
+request: RequestNo, 
+/**
+ * What it covers.
+ */
+query: UsageQuery, } } | { "type": "SetPrice", "value": { 
+/**
+ * The viewer's number for this request.
+ */
+request: RequestNo, 
+/**
+ * The model, by the agent's id for it, as a [`Bucket`] names it.
+ *
+ * [`Bucket`]: crate::usage::Bucket
+ */
+model: string, 
+/**
+ * Its price, or `None`.
+ */
+price: ModelPrice | null, } };

@@ -17,6 +17,7 @@ use crate::question::Answer;
 use crate::save::{CannotRestore, Header, RestoreChat, Saved};
 use crate::settings::SettingChoice;
 use crate::time::Wall;
+use crate::usage::PriceTable;
 
 /// Something that happened. `A` and `D` are the app's item and data
 /// types.
@@ -66,6 +67,10 @@ pub enum Event<A: AppItem = NoAppItems, D: AppData = NoAppData> {
         /// What happened.
         event: SetupEvent,
     },
+    /// The prices to estimate cost with, whole: the usage driver's report,
+    /// as it starts and whenever they change. Every chat's spend is worked
+    /// out again with them.
+    Prices(PriceTable),
 }
 
 /// What the host asked for.

@@ -7,10 +7,12 @@ import type { ModelUsed } from "./ModelUsed.ts";
 import type { Question } from "./Question.ts";
 import type { QuestionId } from "./QuestionId.ts";
 import type { Settings } from "./Settings.ts";
+import type { Spend } from "./Spend.ts";
 import type { ToolCall } from "./ToolCall.ts";
 import type { Turn } from "./Turn.ts";
 import type { TurnId } from "./TurnId.ts";
 import type { TurnLife } from "./TurnLife.ts";
+import type { TurnUsage } from "./TurnUsage.ts";
 import type { Usage } from "./Usage.ts";
 
 /**
@@ -76,4 +78,12 @@ item: ItemId,
 /**
  * When.
  */
-end: End, } } | { "type": "Usage", "value": Usage } | { "type": "QuestionAsked", "value": Question } | { "type": "QuestionGone", "value": QuestionId };
+end: End, } } | { "type": "Usage", "value": Usage } | { "type": "TurnSpent", "value": { 
+/**
+ * The turn.
+ */
+turn: TurnId, 
+/**
+ * What it spent.
+ */
+usage: TurnUsage, } } | { "type": "Spend", "value": Spend } | { "type": "QuestionAsked", "value": Question } | { "type": "QuestionGone", "value": QuestionId };

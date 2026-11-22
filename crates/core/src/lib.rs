@@ -12,8 +12,9 @@
 //! Drivers are small and do one kind of job each: the agent driver starts
 //! adapter programs and carries their bytes, the timer driver wakes the
 //! core, the policy driver answers "is this allowed?", the viewer driver
-//! shows chats, the storage driver saves them, and the setup driver
-//! installs agents and signs in to them. Drivers never hear each
+//! shows chats, the storage driver saves them, the setup driver
+//! installs agents and signs in to them, and the usage driver keeps the
+//! usage ledger every CAF app shares and the prices. Drivers never hear each
 //! other; only the core listens to them, and only the core gives them
 //! work. `caf-driver-tokio` has ready-made ones; a host with its own event
 //! loop, such as clackatoo, writes its own against [`Event`] and
@@ -38,9 +39,12 @@
 //! and the rest, with where each agent stands in [`Core::agents`].
 //! Feature 4 added saving chats and restoring them ([`save`]):
 //! [`Core::restore`], [`Core::put_away`] and the rest, with the app's own
-//! data on each chat ([`AppData`]). Feature 5 adds choosing the agent's
+//! data on each chat ([`AppData`]). Feature 5 added choosing the agent's
 //! model, its effort and fast mode, for any agent ([`settings`]):
-//! [`Core::set_setting`] and [`Core::learn_settings`].
+//! [`Core::set_setting`] and [`Core::learn_settings`]. Feature 6 adds
+//! usage ([`usage`]): what each turn spent, what each chat has spent, and
+//! the usage ledger every CAF app on a machine shares, which the usage
+//! driver keeps.
 //!
 //! The types already hold everything the architecture fixed, so later
 //! features add behaviour without reshaping them. Items and variants
@@ -190,6 +194,7 @@ mod shape;
 pub mod time;
 #[cfg(feature = "ts")]
 mod ts;
+pub mod usage;
 pub mod viewer;
 
 pub use crate::core::{Core, OpenChat, Refused, SessionChoice};

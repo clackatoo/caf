@@ -5,10 +5,11 @@ import type { Report } from "./Report.ts";
 import type { SetupDirective } from "./SetupDirective.ts";
 import type { StorageDirective } from "./StorageDirective.ts";
 import type { TimerDirective } from "./TimerDirective.ts";
+import type { UsageDirective } from "./UsageDirective.ts";
 import type { ViewerDirective } from "./ViewerDirective.ts";
 
 /**
  * Work for a driver. `A` and `D` are the app's item and data types,
  * which saving carries.
  */
-export type Directive = { "type": "Agent", "value": AgentDirective } | { "type": "Timer", "value": TimerDirective } | { "type": "Policy", "value": PolicyDirective } | { "type": "Viewer", "value": ViewerDirective } | { "type": "Storage", "value": StorageDirective } | { "type": "Setup", "value": SetupDirective } | { "type": "Report", "value": Report };
+export type Directive = { "type": "Agent", "value": AgentDirective } | { "type": "Timer", "value": TimerDirective } | { "type": "Policy", "value": PolicyDirective } | { "type": "Viewer", "value": ViewerDirective } | { "type": "Storage", "value": StorageDirective } | { "type": "Setup", "value": SetupDirective } | { "type": "Usage", "value": UsageDirective } | { "type": "Report", "value": Report };

@@ -82,6 +82,15 @@ pub struct ViewerRules {
     ///
     /// [`Outcome::NotAllowed`]: caf_core::viewer::Outcome::NotAllowed
     pub agents: bool,
+    /// Whether viewers may read usage summaries and set prices of their
+    /// own ([`Rights::usage`]). `false` by default: a summary covers every
+    /// CAF app on the machine, not just this one, so a host opts in.
+    /// Refused requests get [`Outcome::NotAllowed`]. A chat's own usage and
+    /// spend come with watching it, whatever this says.
+    ///
+    /// [`Rights::usage`]: caf_core::viewer::Rights::usage
+    /// [`Outcome::NotAllowed`]: caf_core::viewer::Outcome::NotAllowed
+    pub usage: bool,
 }
 
 impl Default for ViewerRules {
@@ -92,6 +101,7 @@ impl Default for ViewerRules {
             act: true,
             max_watches: 256,
             agents: false,
+            usage: false,
         }
     }
 }
@@ -169,7 +179,7 @@ pub async fn serve<A: AppItem, D: AppData>(
         agents: caf.agents().to_vec(),
         chats: open,
         run: caf.run().to_owned(),
-        may: Rights::new(rules.act, rules.agents),
+        may: Rights::new(rules.act, rules.agents).with_usage(rules.usage),
     };
     let mut saved = caf.watch_saved();
     let Some(listed) = saved.next_listed().await else {
@@ -385,6 +395,23 @@ impl<A: AppItem, D: AppData> Link<A, D> {
                 }
                 Err(outcome) => (request, outcome),
             },
+            // Answered with ToViewer::Usage, or Done saying why not, on a
+            // task of its own: a summary reads files, and mustn't hold up
+            // the viewer's other requests. NotAllowed without
+            // ViewerRules::usage.
+            FromViewer::Usage { request, query } => {
+                let _ = (request, query);
+                todo!("feature 6: a summary for a viewer")
+            }
+            // Done, NoLedger, or NotAllowed without ViewerRules::usage.
+            FromViewer::SetPrice {
+                request,
+                model,
+                price,
+            } => {
+                let _ = (request, model, price);
+                todo!("feature 6: a price of the user's own, from a viewer")
+            }
             // A second Hello, or a message of a later version: there's
             // nothing to do.
             _ => return,

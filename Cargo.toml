@@ -13,6 +13,7 @@ repository = "https://github.com/clackatoo/caf"
 [workspace.dependencies]
 caf-core = { path = "crates/core" }
 caf-save = { path = "crates/save" }
+caf-usage = { path = "crates/usage" }
 # ACP's types only: CAF frames and routes the messages itself. The same
 # pin as clackatoo, with the session notices clackatoo already declares.
 agent-client-protocol-schema = { version = "1.10", default-features = false, features = ["unstable_session_notices"] }
@@ -23,6 +24,9 @@ libc = "0.2"
 log = "0.4"
 # Finds line ends in an adapter's output. serde_json already builds it.
 memchr = "2.8"
+# Time zones, for usage summaries by the user's own days: the system's
+# IANA database, with a bundled copy where it has none.
+jiff = { version = "0.2", features = ["tzdb-bundle-platform"] }
 # MessagePack, in named mode: the saved and Rust viewer format, which the
 # shape tests round-trip through.
 rmp-serde = "1.3"

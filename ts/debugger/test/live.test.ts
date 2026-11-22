@@ -74,7 +74,7 @@ describe('the agents', () => {
     const live = new Live()
     await live.connect(async () => link)
     expect(live.agents.map((agent) => agent.install.type)).toEqual(['Host'])
-    expect(live.may).toEqual({ act: true, agents: false })
+    expect(live.may).toEqual({ act: true, agents: false, usage: false })
     const signedIn = [{ name: 'fake', install: { type: 'Host' }, sign_in: { type: 'SignedIn', value: { type: 'Account' } }, can_sign_in: true }]
     link.deliver({ type: 'Agents', value: signedIn })
     expect(live.agents).toEqual(signedIn)

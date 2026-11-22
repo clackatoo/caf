@@ -762,6 +762,7 @@ pub(crate) fn render(directive: &Directive) -> Value {
         }
         Directive::Storage(storage) => json!({ "storage": storage }),
         Directive::Setup(setup) => render_setup(setup),
+        Directive::Usage(usage) => json!({ "usage": format!("{usage:?}") }),
         Directive::Report(report) => {
             json!({ "report": format!("{:?}", report.level), "message": report.message })
         }
