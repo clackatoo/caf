@@ -17,9 +17,13 @@
 //!
 //! `overage` is never a window: it says whether extra usage is in use
 //! ([`AccountLimits::extra_usage`]), as `isUsingOverage` does. A window
-//! with no share that reads is skipped; a share is kept to 0–100% and
-//! rounded, and a reset only between 2020 and 2100. Agents whose profile
-//! says nothing of limits have none.
+//! with no share that reads is skipped, unless refused; a share is kept
+//! to 0–100% and rounded, and a reset only between 2020 and 2100. A
+//! status CAF doesn't know reads as fine, and a window whose name isn't
+//! plain (letters, digits, `_`, `-` and `.`, 64 bytes at most) is
+//! skipped. Limits are heard only from what an agent says as it works,
+//! never from a session's history replayed, and a window already reset is
+//! no news. Agents whose profile says nothing of limits have none.
 //!
 //! Claude's adapter passes a report on only once the turn has had some of
 //! the agent's reply, so a new Claude process's first one may be lost.
