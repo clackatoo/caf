@@ -311,7 +311,7 @@ fn a_prompt_to_a_session_the_adapter_dropped_resumes_it_and_sends_again() {
             &sent(&out, "session/resume"),
             &json!({ "params": { "sessionId": SESSION } }),
         );
-        let out = script.answers(PROC, 1003, &json!({}));
+        let out = script.answers(PROC, 1003, &json!({ "modes": super::default_modes() }));
         assert_has(
             &sent(&out, "session/prompt"),
             &json!({ "params": { "sessionId": SESSION, "prompt": [{ "text": "go" }] } }),
@@ -339,7 +339,11 @@ fn a_dropped_session_that_cant_be_resumed_is_replaced_and_the_chat_says_so() {
             .get("sessionId")
             .is_none()
     );
-    let out = script.answers(PROC, 1004, &json!({ "sessionId": "fresh" }));
+    let out = script.answers(
+        PROC,
+        1004,
+        &json!({ "modes": super::default_modes(), "sessionId": "fresh" }),
+    );
     sent(&out, "session/prompt");
     assert_has(
         &script.chat(CHAT),
@@ -356,7 +360,7 @@ fn a_message_is_sent_again_to_a_dropped_session_at_most_once() {
     let mut script = Script::with_claude();
     let (turn, _) = script.send(CHAT, "go");
     script.fails(PROC, 1002, &not_found(true));
-    script.answers(PROC, 1003, &json!({}));
+    script.answers(PROC, 1003, &json!({ "modes": super::default_modes() }));
     let out = script.fails(PROC, 1004, &not_found(true));
     assert!(
         with(&out, "write")
@@ -370,7 +374,7 @@ fn a_message_is_sent_again_to_a_dropped_session_at_most_once() {
         }),
     );
     // The chat still opens its session again, for the next message.
-    script.answers(PROC, 1005, &json!({}));
+    script.answers(PROC, 1005, &json!({ "modes": super::default_modes() }));
     assert_has(
         &script.chat(CHAT),
         &json!({ "state": { "type": "Open", "value": { "session": SESSION } } }),
@@ -388,7 +392,7 @@ fn a_turn_being_stopped_isnt_sent_again_when_its_session_was_dropped() {
         &json!({ "turns": [{ "id": turn.expect("sent").0, "life": { "type": "Stopped" } }] }),
     );
     sent(&out, "session/resume");
-    let out = script.answers(PROC, 1003, &json!({}));
+    let out = script.answers(PROC, 1003, &json!({ "modes": super::default_modes() }));
     assert!(with(&out, "write").is_empty(), "nothing sent: {out:#?}");
 }
 
@@ -400,7 +404,11 @@ fn another_profile_matches_none_of_claudes_text() {
         .0
         .expect("opened");
     script.answers(PROC, 1000, &super::plain_init(false));
-    script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+    );
     script.send(CHAT, "go").0.expect("sent");
     script.fails(
         PROC,

@@ -21,7 +21,7 @@ use crate::event::PolicyAnswer;
 use crate::ids::{ChatId, QuestionId, Ticket};
 use crate::question::{Answer, OptionId, OptionKind, Permission, PermissionOption, QuestionKind};
 use crate::time::Now;
-use crate::tool::{Action, DecidedBy, Decision, Origin, ToolStatus};
+use crate::tool::{DecidedBy, Decision, Origin, ToolStatus, reported_action};
 
 /// The most options a permission request keeps: any past it are left
 /// out.
@@ -105,28 +105,28 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let input = (call.get("rawInput").filter(|input| !input.is_null()))
             .map(|input| super::clean::cut(input.to_string(), MOST_INPUT));
         // Whose tool it is: as CAF has it, else as the adapter says in the
-        // request itself. Never from its title.
+        // request itself, which names a server as the app did, so corrects
+        // one read from a tool's name. Never from its title.
         let known = tool.and_then(|item| match &self.item(chat, item)?.kind {
             ItemKind::Tool(tool) => Some(tool.origin.clone()),
             _ => None,
         });
-        let origin = match known {
-            Some(origin) if origin != Origin::NotRecorded => origin,
-            _ => (self.profile_of_chat(chat).origin_of(&call)).unwrap_or(Origin::NotRecorded),
+        let servers = (self.runs.get(&chat))
+            .map(super::sessions::server_names)
+            .unwrap_or_default();
+        let said = self.profile_of_chat(chat).origin_in(&call, &servers);
+        let origin = match (known, said) {
+            (Some(Origin::Server { .. }), Some(said @ Origin::Server { .. })) => said,
+            (Some(known), _) if known != Origin::NotRecorded => known,
+            (_, said) => said.unwrap_or(Origin::NotRecorded),
         };
-        let action = match &origin {
-            Origin::App(name) | Origin::Agent(name) | Origin::Server { tool: name, .. } => {
-                Some(Action::Tool { name: name.clone() })
-            }
-            // CAF's own calls are asked about by CAF itself, with their
-            // actions; nothing reliable is known of one it hasn't seen.
-            Origin::Caf(_) | Origin::NotRecorded => None,
-        };
+        let action = reported_action(&origin);
         if let Some(item) = tool {
             self.change_tool(chat, item, |tool| {
                 // The record says what the policy is told.
-                if tool.origin == Origin::NotRecorded {
+                if tool.origin != origin {
                     tool.origin = origin.clone();
+                    tool.action = action.clone();
                 }
                 if !tool.status.ended() {
                     tool.decision = Decision::Undecided;

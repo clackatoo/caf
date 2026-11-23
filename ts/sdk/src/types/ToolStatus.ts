@@ -6,6 +6,9 @@
  * Every call ends Done, Failed, Refused or Cancelled: when its turn ends,
  * one still Pending, Asking or Running is Cancelled if the user stopped
  * the turn, and Failed otherwise, and so is one a restored chat was cut
- * off in.
+ * off in. One the agent says failed while the user stops its turn was
+ * cancelled, as an agent of ACP's first version, such as Claude's, has
+ * no other word for it. Once a call has ended it stays so, whatever the
+ * agent says of it after, though what it gave back may still come.
  */
 export type ToolStatus = { "type": "Pending" } | { "type": "Asking" } | { "type": "Running" } | { "type": "Done" } | { "type": "Failed" } | { "type": "Refused" } | { "type": "Cancelled" };

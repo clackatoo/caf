@@ -45,10 +45,11 @@
 //! | --- | --- | --- |
 //! | [`Text`] | [`MOST_TEXT`] | its start |
 //! | [`Output`] | [`MOST_OUTPUT`] | its end, in whole lines of at most [`MOST_LINE`] |
-//! | [`Diff`] | [`MOST_DIFF`] | whole hunks, then how many more |
+//! | [`Diff`] | [`MOST_DIFF`], each line 64 bytes more than its text | whole hunks, then how many more; none past 10,000 lines changed |
 //! | [`Image`] | [`MOST_IMAGE`] | all of it, or none, with its size |
 //! | [`ToolCall::locations`] | [`MOST_LOCATIONS`] | the first |
 //! | [`ToolCall::input`] | [`MOST_INPUT`] | its start |
+//! | [`Piece::Unknown`] | [`MOST_INPUT`] | its start |
 
 use serde::{Deserialize, Serialize};
 
@@ -149,7 +150,10 @@ pub enum ToolKind {
 /// Every call ends Done, Failed, Refused or Cancelled: when its turn ends,
 /// one still Pending, Asking or Running is Cancelled if the user stopped
 /// the turn, and Failed otherwise, and so is one a restored chat was cut
-/// off in.
+/// off in. One the agent says failed while the user stops its turn was
+/// cancelled, as an agent of ACP's first version, such as Claude's, has
+/// no other word for it. Once a call has ended it stays so, whatever the
+/// agent says of it after, though what it gave back may still come.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -340,6 +344,7 @@ pub enum Piece {
     Diff(Diff),
     /// A command's output. A call has at most one, and while it runs,
     /// [`Change::OutputChanged`](crate::Change::OutputChanged) changes it.
+    /// It ends with its call: [`Ending::Unknown`] if nothing said how.
     Output(Output),
     /// A picture.
     Image(Image),
@@ -383,7 +388,11 @@ pub struct Cut {
 pub struct Diff {
     /// The file, as an absolute path.
     pub path: String,
-    /// Whether the change makes the file: there was none before.
+    /// Whether the change makes the file: there was none before. For a
+    /// change the agent reports, that it sent nothing of the file before,
+    /// as Claude's adapter does first for a Write, whether or not there
+    /// was a file, and for a hunk that only adds lines: its next report
+    /// of the call usually replaces the diff with the whole truth.
     pub new_file: bool,
     /// How many lines it adds, in all its hunks, kept or not.
     pub added: u64,
@@ -412,8 +421,17 @@ pub struct DiffLine {
     /// Whether it was kept, added or removed.
     pub change: LineChange,
     /// Its number in the file before, numbered from 1: none if added.
+    ///
+    /// For a change the agent reports, numbered within what it sent,
+    /// which may be only part of the file, as Claude's diffs of a hunk or
+    /// an edit's text are; and if the agent gave, in the same place in
+    /// the call's [`locations`](ToolCall::locations), where that part is
+    /// in the file after, from there, both before and after. The numbers
+    /// after are then the file's; those before are too, unless an earlier
+    /// part of the change added or removed lines.
     pub old: Option<u64>,
-    /// Its number in the file after: none if removed.
+    /// Its number in the file after: none if removed. Numbered as
+    /// [`old`](Self::old) says.
     pub new: Option<u64>,
     /// The line, without its ending.
     pub text: String,
@@ -537,12 +555,38 @@ impl Text {
 impl Diff {
     /// The change to the file at `path` from `before`, `None` if there was
     /// no file, to `after`: its hunks, with three lines either side as
-    /// they were, whole ones up to [`MOST_DIFF`]. Lines are compared
-    /// whole, their endings included, and kept without them, with nothing
-    /// in them hidden, as an agent's text is: a control character or one
-    /// that reorders text shows as a code.
+    /// they were, whole ones up to [`MOST_DIFF`], each line counting its
+    /// text and 64 bytes more. Lines are compared whole, their endings
+    /// included, and kept without them, with nothing in them hidden, as an
+    /// agent's text is: a control character or one that reorders text
+    /// shows as a code.
+    ///
+    /// Working out hunks takes time that grows with the square of the
+    /// lines changed, so past 10,000 lines between the two files, not
+    /// counting those the same at either end, it isn't done: the diff has
+    /// no hunks and one [`more`](Self::more), and says it removes every
+    /// one of those lines of `before` and adds every one of `after`.
     #[must_use]
     pub fn new(path: impl Into<String>, before: Option<&str>, after: &str) -> Self {
+        let old: Vec<&str> = before.unwrap_or_default().split_inclusive('\n').collect();
+        let new: Vec<&str> = after.split_inclusive('\n').collect();
+        let same_start = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+        let same_end = (old[same_start..].iter().rev())
+            .zip(new[same_start..].iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let removed = old.len() - same_start - same_end;
+        let added = new.len() - same_start - same_end;
+        if removed + added > MOST_DIFF_WORK {
+            return Self {
+                path: path.into(),
+                new_file: before.is_none(),
+                added: added as u64,
+                removed: removed as u64,
+                hunks: Vec::new(),
+                more: 1,
+            };
+        }
         let diff = similar::TextDiff::from_lines(before.unwrap_or_default(), after);
         let (mut added, mut removed) = (0, 0);
         let mut hunks = Vec::new();
@@ -579,7 +623,9 @@ impl Diff {
         let mut size = 0;
         let kept = (hunks.iter())
             .take_while(|hunk| {
-                size += hunk.lines.iter().map(|line| line.text.len()).sum::<usize>();
+                size += (hunk.lines.iter())
+                    .map(|line| line.text.len() + LINE_COST)
+                    .sum::<usize>();
                 size <= MOST_DIFF
             })
             .count();
@@ -596,8 +642,58 @@ impl Diff {
     }
 }
 
+impl Diff {
+    /// Numbers its lines as if it started at line `first` of the file, both
+    /// before and after: for an agent's diff of only part of a file, such
+    /// as Claude's, one for each hunk, with where it is in the file after.
+    pub(crate) fn number_from(&mut self, first: u64) {
+        let by = first.saturating_sub(1);
+        for line in self.hunks.iter_mut().flat_map(|hunk| &mut hunk.lines) {
+            line.old = line.old.map(|old| old.saturating_add(by));
+            line.new = line.new.map(|new| new.saturating_add(by));
+        }
+    }
+}
+
+impl<A: AppItem> ToolCall<A> {
+    /// Says its command's output ended, if it has: [`Ending::Unknown`], if
+    /// nothing said how, as with an agent's own terminal.
+    pub(crate) fn settle_output(&mut self) {
+        if !self.status.ended() {
+            return;
+        }
+        for piece in &mut self.result {
+            if let Piece::Output(output) = piece
+                && output.ending.is_none()
+            {
+                output.ending = Some(Ending::Unknown);
+            }
+        }
+    }
+}
+
+/// What a call the agent reports does, as CAF knows it from whose tool it
+/// is, `origin`: the tool, by its name, for any tool but CAF's own, whose
+/// actions CAF reads itself from their input. `None` if that isn't known.
+pub(crate) fn reported_action(origin: &Origin) -> Option<Action> {
+    match origin {
+        Origin::App(name) | Origin::Agent(name) | Origin::Server { tool: name, .. } => {
+            Some(Action::Tool { name: name.clone() })
+        }
+        Origin::Caf(_) | Origin::NotRecorded => None,
+    }
+}
+
 /// The lines kept as they were either side of a diff's changes.
 const CONTEXT: usize = 3;
+
+/// The most lines, of both files, a diff's hunks are worked out for, not
+/// counting those the same at either end.
+const MOST_DIFF_WORK: usize = 10_000;
+
+/// What each line of a diff counts against [`MOST_DIFF`] beyond its text:
+/// about what keeping it costs, its numbers and its change.
+const LINE_COST: usize = 64;
 
 /// `text`'s first `most` bytes, at a character boundary, and how much was
 /// kept if that's not all of it.

@@ -185,7 +185,11 @@ fn without_the_agents_id_a_call_joins_the_oldest_report_with_the_same_input() {
         .0
         .expect("opened");
     script.answers(PROC, 1000, &super::claude_init());
-    script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+    );
     script.send(CHAT, "go").0.expect("sent");
     let a = json!({ "file_path": "/work/a" });
     let b = json!({ "file_path": "/work/b" });

@@ -475,8 +475,9 @@ fn reshape_tool_item(item: &mut Tree) -> bool {
 }
 
 /// Makes `tool`, a tool call of the shape before version 6, one of this
-/// version's: its output one piece of text, if it had any; its action the
-/// tool by its title; where it came from and who allowed it not recorded.
+/// version's: its output one piece of text, if it had any; its action not
+/// known, as its title is the model's, not the tool's name; where it came
+/// from and who allowed it not recorded.
 /// Whether it was the old shape.
 fn reshape_tool(tool: &mut Tree) -> bool {
     let Tree::Map(fields) = tool else {
@@ -494,7 +495,6 @@ fn reshape_tool(tool: &mut Tree) -> bool {
         map.extend(value.map(|value| (text("value"), value)));
         Tree::Map(map)
     };
-    let title = tool.get("title").cloned().unwrap_or_else(|| text(""));
     let result = match output {
         Tree::Str(output) if !output.is_empty() => vec![tagged(
             "Text",
@@ -510,10 +510,7 @@ fn reshape_tool(tool: &mut Tree) -> bool {
     };
     fields.extend([
         (text("origin"), tagged("NotRecorded", None)),
-        (
-            text("action"),
-            tagged("Tool", Some(Tree::Map(vec![(text("name"), title)]))),
-        ),
+        (text("action"), Tree::Nil),
         (text("input_cut"), Tree::Nil),
         (text("result"), Tree::List(result)),
         (text("locations"), Tree::List(Vec::new())),

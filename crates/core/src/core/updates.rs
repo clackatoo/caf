@@ -27,7 +27,7 @@ use crate::profiles::ProfileChoice;
 use crate::time::{End, Now, Window};
 use crate::tool::{
     Cut, Decision, Diff, Link, Location, Origin, Output, Piece, Text, capped_input,
-    capped_locations, image,
+    capped_locations, image, reported_action,
 };
 
 /// The longest tool title kept, in bytes.
@@ -105,7 +105,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         {
             self.limits_heard(now, builtin, &update, out);
         }
-        let said = self.read_update(&profile, update);
+        let said = self.read_update(chat, &profile, update);
         if replaying {
             self.replayed(now, chat, said, out);
         } else {
@@ -124,7 +124,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// What `update` says, read by its tag.
-    fn read_update(&self, profile: &ProfileChoice, update: Value) -> Said {
+    fn read_update(&self, chat: ChatId, profile: &ProfileChoice, update: Value) -> Said {
         let tag = update
             .get("sessionUpdate")
             .and_then(Value::as_str)
@@ -140,8 +140,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     },
                 })
             }
-            "tool_call" => tool_call(profile, &update, true),
-            "tool_call_update" => tool_call(profile, &update, false),
+            "tool_call" | "tool_call_update" => {
+                let servers = (self.runs.get(&chat))
+                    .map(super::sessions::server_names)
+                    .unwrap_or_default();
+                tool_call(profile, &servers, &update, tag == "tool_call")
+            }
             // A number JavaScript can't read exactly makes it unreadable:
             // every number in a chat is below 2^53.
             "usage_update" if profile.limits_only(&update) => Some(Said::Limits),
@@ -182,6 +186,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 what,
                 raw: update,
                 summary: None,
+                cut: None,
             })
         })
     }
@@ -284,7 +289,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         let mut update = call.clone();
         update["sessionUpdate"] = Value::from("tool_call_update");
-        let Said::Tool { id, change } = self.read_update(&self.profile_of_chat(chat), update)
+        let Said::Tool { id, change } = self.read_update(chat, &self.profile_of_chat(chat), update)
         else {
             return None;
         };
@@ -333,6 +338,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let input = change.input.as_ref().map(|(input, _)| input);
         if self.served_report(chat, &id, caf, input).is_some() {
             return;
+        }
+        // While the user stops a turn, Claude's adapter says each call it
+        // didn't finish failed, as ACP's first version has no other word
+        // for it, before it answers the prompt: they were cancelled.
+        let mut change = change;
+        let stopping = (self.runs.get(&chat))
+            .and_then(|run| run.running.as_ref())
+            .is_some_and(|running| running.stop_by.is_some());
+        if stopping && change.status == Some(ToolStatus::Failed) {
+            change.status = Some(ToolStatus::Cancelled);
         }
         let known = self
             .runs
@@ -534,12 +549,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 }
 
 impl ToolChange {
-    /// Changes `tool` as this says. A status CAF set itself stands: a
-    /// call is Asking while its permission question is open, whatever
-    /// the agent says of it meanwhile, and a call refused stays so, as it
-    /// never ran. An update's result replaces the last: an agent sends
-    /// what it has so far, such as Claude's diff of the edit's input,
-    /// then the file's own.
+    /// Changes `tool` as this says. A call that has ended stays as it
+    /// ended, whatever the agent says of it after, though what it gave back
+    /// may still come; one is Asking while its permission question is open,
+    /// unless the agent says it has gone on. Whose tool it is is set once,
+    /// and what it does with it, as far as CAF knows that. An update's
+    /// result replaces the last: an agent sends what it has so far, such as
+    /// Claude's diff of the edit's input, then the file's own.
     fn apply<A: AppItem>(self, tool: &mut ToolCall<A>) {
         if let Some(title) = self.title {
             tool.title = agent_text(&title, MOST_TITLE);
@@ -547,15 +563,17 @@ impl ToolChange {
         if let Some(kind) = self.kind {
             tool.kind = kind;
         }
-        if let Some(origin) = self.origin {
+        if let Some(origin) = self.origin
+            && tool.origin == Origin::NotRecorded
+        {
             tool.origin = origin;
         }
+        if tool.action.is_none() {
+            tool.action = reported_action(&tool.origin);
+        }
         if let Some(status) = self.status {
-            let stands = match tool.status {
-                ToolStatus::Refused => true,
-                ToolStatus::Asking => status == ToolStatus::Pending,
-                _ => false,
-            };
+            let stands = tool.status.ended()
+                || (tool.status == ToolStatus::Asking && status == ToolStatus::Pending);
             if !stands {
                 tool.status = status;
             }
@@ -571,6 +589,7 @@ impl ToolChange {
             tool.locations = locations;
             tool.locations_cut = more;
         }
+        tool.settle_output();
     }
 
     /// A new tool call, as this says.
@@ -617,57 +636,62 @@ const MOST_NOTICE: usize = 1024;
 
 /// A tool call, all of it if `whole`, or a change to one: read as far as
 /// it goes, so a call missing something ACP requires, such as its title,
-/// is still a call its updates find. Its content and locations are read
-/// one by one, so one CAF can't read is kept as it came, never dropping
-/// the rest; its origin is what the adapter says of it, as its profile
-/// reads that, and never its title.
-fn tool_call(profile: &ProfileChoice, update: &Value, whole: bool) -> Option<Said> {
+/// is still a call its updates find. Its status, kind, content and
+/// locations are read apart, and leniently, so one CAF can't read loses
+/// nothing else: a piece of content kept as it came, a location with only
+/// its path, or counted as cut. Its origin is what the adapter says of it,
+/// as its profile reads that against the chat's MCP servers, `servers`,
+/// and never its title.
+fn tool_call(
+    profile: &ProfileChoice,
+    servers: &[String],
+    update: &Value,
+    whole: bool,
+) -> Option<Said> {
     let mut fields = update.clone();
-    let content = fields.as_object_mut()?.remove("content");
-    let locations = fields.as_object_mut()?.remove("locations");
+    let object = fields.as_object_mut()?;
+    let content = object
+        .remove("content")
+        .filter(|content| !content.is_null());
+    let locations = object
+        .remove("locations")
+        .filter(|locations| !locations.is_null());
+    let status = object.remove("status");
+    let kind = object.remove("kind");
     let call = serde_json::from_value::<acp::ToolCallUpdate>(fields).ok()?;
     let fields = call.fields;
-    let content = content.filter(|content| !content.is_null());
+    let places = locations.as_ref().map(read_locations);
     let result = match (content.as_ref(), fields.raw_output.as_ref()) {
-        (Some(content), raw) => Some(pieces(content, raw)),
+        (Some(content), raw) => Some(pieces(content, raw, places.as_ref())),
         (None, Some(raw)) => Some(raw_output(raw).into_iter().collect()),
         (None, None) => whole.then(Vec::new),
     };
+    let status = match status.as_ref().and_then(Value::as_str) {
+        Some("pending") => Some(ToolStatus::Pending),
+        Some("in_progress") => Some(ToolStatus::Running),
+        Some("completed") => Some(ToolStatus::Done),
+        Some("failed") => Some(ToolStatus::Failed),
+        // ACP's next version says a call was cancelled.
+        Some("cancelled") => Some(ToolStatus::Cancelled),
+        // Newer than CAF: its status stays as it was.
+        _ => None,
+    };
+    let kind = kind
+        .and_then(|kind| serde_json::from_value::<acp::ToolKind>(kind).ok())
+        .map(tool_kind);
     Some(Said::Tool {
         id: call.tool_call_id.0.to_string(),
         change: ToolChange {
             title: fields.title,
-            kind: fields
-                .kind
-                .map(tool_kind)
-                .or(whole.then_some(ToolKind::Other)),
-            status: fields
-                .status
-                .map(tool_status)
-                .or(whole.then_some(ToolStatus::Pending)),
-            origin: profile.origin_of(update),
+            kind: kind.or(whole.then_some(ToolKind::Other)),
+            status: status.or(whole.then_some(ToolStatus::Pending)),
+            origin: profile.origin_in(update, servers),
             input: fields.raw_input.map(capped_input),
             result,
-            locations: locations
-                .filter(|locations| !locations.is_null())
-                .map(|locations| {
-                    let read = (locations
-                        .as_array()
-                        .map(Vec::as_slice)
-                        .unwrap_or_default()
-                        .iter())
-                    .filter_map(|location| {
-                        let location =
-                            serde_json::from_value::<acp::ToolCallLocation>(location.clone())
-                                .ok()?;
-                        Some(Location {
-                            path: agent_text(&location.path.to_string_lossy(), MOST_PATH),
-                            line: location.line.map(u64::from),
-                        })
-                    })
-                    .collect();
-                    capped_locations(read)
-                }),
+            locations: places.map(|(places, unread)| {
+                let (kept, more) = capped_locations(places.into_iter().flatten().collect());
+                (kept, more + unread)
+            }),
         },
     })
 }
@@ -675,19 +699,50 @@ fn tool_call(profile: &ProfileChoice, update: &Value, whole: bool) -> Option<Sai
 /// The longest path kept, in bytes.
 const MOST_PATH: usize = 4096;
 
+/// The locations a call is about, as ACP gives them, each in its place:
+/// `None` for one with no path, and how many of those there were. One
+/// whose line can't be read keeps its path; a list that isn't one is one
+/// that can't be read.
+fn read_locations(locations: &Value) -> (Vec<Option<Location>>, u64) {
+    let Some(locations) = locations.as_array() else {
+        return (Vec::new(), 1);
+    };
+    let read: Vec<Option<Location>> = (locations.iter())
+        .map(|location| {
+            let path = location.get("path")?.as_str()?;
+            Some(Location {
+                path: agent_text(path, MOST_PATH),
+                line: (location.get("line").and_then(Value::as_u64))
+                    .filter(|line| (1..=MOST_EXACT).contains(line)),
+            })
+        })
+        .collect();
+    let unread = read.iter().filter(|place| place.is_none()).count() as u64;
+    (read, unread)
+}
+
 /// What a tool gave back, `content`, in order: a piece for each item of
 /// it, one CAF can't read kept as it came. Its raw output, `raw`, if it
-/// has no content.
-fn pieces(content: &Value, raw: Option<&Value>) -> Vec<Piece> {
+/// has no content. A call has one output at most: a second terminal is
+/// kept as it came. A diff is numbered from the line of the location in
+/// the same place in `places`, if that's of the same file: an agent may
+/// send only the part of a file that changed, as Claude's adapter does,
+/// with where it is.
+fn pieces(
+    content: &Value,
+    raw: Option<&Value>,
+    places: Option<&(Vec<Option<Location>>, u64)>,
+) -> Vec<Piece> {
     let Some(content) = content.as_array() else {
         return vec![unknown_piece(content)];
     };
     if content.is_empty() {
         return raw.and_then(raw_output).into_iter().collect();
     }
-    (content.iter())
-        .map(
-            |each| match serde_json::from_value::<acp::ToolCallContent>(each.clone()) {
+    let mut output = false;
+    (content.iter().enumerate())
+        .map(|(at, each)| {
+            match serde_json::from_value::<acp::ToolCallContent>(each.clone()) {
                 Ok(acp::ToolCallContent::Content(content)) => match content.content {
                     acp::ContentBlock::Text(text) => Piece::Text(Text::new(unhidden(&text.text))),
                     acp::ContentBlock::Image(picture) => Piece::Image(image(
@@ -700,37 +755,51 @@ fn pieces(content: &Value, raw: Option<&Value>) -> Vec<Piece> {
                     }),
                     _ => unknown_piece(each),
                 },
-                Ok(acp::ToolCallContent::Diff(diff)) => Piece::Diff(Diff::new(
-                    agent_text(&diff.path.to_string_lossy(), MOST_PATH),
-                    diff.old_text.as_deref(),
-                    &diff.new_text,
-                )),
+                Ok(acp::ToolCallContent::Diff(diff)) => {
+                    let path = agent_text(&diff.path.to_string_lossy(), MOST_PATH);
+                    let line = (places.and_then(|(places, _)| places.get(at)))
+                        .and_then(Option::as_ref)
+                        .filter(|place| place.path == path)
+                        .and_then(|place| place.line);
+                    let mut diff = Diff::new(path, diff.old_text.as_deref(), &diff.new_text);
+                    if let Some(line) = line {
+                        diff.number_from(line);
+                    }
+                    Piece::Diff(diff)
+                }
                 // A terminal CAF never gave the agent: its output isn't
                 // CAF's to show, but there was one.
-                Ok(acp::ToolCallContent::Terminal(_)) => Piece::Output(Output {
-                    lines: Vec::new(),
-                    dropped: 0,
-                    ending: None,
-                }),
+                Ok(acp::ToolCallContent::Terminal(_)) if !output => {
+                    output = true;
+                    Piece::Output(Output {
+                        lines: Vec::new(),
+                        dropped: 0,
+                        ending: None,
+                    })
+                }
                 Ok(_) | Err(_) => unknown_piece(each),
-            },
-        )
+            }
+        })
         .collect()
 }
 
 /// The longest image type kept, in bytes.
 const MOST_MIME: usize = 128;
 
-/// A piece of content CAF can't read, kept as it came.
+/// A piece of content CAF can't read, kept as it came: the start of its
+/// JSON, as a string, if that's longer than
+/// [`MOST_INPUT`](crate::tool::MOST_INPUT).
 fn unknown_piece(content: &Value) -> Piece {
     let what = content
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or("content");
+    let (raw, cut) = capped_input(content.clone());
     Piece::Unknown(Unknown {
         what: agent_text(what, 64),
-        raw: content.clone(),
+        raw,
         summary: None,
+        cut,
     })
 }
 
@@ -752,6 +821,7 @@ pub(super) fn settle_imported<A: AppItem>(turn: &mut Turn<A>) {
             && !tool.status.ended()
         {
             tool.status = ToolStatus::Failed;
+            tool.settle_output();
         }
     }
 }
@@ -779,15 +849,5 @@ fn tool_kind(kind: acp::ToolKind) -> ToolKind {
         acp::ToolKind::Think => ToolKind::Think,
         acp::ToolKind::Fetch => ToolKind::Fetch,
         _ => ToolKind::Other,
-    }
-}
-
-/// ACP's tool status in CAF's terms.
-fn tool_status(status: acp::ToolCallStatus) -> ToolStatus {
-    match status {
-        acp::ToolCallStatus::InProgress => ToolStatus::Running,
-        acp::ToolCallStatus::Completed => ToolStatus::Done,
-        acp::ToolCallStatus::Failed => ToolStatus::Failed,
-        _ => ToolStatus::Pending,
     }
 }

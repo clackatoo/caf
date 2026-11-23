@@ -141,7 +141,11 @@ fn a_session_opened_again_is_stripped_again_with_the_same_instructions() {
     open.instructions = Some("Notes.".to_owned());
     script.open(open).0.expect("opened");
     script.answers(PROC, 1000, &claude_init());
-    script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+    );
     // The adapter dropped the session: the prompt resumes it.
     script.send(CHAT, "go").0.expect("sent");
     let out = script.fails(
@@ -238,7 +242,16 @@ fn an_mcp_server_named_caf_is_refused_as_cafs_own() {
         url: "http://localhost:1/mcp".to_owned(),
         headers: Vec::new(),
     };
-    for name in ["caf", "CAF"] {
+    // Claude Code writes `caf.x` as `caf_x`, so its tools as `mcp__caf__…`.
+    for name in [
+        "caf",
+        "CAF",
+        "caf__x",
+        "Caf__",
+        "caf.",
+        "caf._x",
+        "caf. tools",
+    ] {
         let mut script = Script::new(host());
         let mut open = OpenChat::new("claude", "/work");
         open.mcp_servers = vec![server("eyespy"), server(name)];
@@ -253,8 +266,10 @@ fn an_mcp_server_named_caf_is_refused_as_cafs_own() {
         assert!(out.is_empty(), "nothing is read: {out:#?}");
     }
     // A name with `caf` in it is the app's own.
-    let mut script = Script::new(host());
-    let mut open = OpenChat::new("claude", "/work");
-    open.mcp_servers = vec![server("caffeine")];
-    assert_eq!(script.open(open).0, Ok(CHAT));
+    for name in ["caffeine", "caf_tools", "my caf"] {
+        let mut script = Script::new(host());
+        let mut open = OpenChat::new("claude", "/work");
+        open.mcp_servers = vec![server(name)];
+        assert_eq!(script.open(open).0, Ok(CHAT), "{name}");
+    }
 }

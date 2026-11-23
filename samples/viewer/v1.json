@@ -1081,7 +1081,8 @@
                             "raw": {
                               "type": "hologram"
                             },
-                            "summary": null
+                            "summary": null,
+                            "cut": null
                           }
                         }
                       ],
@@ -1132,7 +1133,8 @@
                         "sessionUpdate": "plan",
                         "entries": []
                       },
-                      "summary": null
+                      "summary": null,
+                      "cut": null
                     }
                   }
                 }

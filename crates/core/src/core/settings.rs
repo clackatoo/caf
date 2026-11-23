@@ -292,7 +292,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// The session `chat` opened, as the agent answered `result`: if its
     /// profile starts every session in a permission mode, and the session
-    /// says it's in another, that mode is to be set before anything else
+    /// doesn't say it's in that one, it's to be set before anything else
     /// goes. Claude's adapter starts a session in the user's own default
     /// (`permissions.defaultMode` of `~/.claude/settings.json`), whatever
     /// CAF says: in `plan` or `dontAsk`, no tool would run.
@@ -313,9 +313,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             })
             .and_then(Value::as_str);
         if let Some(run) = self.runs.get_mut(&chat) {
-            run.choosing.mode = current
-                .filter(|current| *current != mode)
-                .map(|_| ModeFix::Unsent(mode));
+            // One that doesn't say is set too: CAF can't know it's right.
+            run.choosing.mode = (current != Some(mode)).then_some(ModeFix::Unsent(mode));
         }
     }
 

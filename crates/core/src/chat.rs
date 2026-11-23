@@ -612,4 +612,11 @@ pub struct Unknown {
     /// What it is, in a line, if CAF knows: an app item's summary.
     #[serde(default)]
     pub summary: Option<String>,
+    /// How much of its data was kept, if it was too big to keep whole:
+    /// then [`raw`](Self::raw) is the start of its JSON, as a string. Only
+    /// a [`Piece::Unknown`](crate::tool::Piece::Unknown) is cut, at
+    /// [`MOST_INPUT`](crate::tool::MOST_INPUT). Saves and recordings
+    /// made before it was added read as none.
+    #[serde(default)]
+    pub cut: Option<crate::tool::Cut>,
 }

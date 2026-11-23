@@ -146,8 +146,8 @@ mod common;
 ///    rather than text, and its locations, and the output of a command
 ///    as it runs ([`Change::OutputChanged`](caf_core::change::Change::OutputChanged)).
 ///    A save of an older version is migrated as it's read: its output is
-///    one piece of text, its action the tool by its title, and where it
-///    came from and who allowed it not recorded.
+///    one piece of text, its action not known, and where it came from and
+///    who allowed it not recorded.
 ///
 /// [`FailureReason::SettingNotApplied`]: caf_core::chat::FailureReason::SettingNotApplied
 pub const VERSION: u32 = 6;

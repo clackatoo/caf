@@ -176,7 +176,11 @@ fn messages_wait_in_order_up_to_the_hosts_limit() {
     script.send(CHAT, "two").0.expect("waits");
     assert_eq!(script.send(CHAT, "three").0, Err(Refused::QueueFull));
     script.answers(PROC, 1000, &claude_init());
-    let out = script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    let out = script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+    );
     assert_has(
         &sent(&out, "session/prompt"),
         &json!({ "params": { "prompt": [{ "text": "one" }] } }),
@@ -402,7 +406,11 @@ fn viewers_read_changes_or_the_whole_chat() {
     };
     assert_eq!(latest, ChangeNo(999));
     script.answers(PROC, 1000, &claude_init());
-    let out = script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    let out = script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+    );
     assert_eq!(
         with(&out, "changed"),
         [json!({ "changed": CHAT, "latest": 1000 })]

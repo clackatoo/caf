@@ -294,6 +294,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 && !tool.status.ended()
             {
                 tool.status = settled;
+                tool.settle_output();
                 self.set_tool(chat, item, tool);
             }
             if open {

@@ -830,6 +830,7 @@ pub(crate) fn every_type(s: &mut Samples) {
         what: "hologram".into(),
         raw: json!({ "sessionUpdate": "hologram" }),
         summary: None,
+        cut: None,
     });
     // change
     let change: Change = Change::TurnLife {

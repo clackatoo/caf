@@ -960,18 +960,45 @@ impl ProfileChoice {
     /// server, as it was named, in `_meta.claudeCode.mcpServer.name`. A
     /// tool of the server `caf`, a name no app may give its own, that is
     /// one of [`CafTool`]'s, is CAF's own.
-    pub(crate) fn origin_of(&self, call: &Value) -> Option<Origin> {
+    ///
+    /// The server and tool are told apart by the chat's own MCP servers'
+    /// names, `servers`, as the agent writes them into its tools' names:
+    /// Claude Code writes each character but a letter, a digit, `_` and
+    /// `-` as `_`. The longest that fits wins; with none, the name splits
+    /// at its first `__`.
+    pub(crate) fn origin_in(&self, call: &Value, servers: &[String]) -> Option<Origin> {
         match self {
-            Self::Builtin(Builtin::ClaudeAgentAcp) => claude_origin(call),
+            Self::Builtin(Builtin::ClaudeAgentAcp) => claude_origin(call, servers),
             #[cfg(test)]
             Self::Builtin(
                 Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain | Builtin::TestModels,
             ) => None,
             #[cfg(feature = "fake")]
-            Self::Builtin(Builtin::Fake) => claude_origin(call),
+            Self::Builtin(Builtin::Fake) => claude_origin(call, servers),
             Self::Cautious => None,
         }
     }
+
+    /// [`origin_in`](Self::origin_in) knowing none of the chat's servers:
+    /// enough to tell CAF's own tools.
+    pub(crate) fn origin_of(&self, call: &Value) -> Option<Origin> {
+        self.origin_in(call, &[])
+    }
+}
+
+/// An MCP server's name as Claude Code writes it into its tools' names,
+/// `mcp__<server>__<tool>`: each character but an ASCII letter, a digit,
+/// `_` and `-` as `_`.
+pub(crate) fn claude_server_name(name: &str) -> String {
+    name.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// The name of the MCP server CAF serves its own tools as, and so a name
@@ -983,25 +1010,44 @@ const MOST_TOOL_NAME: usize = 256;
 
 /// Whose tool a call Claude's adapter reports is: see
 /// [`ProfileChoice::origin_of`].
-fn claude_origin(call: &Value) -> Option<Origin> {
+fn claude_origin(call: &Value, servers: &[String]) -> Option<Origin> {
     let claude = call.pointer("/_meta/claudeCode")?;
     let name = claude.get("toolName")?.as_str()?;
-    let Some((server, tool)) = (name.strip_prefix("mcp__")).and_then(|rest| rest.split_once("__"))
-    else {
+    let Some(rest) = name.strip_prefix("mcp__") else {
         return Some(Origin::Agent(agent_text(name, MOST_TOOL_NAME)));
     };
-    // The server as it was named, if the adapter says: the tool's name
-    // has it as Claude Code normalised it.
-    let named = (claude.pointer("/mcpServer/name"))
-        .and_then(Value::as_str)
-        .unwrap_or(server);
-    if named == CAF_SERVER
+    // The server as it was named, if the adapter says, else the chat's
+    // that fits longest, CAF's own among them.
+    let said = (claude.pointer("/mcpServer/name")).and_then(Value::as_str);
+    let named = said.map_or_else(
+        || {
+            (servers.iter().map(String::as_str))
+                .chain([CAF_SERVER])
+                .filter(|server| {
+                    rest.strip_prefix(&claude_server_name(server))
+                        .is_some_and(|tool| tool.starts_with("__"))
+                })
+                .max_by_key(|server| claude_server_name(server).len())
+        },
+        Some,
+    );
+    let (server, tool) = match named {
+        Some(named) => {
+            let tool = (rest.strip_prefix(&claude_server_name(named)))
+                .and_then(|tool| tool.strip_prefix("__"))
+                .or_else(|| rest.split_once("__").map(|(_, tool)| tool))
+                .unwrap_or(rest);
+            (named, tool)
+        }
+        None => rest.split_once("__").unwrap_or((rest, "")),
+    };
+    if server == CAF_SERVER
         && let Some(caf) = CafTool::named(tool)
     {
         return Some(Origin::Caf(caf));
     }
     Some(Origin::Server {
-        server: agent_text(named, MOST_TOOL_NAME),
+        server: agent_text(server, MOST_TOOL_NAME),
         tool: agent_text(tool, MOST_TOOL_NAME),
     })
 }

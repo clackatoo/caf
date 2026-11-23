@@ -37,7 +37,11 @@ fn a_session_the_agent_no_longer_has_is_opened_new_and_the_chat_says_so() {
     );
     let new = sent(&out, "session/new");
     assert!(new["params"].get("sessionId").is_none());
-    script.answers(PROC, 1002, &json!({ "sessionId": "fresh" }));
+    script.answers(
+        PROC,
+        1002,
+        &json!({ "modes": super::default_modes(), "sessionId": "fresh" }),
+    );
     assert_has(
         &script.chat(CHAT),
         &json!({
@@ -54,7 +58,11 @@ fn an_agent_that_cant_continue_sessions_gets_a_new_one_and_the_chat_says_so() {
     let out = script.answers(PROC, 1000, &plain_init(false));
     // A new session, as the adapter can't load one.
     sent(&out, "session/new");
-    script.answers(PROC, 1001, &json!({ "sessionId": "fresh" }));
+    script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": "fresh" }),
+    );
     assert_has(
         &script.chat(CHAT),
         &json!({ "turns": [{ "starter": { "type": "Caf" }, "items": [{ "kind": { "type": "Note", "value": { "type": "CannotContinue" } } }] }] }),
@@ -137,7 +145,8 @@ fn a_loaded_session_imports_its_history_and_nothing_replayed_acts() {
     assert_eq!(inserted, 2);
 
     // After the load: chat-wide updates aren't turns, and a later update
-    // to a replayed tool call lands on its own item.
+    // to a replayed tool call lands on its own item, which stays as its
+    // turn ended it.
     let out = script.update(
         PROC,
         "old",
@@ -147,11 +156,12 @@ fn a_loaded_session_imports_its_history_and_nothing_replayed_acts() {
     script.update(
         PROC,
         "old",
-        &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed" }),
+        &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed", "rawOutput": "late" }),
     );
     assert_has(
         &script.chat(CHAT)["turns"][0]["items"][2],
-        &json!({ "kind": { "type": "Tool", "value": { "status": { "type": "Done" } } } }),
+        &json!({ "kind": { "type": "Tool", "value": { "status": { "type": "Failed" },
+            "result": [{ "type": "Text", "value": { "text": "late", "cut": null } }] } } }),
     );
     assert_eq!(script.chat(CHAT)["turns"][2]["items"], json!([]));
     script.answers(PROC, 1002, &json!({ "stopReason": "end_turn" }));

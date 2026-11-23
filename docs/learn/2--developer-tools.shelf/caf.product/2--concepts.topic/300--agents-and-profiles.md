@@ -71,15 +71,18 @@ Each of the agent's own tools will come back, one at a time, once CAF
 supports it fully: what it does, in CAF's own terms, the permission it
 needs, and how it shows in the chat. CAF serves its own tools to the agent
 as an MCP server named `caf`, so no server of yours may have that name, in
-any case: opening or restoring a chat with one is refused
-(`Refused::ReservedServer`). The agent never asks permission for CAF's own
+any case, nor one the agent would write as it: Claude Code writes each
+character but a letter, a digit, `_` and `-` as `_`, so `caf.x` and
+`caf__x` would name tools as CAF's do. Opening or restoring a chat with
+one is refused (`Refused::ReservedServer`). The agent never asks permission for CAF's own
 tools; CAF asks your policy, and the user, itself.
 
 Each session starts in the agent's ordinary permission mode, in which it
 asks before using a tool not yet allowed. Claude's adapter would start it
 in the user's own default mode, from their `~/.claude/settings.json`, such
 as plan mode, in which no tool runs; CAF sets it back to `default` as the
-session opens, before anything is sent.
+session opens, before anything is sent, unless the session says it's in
+`default` already.
 
 In place of the agent's built-in instructions, which describe tools it no
 longer has, CAF gives it short ones of its own. For a program called

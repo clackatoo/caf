@@ -141,7 +141,7 @@ fn tool(kind: &str, status: &str, app: Value) -> Value {
         "kind": { "type": kind },
         "status": { "type": status },
         "origin": { "type": "NotRecorded" },
-        "action": { "type": "Tool", "value": { "name": format!("{kind} lib.rs") } },
+        "action": null,
         "input": { "path": "lib.rs", "lines": [1, 20] },
         "input_cut": null,
         "result": [{ "type": "Text", "value": { "text": "fn main() {}\n", "cut": null } }],

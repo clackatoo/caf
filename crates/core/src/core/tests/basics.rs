@@ -56,7 +56,11 @@ fn a_chat_starts_its_adapter_opens_a_session_and_runs_a_turn() {
     );
 
     script.at(1000);
-    let out = script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    let out = script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+    );
     assert_has(
         &script.chat(CHAT),
         &json!({ "state": { "type": "Open", "value": { "session": SESSION } } }),

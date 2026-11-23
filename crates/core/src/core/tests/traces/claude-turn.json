@@ -104,6 +104,27 @@
                 },
                 "outcome": {
                   "Ok": {
+                    "modes": {
+                      "currentModeId": "default",
+                      "availableModes": [
+                        {
+                          "id": "default",
+                          "name": "Manual"
+                        },
+                        {
+                          "id": "acceptEdits",
+                          "name": "Accept edits"
+                        },
+                        {
+                          "id": "plan",
+                          "name": "Plan mode"
+                        },
+                        {
+                          "id": "dontAsk",
+                          "name": "Don't ask"
+                        }
+                      ]
+                    },
                     "sessionId": "sess-1"
                   }
                 }

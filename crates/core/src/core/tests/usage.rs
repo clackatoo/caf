@@ -194,7 +194,7 @@ fn a_stopped_turn_records_what_it_spent_too_and_with_no_split_its_one_row_is_the
     script.answers(
         PROC,
         sent(&out, "session/new")["id"].as_u64().expect("an id"),
-        &json!({ "sessionId": SESSION, "configOptions": options }),
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION, "configOptions": options }),
     );
     let prompt = script.prompt(CHAT, "Tell me a long story");
     script.stop(CHAT).0.expect("stopping");
@@ -271,7 +271,7 @@ fn a_plain_agents_split_by_model_isnt_read_its_usage_is() {
     script.answers(
         proc,
         sent(&out, "session/new")["id"].as_u64().expect("an id"),
-        &json!({ "sessionId": "p1", "configOptions": options }),
+        &json!({ "modes": super::default_modes(), "sessionId": "p1", "configOptions": options }),
     );
     let (_, out) = script.send(chat, "Hello");
     let prompt = sent(&out, "session/prompt")["id"].as_u64().expect("an id");
@@ -382,7 +382,7 @@ fn fast_mode_is_as_the_settings_in_effect_said_when_the_turn_was_sent() {
     script.answers(
         PROC,
         sent(&out, "session/new")["id"].as_u64().expect("an id"),
-        &json!({ "sessionId": SESSION, "configOptions": fast(true) }),
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION, "configOptions": fast(true) }),
     );
     script.event(Event::Prices(prices()));
     let prompt = script.prompt(CHAT, "Quickly");
@@ -491,7 +491,11 @@ fn new_prices_work_every_chats_spend_out_again_and_send_it_only_where_it_changed
     let (other, out) = script.open(OpenChat::new("claude", "/elsewhere"));
     let other = other.expect("opened");
     let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
-    script.answers(PROC, new, &json!({ "sessionId": "sess-2" }));
+    script.answers(
+        PROC,
+        new,
+        &json!({ "modes": super::default_modes(), "sessionId": "sess-2" }),
+    );
     // One chat's turn was reported, the other's is estimated.
     let prompt = script.prompt(CHAT, "Reported");
     script.update(PROC, SESSION, &costing(0.5));
@@ -615,7 +619,7 @@ fn a_session_opened_again_counts_its_cost_afresh() {
         &json!({ "code": -32002, "message": "Resource not found" }),
     );
     let resume = sent(&out, "session/resume")["id"].as_u64().expect("an id");
-    let out = script.answers(PROC, resume, &json!({}));
+    let out = script.answers(PROC, resume, &json!({ "modes": super::default_modes() }));
     let prompt = sent(&out, "session/prompt")["id"].as_u64().expect("an id");
     // Less than the old session had said, from a session that counts
     // from nothing.
@@ -645,7 +649,7 @@ fn with_no_split_the_row_is_the_model_claude_said_during_the_turn_else_the_turns
     script.answers(
         PROC,
         sent(&out, "session/new")["id"].as_u64().expect("an id"),
-        &json!({ "sessionId": SESSION, "configOptions": options }),
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION, "configOptions": options }),
     );
     let said = |model: &str| json!({ "sessionUpdate": "usage_update", "used": 1, "size": 2, "_meta": { "_claude/model": model } });
     let prompt = script.prompt(CHAT, "One");
@@ -737,7 +741,11 @@ fn chats_sharing_a_process_each_count_their_own_sessions_cost() {
     let (other, out) = script.open(OpenChat::new("claude", "/elsewhere"));
     let other = other.expect("opened");
     let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
-    script.answers(PROC, new, &json!({ "sessionId": "sess-2" }));
+    script.answers(
+        PROC,
+        new,
+        &json!({ "modes": super::default_modes(), "sessionId": "sess-2" }),
+    );
     let first = script.prompt(CHAT, "One");
     let second = script.prompt(other, "Two");
     script.update(PROC, SESSION, &costing(0.5));

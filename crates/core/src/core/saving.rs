@@ -38,7 +38,6 @@ use crate::event::StorageEvent;
 use crate::ids::{AgentSessionId, ChatId, Shelf, Ticket};
 use crate::save::{CannotRestore, Entry, Header, RestoreChat, Saved, SavedChat, SavedState};
 use crate::time::{End, Mono, Now, Wall};
-use crate::tool::{Ending, Piece};
 
 /// The latest time a chat's UUID holds, in milliseconds: 48 bits.
 const MOST_MILLIS: u64 = (1 << 48) - 1;
@@ -1680,13 +1679,7 @@ pub(super) fn tidy<A: AppItem>(chat: &Chat<A>, at: Wall, now: Wall) -> Vec<Chang
                 let mut tool = tool.clone();
                 tool.status = ToolStatus::Failed;
                 // A command cut off ended, not saying how.
-                for piece in &mut tool.result {
-                    if let Piece::Output(output) = piece
-                        && output.ending.is_none()
-                    {
-                        output.ending = Some(Ending::Unknown);
-                    }
-                }
+                tool.settle_output();
                 changes.push(Change::ToolChanged {
                     item: item.id,
                     tool,

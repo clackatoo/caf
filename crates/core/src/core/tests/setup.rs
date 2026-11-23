@@ -273,7 +273,11 @@ fn a_chat_waits_for_its_agent_to_be_installed_then_starts() {
     let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
     let out = script.answers(proc, init, &npm_init());
     let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
-    let out = script.answers(proc, new, &json!({ "sessionId": "s1" }));
+    let out = script.answers(
+        proc,
+        new,
+        &json!({ "modes": super::default_modes(), "sessionId": "s1" }),
+    );
     sent(&out, "session/prompt");
     // The chat went from waiting to opening once, and then open.
     let states: Vec<Value> = (script.core.applied[&chat].steps.iter())
@@ -1475,7 +1479,11 @@ fn stopping_an_install_leaves_an_open_chats_messages_alone() {
     let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
     let out = script.answers(proc, init, &npm_init());
     let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
-    script.answers(proc, new, &json!({ "sessionId": "s1" }));
+    script.answers(
+        proc,
+        new,
+        &json!({ "modes": super::default_modes(), "sessionId": "s1" }),
+    );
     script.send(chat, "first").0.expect("sent");
     let queued = script.send(chat, "second").0.expect("sent");
     // The folder went from under it, and the user installs it again.

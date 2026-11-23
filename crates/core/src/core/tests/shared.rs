@@ -64,12 +64,20 @@ fn retry_while_another_chat_is_mid_turn_only_asks_again() {
     );
     assert_eq!(sent(&out, "session/new")["id"], 1004);
     // The first ask, abandoned, opens late: closed.
-    let out = script.answers(PROC, 1002, &json!({ "sessionId": "abandoned" }));
+    let out = script.answers(
+        PROC,
+        1002,
+        &json!({ "modes": super::default_modes(), "sessionId": "abandoned" }),
+    );
     assert_eq!(
         sent(&out, "session/close")["params"],
         json!({ "sessionId": "abandoned" })
     );
-    script.answers(PROC, 1004, &json!({ "sessionId": "sess-2" }));
+    script.answers(
+        PROC,
+        1004,
+        &json!({ "modes": super::default_modes(), "sessionId": "sess-2" }),
+    );
     assert_has(
         &script.chat(OTHER),
         &json!({ "state": { "type": "Open", "value": { "session": "sess-2" } } }),
@@ -121,7 +129,11 @@ fn retry_restarts_a_shared_adapter_every_chat_hears_and_waiting_messages_survive
     // next message.
     assert_eq!(writes(&out).len(), 1);
     sent(&out, "session/new");
-    let out = script.answers(1006, 1001, &json!({ "sessionId": "sess-2" }));
+    let out = script.answers(
+        1006,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": "sess-2" }),
+    );
     assert_has(
         &sent(&out, "session/prompt"),
         &json!({ "params": { "sessionId": "sess-2", "prompt": [{ "text": "hi" }] } }),
@@ -141,7 +153,11 @@ fn an_adapter_dying_tells_every_chat_on_it() {
         .open(OpenChat::new("claude", "/elsewhere"))
         .0
         .expect("opened");
-    script.answers(PROC, 1002, &json!({ "sessionId": "sess-2" }));
+    script.answers(
+        PROC,
+        1002,
+        &json!({ "modes": super::default_modes(), "sessionId": "sess-2" }),
+    );
     script.send(OTHER, "work").0.expect("sent");
     script.agent(PROC, AgentEvent::Exited(Exit::Code(1)));
     let out = script.agent(PROC, AgentEvent::OutputClosed);
