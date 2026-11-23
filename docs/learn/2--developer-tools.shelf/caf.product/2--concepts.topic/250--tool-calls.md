@@ -125,7 +125,7 @@ Anything cut says how much of it was kept, of how much (a `Cut`, in bytes):
 | What | Most kept | Which part |
 | --- | --- | --- |
 | `Text` | 64 KB | its start |
-| `Output` | 64 KB | its end, in whole lines of at most 16 KB |
+| `Output` | 64 KB, each line's ending counting as a byte | its end, in whole lines of at most 16 KB |
 | `Diff` | 256 KB of its lines | whole hunks, then how many more there were (`more`) |
 | `Image` | 2 MB | all of it, or none, with its size |
 | `locations` | 256 | the first, then how many more (`locations_cut`) |
