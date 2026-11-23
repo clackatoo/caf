@@ -29,7 +29,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) use self::clean::unhidden;
+pub(crate) use self::clean::{agent_text, unhidden};
 use self::record::Log;
 use self::saving::Saving;
 use self::state::{Ask, Conn, Ids, Pending, Proc, Run, Setup};
@@ -380,7 +380,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Event::Agent { process, event } => self.agent_event(now, process, event, out),
             Event::Woken => self.woken(now, out),
             // The policy's reason is kept on the call: feature 10.
-            Event::Policy { ticket, answer, .. } => self.policy_answered(now, ticket, answer, out),
+            Event::Policy {
+                ticket,
+                answer,
+                reason,
+            } => self.policy_answered(now, ticket, answer, reason, out),
             Event::Tool { call, event } => self.tool_event(now, call, event, out),
             Event::Storage { ticket, event } => self.storage_event(now, ticket, event, out),
             Event::Setup { ticket, event } => self.setup_event(now, ticket, event, out),

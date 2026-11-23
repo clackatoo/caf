@@ -6,13 +6,13 @@ use serde_json::{Value, json};
 
 use super::harness::{Script, agents, host, sent, with, writes};
 use super::{CHAT, PROC, SESSION, claude_init};
+use crate::agent::McpServer;
 use crate::agent::{AgentSpec, SpawnCommand};
 use crate::core::sessions::MOST_INSTRUCTIONS;
 use crate::core::{OpenChat, Refused, SessionChoice};
 use crate::ids::AgentSessionId;
-use crate::profiles::ProfileChoice;
-use crate::agent::McpServer;
 use crate::ids::Shelf;
+use crate::profiles::ProfileChoice;
 use crate::save::RestoreChat;
 
 /// CAF's own instructions, to an agent of the tests' host.
