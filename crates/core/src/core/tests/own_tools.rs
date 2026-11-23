@@ -273,3 +273,38 @@ fn an_mcp_server_named_caf_is_refused_as_cafs_own() {
         assert_eq!(script.open(open).0, Ok(CHAT), "{name}");
     }
 }
+
+#[test]
+fn mcp_servers_the_agent_would_name_alike_are_refused() {
+    let server = |name: &str| McpServer::Http {
+        name: name.to_owned(),
+        url: "http://localhost:1/mcp".to_owned(),
+        headers: Vec::new(),
+    };
+    // Claude Code writes both as `my_tools`: their tools couldn't be told
+    // apart.
+    for names in [
+        ["my tools", "my.tools"],
+        ["eyes", "eyes"],
+        ["a\u{e9}", "a."],
+    ] {
+        let mut script = Script::new(host());
+        let mut open = OpenChat::new("claude", "/work");
+        open.mcp_servers = names.iter().map(|name| server(name)).collect();
+        let (chat, out) = script.open(open);
+        assert_eq!(chat, Err(Refused::SameServerName), "{names:?}");
+        assert!(writes(&out).is_empty() && with(&out, "start").is_empty());
+        let mut restore = RestoreChat::new(CHAT, Shelf("work".to_owned()));
+        restore.mcp_servers = names.iter().map(|name| server(name)).collect();
+        assert_eq!(
+            script.restore(restore).0,
+            Err(Refused::SameServerName),
+            "{names:?}"
+        );
+    }
+    // Names only in another case are written apart.
+    let mut script = Script::new(host());
+    let mut open = OpenChat::new("claude", "/work");
+    open.mcp_servers = vec![server("Tools"), server("tools"), server("my-tools")];
+    assert_eq!(script.open(open).0, Ok(CHAT));
+}

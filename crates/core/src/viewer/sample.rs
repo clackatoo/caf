@@ -851,6 +851,7 @@ fn version_1() -> Sample {
         Refused::OwnTools,
         Refused::NoSuchSetting,
         Refused::ReservedServer,
+        Refused::SameServerName,
     ];
     let outcomes = [
         Outcome::Opened(ChatId::from_number(1)),

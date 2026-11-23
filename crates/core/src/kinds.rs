@@ -170,6 +170,7 @@ kinds!(Refused {
     "OwnTools" => Refused::OwnTools,
     "NoSuchSetting" => Refused::NoSuchSetting,
     "ReservedServer" => Refused::ReservedServer,
+    "SameServerName" => Refused::SameServerName,
 });
 
 kinds!(SessionChoice {
