@@ -126,7 +126,10 @@
 //!    choose.
 //! 3. **Nothing the agent sends is silently dropped.** An update CAF can't
 //!    read becomes an [`ItemKind::Unknown`] with its original data in the
-//!    turn that's open, and a message that fits nowhere becomes a
+//!    turn that's open, as does a piece of a tool call's result
+//!    ([`Piece::Unknown`](tool::Piece::Unknown),
+//!    `what_a_call_gave_back_is_read_into_pieces_and_nothing_is_dropped`),
+//!    and a message that fits nowhere becomes a
 //!    [`Report`]. Only the agent's own output (words, thinking, tools)
 //!    opens a turn: anything else said outside one, such as a notice, is
 //!    reported, with what it says, as are updates about the whole chat
@@ -169,6 +172,15 @@
 //! 13. **Every chat the store holds locked for this run is let go** once
 //!     nothing has a use for it, whatever order the store answers in
 //!     (`saved_chats_restored_put_away_deleted_and_moved_in_any_order_settle_as_they_should`).
+//! 14. **Whose tool a call is never comes from the model.** A call CAF
+//!     serves is CAF's by the connection it came on; any other's
+//!     [`Origin`](tool::Origin) is what the agent's adapter says of it, as
+//!     its profile reads that, never the call's title or input
+//!     (`whose_tool_a_call_is_comes_from_the_adapters_metadata_never_its_title`).
+//! 15. **Every tool call ends.** When its turn ends, a call that hasn't is
+//!     Cancelled if the user stopped the turn, and Failed otherwise, as is
+//!     one a restored chat was cut off in, or one imported unfinished
+//!     (`every_call_settles_when_its_turn_ends`).
 
 // `acp`'s framer and parser are being written apart from the rest.
 pub mod acp;
