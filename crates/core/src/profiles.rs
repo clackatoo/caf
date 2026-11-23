@@ -935,6 +935,11 @@ impl ProfileChoice {
     /// from `~/.claude/settings.json`, which `settingSources: []` doesn't
     /// keep out, and overwrites the `permissionMode` CAF would give it.
     /// CAF's is `default`: the agent asks before anything not allowed.
+    ///
+    /// If the agent refuses to set it, or doesn't answer, the host's log
+    /// says so at Warn, and messages go anyway: CAF asks about its own
+    /// tools itself, whatever the mode, and only the app's tools may then
+    /// run without the agent asking.
     pub(crate) fn start_mode(&self) -> Option<&'static str> {
         match self {
             Self::Builtin(Builtin::ClaudeAgentAcp) => Some("default"),

@@ -79,7 +79,9 @@ Each session starts in the agent's ordinary permission mode, in which it
 asks before using a tool not yet allowed. Claude's adapter would start it
 in the user's own default mode, from their `~/.claude/settings.json`, such
 as plan mode, in which no tool runs; CAF sets it back to `default` as the
-session opens, before anything is sent.
+session opens, before anything is sent. If the agent won't, CAF logs a
+warning and carries on: it still asks about its own tools itself, but your
+MCP servers' tools may then run without the agent asking.
 
 In place of the agent's built-in instructions, which describe tools it no
 longer has, CAF gives it short ones of its own. For a program called

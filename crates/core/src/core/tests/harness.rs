@@ -17,6 +17,9 @@
 //!   have the timer driver wake it over and over;
 //! - no request of the agent's is answered twice, and by the end each is
 //!   answered once, unless its process went before it could be;
+//! - each call to a tool CAF serves is run at most once, refused or
+//!   cancelled at most once and never once run (but for a cancel), told
+//!   nothing once it ended, and by the end has ended;
 //! - its recording replays to the same directives and state;
 //! - its chats' conformance fixtures are current (see [`fixtures`]).
 
@@ -702,8 +705,7 @@ impl Script {
     /// process went before it could be.
     fn check_answers(&self) {
         for (call, (_, ended)) in &self.calls {
-            let going = self.core.calls.contains_key(&CallId(*call));
-            assert!(*ended || going, "call {call} never ended");
+            assert!(*ended, "call {call} never ended");
         }
         for ((proc, id), &count) in &self.answers {
             let writable = self

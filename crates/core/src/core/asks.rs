@@ -18,10 +18,10 @@ use crate::chat::AppData;
 use crate::chat::{AppItem, ItemKind};
 use crate::directive::{Directive, Level, PermissionRequest, PolicyDirective};
 use crate::event::PolicyAnswer;
-use crate::ids::{ChatId, QuestionId, Ticket};
+use crate::ids::{ChatId, ItemId, QuestionId, Ticket};
 use crate::question::{Answer, OptionId, OptionKind, Permission, PermissionOption, QuestionKind};
 use crate::time::Now;
-use crate::tool::{Action, DecidedBy, Decision, Origin, ToolStatus};
+use crate::tool::{Action, DecidedBy, Decision, Origin, ToolCall, ToolStatus};
 
 /// The most options a permission request keeps: any past it are left
 /// out.
@@ -123,7 +123,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Origin::Caf(_) | Origin::NotRecorded => None,
         };
         if let Some(item) = tool {
-            self.change_tool(chat, item, |tool| {
+            self.change_asked(chat, item, |tool| {
                 // The record says what the policy is told.
                 if tool.origin == Origin::NotRecorded {
                     tool.origin = origin.clone();
@@ -220,7 +220,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             ask.question = Some(question);
         }
         if let Some(item) = tool {
-            self.change_tool(chat, item, |tool| {
+            self.change_asked(chat, item, |tool| {
                 if !tool.status.ended() {
                     tool.status = ToolStatus::Asking;
                 }
@@ -267,7 +267,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             )
         });
         if let Some(item) = ask.tool {
-            self.change_tool(ask.chat, item, |tool| {
+            self.change_asked(ask.chat, item, |tool| {
                 if tool.status.ended() {
                     return;
                 }
@@ -416,7 +416,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let ask = self.asks.remove(&ticket)?;
         // Nobody decided: it waits for the agent again.
         if let Some(item) = ask.tool {
-            self.change_tool(ask.chat, item, |tool| {
+            self.change_asked(ask.chat, item, |tool| {
                 if tool.status == ToolStatus::Asking {
                     tool.status = ToolStatus::Pending;
                 }
@@ -427,6 +427,17 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             None => out.push(Directive::Policy(PolicyDirective::Withdrawn { ticket })),
         }
         Some(ask)
+    }
+}
+
+impl<A: AppItem, D: AppData> Core<A, D> {
+    /// Changes the tool call `item` a request of the agent's is about, as
+    /// `change` says: unless it's a call CAF serves, whose record is
+    /// CAF's, and which CAF asks about itself.
+    fn change_asked(&mut self, chat: ChatId, item: ItemId, change: impl FnOnce(&mut ToolCall<A>)) {
+        if !self.is_served(chat, item) {
+            self.change_tool(chat, item, change);
+        }
     }
 }
 

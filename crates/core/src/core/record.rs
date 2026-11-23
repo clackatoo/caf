@@ -106,6 +106,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 kept.urgent = true;
             }
             kept.add_with(|| crate::save::Entry::Change(change.clone()));
+            if let Change::OutputChanged { item, .. } = &change {
+                kept.bound_output(*item, whole);
+            }
         }
         log.push(change, self.host.limits.kept_changes);
         #[cfg(test)]

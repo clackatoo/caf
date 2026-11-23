@@ -35,7 +35,7 @@ use crate::chat::{
 };
 use crate::directive::{Directive, Level, StorageDirective};
 use crate::event::StorageEvent;
-use crate::ids::{AgentSessionId, ChatId, Shelf, Ticket};
+use crate::ids::{AgentSessionId, ChatId, ItemId, Shelf, Ticket};
 use crate::save::{CannotRestore, Entry, Header, RestoreChat, Saved, SavedChat, SavedState};
 use crate::time::{End, Mono, Now, Wall};
 use crate::tool::{Ending, Piece};
@@ -259,6 +259,36 @@ impl<A: AppItem, D: AppData> Kept<A, D> {
     /// again replaces the last entry, if that was its change.
     pub(super) fn add(&mut self, entry: Entry<A, D>) {
         self.add_with(|| entry);
+    }
+
+    /// Keeps the last entry unsaved, if it's a run of changes to `item`'s
+    /// output merged into one, about as big as the output `chat` keeps:
+    /// once it's bigger than [`MOST_OUTPUT`](crate::tool::MOST_OUTPUT),
+    /// it's the call as it is instead, which the record keeps capped. A
+    /// merged change keeps every line printed since, even those dropped.
+    pub(super) fn bound_output(&mut self, item: ItemId, chat: &Chat<A>) {
+        let Some(Entry::Change(Change::OutputChanged {
+            item: last, lines, ..
+        })) = self.unsaved.last()
+        else {
+            return;
+        };
+        if *last != item || lines.iter().map(String::len).sum::<usize>() <= crate::tool::MOST_OUTPUT
+        {
+            return;
+        }
+        let tool = (chat.turns.iter().rev())
+            .flat_map(|turn| turn.items.iter())
+            .find(|each| each.id == item)
+            .and_then(|each| match &each.kind {
+                ItemKind::Tool(tool) => Some(tool.clone()),
+                _ => None,
+            });
+        let Some(tool) = tool else {
+            return;
+        };
+        self.unsaved.pop();
+        self.add_with(|| Entry::Change(Change::ToolChanged { item, tool }));
     }
 
     /// Adds the entry `entry` makes to what's unsaved, as
