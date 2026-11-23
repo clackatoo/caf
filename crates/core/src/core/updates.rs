@@ -325,6 +325,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         change: ToolChange,
         out: &mut Vec<Directive<A, D>>,
     ) {
+        // A report of a call CAF serves changes nothing of it.
+        let caf = match change.origin {
+            Some(Origin::Caf(tool)) => Some(tool),
+            _ => None,
+        };
+        let input = change.input.as_ref().map(|(input, _)| input);
+        if self.served_report(chat, &id, caf, input).is_some() {
+            return;
+        }
         let known = self
             .runs
             .get(&chat)

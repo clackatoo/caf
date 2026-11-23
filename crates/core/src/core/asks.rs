@@ -66,7 +66,35 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         let options = options(params.get("options"));
         let call = params.get("toolCall").cloned().unwrap_or(Value::Null);
+        // CAF asks about its own tools itself, with what it knows of each
+        // call: the agent asking too is answered at once. Known by the
+        // adapter's metadata, or the call CAF has, never its title.
+        let caf = matches!(
+            self.profile_of_chat(chat).origin_of(&call),
+            Some(Origin::Caf(_))
+        ) || (call.get("toolCallId").and_then(Value::as_str))
+            .and_then(|id| self.runs.get(&chat)?.tools.get(id).copied())
+            .is_some_and(|item| self.is_served(chat, item));
         let tool = self.tool_named(now, chat, &call, out);
+        if caf {
+            let allow = (options.iter())
+                .find(|option| option.kind == OptionKind::AllowOnce)
+                .or_else(|| (options.iter()).find(|option| option.kind == OptionKind::AllowAlways));
+            let outcome = match allow {
+                Some(option) => {
+                    json!({ "outcome": { "outcome": "selected", "optionId": option.id.0 } })
+                }
+                None => cancelled(),
+            };
+            report(
+                out,
+                Level::Debug,
+                "allowed the agent's asking about one of CAF's own tools: CAF asks itself"
+                    .to_owned(),
+            );
+            self.reply_or_report(proc, id, Ok(outcome), out);
+            return;
+        }
         let title = (call.get("title").and_then(Value::as_str))
             .map(|title| agent_text(title, MOST_LABEL))
             .or_else(|| match &self.item(chat, tool?)?.kind {
@@ -283,6 +311,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         answer: Answer,
         out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
+        if let Answer::Permission(option) = &answer
+            && let Some(offered) = self.served_answer(now, question, option, out)
+        {
+            return if offered {
+                Ok(())
+            } else {
+                Err(Refused::WrongAnswer)
+            };
+        }
         if let Some((&ticket, ask)) = self
             .asks
             .iter()

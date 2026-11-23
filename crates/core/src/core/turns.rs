@@ -278,6 +278,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// every tool call in it that hasn't ended does: Cancelled if the user
     /// stopped the turn, else Failed.
     pub(super) fn end_turn(&mut self, now: Now, chat: ChatId, turn: TurnId, life: TurnLife) {
+        // Calls CAF serves are settled first.
+        self.settle_calls(now, chat, turn, life == TurnLife::Stopped);
         let settled = if life == TurnLife::Stopped {
             ToolStatus::Cancelled
         } else {
