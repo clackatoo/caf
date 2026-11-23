@@ -427,6 +427,10 @@ export function refusedText(reason: DeepReadonly<Refused>): string {
       return "CAF can't turn off this agent's own tools, so it won't run it."
     case 'NoSuchSetting':
       return "The agent doesn't offer that setting, or that choice of it."
+    case 'ReservedServer':
+      return "An MCP server can't be named caf, nor anything the agent would write as it."
+    case 'SameServerName':
+      return "Two of the MCP servers have names the agent would write alike, so their tools couldn't be told apart."
     default:
       return `Refused, for a reason this viewer doesn't know (${tagOf(reason)}).`
   }
