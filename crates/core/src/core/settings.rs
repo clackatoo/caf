@@ -75,6 +75,23 @@ pub(super) struct Choosing {
     /// last word of it, else what CAF knew of the agent. A choice the
     /// session doesn't offer is named as it was there.
     pub(super) before: Vec<Setting>,
+    /// The permission mode its profile starts every session in, while
+    /// it's still to be set: before any setting or message goes.
+    pub(super) mode: Option<ModeFix>,
+}
+
+/// Setting a session's permission mode as it opens.
+#[derive(Clone, Debug, Serialize)]
+pub(super) enum ModeFix {
+    /// To send: the mode.
+    Unsent(&'static str),
+    /// Sent, as request `id` of `proc`, waiting for the answer.
+    Asked {
+        /// The process asked.
+        proc: Ticket,
+        /// The request.
+        id: i64,
+    },
 }
 
 /// A setting being set.
@@ -273,6 +290,109 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.change_settings(chat, |settings| settings.offered = offer.settings);
     }
 
+    /// The session `chat` opened, as the agent answered `result`: if its
+    /// profile starts every session in a permission mode, and the session
+    /// says it's in another, that mode is to be set before anything else
+    /// goes. Claude's adapter starts a session in the user's own default
+    /// (`permissions.defaultMode` of `~/.claude/settings.json`), whatever
+    /// CAF says: in `plan` or `dontAsk`, no tool would run.
+    pub(super) fn mode_opened(&mut self, chat: ChatId, result: &Value) {
+        let Some(mode) = self.profile_of_chat(chat).start_mode() else {
+            return;
+        };
+        let current = (result.pointer("/modes/currentModeId"))
+            .or_else(|| {
+                (result.get("configOptions").and_then(Value::as_array))
+                    .and_then(|options| {
+                        options.iter().find(|option| {
+                            option.get("category").and_then(Value::as_str) == Some("mode")
+                                || option.get("id").and_then(Value::as_str) == Some("mode")
+                        })
+                    })
+                    .and_then(|option| option.get("currentValue"))
+            })
+            .and_then(Value::as_str);
+        if let Some(run) = self.runs.get_mut(&chat) {
+            run.choosing.mode = current
+                .filter(|current| *current != mode)
+                .map(|_| ModeFix::Unsent(mode));
+        }
+    }
+
+    /// Sends the permission mode `chat`'s session is to be set to, if it's
+    /// still to be: whether it's set, so the rest may go.
+    fn send_mode(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        proc: Ticket,
+        session: &AgentSessionId,
+        out: &mut Vec<Directive<A, D>>,
+    ) -> bool {
+        let Some(run) = self.runs.get_mut(&chat) else {
+            return false;
+        };
+        let mode = match run.choosing.mode {
+            None => return true,
+            Some(ModeFix::Asked { proc, id }) if self.pending.contains_key(&(proc, id)) => {
+                return false;
+            }
+            // Its request ended unanswered, as its process went: the
+            // session opens again, and says its mode again.
+            Some(ModeFix::Asked { .. }) => {
+                run.choosing.mode = None;
+                return true;
+            }
+            Some(ModeFix::Unsent(mode)) => mode,
+        };
+        let params = json!({ "sessionId": session.0, "modeId": mode });
+        let wait = self.host.timers.request;
+        let id = self.request(
+            now,
+            proc,
+            ("session/set_mode", params),
+            Purpose::Mode { chat },
+            Some(wait),
+            out,
+        );
+        if let (Some(run), Some(id)) = (self.runs.get_mut(&chat), id) {
+            run.choosing.mode = Some(ModeFix::Asked { proc, id });
+        }
+        false
+    }
+
+    /// The agent answered setting `chat`'s permission mode, as request
+    /// `id` of `proc`, or never did: the rest of what's waiting goes
+    /// either way, and the host's log says if it wasn't set.
+    pub(super) fn mode_answered(
+        &mut self,
+        now: Now,
+        (proc, id): (Ticket, i64),
+        chat: ChatId,
+        set: bool,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
+        let Some(run) = self.runs.get_mut(&chat) else {
+            return;
+        };
+        if !matches!(run.choosing.mode, Some(ModeFix::Asked { proc: on, id: asked }) if on == proc && asked == id)
+        {
+            return;
+        }
+        run.choosing.mode = None;
+        if !set {
+            report(
+                out,
+                Level::Warn,
+                format!(
+                    "chat {}: the agent didn't set its session's permission mode: it may not ask before using tools as CAF expects",
+                    chat.0
+                ),
+            );
+        }
+        self.pump(now, chat, out);
+    }
+
     /// Sends `chat`'s next setting to send, to its session `session` on
     /// `proc`. Whether nothing is left to send or waiting for an answer, so
     /// a message may go.
@@ -284,6 +404,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         session: &AgentSessionId,
         out: &mut Vec<Directive<A, D>>,
     ) -> bool {
+        if !self.send_mode(now, chat, proc, session, out) {
+            return false;
+        }
         // One the agent may still answer. One whose request ended, as
         // its process went, no longer counts.
         let asked = (self.runs.get(&chat))

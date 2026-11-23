@@ -267,6 +267,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             super::state::Purpose::Set { chat, choice } => {
                 self.set_answered(now, (proc, id), chat, choice, reply, out);
             }
+            super::state::Purpose::Mode { chat } => {
+                let set = matches!(reply, Reply::Result(_));
+                self.mode_answered(now, (proc, id), chat, set, out);
+            }
             super::state::Purpose::Learn { conn } => {
                 self.learned(now, (proc, id), conn, reply, out);
             }

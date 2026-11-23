@@ -277,6 +277,11 @@ pub(super) enum Purpose {
         /// What was asked for.
         choice: SettingChoice,
     },
+    /// Setting a chat's session's permission mode as it opens.
+    Mode {
+        /// The chat.
+        chat: ChatId,
+    },
     /// Opening a session only to learn what settings a connection's agent
     /// offers.
     Learn {

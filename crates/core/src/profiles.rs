@@ -77,6 +77,9 @@
 //!   permission rules of theirs;
 //! - `strictMcpConfig: true`, `settings.disableClaudeAiConnectors`: only
 //!   the MCP servers the app gives;
+//! - `allowedTools: ["mcp__caf"]`: CAF's own tools, served as the MCP
+//!   server `caf`, run without the agent asking permission, as CAF asks
+//!   its policy and the user itself;
 //! - `settings.disableRemoteControl`: the session can't be connected to
 //!   claude.ai, even if the user sends the adapter's `/remote-control`;
 //! - `systemPrompt`: CAF's own short instructions, saying what the agent
@@ -923,6 +926,32 @@ impl ProfileChoice {
     }
 }
 
+impl ProfileChoice {
+    /// The permission mode every session of an agent with this profile is
+    /// set to as it opens, if the session says it's in another: Claude's
+    /// adapter starts one in the user's own `permissions.defaultMode`
+    /// from `~/.claude/settings.json`, which `settingSources: []` doesn't
+    /// keep out, and overwrites the `permissionMode` CAF would give it.
+    /// CAF's is `default`: the agent asks before anything not allowed.
+    pub(crate) fn start_mode(&self) -> Option<&'static str> {
+        match self {
+            Self::Builtin(Builtin::ClaudeAgentAcp) => Some("default"),
+            #[cfg(test)]
+            Self::Builtin(
+                Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain | Builtin::TestModels,
+            ) => None,
+            // The fake has no modes.
+            #[cfg(feature = "fake")]
+            Self::Builtin(Builtin::Fake) => None,
+            Self::Cautious => None,
+        }
+    }
+}
+
+/// The name of the MCP server CAF serves its own tools as, and so a name
+/// no app may give one of its own.
+pub(crate) const CAF_SERVER: &str = "caf";
+
 /// The longest name of a window CAF keeps, in bytes.
 const MOST_WINDOW_NAME: usize = 64;
 
@@ -1251,6 +1280,9 @@ fn claude_stripped(own: &str, instructions: Option<&str>) -> Value {
         "settingSources": [],
         // Only the MCP servers the app gives, in `mcpServers`.
         "strictMcpConfig": true,
+        // CAF's own tools run without the agent asking: CAF asks its
+        // policy, and the user, itself, with what it knows of each call.
+        "allowedTools": [format!("mcp__{CAF_SERVER}")],
         "systemPrompt": prompt,
         "promptSuggestions": false,
         // The user's words as they are: no `@path` expansion or slash
@@ -1708,6 +1740,8 @@ pub(crate) mod tests {
             .stripped("Ours.", Some("Theirs."))
             .expect("stripped")["claudeCode"]["options"];
         assert_eq!(options["systemPrompt"], "Ours.\n\nTheirs.");
+        // CAF asks about its own tools itself.
+        assert_eq!(options["allowedTools"], json!(["mcp__caf"]));
     }
 
     #[test]
