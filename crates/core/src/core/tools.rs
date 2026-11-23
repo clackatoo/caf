@@ -201,6 +201,17 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(cwd) = self.runs.get(&chat).map(|run| run.cwd.clone()) else {
             return refuse(out, RefusedCall::NotRunning);
         };
+        // A report held only for now by a call that came without the
+        // agent's id is this call's, as it names it: let go.
+        if let Some(id) = &agent_call
+            && let Some(run) = self.runs.get_mut(&chat)
+            && let Some(&item) = run.tools.get(id)
+            && let Some(served) = run.served.get_mut(&item)
+            && served.report == Joined::Maybe(id.clone())
+        {
+            served.report = Joined::No;
+            run.tools.remove(id);
+        }
         // The agent's id for a call names one call: a second call naming
         // it is never joined to the first's item.
         let agent_call = agent_call.filter(|id| {
