@@ -24,7 +24,7 @@
 use std::collections::VecDeque;
 
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::clean::agent_text;
 use super::{Core, report};
@@ -80,12 +80,15 @@ pub(super) enum Stage {
 }
 
 /// Which of the lines a command printed are kept, as the driver numbers
-/// them: the kept lines are the pieces of the driver's lines from
-/// `first` on, `pieces[i]` of line `first + i`, the first of them perhaps
-/// missing some from its start.
+/// them: the kept lines are `fixed` lines no longer rewritten, then the
+/// pieces of the driver's lines from `first` on, `pieces[i]` of line
+/// `first + i`, the first of them perhaps missing some from its start.
 #[derive(Debug, Default, Serialize)]
 #[cfg_attr(feature = "inspect", derive(Clone))]
 pub(super) struct Printed {
+    /// How many kept lines come before the driver's line `first`: those
+    /// kept from before lines it skipped.
+    pub(super) fixed: u64,
     /// The driver's number of the first line any of which is kept.
     pub(super) first: u64,
     /// How many kept lines each of the driver's lines from there is.
@@ -113,14 +116,27 @@ impl Owed {
     }
 }
 
+/// Whether the agent's report of a call CAF serves has joined it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", content = "value")]
+pub(super) enum Joined {
+    /// Not yet.
+    No,
+    /// The report with this id, which said nothing yet of the call's
+    /// input: it's let go if its input turns out to be another's.
+    Maybe(String),
+    /// Yes.
+    Yes,
+}
+
 /// A tool call item CAF serves, in its chat's run: whatever the agent
 /// reports of it changes nothing.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub(super) struct Served {
     /// The tool.
     pub(super) tool: CafTool,
-    /// The agent's report of it has joined it.
-    pub(super) reported: bool,
+    /// Whether the agent's report of it has joined it.
+    pub(super) report: Joined,
     /// The agent gave its id for the call with it, so its report joins
     /// by that id, never by input.
     pub(super) keyed: bool,
@@ -203,9 +219,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
             !taken
         });
-        let joins = agent_call
-            .as_ref()
-            .and_then(|id| self.reported_item(chat, id));
+        let joins = match &agent_call {
+            Some(id) => self.reported_item(chat, id),
+            None => self.unjoined_report(chat, tool, &input),
+        };
         let action = match action_of(tool, &input, &cwd) {
             Ok(action) => action,
             Err(why) => {
@@ -215,10 +232,6 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 }
                 return refuse(out, RefusedCall::BadInput(why));
             }
-        };
-        let joins = match &agent_call {
-            Some(_) => joins,
-            None => self.unjoined_report(chat, tool, &input),
         };
         let (kept, input_cut) = crate::tool::capped_input(input);
         let record = Box::new(ToolCall {
@@ -250,7 +263,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 item,
                 Served {
                     tool,
-                    reported: joins.is_some(),
+                    report: if joins.is_some() {
+                        Joined::Yes
+                    } else {
+                        Joined::No
+                    },
                     keyed: agent_call.is_some(),
                 },
             );
@@ -289,6 +306,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// going: for a call that came without the agent's id for it.
     fn unjoined_report(&self, chat: ChatId, tool: CafTool, input: &Value) -> Option<ItemId> {
         let run = self.runs.get(&chat)?;
+        // The report's input is kept as the call's is: cut, if long.
+        let input = &crate::tool::capped_input(input.clone()).0;
         let mut items: Vec<ItemId> = (run.tools.values())
             .filter(|item| !run.served.contains_key(item))
             .copied()
@@ -322,7 +341,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 item,
                 Served {
                     tool,
-                    reported: true,
+                    report: Joined::Yes,
                     keyed: true,
                 },
             );
@@ -337,6 +356,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// report that's of no call CAF serves, yet, is the reported calls'
     /// to keep, as any other.
     ///
+    /// A report that says nothing yet of its input (none, or `{}`) joins
+    /// the oldest call of its tool waiting for one, for now: once it says
+    /// its input, it stays if that's the call's, and else is let go to
+    /// join the call it is, or be an item of its own.
+    ///
     /// What the agent reports of a call CAF serves changes nothing of it:
     /// it added only its id, and when it started, if it came first.
     pub(super) fn served_report(
@@ -346,28 +370,72 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         tool: Option<CafTool>,
         input: Option<&Value>,
     ) -> Option<ItemId> {
+        // An adapter may report a call before its input, as `{}`.
+        let input = input.filter(|input| !matches!(input, Value::Null) && *input != &json!({}));
         let run = self.runs.get_mut(&chat)?;
         if let Some(&item) = run.tools.get(id) {
             let served = run.served.get_mut(&item)?;
-            served.reported = true;
-            return Some(item);
+            if served.report != Joined::Maybe(id.to_owned()) {
+                served.report = Joined::Yes;
+                return Some(item);
+            }
+            let Some(input) = input else {
+                return Some(item);
+            };
+            let same = matches!(self.item(chat, item).map(|each| &each.kind),
+                Some(ItemKind::Tool(call)) if call.input.as_ref() == Some(input));
+            let run = self.runs.get_mut(&chat)?;
+            if same {
+                if let Some(served) = run.served.get_mut(&item) {
+                    served.report = Joined::Yes;
+                }
+                return Some(item);
+            }
+            // It was another call's report: let go, it joins its own.
+            run.tools.remove(id);
+            if let Some(served) = run.served.get_mut(&item) {
+                served.report = Joined::No;
+            }
         }
         // A call that came without the agent's id for it: the oldest of
-        // the same tool, with the same input, that no report has joined.
-        let (tool, input) = (tool?, input?);
+        // the same tool, with the same input, that no report has joined,
+        // or, until the report says its input, any.
+        let tool = tool?;
+        let run = self.runs.get(&chat)?;
+        // A report saying its input also takes a call another holds only
+        // for now: that other is let go.
         let mut waiting: Vec<ItemId> = (run.served.iter())
-            .filter(|(_, served)| served.tool == tool && !served.reported && !served.keyed)
+            .filter(|(_, served)| {
+                let free = match &served.report {
+                    Joined::No => true,
+                    Joined::Maybe(_) => input.is_some(),
+                    Joined::Yes => false,
+                };
+                served.tool == tool && free && !served.keyed
+            })
             .map(|(&item, _)| item)
             .collect();
         waiting.sort_unstable();
         let item = waiting.into_iter().find(|&item| {
-            matches!(self.item(chat, item).map(|each| &each.kind),
-                Some(ItemKind::Tool(call)) if call.input.as_ref() == Some(input))
+            input.is_none_or(|input| {
+                matches!(self.item(chat, item).map(|each| &each.kind),
+                    Some(ItemKind::Tool(call)) if call.input.as_ref() == Some(input))
+            })
         })?;
         let run = self.runs.get_mut(&chat)?;
+        if let Some(Served {
+            report: Joined::Maybe(other),
+            ..
+        }) = run.served.get(&item)
+        {
+            run.tools.remove(&other.clone());
+        }
         run.tools.insert(id.to_owned(), item);
         if let Some(served) = run.served.get_mut(&item) {
-            served.reported = true;
+            served.report = match input {
+                Some(_) => Joined::Yes,
+                None => Joined::Maybe(id.to_owned()),
+            };
         }
         Some(item)
     }
@@ -390,7 +458,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return stale(out, call, "a second preview");
         }
         let (chat, item) = (each.chat, each.item);
-        self.change_call(chat, item, |tool| tool.result = pieces);
+        self.change_tool(chat, item, |tool| tool.result = pieces);
         self.decide(call, out);
     }
 
@@ -471,7 +539,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 if let Some(each) = self.calls.get_mut(&call) {
                     each.stage = Stage::Asking(question);
                 }
-                self.change_call(chat, item, |tool| tool.status = ToolStatus::Asking);
+                self.change_tool(chat, item, |tool| tool.status = ToolStatus::Asking);
             }
             // Refused, or no one can be asked.
             _ => self.refuse_call(now, call, by, out),
@@ -514,7 +582,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             self.unask(chat, question);
         }
         let runs_command = matches!(action, Action::Run { .. });
-        self.change_call(chat, item, |tool| {
+        self.change_tool(chat, item, |tool| {
             tool.status = ToolStatus::Running;
             tool.decision = Decision::Allowed(by);
             if runs_command {
@@ -542,7 +610,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if let Stage::Asking(question) = each.stage {
             self.unask(each.chat, question);
         }
-        self.change_call(each.chat, each.item, |tool| {
+        self.change_tool(each.chat, each.item, |tool| {
             tool.status = ToolStatus::Refused;
             tool.decision = Decision::Refused(by);
         });
@@ -589,6 +657,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(change) = change else {
             return;
         };
+        if change.skipped > 0 {
+            report(
+                out,
+                Level::Warn,
+                format!(
+                    "call {}: the tools driver skipped {} lines of output",
+                    call.0, change.skipped
+                ),
+            );
+        }
         self.record(
             chat,
             crate::change::Change::OutputChanged {
@@ -630,16 +708,22 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(each) = self.calls.remove(&call) else {
             return;
         };
-        self.change_call(each.chat, each.item, |tool| {
+        self.change_tool(each.chat, each.item, |tool| {
             tool.status = if done {
                 ToolStatus::Done
             } else {
                 ToolStatus::Failed
             };
+            // A diff it gives is the change as made, in place of the
+            // preview's.
+            if pieces.iter().any(|piece| matches!(piece, Piece::Diff(_))) {
+                tool.result.retain(|kept| !matches!(kept, Piece::Diff(_)));
+            }
             for piece in pieces {
                 // A command's output is the one kept as it ran, ended.
                 if let Piece::Output(ended) = &piece
-                    && let Some(output) = (tool.result.iter_mut()).find_map(|kept| match kept {
+                    && let Some(output) = (tool.result.iter_mut().rev()).find_map(|kept| match kept
+                    {
                         Piece::Output(output) => Some(output),
                         _ => None,
                     })
@@ -671,7 +755,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if let Stage::Asking(question) = each.stage {
             self.unask(each.chat, question);
         }
-        self.change_call(each.chat, each.item, |tool| {
+        self.change_tool(each.chat, each.item, |tool| {
             tool.status = status;
             for piece in &mut tool.result {
                 if let Piece::Output(output) = piece
@@ -716,6 +800,24 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
     }
 
+    /// `chat`'s turn is being stopped: its calls CAF serves that haven't
+    /// started running are cancelled at once, so nothing allows them
+    /// after. Those running are stopped as the turn ends.
+    pub(super) fn stop_calls(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
+        let calls: Vec<CallId> = (self.calls.iter())
+            .filter(|(_, each)| each.chat == chat && each.stage != Stage::Running)
+            .map(|(&call, _)| call)
+            .collect();
+        for call in calls {
+            if let Some(each) = self.calls.remove(&call) {
+                out.push(Directive::Tool(ToolDirective::Cancel { call }));
+                if let Some(ticket) = self.drop_call(now, &each, ToolStatus::Cancelled) {
+                    out.push(Directive::Policy(PolicyDirective::Withdrawn { ticket }));
+                }
+            }
+        }
+    }
+
     /// Forgets `chat`'s calls CAF serves, as it's let go: any that
     /// haven't finished are cancelled. Its turns have ended, so there
     /// should be none.
@@ -733,16 +835,6 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
         }
     }
-
-    /// Changes `chat`'s call `item` as `change` says.
-    fn change_call(&mut self, chat: ChatId, item: ItemId, change: impl FnOnce(&mut ToolCall<A>)) {
-        let Some(ItemKind::Tool(tool)) = self.item(chat, item).map(|each| &each.kind) else {
-            return;
-        };
-        let mut tool = tool.clone();
-        change(&mut tool);
-        self.set_tool(chat, item, tool);
-    }
 }
 
 /// Reports a driver's report of `call` ignored, as the core has finished
@@ -759,8 +851,10 @@ fn stale<A: AppItem, D: AppData>(out: &mut Vec<Directive<A, D>>, call: CallId, w
 }
 
 /// A change to a command's kept output, in the record's terms.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct Printing {
+    /// How many of the driver's lines it skipped, which it never gave.
+    pub(super) skipped: u64,
     /// The first kept line replaced.
     pub(super) from: u64,
     /// The lines from there.
@@ -773,8 +867,14 @@ impl Printed {
     /// The driver's lines from `from` on are now `lines`, and `kept` are
     /// the lines kept: what changes in them, if anything. Lines longer
     /// than [`MOST_LINE`] are split, and lines dropped from the top to
-    /// keep them within [`MOST_OUTPUT`]. A line rewritten that was
-    /// already dropped rewrites from the first kept.
+    /// keep them within [`MOST_OUTPUT`].
+    ///
+    /// Lines the driver skips, starting past its last, are never kept:
+    /// the lines before them stay as they are, and the driver's numbers
+    /// count on from there. A line rewritten that was already dropped, or
+    /// is before such a gap, rewrites from the first kept; the lines
+    /// counted dropped then stay counted, so the count is at most a few
+    /// lines too high.
     pub(super) fn print(
         &mut self,
         kept: &[String],
@@ -782,18 +882,24 @@ impl Printed {
         lines: Vec<String>,
     ) -> Option<Printing> {
         let printed = self.first + self.pieces.len() as u64;
-        // Lines can't be skipped: anything past the end is added there.
-        let from = from.min(printed);
         if from == printed && lines.is_empty() {
             return None;
         }
-        let (at, kept_from) = if from < self.first {
-            // Rewriting lines already dropped: all that's kept goes.
+        let mut skipped = 0;
+        if from > printed {
+            skipped = from - printed;
+            self.fixed += self.pieces.iter().sum::<u64>();
+            self.pieces.clear();
             self.first = from;
+        }
+        let (at, kept_from) = if from < self.first {
+            // Rewriting lines dropped, or fixed: all that's kept goes.
+            self.first = from;
+            self.fixed = 0;
             (0, 0)
         } else {
             let at = usize::try_from(from - self.first).unwrap_or(usize::MAX);
-            let kept_from: u64 = self.pieces.iter().take(at).sum();
+            let kept_from: u64 = self.fixed + self.pieces.iter().take(at).sum::<u64>();
             (at, kept_from)
         };
         self.pieces.truncate(at);
@@ -816,8 +922,11 @@ impl Printed {
             size -= line.len();
             dropped += 1;
         }
-        // Drop those lines from the driver's lines' pieces.
-        let mut left = dropped;
+        // Drop those lines: the fixed first, then the driver's lines'
+        // pieces.
+        let fixed = self.fixed.min(dropped);
+        self.fixed -= fixed;
+        let mut left = dropped - fixed;
         while left > 0 {
             let Some(first) = self.pieces.front_mut() else {
                 break;
@@ -832,6 +941,7 @@ impl Printed {
             }
         }
         Some(Printing {
+            skipped,
             from: kept_from,
             lines: new,
             dropped,
@@ -1116,6 +1226,7 @@ mod tests {
         assert_eq!(
             change,
             Printing {
+                skipped: 0,
                 from: 1,
                 lines: lines(&["50%"]),
                 dropped: 0
@@ -1155,6 +1266,7 @@ mod tests {
         assert_eq!(
             change,
             Printing {
+                skipped: 0,
                 from: 0,
                 lines: lines(&["short"]),
                 dropped: 0
@@ -1175,6 +1287,7 @@ mod tests {
         assert_eq!(
             change,
             Printing {
+                skipped: 0,
                 from: 0,
                 lines: lines(&["again"]),
                 dropped: 0
@@ -1191,8 +1304,9 @@ mod squashing {
     use crate::chat::NoAppItems;
     use crate::core::saving::squash_output;
 
-    /// Applies `change`, an output change, to `kept`, as the record does.
-    fn apply(kept: &mut Vec<String>, change: &Change<NoAppItems>) {
+    /// Applies `change`, an output change, to `kept`, its lines and how
+    /// many were dropped, as the record does.
+    fn apply((kept, gone): &mut (Vec<String>, u64), change: &Change<NoAppItems>) {
         let Change::OutputChanged {
             from,
             lines,
@@ -1208,6 +1322,7 @@ mod squashing {
         kept.truncate(from);
         kept.extend(lines.iter().cloned());
         kept.drain(..dropped);
+        *gone += dropped as u64;
     }
 
     #[test]
@@ -1225,12 +1340,12 @@ mod squashing {
         ];
         for start in 0..steps.len() {
             let mut printed = Printed::default();
-            let mut kept = Vec::new();
+            let mut kept = (Vec::new(), 0);
             // Up to `start` as it was, then the rest squashed into one.
             let mut squashed: Option<Change<NoAppItems>> = None;
-            let mut before = Vec::new();
+            let mut before = (Vec::new(), 0);
             for (at, (from, lines)) in steps.iter().enumerate() {
-                let Some(change) = printed.print(&kept, *from, lines.clone()) else {
+                let Some(change) = printed.print(&kept.0, *from, lines.clone()) else {
                     continue;
                 };
                 let change = Change::OutputChanged {

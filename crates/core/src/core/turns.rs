@@ -428,6 +428,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         // ACP: open permission requests are answered "cancelled" before
         // the agent is told to stop.
         self.withdraw_asks(chat, out);
+        // And CAF's own calls not yet running never run.
+        self.stop_calls(now, chat, out);
         if let Some(turn) = agent_turn {
             self.stop_agent_turn(now, chat, turn, out);
         }
