@@ -85,7 +85,11 @@ impl Script {
         let (other, out) = self.open(OpenChat::new("claude", "/elsewhere"));
         assert_eq!(other, Ok(OTHER));
         let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
-        self.answers(PROC, new, &json!({ "sessionId": OTHER_SESSION }));
+        self.answers(
+            PROC,
+            new,
+            &json!({ "modes": super::default_modes(), "sessionId": OTHER_SESSION }),
+        );
     }
 }
 
@@ -241,7 +245,11 @@ fn an_agent_whose_profile_says_nothing_of_limits_has_none() {
     let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
     let out = script.answers(PROC, init, &super::plain_init(false));
     let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
-    script.answers(PROC, new, &json!({ "sessionId": SESSION }));
+    script.answers(
+        PROC,
+        new,
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+    );
     let out = script.update(
         PROC,
         SESSION,

@@ -106,6 +106,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 kept.urgent = true;
             }
             kept.add_with(|| crate::save::Entry::Change(change.clone()));
+            if let Change::OutputChanged { item, .. } = &change {
+                kept.bound_output(*item, whole);
+            }
         }
         log.push(change, self.host.limits.kept_changes);
         #[cfg(test)]
@@ -222,7 +225,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Sets a tool call as it is now.
-    pub(super) fn set_tool(&mut self, chat: ChatId, item: ItemId, tool: ToolCall<A>) {
+    pub(super) fn set_tool(&mut self, chat: ChatId, item: ItemId, tool: Box<ToolCall<A>>) {
         let Some(each) = self.item(chat, item) else {
             return;
         };
@@ -231,6 +234,22 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         {
             self.record(chat, Change::ToolChanged { item, tool });
         }
+    }
+
+    /// Changes the tool call `item` as `change` does, if it's a tool call,
+    /// recording it if anything changed.
+    pub(super) fn change_tool(
+        &mut self,
+        chat: ChatId,
+        item: ItemId,
+        change: impl FnOnce(&mut ToolCall<A>),
+    ) {
+        let Some(ItemKind::Tool(tool)) = self.item(chat, item).map(|each| &each.kind) else {
+            return;
+        };
+        let mut tool = tool.clone();
+        change(&mut tool);
+        self.set_tool(chat, item, tool);
     }
 
     /// Sets how full the agent's memory is, and keeps what its session

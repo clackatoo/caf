@@ -11,13 +11,14 @@ use crate::acp::Frame;
 use crate::agent::InstallFailure;
 use crate::chat::{AppData, AppItem, NoAppData, NoAppItems, UserMessage};
 use crate::core::OpenChat;
-use crate::ids::{AgentName, ChatId, QuestionId, Shelf, Ticket, TurnId};
+use crate::ids::{AgentName, CallId, ChatId, QuestionId, Shelf, Ticket, TurnId};
 use crate::install::{Platform, SignedInAs};
 use crate::limits::ProfileLimits;
 use crate::question::Answer;
 use crate::save::{CannotRestore, Header, RestoreChat, Saved};
 use crate::settings::SettingChoice;
 use crate::time::Wall;
+use crate::tool::{CafTool, Piece};
 use crate::usage::PriceTable;
 
 /// The version of a recording of a run's events (the tokio kit's
@@ -25,8 +26,8 @@ use crate::usage::PriceTable;
 /// whenever an [`Event`] of an older version no longer reads the same; as
 /// CAF isn't released yet, nothing migrates an older one, and a reader
 /// refuses it. Version 3 came with archiving and the names on notes about
-/// settings.
-pub const RECORDING_VERSION: u32 = 3;
+/// settings; version 4 with tool calls' new shape.
+pub const RECORDING_VERSION: u32 = 4;
 
 /// Something that happened. `A` and `D` are the app's item and data
 /// types.
@@ -61,6 +62,18 @@ pub enum Event<A: AppItem = NoAppItems, D: AppData = NoAppData> {
         ticket: Ticket,
         /// The answer.
         answer: PolicyAnswer,
+        /// Why, in a line, if the policy says: kept on the call
+        /// ([`DecidedBy::Policy`](crate::tool::DecidedBy::Policy)).
+        /// Recordings made before it was added read as none.
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    /// The tools driver's report of a call to a tool CAF serves.
+    Tool {
+        /// The call.
+        call: CallId,
+        /// What happened.
+        event: ToolEvent,
     },
     /// The storage driver's report.
     Storage {
@@ -261,6 +274,61 @@ pub enum Exit {
     Code(i32),
     /// Killed by this signal.
     Signal(i32),
+}
+
+/// What the tools driver reports of a call.
+#[non_exhaustive]
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum ToolEvent {
+    /// The agent called a tool CAF serves. The core refuses it, unless
+    /// its chat is running a turn and was given the tool, and it reads as
+    /// an action; otherwise it joins the agent's report of the call, or
+    /// makes the item, and asks the policy.
+    Called {
+        /// The chat, as the connection it came on belongs to: never from
+        /// the call itself.
+        chat: ChatId,
+        /// The tool.
+        tool: CafTool,
+        /// What it was given, as the model wrote it.
+        input: serde_json::Value,
+        /// The agent's id for the call, if it sent one with it, such as
+        /// Claude's `_meta["claudecode/toolUseId"]`: what joins it to the
+        /// agent's report of it.
+        agent_call: Option<String>,
+    },
+    /// What [`ToolDirective::Preview`](crate::directive::ToolDirective::Preview)
+    /// worked out: put on the call before it's asked about.
+    Previewed {
+        /// The pieces, such as an edit's diff.
+        pieces: Vec<Piece>,
+    },
+    /// A running command's output changed. `from` counts every line it
+    /// has printed, from 0: the core keeps the end of them, and says what
+    /// changed in its own terms
+    /// ([`Change::OutputChanged`](crate::Change::OutputChanged)).
+    Output {
+        /// The first line replaced.
+        from: u64,
+        /// The lines from there, worked out as its terminal shows them.
+        lines: Vec<String>,
+    },
+    /// It finished, and the agent was answered.
+    Finished {
+        /// Whether it did what it was asked.
+        done: bool,
+        /// What it gave back, for the record: for a failure, why, as a
+        /// [`Piece::Text`]. A command's output is ended with its
+        /// [`ending`](crate::tool::Output::ending). A [`Piece::Diff`] is
+        /// the change as made, in place of the preview's diffs; without
+        /// one, the preview's stay.
+        pieces: Vec<Piece>,
+    },
+    /// The agent cancelled it, or its connection closed: nothing more
+    /// will come of it.
+    Gone,
 }
 
 /// The policy's answer to "is this allowed?".

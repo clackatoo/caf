@@ -11,7 +11,22 @@
   const kind = $derived(toolKind(tool.kind))
   const time = $derived(took(window))
   const input = $derived(tool.input === null ? null : rawJson(tool.input))
-  const ended = $derived(tool.status.type === 'Done' || tool.status.type === 'Failed')
+  const ended = $derived(
+    ['Done', 'Failed', 'Refused', 'Cancelled'].includes(tool.status.type),
+  )
+  // Until the debugger draws every piece (feature 10): their text.
+  const output = $derived(
+    tool.result
+      .map((piece) =>
+        piece.type === 'Text'
+          ? piece.value.text
+          : piece.type === 'Output'
+            ? piece.value.lines.join('\n')
+            : '',
+      )
+      .filter((text) => text !== '')
+      .join('\n'),
+  )
 </script>
 
 <details class="tool" data-status={tool.status.type}>
@@ -30,10 +45,10 @@
       <pre>{input}</pre>
     {/if}
     <div class="label">Output</div>
-    {#if tool.output === ''}
+    {#if output === ''}
       <div class="none">{ended ? 'None' : 'None yet'}</div>
     {:else}
-      <pre>{unhidden(tool.output)}</pre>
+      <pre>{unhidden(output)}</pre>
     {/if}
   </div>
 </details>

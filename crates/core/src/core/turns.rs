@@ -275,21 +275,31 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Ends `chat`'s turn `turn` as `life`: its words stop growing, and
-    /// tools still running fail.
+    /// every tool call in it that hasn't ended does: Cancelled if the user
+    /// stopped the turn, else Failed.
     pub(super) fn end_turn(&mut self, now: Now, chat: ChatId, turn: TurnId, life: TurnLife) {
+        // Calls CAF serves are settled first.
+        self.settle_calls(now, chat, turn, life == TurnLife::Stopped);
+        let settled = if life == TurnLife::Stopped {
+            ToolStatus::Cancelled
+        } else {
+            ToolStatus::Failed
+        };
         let items: Vec<_> = (self.turn(chat, turn).into_iter())
             .flat_map(|each| each.items.iter())
-            .filter(|item| item.window.end == End::Open)
-            .map(|item| (item.id, item.kind.clone()))
+            .map(|item| (item.id, item.window.end == End::Open, item.kind.clone()))
             .collect();
-        for (item, kind) in items {
+        for (item, open, kind) in items {
             if let ItemKind::Tool(mut tool) = kind
-                && matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)
+                && !tool.status.ended()
             {
-                tool.status = ToolStatus::Failed;
+                tool.status = settled;
+                tool.settle_output();
                 self.set_tool(chat, item, tool);
             }
-            self.end_item(now, chat, item);
+            if open {
+                self.end_item(now, chat, item);
+            }
         }
         self.set_life(now, chat, turn, life);
         if let Some(run) = self.runs.get_mut(&chat)
@@ -382,7 +392,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         let tools = (self.turn(chat, turn).into_iter())
             .flat_map(|each| each.items.iter())
-            .any(|item| matches!(&item.kind, ItemKind::Tool(tool) if matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)));
+            .any(|item| matches!(&item.kind, ItemKind::Tool(tool) if !tool.status.ended()));
         let busy = tools || self.asks.values().any(|ask| ask.chat == chat);
         if busy {
             let quiet_by = now.mono.after(self.host.timers.quiet);
@@ -418,6 +428,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         // ACP: open permission requests are answered "cancelled" before
         // the agent is told to stop.
         self.withdraw_asks(chat, out);
+        // And CAF's own calls not yet running never run.
+        self.stop_calls(now, chat, out);
         if let Some(turn) = agent_turn {
             self.stop_agent_turn(now, chat, turn, out);
         }

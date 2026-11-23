@@ -3,6 +3,13 @@
 //! through MessagePack in named mode, and the exact shape of some. Its
 //! sample values are other tests' too.
 
+use crate::directive::{RefusedCall, ToolDirective};
+use crate::event::ToolEvent;
+use crate::ids::CallId;
+use crate::tool::{
+    Action, CafTool, Cut, DecidedBy, Decision, Diff, DiffLine, Ending, Hunk, Image, LineChange,
+    Lines, Link, Location, Origin, Output, Piece, Text,
+};
 use std::fmt::Debug;
 
 use serde::Serialize;
@@ -194,8 +201,25 @@ pub(crate) fn tool() -> ToolCall {
         title: "Read lib.rs".into(),
         kind: ToolKind::Read,
         status: ToolStatus::Done,
+        origin: Origin::Caf(CafTool::Read),
+        action: Some(Action::Read {
+            path: "/home/user/project/lib.rs".into(),
+            lines: None,
+        }),
         input: Some(json!({ "path": "lib.rs" })),
-        output: "fn main() {}".into(),
+        input_cut: None,
+        result: vec![Piece::Text(Text {
+            text: "fn main() {}".into(),
+            cut: None,
+        })],
+        locations: vec![Location {
+            path: "/home/user/project/lib.rs".into(),
+            line: None,
+        }],
+        locations_cut: 0,
+        decision: Decision::Allowed(DecidedBy::User {
+            option: "Allow".into(),
+        }),
         app: None,
     }
 }
@@ -695,16 +719,118 @@ pub(crate) fn every_type(s: &mut Samples) {
     s.both(&FailureReason::DidNotStop);
     s.both(&Remedy::SignIn);
     s.both(&item());
-    s.both(&ItemKind::<crate::chat::NoAppItems>::Tool(tool()));
+    s.both(&ItemKind::<crate::chat::NoAppItems>::Tool(Box::new(tool())));
     s.both(&tool());
     s.both(&ToolKind::Execute);
     s.both(&ToolStatus::Pending);
+    s.both(&Origin::Agent("WebSearch".into()));
+    s.both(&CafTool::Edit);
+    s.both(&Action::Edit {
+        path: "/home/user/project/lib.rs".into(),
+    });
+    s.both(&Piece::Output(Output {
+        lines: vec!["ok".into()],
+        dropped: 0,
+        ending: Some(Ending::Unknown),
+    }));
+    s.both(&LineChange::Added);
+    s.both(&Text {
+        text: "ok".into(),
+        cut: None,
+    });
+    s.both(&Location {
+        path: "/home/user/project/lib.rs".into(),
+        line: Some(3),
+    });
+    s.both(&Output {
+        lines: vec!["ok".into()],
+        dropped: 2,
+        ending: None,
+    });
+    s.both(&DiffLine {
+        change: LineChange::Kept,
+        old: Some(1),
+        new: Some(1),
+        text: "fn main() {".into(),
+    });
+    s.both(&Hunk { lines: Vec::new() });
+    s.both(&Lines {
+        first: 1,
+        last: None,
+    });
+    s.both(&Cut { kept: 1, total: 2 });
+    s.both(&Diff {
+        path: "/home/user/project/lib.rs".into(),
+        new_file: true,
+        added: 1,
+        removed: 0,
+        hunks: vec![Hunk {
+            lines: vec![DiffLine {
+                change: LineChange::Added,
+                old: None,
+                new: Some(1),
+                text: "fn main() {}".into(),
+            }],
+        }],
+        more: 0,
+    });
+    s.both(&Image {
+        mime: "image/png".into(),
+        data: None,
+        size: 3_000_000,
+    });
+    s.both(&Link {
+        uri: "https://example.com".into(),
+        name: "example".into(),
+    });
+    s.both(&Ending::Exited(Exit::Code(1)));
+    s.written(
+        &ToolDirective::Run {
+            call: CallId(4),
+            action: Action::Run {
+                command: "ls".into(),
+                folder: "/home/user/project".into(),
+                background: false,
+            },
+        },
+        true,
+    );
+    s.both(&RefusedCall::BadInput("no path".into()));
+    s.both(&CallId(4));
+    s.written(
+        &Event::<crate::chat::NoAppItems>::Tool {
+            call: CallId(4),
+            event: ToolEvent::Called {
+                chat: ChatId::from_number(1),
+                tool: CafTool::Bash,
+                input: json!({ "command": "ls" }),
+                agent_call: Some("toolu_01".into()),
+            },
+        },
+        true,
+    );
+    s.written(
+        &ToolEvent::Finished {
+            done: true,
+            pieces: Vec::new(),
+        },
+        true,
+    );
+    s.both(&Decision::NotAsked);
+    s.both(&DecidedBy::Policy { reason: None });
+    s.both(&Change::<crate::chat::NoAppItems>::OutputChanged {
+        item: ItemId(3),
+        from: 0,
+        lines: vec!["ok".into()],
+        dropped: 0,
+    });
     s.both(&Compacted {});
     s.both(&Note::SessionGone);
     s.both(&Unknown {
         what: "hologram".into(),
         raw: json!({ "sessionUpdate": "hologram" }),
         summary: None,
+        cut: None,
     });
     // change
     let change: Change = Change::TurnLife {
@@ -718,6 +844,7 @@ pub(crate) fn every_type(s: &mut Samples) {
     });
     s.both(&change);
     s.both(&Mismatch::NotText(ItemId(3)));
+    s.both(&Mismatch::NoOutput(ItemId(3)));
     // question
     s.both(&question());
     s.both(&QuestionKind::SlowToOpen(SlowToOpen {
@@ -1071,14 +1198,24 @@ pub(crate) fn every_type(s: &mut Samples) {
             ticket: Ticket(5),
             chat: ChatId::from_number(1),
             request: PermissionRequest {
+                item: Some(ItemId(7)),
                 title: "Run ls".into(),
+                origin: Origin::Caf(CafTool::Bash),
+                action: Some(Action::Run {
+                    command: "ls".into(),
+                    folder: "/home/user/project".into(),
+                    background: false,
+                }),
                 input: Some("ls".into()),
             },
         },
         true,
     );
     s.both(&PermissionRequest {
+        item: None,
         title: "Run ls".into(),
+        origin: Origin::NotRecorded,
+        action: None,
         input: None,
     });
     s.written(
@@ -1308,13 +1445,19 @@ fn enums_are_type_then_value() {
         } })
     );
     assert_eq!(
-        both(&ItemKind::<crate::chat::NoAppItems>::Tool(tool())),
+        both(&ItemKind::<crate::chat::NoAppItems>::Tool(Box::new(tool()))),
         json!({ "type": "Tool", "value": {
             "title": "Read lib.rs",
             "kind": { "type": "Read" },
             "status": { "type": "Done" },
+            "origin": { "type": "Caf", "value": { "type": "Read" } },
+            "action": { "type": "Read", "value": { "path": "/home/user/project/lib.rs", "lines": null } },
             "input": { "path": "lib.rs" },
-            "output": "fn main() {}",
+            "input_cut": null,
+            "result": [{ "type": "Text", "value": { "text": "fn main() {}", "cut": null } }],
+            "locations": [{ "path": "/home/user/project/lib.rs", "line": null }],
+            "locations_cut": 0,
+            "decision": { "type": "Allowed", "value": { "type": "User", "value": { "option": "Allow" } } },
             "app": null
         } })
     );

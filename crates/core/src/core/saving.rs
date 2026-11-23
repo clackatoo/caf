@@ -35,7 +35,7 @@ use crate::chat::{
 };
 use crate::directive::{Directive, Level, StorageDirective};
 use crate::event::StorageEvent;
-use crate::ids::{AgentSessionId, ChatId, Shelf, Ticket};
+use crate::ids::{AgentSessionId, ChatId, ItemId, Shelf, Ticket};
 use crate::save::{CannotRestore, Entry, Header, RestoreChat, Saved, SavedChat, SavedState};
 use crate::time::{End, Mono, Now, Wall};
 
@@ -260,6 +260,35 @@ impl<A: AppItem, D: AppData> Kept<A, D> {
         self.add_with(|| entry);
     }
 
+    /// Keeps the last entry unsaved, if it's a run of changes to `item`'s
+    /// output merged into one, about as big as the output `chat` keeps:
+    /// once it's bigger than [`MOST_OUTPUT`](crate::tool::MOST_OUTPUT),
+    /// it's the call as it is instead, which the record keeps capped. A
+    /// merged change keeps every line printed since, even those dropped.
+    pub(super) fn bound_output(&mut self, item: ItemId, chat: &Chat<A>) {
+        let Some(Entry::Change(Change::OutputChanged {
+            item: last, lines, ..
+        })) = self.unsaved.last()
+        else {
+            return;
+        };
+        if *last != item || crate::tool::output_size(lines) <= crate::tool::MOST_OUTPUT {
+            return;
+        }
+        let tool = (chat.turns.iter().rev())
+            .flat_map(|turn| turn.items.iter())
+            .find(|each| each.id == item)
+            .and_then(|each| match &each.kind {
+                ItemKind::Tool(tool) => Some(tool.clone()),
+                _ => None,
+            });
+        let Some(tool) = tool else {
+            return;
+        };
+        self.unsaved.pop();
+        self.add_with(|| Entry::Change(Change::ToolChanged { item, tool }));
+    }
+
     /// Adds the entry `entry` makes to what's unsaved, as
     /// [`Kept::add`]: or, if it's written whole next anyway, notes only
     /// that it changed, as the chat itself holds the change.
@@ -282,6 +311,11 @@ impl<A: AppItem, D: AppData> Kept<A, D> {
             text.push_str(added);
             return;
         }
+        if let (Some(Entry::Change(last)), Entry::Change(next)) = (self.unsaved.last_mut(), &entry)
+            && squash_output(last, next)
+        {
+            return;
+        }
         if let (
             Some(Entry::Change(Change::ToolChanged { item, .. })),
             Entry::Change(Change::ToolChanged { item: again, .. }),
@@ -294,6 +328,47 @@ impl<A: AppItem, D: AppData> Kept<A, D> {
         }
         self.unsaved.push(entry);
     }
+}
+
+/// Makes `last` a change to a command's output do what it does and then
+/// `next` does, if both are, of the same call. Returns whether it did.
+///
+/// `last` replaces the lines from `from` on with `lines`, then drops
+/// `dropped` from the top; `next` then counts from what's left. Where
+/// `next` starts within what `last` left of the lines before it, it
+/// replaces from there; else it keeps the start of `last`'s lines.
+pub(super) fn squash_output<A: AppItem>(last: &mut Change<A>, next: &Change<A>) -> bool {
+    let (
+        Change::OutputChanged {
+            item,
+            from,
+            lines,
+            dropped,
+        },
+        Change::OutputChanged {
+            item: again,
+            from: next_from,
+            lines: next_lines,
+            dropped: next_dropped,
+        },
+    ) = (last, next)
+    else {
+        return false;
+    };
+    if item != again {
+        return false;
+    }
+    // Where `next` starts, counted before `last` dropped any.
+    let start = *next_from + *dropped;
+    if start <= *from {
+        *from = start;
+        lines.clear();
+    } else {
+        lines.truncate(usize::try_from(start - *from).unwrap_or(usize::MAX));
+    }
+    lines.extend(next_lines.iter().cloned());
+    *dropped += *next_dropped;
+    true
 }
 
 /// A chat put away, whose last snapshot isn't written yet.
@@ -925,6 +1000,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         check_shelf(&restore.shelf)?;
+        super::sessions::check_servers(&restore.mcp_servers)?;
         (restore.mcp_servers.iter())
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
@@ -1077,6 +1153,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 held_until: None,
                 dropped_tools: BTreeSet::new(),
                 tools: BTreeMap::new(),
+                served: BTreeMap::new(),
                 import: None,
                 replaying: false,
                 slow: None,
@@ -1194,6 +1271,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// Lets `chat` go from memory, with everything kept for it, and
     /// returns what was kept of its saving.
     fn forget(&mut self, chat: ChatId) -> Option<Kept<A, D>> {
+        self.forget_calls(chat);
         self.chats.remove(&chat);
         self.data.remove(&chat);
         self.logs.remove(&chat);
@@ -1584,6 +1662,7 @@ fn saved_session<A: AppItem>(run: &Run<A>) -> Option<AgentSessionId> {
         held_until: _,
         dropped_tools: _,
         tools: _,
+        served: _,
         import: _,
         replaying: _,
         slow: _,
@@ -1624,10 +1703,12 @@ pub(super) fn tidy<A: AppItem>(chat: &Chat<A>, at: Wall, now: Wall) -> Vec<Chang
             .filter(|item| item.window.end == End::Open)
         {
             if let ItemKind::Tool(tool) = &item.kind
-                && matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)
+                && !tool.status.ended()
             {
                 let mut tool = tool.clone();
                 tool.status = ToolStatus::Failed;
+                // A command cut off ended, not saying how.
+                tool.settle_output();
                 changes.push(Change::ToolChanged {
                     item: item.id,
                     tool,

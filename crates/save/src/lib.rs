@@ -140,10 +140,17 @@ mod common;
 ///    the agent's name for a choice in the notes about settings
 ///    ([`Note::NotOffered`](caf_core::chat::Note::NotOffered) and the
 ///    rest): a change of their shape, which a save of an older version is
-///    migrated from as it's read, with no name.
+///    migrated from as it's read, with no name;
+/// 6. tool calls' new shape ([`ToolCall`](caf_core::tool::ToolCall)): where
+///    each came from, what it does, who allowed it, its result as pieces
+///    rather than text, and its locations, and the output of a command
+///    as it runs ([`Change::OutputChanged`](caf_core::change::Change::OutputChanged)).
+///    A save of an older version is migrated as it's read: its output is
+///    one piece of text, its action not known, and where it came from and
+///    who allowed it not recorded.
 ///
 /// [`FailureReason::SettingNotApplied`]: caf_core::chat::FailureReason::SettingNotApplied
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 
 /// How hard to compress.
 #[non_exhaustive]

@@ -69,7 +69,26 @@ the agent has are the ones your program gives it, as MCP servers
 
 Each of the agent's own tools will come back, one at a time, once CAF
 supports it fully: what it does, in CAF's own terms, the permission it
-needs, and how it shows in the chat.
+needs, and how it shows in the chat. CAF serves its own tools to the agent
+as an MCP server named `caf`, so no server of yours may have that name, in
+any case, nor one the agent would write as `caf`, or as `caf_` or
+anything starting `caf__`: Claude Code writes each character but a
+letter, a digit, `_` and `-` as `_`, so `caf.` and `caf__x` would name
+tools as CAF's do (`caf.x`, written `caf_x`, is fine). Opening or restoring a chat with
+one is refused (`Refused::ReservedServer`). Nor may two of your servers have
+names the agent would write alike, such as `my tools` and `my.tools`, both
+`my_tools`: a chat with them is refused (`Refused::SameServerName`), as
+the agent couldn't tell their tools apart. The agent never asks permission for CAF's own
+tools; CAF asks your policy, and the user, itself.
+
+Each session starts in the agent's ordinary permission mode, in which it
+asks before using a tool not yet allowed. Claude's adapter would start it
+in the user's own default mode, from their `~/.claude/settings.json`, such
+as plan mode, in which no tool runs; CAF sets it back to `default` as the
+session opens, before anything is sent, unless the session says it's in
+`default` already. If the agent won't, CAF logs a warning and carries on:
+it still asks about its own tools itself, but your MCP servers' tools may
+then run without the agent asking.
 
 In place of the agent's built-in instructions, which describe tools it no
 longer has, CAF gives it short ones of its own. For a program called

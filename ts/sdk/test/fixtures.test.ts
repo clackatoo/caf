@@ -59,6 +59,7 @@ function named(chat: DeepReadonly<Chat>, change: Change): { turn?: number; item?
       return { turn: change.value.turn };
     case "Appended":
     case "ToolChanged":
+    case "OutputChanged":
     case "ItemEnded": {
       const item = change.value.item;
       const turn = [...chat.turns].reverse().find((each) => each.items.some((one) => one.id === item));
@@ -81,6 +82,7 @@ function expectShared(before: DeepReadonly<Chat>, after: DeepReadonly<Chat>, cha
       "ItemAdded",
       "Appended",
       "ToolChanged",
+      "OutputChanged",
       "ItemEnded",
     ].includes(
       change.type,

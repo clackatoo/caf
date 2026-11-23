@@ -39,7 +39,7 @@ fn a_recorded_claude_turn_replays_from_json() {
             "state": { "type": "Open", "value": { "session": SESSION } },
             "turns": [{ "life": { "type": "Finished" }, "items": [
                 { "kind": { "type": "Words", "value": "Running them." } },
-                { "kind": { "type": "Tool", "value": { "title": "Run `cargo test`", "status": { "type": "Done" }, "output": "test result: ok" } } }
+                { "kind": { "type": "Tool", "value": { "title": "Run `cargo test`", "status": { "type": "Done" }, "result": [{ "type": "Text", "value": { "text": "test result: ok", "cut": null } }] } } }
             ] }]
         }),
     );

@@ -27,7 +27,7 @@ use crate::chat::{
 use crate::directive::{Directive, Level};
 use crate::host::Grouping;
 use crate::ids::{AgentName, AgentSessionId, ChatId, ConnectionId, QuestionId, Ticket};
-use crate::profiles::{AUTH_REQUIRED, own_instructions};
+use crate::profiles::{AUTH_REQUIRED, CAF_SERVER, claude_server_name, own_instructions};
 use crate::question::{QuestionKind, SlowChoice, SlowToOpen};
 use crate::time::{Now, Window};
 
@@ -55,6 +55,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return Err(Refused::RelativeFolder);
         }
         let cwd = open.cwd.to_str().ok_or(Refused::Unsendable)?.to_owned();
+        check_servers(&open.mcp_servers)?;
         let mcp_sent = open
             .mcp_servers
             .iter()
@@ -118,6 +119,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 held_until: None,
                 dropped_tools: std::collections::BTreeSet::new(),
                 tools: BTreeMap::new(),
+                served: BTreeMap::new(),
                 import: None,
                 replaying: false,
                 slow: None,
@@ -460,6 +462,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         // What it offers, and the choices to send before any message.
         self.settings_opened(chat, result);
+        self.mode_opened(chat, result);
         self.pump(now, chat, out);
     }
 
@@ -959,6 +962,43 @@ pub(super) fn check_instructions(instructions: Option<&str>) -> Result<(), Refus
         Some(text) if text.len() > MOST_INSTRUCTIONS => Err(Refused::Unsendable),
         _ => Ok(()),
     }
+}
+
+/// Checks the MCP servers the app gives a chat: none may be named so that
+/// an agent writes its tools' names as CAF's own, `mcp__caf__…`, else
+/// [`Refused::ReservedServer`]: one Claude Code writes as `caf`, in any
+/// case, or as `caf_` or anything starting `caf__`, such as `caf.` or
+/// `CAF__x` (`caf.x`, written `caf_x`, is fine). An agent
+/// couldn't tell the app's tools from CAF's. Nor may two be named alike,
+/// as Claude Code writes them, else [`Refused::SameServerName`].
+pub(super) fn check_servers(servers: &[McpServer]) -> Result<(), Refused> {
+    let reserved = servers.iter().any(|server| {
+        let (McpServer::Stdio { name, .. } | McpServer::Http { name, .. }) = server;
+        format!("{}__", claude_server_name(name))
+            .to_ascii_lowercase()
+            .starts_with(&format!("{CAF_SERVER}__"))
+    });
+    if reserved {
+        return Err(Refused::ReservedServer);
+    }
+    let mut written = std::collections::BTreeSet::new();
+    for server in servers {
+        let (McpServer::Stdio { name, .. } | McpServer::Http { name, .. }) = server;
+        if !written.insert(claude_server_name(name)) {
+            return Err(Refused::SameServerName);
+        }
+    }
+    Ok(())
+}
+
+/// The names of `run`'s MCP servers, as the app gave them.
+pub(super) fn server_names<A: AppItem>(run: &Run<A>) -> Vec<String> {
+    (run.mcp.iter())
+        .map(|server| {
+            let (McpServer::Stdio { name, .. } | McpServer::Http { name, .. }) = server;
+            name.clone()
+        })
+        .collect()
 }
 
 /// Whether CAF keeps `session` as a session id: at most 256 bytes, with

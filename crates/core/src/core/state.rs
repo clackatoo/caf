@@ -277,6 +277,11 @@ pub(super) enum Purpose {
         /// What was asked for.
         choice: SettingChoice,
     },
+    /// Setting a chat's session's permission mode as it opens.
+    Mode {
+        /// The chat.
+        chat: ChatId,
+    },
     /// Opening a session only to learn what settings a connection's agent
     /// offers.
     Learn {
@@ -364,6 +369,9 @@ pub(super) struct Run<A: AppItem> {
     pub(super) dropped_tools: BTreeSet<String>,
     /// Its tool calls, by the agent's ids.
     pub(super) tools: BTreeMap<String, ItemId>,
+    /// Its tool calls CAF serves, whose record the agent's reports never
+    /// change.
+    pub(super) served: BTreeMap<ItemId, super::tools::Served>,
     /// The history being replayed by `session/load`, the turn being
     /// built.
     pub(super) import: Option<Turn<A>>,

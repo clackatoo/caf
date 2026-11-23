@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::pattern::matches;
-use crate::script::{Await, LongLine, On, Output, Respond, Script, SpawnHolder, Step, Wait};
+use crate::script::{
+    Await, LongLine, On, Output, Respond, Script, SpawnHolder, Step, Tool, ToolContent, Wait,
+};
 use crate::{EXIT_BAD_SCRIPT, EXIT_CHECK_FAILED};
 
 /// How much of a long line is written at a time.
@@ -279,6 +281,7 @@ impl Fake<'_> {
                     "content": {"type": "text", "text": chunk.text},
                 }),
             ),
+            Step::Tool(tool) => self.update(&tool.session, &tool_update(tool)),
             Step::Request(request) => {
                 let id = request.id.clone().unwrap_or_else(|| {
                     self.next_id += 1;
@@ -842,5 +845,58 @@ fn close(file: &mut Option<File>) {
         },
         // SAFETY: this owns `fd`, and nothing else uses it.
         Err(_) => drop(unsafe { File::from_raw_fd(fd) }),
+    }
+}
+
+/// The `session/update` that reports `tool`.
+fn tool_update(tool: &Tool) -> Value {
+    let kind = if tool.update {
+        "tool_call_update"
+    } else {
+        "tool_call"
+    };
+    let mut update = json!({ "sessionUpdate": kind, "toolCallId": tool.id });
+    let fields = [
+        ("title", tool.title.as_ref().map(|title| json!(title))),
+        ("kind", tool.kind.as_ref().map(|kind| json!(kind))),
+        ("status", tool.status.as_ref().map(|status| json!(status))),
+        (
+            "_meta",
+            (tool.tool_name.as_ref()).map(|name| json!({ "claudeCode": { "toolName": name } })),
+        ),
+        (
+            "content",
+            (tool.content.as_ref()).map(|content| content.iter().map(tool_content).collect()),
+        ),
+        (
+            "locations",
+            (tool.locations.as_ref()).map(|locations| json!(locations)),
+        ),
+        ("rawInput", tool.raw_input.clone()),
+        ("rawOutput", tool.raw_output.clone()),
+    ];
+    for (key, value) in fields {
+        if let Some(value) = value {
+            update[key] = value;
+        }
+    }
+    update
+}
+
+/// A piece of a tool call's content, as ACP says it.
+fn tool_content(content: &ToolContent) -> Value {
+    match content {
+        ToolContent::Text(text) => {
+            json!({ "type": "content", "content": { "type": "text", "text": text } })
+        }
+        ToolContent::Diff(diff) => {
+            json!({ "type": "diff", "path": diff.path, "oldText": diff.old, "newText": diff.new })
+        }
+        ToolContent::Terminal(id) => json!({ "type": "terminal", "terminalId": id }),
+        ToolContent::Image(image) => json!({ "type": "content",
+            "content": { "type": "image", "mimeType": image.mime, "data": image.data } }),
+        ToolContent::Link(link) => json!({ "type": "content",
+            "content": { "type": "resource_link", "uri": link.uri, "name": link.name } }),
+        ToolContent::Raw(raw) => raw.clone(),
     }
 }

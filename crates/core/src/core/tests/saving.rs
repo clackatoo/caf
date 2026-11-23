@@ -328,7 +328,11 @@ impl Script {
         };
         let out = self.answers(PROC, init, &answer);
         let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
-        self.answers(PROC, new, &json!({ "sessionId": SESSION }));
+        self.answers(
+            PROC,
+            new,
+            &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+        );
     }
 
     /// Gives the store's answers back, in any order it may give them, until
@@ -387,7 +391,7 @@ fn saved(chat: &Value, session: Option<&str>, changed: i64) -> Saved {
 fn mid_turn(agent: &str) -> Value {
     let at = |ms: i64| json!(EPOCH - 50_000 + ms);
     let text = |text: &str| json!({ "type": "User", "value": { "parts": [{ "type": "Text", "value": text }] } });
-    let tool = |status: &str| json!({ "type": "Tool", "value": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": status }, "input": null, "output": "", "app": null } });
+    let tool = |status: &str| json!({ "type": "Tool", "value": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": status }, "input": null, "origin": { "type": "NotRecorded" }, "action": null, "input_cut": null, "result": [], "locations": [], "locations_cut": 0, "decision": { "type": "NotRecorded" }, "app": null } });
     json!({
         "id": CHAT, "agent": agent, "cwd": "/work",
         "state": { "type": "Open", "value": { "session": "old" } },
@@ -420,7 +424,11 @@ fn a_new_saved_chat_is_written_whole_a_second_after_it_changes() {
     assert!(storage(&out).is_empty(), "not written at once");
     assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 1000 })]);
     script.answers(PROC, 1000, &claude_init());
-    script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+    );
 
     script.at(1000);
     let out = script.woken();
@@ -659,7 +667,7 @@ fn a_restore_finds_what_was_under_way_and_tidies_it() {
         serde_json::to_value(&changes).expect("JSON"),
         json!([
             { "type": "ItemEnded", "value": { "item": 5003, "end": end } },
-            { "type": "ToolChanged", "value": { "item": 5005, "tool": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Failed" }, "input": null, "output": "", "app": null } } },
+            { "type": "ToolChanged", "value": { "item": 5005, "tool": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Failed" }, "input": null, "origin": { "type": "NotRecorded" }, "action": null, "input_cut": null, "result": [], "locations": [], "locations_cut": 0, "decision": { "type": "NotRecorded" }, "app": null } } },
             { "type": "ItemEnded", "value": { "item": 5005, "end": end } },
             { "type": "TurnLife", "value": { "turn": 5002, "life": { "type": "CutOff" }, "end": end } },
             { "type": "TurnLife", "value": { "turn": 5006, "life": { "type": "Stopped" }, "end": end } },
@@ -811,7 +819,11 @@ fn a_restored_session_the_agent_no_longer_has_opens_new_and_the_chat_says_so() {
         &json!({ "code": -32002, "message": "Resource not found: old" }),
     );
     let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
-    script.answers(proc, new, &json!({ "sessionId": "fresh" }));
+    script.answers(
+        proc,
+        new,
+        &json!({ "modes": super::default_modes(), "sessionId": "fresh" }),
+    );
     let chat = script.chat(CHAT);
     let turns = chat["turns"].as_array().expect("turns");
     assert_has(
@@ -851,7 +863,11 @@ fn the_journal_hears_when_the_session_to_continue_changes() {
         &json!({ "code": -32002, "message": "Resource not found: old" }),
     );
     let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
-    script.answers(PROC, new, &json!({ "sessionId": "fresh" }));
+    script.answers(
+        PROC,
+        new,
+        &json!({ "modes": super::default_modes(), "sessionId": "fresh" }),
+    );
     script.at(2000);
     let append = one_storage(&script.woken());
     let entries = append["value"]["entries"].as_array().expect("entries");
@@ -2928,7 +2944,10 @@ fn a_tool_call_that_changes_again_is_one_entry() {
         .filter(|entry| entry["value"]["type"] == "ToolChanged")
         .collect();
     assert_eq!(changed.len(), 1, "{append:#}");
-    assert_eq!(changed[0]["value"]["value"]["tool"]["output"], "three");
+    assert_eq!(
+        changed[0]["value"]["value"]["tool"]["result"][0]["value"]["text"],
+        "three"
+    );
 }
 
 #[test]
@@ -3263,5 +3282,170 @@ fn a_chat_let_go_behind_a_move_and_called_back_is_let_go_then_written_whole_afte
             { "type": "Release", "value": { "shelf": "renamed", "chat": CHAT } },
             { "type": "Snapshot", "value": { "shelf": "renamed" } }
         ]),
+    );
+}
+
+/// A command CAF runs for the agent, saved: its output's changes are one
+/// entry, and put away while it runs, it's cancelled, and comes back
+/// failed, its output kept, ended not saying how.
+#[test]
+fn a_served_command_is_journaled_squashed_and_comes_back_cut_off() {
+    use crate::event::{PolicyAnswer, ToolEvent};
+    use crate::tool::CafTool;
+
+    let mut script = Script::new(host());
+    let mut store = Store::default();
+    script.open_saved("claude");
+    store.take(&script.list_saved(SHELF).1);
+    script.serve(&mut store, false);
+    script.at(1000);
+    store.take(&script.woken());
+    script.serve(&mut store, false);
+    script.send(CHAT, "Build it").0.expect("sent");
+    let out = script.tool(
+        1,
+        ToolEvent::Called {
+            chat: CHAT,
+            tool: CafTool::Bash,
+            input: json!({ "command": "cargo build" }),
+            agent_call: None,
+        },
+    );
+    let decide = with(&out, "decide")[0]["decide"]
+        .as_u64()
+        .expect("a ticket");
+    script.policy(decide, PolicyAnswer::Allow);
+    let lines = |text: &[&str]| text.iter().map(|&line| line.to_owned()).collect();
+    script.tool(
+        1,
+        ToolEvent::Output {
+            from: 0,
+            lines: lines(&["Compiling", "[=> ]"]),
+        },
+    );
+    script.tool(
+        1,
+        ToolEvent::Output {
+            from: 1,
+            lines: lines(&["[==>]"]),
+        },
+    );
+    script.tool(
+        1,
+        ToolEvent::Output {
+            from: 2,
+            lines: lines(&["more"]),
+        },
+    );
+
+    script.at(2000);
+    let out = script.woken();
+    let append = one_storage(&out);
+    let changed: Vec<&Value> = (append["value"]["entries"].as_array().into_iter())
+        .flatten()
+        .filter(|entry| entry["value"]["type"] == "OutputChanged")
+        .collect();
+    assert_eq!(
+        changed,
+        [
+            &json!({ "type": "Change", "value": { "type": "OutputChanged", "value": {
+            "item": 1006, "from": 0, "lines": ["Compiling", "[==>]", "more"], "dropped": 0
+        } } })
+        ],
+        "{append:#}"
+    );
+    store.take(&out);
+    script.serve(&mut store, false);
+
+    script.at(2500);
+    let out = script.put_away(CHAT).1;
+    assert_eq!(
+        with(&out, "tool"),
+        [json!({ "tool": { "type": "Cancel", "value": { "call": 1 } } })]
+    );
+    store.take(&out);
+    script.serve(&mut store, false);
+    script.at(3000);
+    let out = script
+        .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
+        .1;
+    store.take(&out);
+    script.serve(&mut store, false);
+    let tool = &script.chat(CHAT)["turns"][0]["items"][0];
+    assert_has(
+        tool,
+        &json!({ "kind": { "type": "Tool", "value": {
+            "title": "cargo build", "status": { "type": "Failed" },
+            "result": [{ "type": "Output", "value": {
+                "lines": ["Compiling", "[==>]", "more"], "dropped": 0, "ending": { "type": "Unknown" }
+            } }],
+        } } }),
+    );
+    assert_ne!(tool["window"]["end"]["type"], "Open");
+}
+
+/// However much a command prints between saves, its journal entry is
+/// about as big as the output kept, and reads back to it.
+#[test]
+fn a_chatty_commands_journal_entry_stays_as_small_as_its_output() {
+    use crate::event::{PolicyAnswer, ToolEvent};
+    use crate::tool::{CafTool, MOST_OUTPUT};
+
+    let mut script = Script::new(host());
+    let mut store = Store::default();
+    script.open_saved("claude");
+    store.take(&script.list_saved(SHELF).1);
+    script.serve(&mut store, false);
+    script.at(1000);
+    store.take(&script.woken());
+    script.serve(&mut store, false);
+    script.send(CHAT, "Say yes").0.expect("sent");
+    let out = script.tool(
+        1,
+        ToolEvent::Called {
+            chat: CHAT,
+            tool: CafTool::Bash,
+            input: json!({ "command": "yes" }),
+            agent_call: None,
+        },
+    );
+    let decide = with(&out, "decide")[0]["decide"]
+        .as_u64()
+        .expect("a ticket");
+    script.policy(decide, PolicyAnswer::Allow);
+    let line = "y".repeat(1000);
+    for batch in 0..200u64 {
+        let lines = (0..16).map(|_| line.clone()).collect();
+        script.tool(
+            1,
+            ToolEvent::Output {
+                from: batch * 16,
+                lines,
+            },
+        );
+    }
+    script.at(2000);
+    let out = script.woken();
+    let append = one_storage(&out);
+    let size = append.to_string().len();
+    assert!(size < 2 * MOST_OUTPUT + 16 * 1024, "{size} bytes");
+    store.take(&out);
+    script.serve(&mut store, false);
+    let (saved, entries) = store.chats.values().next().expect("saved").clone();
+    let mut saved = saved;
+    for entry in &entries {
+        apply(&mut saved, entry);
+    }
+    assert_eq!(
+        serde_json::to_value(&saved.chat.turns).expect("JSON"),
+        script.chat(CHAT)["turns"],
+        "the journal reads back to the chat"
+    );
+    script.tool(
+        1,
+        ToolEvent::Finished {
+            done: true,
+            pieces: Vec::new(),
+        },
     );
 }

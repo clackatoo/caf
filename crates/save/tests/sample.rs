@@ -96,7 +96,9 @@ struct Sample {
 /// A version's sample's values.
 fn sample(version: u32) -> Sample {
     match version {
-        1..=5 => Sample {
+        // The same values in each: what's added since is checked by
+        // reading, and by the newest sample's shapes.
+        1..=6 => Sample {
             header: from(header(version, 9)),
             before: before(),
             records: records(version),
@@ -138,8 +140,14 @@ fn tool(kind: &str, status: &str, app: Value) -> Value {
         "title": format!("{kind} lib.rs"),
         "kind": { "type": kind },
         "status": { "type": status },
+        "origin": { "type": "NotRecorded" },
+        "action": null,
         "input": { "path": "lib.rs", "lines": [1, 20] },
-        "output": "fn main() {}\n",
+        "input_cut": null,
+        "result": [{ "type": "Text", "value": { "text": "fn main() {}\n", "cut": null } }],
+        "locations": [],
+        "locations_cut": 0,
+        "decision": { "type": "NotRecorded" },
         "app": app,
     })
 }

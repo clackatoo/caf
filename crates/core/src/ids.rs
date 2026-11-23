@@ -9,7 +9,7 @@
 //!   names one names its chat too, and a restored chat keeps its numbers:
 //!   the core counts on from past them.
 //! - **Everything else is one run's** (questions, connections, tickets,
-//!   change numbers), and never saved.
+//!   calls, change numbers), and never saved.
 //!
 //! The core gives ids out in order, and a chat's UUID from the seed the
 //! host gives it ([`Host::seed`](crate::Host::seed)) and the time, so a
@@ -109,6 +109,13 @@ id! {
     /// directive that started it, so output from a process the core has
     /// replaced can't be mistaken for the new one's.
     Ticket
+}
+id! {
+    /// A call to a tool CAF serves, as the tools driver numbered it when
+    /// it arrived: the driver hears the call first, so it gives the
+    /// number, and never gives one twice in a run. One run's, like a
+    /// [`Ticket`].
+    CallId
 }
 id! {
     /// A change in a chat's numbered list of changes. Viewers say how far

@@ -6,10 +6,12 @@ use serde_json::{Value, json};
 
 use super::harness::{Script, agents, host, sent, with, writes};
 use super::{CHAT, PROC, SESSION, claude_init};
+use crate::agent::McpServer;
 use crate::agent::{AgentSpec, SpawnCommand};
 use crate::core::sessions::MOST_INSTRUCTIONS;
 use crate::core::{OpenChat, Refused, SessionChoice};
 use crate::ids::AgentSessionId;
+use crate::ids::Shelf;
 use crate::profiles::ProfileChoice;
 use crate::save::RestoreChat;
 
@@ -24,6 +26,7 @@ fn stripped(prompt: &str) -> Value {
         "tools": [],
         "settingSources": [],
         "strictMcpConfig": true,
+        "allowedTools": ["mcp__caf"],
         "systemPrompt": prompt,
         "promptSuggestions": false,
         "verbatimPrompts": true,
@@ -138,7 +141,11 @@ fn a_session_opened_again_is_stripped_again_with_the_same_instructions() {
     open.instructions = Some("Notes.".to_owned());
     script.open(open).0.expect("opened");
     script.answers(PROC, 1000, &claude_init());
-    script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+    );
     // The adapter dropped the session: the prompt resumes it.
     script.send(CHAT, "go").0.expect("sent");
     let out = script.fails(
@@ -226,4 +233,79 @@ fn an_agents_status_follows_the_adapter_that_last_answered() {
     let out = script.answers(proc, init, &claude_init());
     sent(&out, "session/new");
     assert_eq!(script.agent_status("claude")["own_tools_off"], true);
+}
+
+#[test]
+fn an_mcp_server_named_caf_is_refused_as_cafs_own() {
+    let server = |name: &str| McpServer::Http {
+        name: name.to_owned(),
+        url: "http://localhost:1/mcp".to_owned(),
+        headers: Vec::new(),
+    };
+    // Claude Code writes `caf.` as `caf_` and `caf._x` as `caf__x`, so
+    // their tools as `mcp__caf__…`; `caf.x`, written `caf_x`, is fine.
+    for name in [
+        "caf",
+        "CAF",
+        "caf__x",
+        "Caf__",
+        "caf.",
+        "caf._x",
+        "caf. tools",
+    ] {
+        let mut script = Script::new(host());
+        let mut open = OpenChat::new("claude", "/work");
+        open.mcp_servers = vec![server("eyespy"), server(name)];
+        let (chat, out) = script.open(open);
+        assert_eq!(chat, Err(Refused::ReservedServer), "{name}");
+        assert!(writes(&out).is_empty() && with(&out, "start").is_empty());
+        assert_eq!(script.state()["chats"], json!([]), "no chat is made");
+        let mut restore = RestoreChat::new(CHAT, Shelf("work".to_owned()));
+        restore.mcp_servers = vec![server(name)];
+        let (restored, out) = script.restore(restore);
+        assert_eq!(restored, Err(Refused::ReservedServer), "{name}");
+        assert!(out.is_empty(), "nothing is read: {out:#?}");
+    }
+    // A name with `caf` in it is the app's own.
+    for name in ["caffeine", "caf_tools", "caf.x", "my caf", "caf\u{e9}x"] {
+        let mut script = Script::new(host());
+        let mut open = OpenChat::new("claude", "/work");
+        open.mcp_servers = vec![server(name)];
+        assert_eq!(script.open(open).0, Ok(CHAT), "{name}");
+    }
+}
+
+#[test]
+fn mcp_servers_the_agent_would_name_alike_are_refused() {
+    let server = |name: &str| McpServer::Http {
+        name: name.to_owned(),
+        url: "http://localhost:1/mcp".to_owned(),
+        headers: Vec::new(),
+    };
+    // Claude Code writes both as `my_tools`: their tools couldn't be told
+    // apart.
+    for names in [
+        ["my tools", "my.tools"],
+        ["eyes", "eyes"],
+        ["a\u{e9}", "a."],
+    ] {
+        let mut script = Script::new(host());
+        let mut open = OpenChat::new("claude", "/work");
+        open.mcp_servers = names.iter().map(|name| server(name)).collect();
+        let (chat, out) = script.open(open);
+        assert_eq!(chat, Err(Refused::SameServerName), "{names:?}");
+        assert!(writes(&out).is_empty() && with(&out, "start").is_empty());
+        let mut restore = RestoreChat::new(CHAT, Shelf("work".to_owned()));
+        restore.mcp_servers = names.iter().map(|name| server(name)).collect();
+        assert_eq!(
+            script.restore(restore).0,
+            Err(Refused::SameServerName),
+            "{names:?}"
+        );
+    }
+    // Names only in another case are written apart.
+    let mut script = Script::new(host());
+    let mut open = OpenChat::new("claude", "/work");
+    open.mcp_servers = vec![server("Tools"), server("tools"), server("my-tools")];
+    assert_eq!(script.open(open).0, Ok(CHAT));
 }

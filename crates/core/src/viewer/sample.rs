@@ -24,6 +24,7 @@ use crate::chat::{
     UserMessage,
 };
 use crate::core::{Refused, SessionChoice};
+use crate::event::Exit;
 use crate::ids::{AgentName, AgentSessionId, ChangeNo, ChatId, ItemId, QuestionId, Shelf, TurnId};
 use crate::install::SignedInAs;
 use crate::kinds::Seen;
@@ -35,6 +36,10 @@ use crate::save::{CannotRestore, Header, SavedChat, SavedState};
 use crate::settings::{KnownSettings, LearnFailure, ModelUsed, SettingChoice};
 use crate::shape::{account_limits, model_price, settings, spend, turn_usage};
 use crate::time::{End, Wall, Window};
+use crate::tool::{
+    Action, CafTool, Cut, DecidedBy, Decision, Diff, DiffLine, Ending, Hunk, Image, LineChange,
+    Lines, Link, Location, Origin, Output, Piece, Text,
+};
 use crate::usage::{BadQuery, ModelPrice, PriceLayer, PricedModel, UsageQuery};
 use crate::viewer::{
     AgentAction, ChatSummary, FromViewer, OpenRequest, Outcome, RequestNo, Rights, ToViewer,
@@ -104,14 +109,177 @@ fn turn(id: u64, starter: Starter, life: TurnLife, window: Window, items: Vec<It
     }
 }
 
-/// A tool call, `kind`, as `status`.
+/// A tool call, `kind`, as `status`: each kind with a different origin,
+/// action, decision and result, so the sample holds one of each.
 fn tool(kind: ToolKind, status: ToolStatus) -> ToolCall {
+    let path = "/home/user/project/lib.rs".to_owned();
+    let caf = |tool| Origin::Caf(tool);
+    let other = |name: &str| Action::Tool { name: name.into() };
+    let output = |ending| {
+        Piece::Output(Output {
+            lines: vec!["\u{1b}[32mok\u{1b}[0m".into(), "done".into()],
+            dropped: 3,
+            ending,
+        })
+    };
+    let (origin, action, decision, result) = match kind {
+        ToolKind::Read => (
+            caf(CafTool::Read),
+            Action::Read {
+                path: path.clone(),
+                lines: Some(Lines {
+                    first: 1,
+                    last: Some(40),
+                }),
+            },
+            Decision::Allowed(DecidedBy::Policy {
+                reason: Some("reads are allowed".into()),
+            }),
+            vec![Piece::Text(Text {
+                text: "fn main() {}".into(),
+                cut: Some(Cut {
+                    kept: 12,
+                    total: 90_000,
+                }),
+            })],
+        ),
+        ToolKind::Edit => (
+            caf(CafTool::Edit),
+            Action::Edit { path: path.clone() },
+            Decision::Allowed(DecidedBy::User {
+                option: "Allow".into(),
+            }),
+            vec![Piece::Diff(Diff {
+                path: path.clone(),
+                new_file: false,
+                added: 1,
+                removed: 1,
+                hunks: vec![Hunk {
+                    lines: vec![
+                        DiffLine {
+                            change: LineChange::Kept,
+                            old: Some(1),
+                            new: Some(1),
+                            text: "fn main() {".into(),
+                        },
+                        DiffLine {
+                            change: LineChange::Removed,
+                            old: Some(2),
+                            new: None,
+                            text: "    old();".into(),
+                        },
+                        DiffLine {
+                            change: LineChange::Added,
+                            old: None,
+                            new: Some(2),
+                            text: "    new();".into(),
+                        },
+                    ],
+                }],
+                more: 2,
+            })],
+        ),
+        ToolKind::Delete => (
+            caf(CafTool::Write),
+            Action::Write { path: path.clone() },
+            Decision::Refused(DecidedBy::Policy { reason: None }),
+            vec![Piece::Diff(Diff {
+                path: path.clone(),
+                new_file: true,
+                added: 1,
+                removed: 0,
+                hunks: Vec::new(),
+                more: 1,
+            })],
+        ),
+        ToolKind::Move => (
+            Origin::Server {
+                server: "files".into(),
+                tool: "move".into(),
+            },
+            other("move"),
+            Decision::NotAsked,
+            vec![Piece::Link(Link {
+                uri: "file:///home/user/project/lib.rs".into(),
+                name: "lib.rs".into(),
+            })],
+        ),
+        ToolKind::Search => (
+            Origin::Agent("Grep".into()),
+            other("Grep"),
+            Decision::Undecided,
+            vec![Piece::Image(Image {
+                mime: "image/png".into(),
+                data: Some("iVBORw0KGgo=".into()),
+                size: 8,
+            })],
+        ),
+        ToolKind::Execute => (
+            caf(CafTool::Bash),
+            Action::Run {
+                command: "cargo test".into(),
+                folder: "/home/user/project".into(),
+                background: false,
+            },
+            Decision::Allowed(DecidedBy::User {
+                option: "Allow".into(),
+            }),
+            vec![output(Some(Ending::Exited(Exit::Code(0))))],
+        ),
+        ToolKind::Think => (
+            Origin::App("note".into()),
+            other("note"),
+            Decision::NotRecorded,
+            vec![Piece::Image(Image {
+                mime: "image/jpeg".into(),
+                data: None,
+                size: 9_000_000,
+            })],
+        ),
+        ToolKind::Fetch => (
+            Origin::NotRecorded,
+            other("Fetch"),
+            Decision::Refused(DecidedBy::User {
+                option: "Refuse".into(),
+            }),
+            vec![
+                output(Some(Ending::Unknown)),
+                output(Some(Ending::Exited(Exit::Signal(9)))),
+            ],
+        ),
+        _ => (
+            Origin::NotRecorded,
+            other("hologram"),
+            Decision::NotRecorded,
+            vec![
+                output(None),
+                Piece::Unknown(Unknown {
+                    what: "hologram".into(),
+                    raw: json!({ "type": "hologram" }),
+                    summary: None,
+                    cut: None,
+                }),
+            ],
+        ),
+    };
     ToolCall {
         title: format!("{kind:?} lib.rs"),
         kind,
         status,
+        origin,
+        action: Some(action),
         input: Some(json!({ "path": "lib.rs" })),
-        output: "fn main() {}".into(),
+        input_cut: (kind == ToolKind::Read).then_some(Cut {
+            kept: 20,
+            total: 70_000,
+        }),
+        result,
+        locations: vec![Location {
+            path,
+            line: (kind == ToolKind::Read).then_some(1),
+        }],
+        locations_cut: u64::from(kind == ToolKind::Search),
+        decision,
         app: None,
     }
 }
@@ -132,12 +300,22 @@ fn chat() -> Chat {
     ];
     let statuses = [
         ToolStatus::Pending,
+        ToolStatus::Asking,
         ToolStatus::Running,
         ToolStatus::Done,
         ToolStatus::Failed,
+        ToolStatus::Refused,
+        ToolStatus::Cancelled,
     ];
-    let tools = (kinds.into_iter().zip(statuses.into_iter().cycle()).zip(6..))
-        .map(|((kind, status), id)| item(id, ended(110, 120), ItemKind::Tool(tool(kind, status))));
+    let tools = (kinds.into_iter().zip(statuses.into_iter().cycle()).zip(6..)).map(
+        |((kind, status), id)| {
+            item(
+                id,
+                ended(110, 120),
+                ItemKind::Tool(Box::new(tool(kind, status))),
+            )
+        },
+    );
     let mut thinking = item(
         5,
         ended(105, 106),
@@ -157,6 +335,7 @@ fn chat() -> Chat {
             what: "an update of a kind CAF doesn't know".into(),
             raw: json!({ "sessionUpdate": "plan", "entries": [] }),
             summary: None,
+            cut: None,
         }),
     ));
     let notes = [
@@ -404,7 +583,7 @@ fn changes() -> Vec<Change> {
             item: item(
                 33,
                 open(800),
-                ItemKind::Tool(tool(ToolKind::Execute, ToolStatus::Pending)),
+                ItemKind::Tool(Box::new(tool(ToolKind::Execute, ToolStatus::Pending))),
             ),
         },
         Change::Appended {
@@ -413,7 +592,13 @@ fn changes() -> Vec<Change> {
         },
         Change::ToolChanged {
             item: ItemId(33),
-            tool: tool(ToolKind::Execute, ToolStatus::Done),
+            tool: Box::new(tool(ToolKind::Execute, ToolStatus::Done)),
+        },
+        Change::OutputChanged {
+            item: ItemId(33),
+            from: 1,
+            lines: vec!["50%".into(), "100%".into()],
+            dropped: 1,
         },
         Change::ItemEnded {
             item: ItemId(20),
@@ -665,6 +850,8 @@ fn version_1() -> Sample {
         Refused::BadShelf,
         Refused::OwnTools,
         Refused::NoSuchSetting,
+        Refused::ReservedServer,
+        Refused::SameServerName,
     ];
     let outcomes = [
         Outcome::Opened(ChatId::from_number(1)),

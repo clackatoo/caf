@@ -8,4 +8,4 @@ import type { TurnId } from "./TurnId.ts";
  * have. A viewer that meets one has missed something, and needs the chat
  * whole again; inside the core, it's a bug.
  */
-export type Mismatch = { "type": "NoTurn", "value": TurnId } | { "type": "NoItem", "value": ItemId } | { "type": "NotText", "value": ItemId } | { "type": "NotTool", "value": ItemId } | { "type": "NoQuestion", "value": QuestionId };
+export type Mismatch = { "type": "NoTurn", "value": TurnId } | { "type": "NoItem", "value": ItemId } | { "type": "NotText", "value": ItemId } | { "type": "NotTool", "value": ItemId } | { "type": "NoQuestion", "value": QuestionId } | { "type": "NoOutput", "value": ItemId };

@@ -232,7 +232,7 @@ describe('items', () => {
     const tool = item(
       {
         type: 'Tool',
-        value: { title: 'cargo test', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'cargo test' }, output: 'ok: 3 passed', app: null },
+        value: { title: 'cargo test', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'cargo test' }, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [{ type: 'Text', value: { text: 'ok: 3 passed', cut: null } }], app: null },
       },
       1500,
     )
@@ -253,7 +253,7 @@ describe('items', () => {
   it("names a tool kind and status it doesn't know", () => {
     const tool = item({
       type: 'Tool',
-      value: { title: 't', kind: { type: 'Teleport' } as never, status: { type: 'Pondering' } as never, input: null, output: '', app: null },
+      value: { title: 't', kind: { type: 'Teleport' } as never, status: { type: 'Pondering' } as never, input: null, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [], app: null },
     })
     const { container } = draw(chat({ turns: [turn({ items: [tool] })] }))
     expect(container.querySelector('.tool .kind')?.textContent).toBe('Unknown kind (Teleport)')
@@ -276,7 +276,7 @@ describe('items', () => {
   }
 
   it('folds an unknown item, with what it was and its raw data', () => {
-    const unknown = item({ type: 'Unknown', value: { what: 'plan_v2', raw: { steps: ['a'] }, summary: null } })
+    const unknown = item({ type: 'Unknown', value: { what: 'plan_v2', raw: { steps: ['a'] }, summary: null, cut: null } })
     const { container } = draw(chat({ turns: [turn({ items: [unknown] })] }))
     const details = container.querySelector('details.unknown') as HTMLDetailsElement
     expect(details.open).toBe(false)
@@ -290,7 +290,7 @@ describe('items', () => {
   })
 
   it("draws an app item this version of the app can't read by the summary it had, and keeps its data", () => {
-    const unreadable = item({ type: 'Unknown', value: { what: 'App', raw: { route: ['Kyiv'] }, summary: 'Planned a route' } })
+    const unreadable = item({ type: 'Unknown', value: { what: 'App', raw: { route: ['Kyiv'] }, summary: 'Planned a route', cut: null } })
     const { container } = draw(chat({ turns: [turn({ items: [unreadable] })] }))
     const details = container.querySelector('details.unreadable') as HTMLDetailsElement
     expect(details.open).toBe(false)
@@ -857,7 +857,7 @@ describe('words for what comes next', () => {
 describe('a tool that ended', () => {
   it('says None for no output once it has ended, and None yet while it runs', () => {
     const tool = (status: string) =>
-      item({ type: 'Tool', value: { title: 't', kind: { type: 'Read' }, status: { type: status } as never, input: null, output: '', app: null } })
+      item({ type: 'Tool', value: { title: 't', kind: { type: 'Read' }, status: { type: status } as never, input: null, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [], app: null } })
     const { container } = draw(chat({ turns: [turn({ items: [tool('Done'), tool('Failed'), tool('Running')] })] }))
     const outputs = [...container.querySelectorAll('.tool .none')].map((none) => none.textContent)
     expect(outputs).toEqual(['None', 'None', 'None', 'None', 'None', 'None yet'])
@@ -868,9 +868,9 @@ describe("text that hides or reorders itself", () => {
   it('shows bidi controls and invisible characters in raw JSON as escapes', () => {
     const tool = item({
       type: 'Tool',
-      value: { title: 't', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'echo \u202Egnp.exe\u200B' }, output: 'out\u2066put', app: null },
+      value: { title: 't', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'echo \u202Egnp.exe\u200B' }, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [{ type: 'Text', value: { text: 'out\u2066put', cut: null } }], app: null },
     })
-    const unknown = item({ type: 'Unknown', value: { what: 'x\u202E', raw: { a: '\u202Eb' }, summary: null } })
+    const unknown = item({ type: 'Unknown', value: { what: 'x\u202E', raw: { a: '\u202Eb' }, summary: null, cut: null } })
     const { container } = draw(chat({ turns: [turn({ items: [tool, unknown] })] }))
     const all = container.textContent ?? ''
     expect(all).not.toMatch(/[\u202A-\u202E\u2066-\u2069\u200B]/)

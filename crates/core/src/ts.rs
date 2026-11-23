@@ -64,21 +64,22 @@ mod tests {
     use crate::change::{Change, Mismatch, Numbered};
     use crate::chat::{
         Chat, ChatState, Compacted, Cost, Failure, FailureReason, Incompatible, Item, ItemKind,
-        Lost, NoAppData, NoAppItems, Note, Part, Remedy, Starter, ToolCall, ToolKind, ToolStatus,
-        Turn, TurnLife, Unknown, Usage, UserMessage,
+        Lost, NoAppData, NoAppItems, Note, Part, Remedy, Starter, Turn, TurnLife, Unknown, Usage,
+        UserMessage,
     };
     use crate::core::{ConnectionInfo, OpenChat, Refused, SessionChoice};
     use crate::directive::{
-        AgentDirective, Directive, Level, PermissionRequest, PolicyDirective, Report,
-        SetupDirective, Signal, StorageDirective, TimerDirective, UsageDirective, ViewerDirective,
+        AgentDirective, Directive, Level, PermissionRequest, PolicyDirective, RefusedCall, Report,
+        SetupDirective, Signal, StorageDirective, TimerDirective, ToolDirective, UsageDirective,
+        ViewerDirective,
     };
     use crate::event::{
-        AgentEvent, Event, Exit, HostCommand, PolicyAnswer, SetupEvent, StorageEvent,
+        AgentEvent, Event, Exit, HostCommand, PolicyAnswer, SetupEvent, StorageEvent, ToolEvent,
     };
     use crate::host::{Grouping, Host, Limits, Shows, Timers};
     use crate::ids::{
-        AgentName, AgentSessionId, ChangeNo, ChatId, ConnectionId, ItemId, QuestionId, Shelf,
-        Ticket, TurnId,
+        AgentName, AgentSessionId, CallId, ChangeNo, ChatId, ConnectionId, ItemId, QuestionId,
+        Shelf, Ticket, TurnId,
     };
     use crate::install::{
         Artifact, Bundled, Edit, EnvValue, FilePatch, Install, LinkFrom, Needs, NpmPackage, Patch,
@@ -99,6 +100,10 @@ mod tests {
     };
     use crate::shape::{Samples, every_type, traces};
     use crate::time::{End, Mono, Now, Wall, Window};
+    use crate::tool::{
+        Action, CafTool, Cut, DecidedBy, Decision, Diff, DiffLine, Ending, Hunk, Image, LineChange,
+        Lines, Link, Location, Origin, Output, Piece, Text, ToolCall, ToolKind, ToolStatus,
+    };
     use crate::usage::{
         BadQuery, Bucket, ChatCounts, Estimate, LedgerLine, ModelPrice, ModelTokens, PriceLayer,
         PriceTable, PricedModel, Resolution, Spend, Summary, Tokens, TurnUsage, UsageQuery,
@@ -170,14 +175,33 @@ mod tests {
             Part,
             Remedy,
             Starter,
-            ToolCall,
-            ToolKind,
-            ToolStatus,
             Turn,
             TurnLife,
             Unknown,
             Usage,
             UserMessage,
+            // tool
+            Action,
+            CafTool,
+            Cut,
+            DecidedBy,
+            Decision,
+            Diff,
+            DiffLine,
+            Ending,
+            Hunk,
+            Image,
+            LineChange,
+            Lines,
+            Link,
+            Location,
+            Origin,
+            Output,
+            Piece,
+            Text,
+            ToolCall,
+            ToolKind,
+            ToolStatus,
             // settings
             Choice,
             KnownSettings,
@@ -208,8 +232,10 @@ mod tests {
             Level,
             PermissionRequest,
             PolicyDirective,
+            RefusedCall,
             Report,
             SetupDirective,
+            ToolDirective,
             UsageDirective,
             Signal,
             StorageDirective,
@@ -223,6 +249,7 @@ mod tests {
             PolicyAnswer,
             SetupEvent,
             StorageEvent,
+            ToolEvent,
             // host
             Grouping,
             Host,
@@ -253,6 +280,7 @@ mod tests {
             AgentName,
             AgentSessionId,
             ChangeNo,
+            CallId,
             ChatId,
             ConnectionId,
             ItemId,

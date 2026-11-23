@@ -77,6 +77,9 @@
 //!   permission rules of theirs;
 //! - `strictMcpConfig: true`, `settings.disableClaudeAiConnectors`: only
 //!   the MCP servers the app gives;
+//! - `allowedTools: ["mcp__caf"]`: CAF's own tools, served as the MCP
+//!   server `caf`, run without the agent asking permission, as CAF asks
+//!   its policy and the user itself;
 //! - `settings.disableRemoteControl`: the session can't be connected to
 //!   claude.ai, even if the user sends the adapter's `/remote-control`;
 //! - `systemPrompt`: CAF's own short instructions, saying what the agent
@@ -184,6 +187,7 @@ use serde_json::{Value, json};
 
 use crate::acp::RpcError;
 use crate::chat::{FailureReason, Remedy};
+use crate::core::agent_text;
 use crate::install::{
     Bundled, Edit, FilePatch, Install, LinkFrom, Needs, NpmPackage, Patch, Program, Recipe, SignIn,
     SignedInAs, Status, StatusCommand,
@@ -192,6 +196,7 @@ use crate::limits::{
     AccountLimits, EARLIEST_RESET, ExtraUsage, LATEST_RESET, LimitState, LimitWindow, WindowKind,
 };
 use crate::time::Wall;
+use crate::tool::{CafTool, Origin};
 use crate::usage::Tokens;
 
 /// Which profile an agent should have.
@@ -923,6 +928,136 @@ impl ProfileChoice {
     }
 }
 
+impl ProfileChoice {
+    /// The permission mode every session of an agent with this profile is
+    /// set to as it opens, if the session says it's in another: Claude's
+    /// adapter starts one in the user's own `permissions.defaultMode`
+    /// from `~/.claude/settings.json`, which `settingSources: []` doesn't
+    /// keep out, and overwrites the `permissionMode` CAF would give it.
+    /// CAF's is `default`: the agent asks before anything not allowed.
+    ///
+    /// If the agent refuses to set it, or doesn't answer, the host's log
+    /// says so at Warn, and messages go anyway: CAF asks about its own
+    /// tools itself, whatever the mode, and only the app's tools may then
+    /// run without the agent asking.
+    pub(crate) fn start_mode(&self) -> Option<&'static str> {
+        match self {
+            Self::Builtin(Builtin::ClaudeAgentAcp) => Some("default"),
+            #[cfg(test)]
+            Self::Builtin(
+                Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain | Builtin::TestModels,
+            ) => None,
+            // The fake has no modes.
+            #[cfg(feature = "fake")]
+            Self::Builtin(Builtin::Fake) => None,
+            Self::Cautious => None,
+        }
+    }
+
+    /// Whose tool a call the agent reports is, from what its adapter says
+    /// of it in `call`, a `tool_call`, a `tool_call_update` or a
+    /// permission request's `toolCall`: never from its title, nor anything
+    /// else the model wrote. `None` if the adapter says nothing of it.
+    ///
+    /// Claude's adapter, and the fake, name the tool in
+    /// `_meta.claudeCode.toolName`, an MCP server's as
+    /// `mcp__<server>__<tool>`, and in a permission request also the
+    /// server, as it was named, in `_meta.claudeCode.mcpServer.name`. A
+    /// tool of the server `caf`, a name no app may give its own, that is
+    /// one of [`CafTool`]'s, is CAF's own.
+    ///
+    /// The server and tool are told apart by the chat's own MCP servers'
+    /// names, `servers`, as the agent writes them into its tools' names:
+    /// Claude Code writes each character but a letter, a digit, `_` and
+    /// `-` as `_`. The longest that fits wins; with none, the name splits
+    /// at its first `__`.
+    pub(crate) fn origin_in(&self, call: &Value, servers: &[String]) -> Option<Origin> {
+        match self {
+            Self::Builtin(Builtin::ClaudeAgentAcp) => claude_origin(call, servers),
+            #[cfg(test)]
+            Self::Builtin(
+                Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain | Builtin::TestModels,
+            ) => None,
+            #[cfg(feature = "fake")]
+            Self::Builtin(Builtin::Fake) => claude_origin(call, servers),
+            Self::Cautious => None,
+        }
+    }
+
+    /// [`origin_in`](Self::origin_in) knowing none of the chat's servers:
+    /// enough to tell CAF's own tools.
+    pub(crate) fn origin_of(&self, call: &Value) -> Option<Origin> {
+        self.origin_in(call, &[])
+    }
+}
+
+/// An MCP server's name as Claude Code writes it into its tools' names,
+/// `mcp__<server>__<tool>`: each character but an ASCII letter, a digit,
+/// `_` and `-` as `_`, one for each UTF-16 unit of it, as JavaScript
+/// counts characters, so an emoji is two.
+pub(crate) fn claude_server_name(name: &str) -> String {
+    let mut written = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            written.push(ch);
+        } else {
+            (0..ch.len_utf16()).for_each(|_| written.push('_'));
+        }
+    }
+    written
+}
+
+/// The name of the MCP server CAF serves its own tools as, and so a name
+/// no app may give one of its own.
+pub(crate) const CAF_SERVER: &str = "caf";
+
+/// The longest tool or server name kept, in bytes.
+const MOST_TOOL_NAME: usize = 256;
+
+/// Whose tool a call Claude's adapter reports is: see
+/// [`ProfileChoice::origin_of`].
+fn claude_origin(call: &Value, servers: &[String]) -> Option<Origin> {
+    let claude = call.pointer("/_meta/claudeCode")?;
+    let name = claude.get("toolName")?.as_str()?;
+    let Some(rest) = name.strip_prefix("mcp__") else {
+        return Some(Origin::Agent(agent_text(name, MOST_TOOL_NAME)));
+    };
+    // The server as it was named, if the adapter says, else the chat's
+    // that fits longest, CAF's own among them.
+    let said = (claude.pointer("/mcpServer/name")).and_then(Value::as_str);
+    let named = said.map_or_else(
+        || {
+            (servers.iter().map(String::as_str))
+                .chain([CAF_SERVER])
+                .filter(|server| {
+                    rest.strip_prefix(&claude_server_name(server))
+                        .is_some_and(|tool| tool.starts_with("__"))
+                })
+                .max_by_key(|server| claude_server_name(server).len())
+        },
+        Some,
+    );
+    let (server, tool) = match named {
+        Some(named) => {
+            let tool = (rest.strip_prefix(&claude_server_name(named)))
+                .and_then(|tool| tool.strip_prefix("__"))
+                .or_else(|| rest.split_once("__").map(|(_, tool)| tool))
+                .unwrap_or(rest);
+            (named, tool)
+        }
+        None => rest.split_once("__").unwrap_or((rest, "")),
+    };
+    if server == CAF_SERVER
+        && let Some(caf) = CafTool::named(tool)
+    {
+        return Some(Origin::Caf(caf));
+    }
+    Some(Origin::Server {
+        server: agent_text(server, MOST_TOOL_NAME),
+        tool: agent_text(tool, MOST_TOOL_NAME),
+    })
+}
+
 /// The longest name of a window CAF keeps, in bytes.
 const MOST_WINDOW_NAME: usize = 64;
 
@@ -1251,6 +1386,9 @@ fn claude_stripped(own: &str, instructions: Option<&str>) -> Value {
         "settingSources": [],
         // Only the MCP servers the app gives, in `mcpServers`.
         "strictMcpConfig": true,
+        // CAF's own tools run without the agent asking: CAF asks its
+        // policy, and the user, itself, with what it knows of each call.
+        "allowedTools": [format!("mcp__{CAF_SERVER}")],
         "systemPrompt": prompt,
         "promptSuggestions": false,
         // The user's words as they are: no `@path` expansion or slash
@@ -1708,6 +1846,8 @@ pub(crate) mod tests {
             .stripped("Ours.", Some("Theirs."))
             .expect("stripped")["claudeCode"]["options"];
         assert_eq!(options["systemPrompt"], "Ours.\n\nTheirs.");
+        // CAF asks about its own tools itself.
+        assert_eq!(options["allowedTools"], json!(["mcp__caf"]));
     }
 
     #[test]

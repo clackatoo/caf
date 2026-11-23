@@ -10,11 +10,12 @@ use std::path::PathBuf;
 
 use crate::agent::SpawnCommand;
 use crate::chat::{AppData, AppItem, NoAppData, NoAppItems};
-use crate::ids::{ChangeNo, ChatId, Shelf, Ticket};
+use crate::ids::{CallId, ChangeNo, ChatId, ItemId, Shelf, Ticket};
 use crate::install::{Install, LinkFrom, Patch, SignedInAs};
 use crate::limits::ProfileLimits;
 use crate::save::{Entry, Header, Saved};
 use crate::time::{Mono, Wall};
+use crate::tool::{Action, Origin};
 use crate::usage::LedgerLine;
 
 /// Work for a driver. `A` and `D` are the app's item and data types,
@@ -43,6 +44,8 @@ pub enum Directive<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     Setup(SetupDirective),
     /// For the usage driver: the usage ledger.
     Usage(UsageDirective),
+    /// For the tools driver: running the tools CAF serves.
+    Tool(ToolDirective),
     /// For the host's log.
     Report(Report),
 }
@@ -177,17 +180,94 @@ pub enum PolicyDirective {
     },
 }
 
-/// What the agent wants to do, for the policy to decide on. In feature 1
-/// it's as the agent described it; the typed action ("run `cargo test` in
-/// this folder") comes with the Permission Engine.
+/// What the agent wants to do, for the policy to decide on.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PermissionRequest {
-    /// What the agent calls it.
+    /// The tool call it's about, if CAF has seen it: always, for a tool
+    /// CAF serves.
+    pub item: Option<ItemId>,
+    /// What it's called: [`ToolCall::title`](crate::tool::ToolCall::title).
     pub title: String,
-    /// What the tool was given, as the agent sent it.
+    /// Whose tool it is. For a call CAF hasn't seen, what the agent's
+    /// adapter says of it, else [`Origin::NotRecorded`].
+    pub origin: Origin,
+    /// What it does, as CAF reads it: always, for CAF's own tools.
+    pub action: Option<Action>,
+    /// What the tool was given, as the agent sent it, at most 64 KiB.
     pub input: Option<String>,
+}
+
+/// Work for the tools driver: running the tools CAF serves, its own and
+/// (*later*) the app's.
+///
+/// The driver serves them to the agent over MCP (*later*: how), and tells
+/// the core of each call that arrives ([`ToolEvent::Called`](crate::event::ToolEvent::Called)); the core
+/// decides what's done with it. The driver's side of the contract:
+/// - **Every call is answered exactly once**, to the agent, whatever
+///   happens: with its result once [`ToolDirective::Run`] finishes it, or
+///   as refused or cancelled as the core says. A call the core never
+///   answers isn't left hanging: the driver ends it as cancelled when its
+///   chat's turn ends, as [`ToolDirective::Cancel`] would.
+/// - **It never runs anything the core didn't say to run,** and runs what
+///   the core says exactly: the [`Action`] given, with its paths as they
+///   are, never the model's input read again.
+/// - **Output is reported in batches,** at most every 100 ms or 16 KiB,
+///   and in order.
+/// - **A preview changes nothing.**
+#[non_exhaustive]
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum ToolDirective {
+    /// Work out what this would do, without doing it, and report
+    /// [`ToolEvent::Previewed`](crate::event::ToolEvent::Previewed): an edit's diff, before it's asked about.
+    Preview {
+        /// The call.
+        call: CallId,
+        /// What it does.
+        action: Action,
+    },
+    /// Run it: report its output as it comes, then
+    /// [`ToolEvent::Finished`](crate::event::ToolEvent::Finished), and answer the agent with its result.
+    Run {
+        /// The call.
+        call: CallId,
+        /// What it does.
+        action: Action,
+    },
+    /// Don't run it: answer the agent that it was refused.
+    Refuse {
+        /// The call.
+        call: CallId,
+        /// Why, for the agent.
+        why: RefusedCall,
+    },
+    /// Stop it if it's running, and answer the agent that it was
+    /// cancelled. Nothing more is reported of it; anything that comes is
+    /// ignored.
+    Cancel {
+        /// The call.
+        call: CallId,
+    },
+}
+
+/// Why the core refused a call to a tool CAF serves.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum RefusedCall {
+    /// The policy or the user said no.
+    NotAllowed,
+    /// Its chat isn't running a turn.
+    NotRunning,
+    /// It's not a tool its chat was given.
+    NotGiven,
+    /// What it was given doesn't make an action, such as a path that
+    /// isn't UTF-8, or a field missing: the reason, for the model.
+    BadInput(String),
 }
 
 /// Work for the viewer driver.

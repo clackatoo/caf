@@ -62,7 +62,7 @@ fn stop_answers_the_agents_questions_then_tells_it_and_waits() {
         &json!({ "turns": [{
         "id": turn.0,
         "life": { "type": "Stopped" },
-        "items": [{ "id": 1004, "kind": { "type": "Tool", "value": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Failed" } } } }]
+        "items": [{ "id": 1004, "kind": { "type": "Tool", "value": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Cancelled" } } } }]
     }] }),
     );
 }
@@ -140,7 +140,11 @@ fn stop_while_opening_abandons_the_open_and_a_late_session_is_closed() {
         }),
     );
 
-    let out = script.answers(PROC, 1001, &json!({ "sessionId": "late" }));
+    let out = script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": "late" }),
+    );
     assert_eq!(
         sent(&out, "session/close")["params"],
         json!({ "sessionId": "late" })
@@ -190,7 +194,11 @@ fn a_session_opening_after_caf_gave_up_on_it_is_still_closed() {
     script.at(60_000);
     script.woken();
     assert_eq!(script.state()["pending"], json!([]));
-    let out = script.answers(PROC, 1001, &json!({ "sessionId": "very-late" }));
+    let out = script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": "very-late" }),
+    );
     assert_eq!(
         sent(&out, "session/close")["params"],
         json!({ "sessionId": "very-late" })
@@ -216,10 +224,18 @@ fn a_stuck_session_that_cant_be_closed_isnt_continued() {
     let mut script = Script::new(host());
     script.open(OpenChat::new("plain", "/a")).0.expect("opened");
     script.answers(PROC, 1000, &super::plain_init(true));
-    script.answers(PROC, 1001, &json!({ "sessionId": "a" }));
+    script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": "a" }),
+    );
     let (other, _) = script.open(OpenChat::new("plain", "/b"));
     let other = other.expect("opened");
-    script.answers(PROC, 1002, &json!({ "sessionId": "b" }));
+    script.answers(
+        PROC,
+        1002,
+        &json!({ "modes": super::default_modes(), "sessionId": "b" }),
+    );
     script.send(CHAT, "stuck").0.expect("sent");
     script.send(other, "busy").0.expect("sent");
     script.stop(CHAT).0.expect("stopping");
@@ -235,7 +251,11 @@ fn a_stuck_session_that_cant_be_closed_isnt_continued() {
             .get("sessionId")
             .is_none()
     );
-    script.answers(PROC, 1005, &json!({ "sessionId": "a2" }));
+    script.answers(
+        PROC,
+        1005,
+        &json!({ "modes": super::default_modes(), "sessionId": "a2" }),
+    );
     assert_has(
         &script.chat(CHAT),
         &json!({ "turns": [{}, { "starter": { "type": "Caf" }, "items": [{ "kind": { "type": "Note", "value": { "type": "SessionStuck" } } }] }, { "life": { "type": "Running" } }] }),

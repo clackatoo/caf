@@ -71,7 +71,23 @@ item: ItemId,
 /**
  * The tool call as it is now.
  */
-tool: ToolCall, } } | { "type": "ItemEnded", "value": { 
+tool: ToolCall, } } | { "type": "OutputChanged", "value": { 
+/**
+ * The tool call.
+ */
+item: ItemId, 
+/**
+ * The first line replaced.
+ */
+from: number, 
+/**
+ * The lines from there.
+ */
+lines: Array<string>, 
+/**
+ * How many lines then go from the top.
+ */
+dropped: number, } } | { "type": "ItemEnded", "value": { 
 /**
  * The item.
  */

@@ -22,6 +22,8 @@ use crate::question::Question;
 use crate::settings::{ModelUsed, SettingChoice, Settings};
 use crate::time::{Wall, Window};
 
+pub use crate::tool::{ToolCall, ToolKind, ToolStatus};
+
 /// An app's own kind of item, such as eyespy's "the agent moved the map
 /// here".
 ///
@@ -511,8 +513,9 @@ pub enum ItemKind<A: AppItem = NoAppItems> {
     Words(String),
     /// The agent's thinking, in Markdown. Only kept if the host shows it.
     Thinking(String),
-    /// A tool the agent used.
-    Tool(ToolCall<A>),
+    /// A tool the agent used. Boxed, as a call is far bigger than the
+    /// other kinds.
+    Tool(Box<ToolCall<A>>),
     /// The agent summarised its memory to make room. *Later.*
     Compacted(Compacted),
     /// Something CAF itself says, such as "the agent no longer had this
@@ -522,71 +525,6 @@ pub enum ItemKind<A: AppItem = NoAppItems> {
     App(A),
     /// Something the agent sent that CAF couldn't read, kept as it came.
     Unknown(Unknown),
-}
-
-/// A tool call.
-#[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts", ts(concrete(A = NoAppItems), bound = "A: ts_rs::TS"))]
-#[serde(bound = "A: AppItem")]
-pub struct ToolCall<A: AppItem = NoAppItems> {
-    /// What the agent calls it, as a short title.
-    pub title: String,
-    /// What kind of tool it is.
-    pub kind: ToolKind,
-    /// Where it is.
-    pub status: ToolStatus,
-    /// What it was given, as the agent sent it.
-    pub input: Option<serde_json::Value>,
-    /// What it gave back, as text.
-    pub output: String,
-    /// The app's own item for this call, such as the map move one of its
-    /// tools made. *Later.*
-    pub app: Option<A>,
-    // The typed action, file changes and who allowed it: later.
-}
-
-/// What kind of tool a call is, as the agent says.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[serde(tag = "type", content = "value")]
-pub enum ToolKind {
-    /// Reading files.
-    Read,
-    /// Changing files.
-    Edit,
-    /// Deleting files.
-    Delete,
-    /// Moving files.
-    Move,
-    /// Searching.
-    Search,
-    /// Running a command.
-    Execute,
-    /// Thinking it through.
-    Think,
-    /// Fetching from the web.
-    Fetch,
-    /// Anything else.
-    Other,
-}
-
-/// Where a tool call is.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[serde(tag = "type", content = "value")]
-pub enum ToolStatus {
-    /// Not started yet, such as while waiting for permission.
-    Pending,
-    /// Running.
-    Running,
-    /// Finished.
-    Done,
-    /// Failed, or ended unfinished with its turn.
-    Failed,
 }
 
 /// The agent compacted its memory. *Later.*
@@ -674,4 +612,11 @@ pub struct Unknown {
     /// What it is, in a line, if CAF knows: an app item's summary.
     #[serde(default)]
     pub summary: Option<String>,
+    /// How much of its data was kept, if it was too big to keep whole:
+    /// then [`raw`](Self::raw) is the start of its JSON, as a string. Only
+    /// a [`Piece::Unknown`](crate::tool::Piece::Unknown) is cut, at
+    /// [`MOST_INPUT`](crate::tool::MOST_INPUT). Saves and recordings
+    /// made before it was added read as none.
+    #[serde(default)]
+    pub cut: Option<crate::tool::Cut>,
 }

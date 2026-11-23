@@ -18,6 +18,7 @@ use crate::ids::{ChangeNo, ItemId, QuestionId, TurnId};
 use crate::question::Question;
 use crate::settings::{ModelUsed, Settings};
 use crate::time::{End, Wall};
+use crate::tool::Piece;
 use crate::usage::{Spend, TurnUsage};
 
 /// A change, with its number.
@@ -104,7 +105,29 @@ pub enum Change<A: AppItem = NoAppItems> {
         /// The item.
         item: ItemId,
         /// The tool call as it is now.
-        tool: ToolCall<A>,
+        tool: Box<ToolCall<A>>,
+    },
+    /// A running command's output changed: in the call's
+    /// [`Output`](crate::tool::Output), the lines from `from` on are
+    /// replaced with `lines`, and then the first `dropped` lines are
+    /// dropped and added to its [`dropped`](crate::tool::Output::dropped).
+    ///
+    /// `from` counts the lines kept before this change, from 0: the number
+    /// of them adds lines at the end, and a smaller one rewrites the last
+    /// few, as a progress bar redrawing its line does. CAF works out
+    /// `dropped`, so the output stays within
+    /// [`MOST_OUTPUT`](crate::tool::MOST_OUTPUT); a viewer only applies
+    /// it. Sent at most every 100 ms or 16 KiB of output, never for each
+    /// line.
+    OutputChanged {
+        /// The tool call.
+        item: ItemId,
+        /// The first line replaced.
+        from: u64,
+        /// The lines from there.
+        lines: Vec<String>,
+        /// How many lines then go from the top.
+        dropped: u64,
     },
     /// An item ended.
     ItemEnded {
@@ -167,6 +190,10 @@ pub enum Mismatch {
     NotTool(ItemId),
     /// No question waiting has this id.
     NoQuestion(QuestionId),
+    /// Output changed for a tool call that has no
+    /// [`Output`](crate::tool::Output), or from past its last line, or
+    /// dropping more lines than it has.
+    NoOutput(ItemId),
 }
 
 impl<A: AppItem> Chat<A> {
@@ -206,6 +233,32 @@ impl<A: AppItem> Chat<A> {
                 ItemKind::Tool(old) => old.clone_from(tool),
                 _ => return Err(Mismatch::NotTool(*item)),
             },
+            Change::OutputChanged {
+                item,
+                from,
+                lines,
+                dropped,
+            } => {
+                let ItemKind::Tool(tool) = &mut self.item_mut(*item)?.kind else {
+                    return Err(Mismatch::NotTool(*item));
+                };
+                let output = (tool.result.iter_mut().rev())
+                    .find_map(|piece| match piece {
+                        Piece::Output(output) => Some(output),
+                        _ => None,
+                    })
+                    .ok_or(Mismatch::NoOutput(*item))?;
+                let from = usize::try_from(*from).map_err(|_| Mismatch::NoOutput(*item))?;
+                let gone = *dropped;
+                let dropped = usize::try_from(gone).map_err(|_| Mismatch::NoOutput(*item))?;
+                if from > output.lines.len() || dropped > from + lines.len() {
+                    return Err(Mismatch::NoOutput(*item));
+                }
+                output.lines.truncate(from);
+                output.lines.extend(lines.iter().cloned());
+                output.lines.drain(..dropped);
+                output.dropped += gone;
+            }
             Change::ItemEnded { item, end } => self.item_mut(*item)?.window.end = *end,
             Change::Usage(usage) => self.usage = Some(usage.clone()),
             Change::TurnSpent { turn, usage } => self.turn_mut(*turn)?.spent = Some(usage.clone()),

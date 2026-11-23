@@ -8,6 +8,7 @@ use crate::ids::{ChangeNo, ItemId, QuestionId, TurnId};
 use crate::settings::{ModelUsed, SettingChoice};
 use crate::shape::{chat, item, question, settings, spend, tool, turn, turn_usage, usage};
 use crate::time::{End, Wall};
+use crate::tool::{Output, Piece};
 
 /// The sample chat (turn 2, holding words 3; question 4), with a second
 /// turn, 5, holding thinking 6 and tool 7.
@@ -24,7 +25,7 @@ fn two_turns() -> Chat {
         },
         Item {
             id: ItemId(7),
-            kind: ItemKind::Tool(tool()),
+            kind: ItemKind::Tool(Box::new(tool())),
             ..item()
         },
     ];
@@ -219,12 +220,15 @@ fn words_and_thinking_grow() {
 fn a_tool_call_is_replaced() {
     let mut now = tool();
     now.status = ToolStatus::Failed;
-    now.output = "no such file".into();
+    now.result = vec![crate::tool::Piece::Text(crate::tool::Text {
+        text: "no such file".into(),
+        cut: None,
+    })];
     let chat = applied(Change::ToolChanged {
         item: ItemId(7),
-        tool: now.clone(),
+        tool: Box::new(now.clone()),
     });
-    assert_eq!(chat.turns[1].items[1].kind, ItemKind::Tool(now));
+    assert_eq!(chat.turns[1].items[1].kind, ItemKind::Tool(Box::new(now)));
 }
 
 #[test]
@@ -318,7 +322,7 @@ fn a_change_naming_what_the_chat_lacks_changes_nothing() {
         "tool-for-no-item",
         Change::ToolChanged {
             item: ItemId(99),
-            tool: tool(),
+            tool: Box::new(tool()),
         },
         Mismatch::NoItem(ItemId(99)),
     );
@@ -326,7 +330,7 @@ fn a_change_naming_what_the_chat_lacks_changes_nothing() {
         "tool-for-words",
         Change::ToolChanged {
             item: ItemId(3),
-            tool: tool(),
+            tool: Box::new(tool()),
         },
         Mismatch::NotTool(ItemId(3)),
     );
@@ -375,4 +379,90 @@ fn a_question_gone_takes_every_question_with_its_id() {
     assert_eq!(chat.questions, [other]);
     let text = fixtures::text(&picture, ChangeNo(5), [(&gone, After::Chat(&chat))]);
     fixtures::check(&format!("{}.json", fixtures::next_script()), &text);
+}
+
+/// [`tool`], running, with an output of `lines`.
+fn running(lines: &[&str]) -> crate::chat::ToolCall {
+    let mut now = tool();
+    now.status = ToolStatus::Running;
+    now.result = vec![Piece::Output(Output {
+        lines: lines.iter().map(|line| (*line).to_owned()).collect(),
+        dropped: 0,
+        ending: None,
+    })];
+    now
+}
+
+/// The lines of tool 7's output in `chat`, and how many were dropped.
+fn output_of(chat: &Chat) -> (Vec<String>, u64) {
+    let ItemKind::Tool(tool) = &chat.turns[1].items[1].kind else {
+        panic!("item 7 is a tool");
+    };
+    match &tool.result[..] {
+        [Piece::Output(output)] => (output.lines.clone(), output.dropped),
+        other => panic!("one output: {other:?}"),
+    }
+}
+
+#[test]
+fn output_grows_is_rewritten_from_a_line_and_drops_from_the_top() {
+    let lines = |lines: &[&str]| {
+        lines
+            .iter()
+            .map(|line| (*line).to_owned())
+            .collect::<Vec<_>>()
+    };
+    let chat = applied_all(vec![
+        Change::ToolChanged {
+            item: ItemId(7),
+            tool: Box::new(running(&["Compiling"])),
+        },
+        // Added at the end.
+        Change::OutputChanged {
+            item: ItemId(7),
+            from: 1,
+            lines: lines(&["10%"]),
+            dropped: 0,
+        },
+        // A progress bar redrawing its own line, and a line after it.
+        Change::OutputChanged {
+            item: ItemId(7),
+            from: 1,
+            lines: lines(&["100%", "Finished"]),
+            dropped: 0,
+        },
+        // Past the cap: replaced first, then dropped from the top.
+        Change::OutputChanged {
+            item: ItemId(7),
+            from: 3,
+            lines: lines(&["Running 3 tests"]),
+            dropped: 2,
+        },
+    ]);
+    assert_eq!(
+        output_of(&chat),
+        (lines(&["Finished", "Running 3 tests"]), 2)
+    );
+}
+
+#[test]
+fn output_that_doesnt_fit_is_refused() {
+    let change = |from, dropped| Change::OutputChanged {
+        item: ItemId(7),
+        from,
+        lines: vec!["ok".into()],
+        dropped,
+    };
+    // Tool 7 has text, but no output.
+    misfits("no-output", change(0, 0), Mismatch::NoOutput(ItemId(7)));
+    misfits(
+        "not-a-tool",
+        Change::OutputChanged {
+            item: ItemId(6),
+            from: 0,
+            lines: Vec::new(),
+            dropped: 0,
+        },
+        Mismatch::NotTool(ItemId(6)),
+    );
 }

@@ -16,6 +16,7 @@ mod setup;
 mod spending;
 mod state;
 mod timers;
+mod tools;
 mod turns;
 mod updates;
 mod wire;
@@ -28,6 +29,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub(crate) use self::clean::{agent_text, unhidden};
 use self::record::Log;
 use self::saving::Saving;
 use self::state::{Ask, Conn, Ids, Pending, Proc, Run, Setup};
@@ -39,7 +41,8 @@ use crate::directive::{Directive, Level, Report};
 use crate::event::{Event, HostCommand};
 use crate::host::Host;
 use crate::ids::{
-    AgentName, AgentSessionId, ChangeNo, ChatId, ConnectionId, QuestionId, Shelf, Ticket, TurnId,
+    AgentName, AgentSessionId, CallId, ChangeNo, ChatId, ConnectionId, QuestionId, Shelf, Ticket,
+    TurnId,
 };
 use crate::install::Recipe;
 use crate::profiles::ProfileReport;
@@ -112,6 +115,9 @@ pub struct Core<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     /// The agent's requests waiting for CAF's answer, by the ticket of
     /// the policy's decision.
     asks: BTreeMap<Ticket, Ask>,
+    /// The calls to the tools CAF serves that haven't finished, by the
+    /// driver's number for each.
+    calls: BTreeMap<CallId, tools::Call>,
     /// The time the timer driver was last asked to wake the core at.
     wake: Option<Mono>,
     /// Chats changed since viewers were last told.
@@ -127,6 +133,9 @@ pub struct Core<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     /// Changes that didn't fit their chat's record since the call began,
     /// and why: bugs, reported when it ends with what they said.
     misfits: Vec<(ChatId, Change<A>, Mismatch)>,
+    /// Work owed to drivers, found where there's no list of work to add
+    /// it to: added to the list when the call into the core finishes.
+    owed: Vec<tools::Owed>,
     /// What tests saw of each chat's record, change by change.
     #[cfg(test)]
     applied: BTreeMap<ChatId, record::Applied<A>>,
@@ -277,6 +286,15 @@ pub enum Refused {
     /// [`Settings::offered`](crate::settings::Settings::offered), once its
     /// session has opened.
     NoSuchSetting,
+    /// One of the MCP servers given is named `caf`, in any case, or so that
+    /// an agent writes its tools' names as CAF's own (Claude Code writes
+    /// `caf.x` as `caf_x`, so `caf.` or `caf__`): CAF serves its own tools
+    /// as `caf`, so an agent couldn't tell them apart.
+    ReservedServer,
+    /// Two of the MCP servers given would have the same name to the
+    /// agent, as two the same, or as Claude Code writes `my tools` and
+    /// `my.tools` alike as `my_tools`: it couldn't tell their tools apart.
+    SameServerName,
 }
 
 /// What the host can see of a connection: one adapter process.
@@ -346,12 +364,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             procs: BTreeMap::new(),
             pending: BTreeMap::new(),
             asks: BTreeMap::new(),
+            calls: BTreeMap::new(),
             wake: None,
             dirty: BTreeSet::new(),
             shutting_down: false,
             prices: crate::usage::PriceTable::default(),
             limits: limits::Limits::default(),
             misfits: Vec::new(),
+            owed: Vec::new(),
             #[cfg(test)]
             applied: BTreeMap::new(),
             #[cfg(test)]
@@ -374,7 +394,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
             Event::Agent { process, event } => self.agent_event(now, process, event, out),
             Event::Woken => self.woken(now, out),
-            Event::Policy { ticket, answer } => self.policy_answered(now, ticket, answer, out),
+            Event::Policy {
+                ticket,
+                answer,
+                reason,
+            } => {
+                if !self.served_policy(now, ticket, &answer, reason.as_deref(), out) {
+                    self.policy_answered(now, ticket, answer, reason, out);
+                }
+            }
+            Event::Tool { call, event } => self.tool_event(now, call, event, out),
             Event::Storage { ticket, event } => self.storage_event(now, ticket, event, out),
             Event::Setup { ticket, event } => self.setup_event(now, ticket, event, out),
             Event::Prices(prices) => self.prices_given(prices),
@@ -936,6 +965,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.procs.is_empty()
             && self.pending.is_empty()
             && self.asks.is_empty()
+            && self.calls.is_empty()
             && self.runs.values().all(|run| run.running.is_none())
             && self.saving.settled()
             && (!self.shutting_down || self.saving.all_written())
@@ -1053,6 +1083,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// now can, viewers hear which chats changed, and the timer driver
     /// when to wake the core next.
     fn finish(&mut self, now: Now, out: &mut Vec<Directive<A, D>>) {
+        out.extend(self.owed.drain(..).map(tools::Owed::directive));
         self.advance_all(now, out);
         self.save_due(now, out);
         for (chat, change, mismatch) in std::mem::take(&mut self.misfits) {
@@ -1120,6 +1151,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             "procs": self.procs,
             "pending": pending,
             "asks": self.asks,
+            "calls": self.calls,
             "wake": self.wake,
             "next_id": self.ids.next,
             "first_id": self.ids.first,

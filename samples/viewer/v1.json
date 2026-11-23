@@ -469,10 +469,57 @@
                       "status": {
                         "type": "Pending"
                       },
+                      "origin": {
+                        "type": "Caf",
+                        "value": {
+                          "type": "Read"
+                        }
+                      },
+                      "action": {
+                        "type": "Read",
+                        "value": {
+                          "path": "/home/user/project/lib.rs",
+                          "lines": {
+                            "first": 1,
+                            "last": 40
+                          }
+                        }
+                      },
                       "input": {
                         "path": "lib.rs"
                       },
-                      "output": "fn main() {}",
+                      "input_cut": {
+                        "kept": 20,
+                        "total": 70000
+                      },
+                      "result": [
+                        {
+                          "type": "Text",
+                          "value": {
+                            "text": "fn main() {}",
+                            "cut": {
+                              "kept": 12,
+                              "total": 90000
+                            }
+                          }
+                        }
+                      ],
+                      "locations": [
+                        {
+                          "path": "/home/user/project/lib.rs",
+                          "line": 1
+                        }
+                      ],
+                      "locations_cut": 0,
+                      "decision": {
+                        "type": "Allowed",
+                        "value": {
+                          "type": "Policy",
+                          "value": {
+                            "reason": "reads are allowed"
+                          }
+                        }
+                      },
                       "app": null
                     }
                   }
@@ -495,12 +542,82 @@
                         "type": "Edit"
                       },
                       "status": {
-                        "type": "Running"
+                        "type": "Asking"
+                      },
+                      "origin": {
+                        "type": "Caf",
+                        "value": {
+                          "type": "Edit"
+                        }
+                      },
+                      "action": {
+                        "type": "Edit",
+                        "value": {
+                          "path": "/home/user/project/lib.rs"
+                        }
                       },
                       "input": {
                         "path": "lib.rs"
                       },
-                      "output": "fn main() {}",
+                      "input_cut": null,
+                      "result": [
+                        {
+                          "type": "Diff",
+                          "value": {
+                            "path": "/home/user/project/lib.rs",
+                            "new_file": false,
+                            "added": 1,
+                            "removed": 1,
+                            "hunks": [
+                              {
+                                "lines": [
+                                  {
+                                    "change": {
+                                      "type": "Kept"
+                                    },
+                                    "old": 1,
+                                    "new": 1,
+                                    "text": "fn main() {"
+                                  },
+                                  {
+                                    "change": {
+                                      "type": "Removed"
+                                    },
+                                    "old": 2,
+                                    "new": null,
+                                    "text": "    old();"
+                                  },
+                                  {
+                                    "change": {
+                                      "type": "Added"
+                                    },
+                                    "old": null,
+                                    "new": 2,
+                                    "text": "    new();"
+                                  }
+                                ]
+                              }
+                            ],
+                            "more": 2
+                          }
+                        }
+                      ],
+                      "locations": [
+                        {
+                          "path": "/home/user/project/lib.rs",
+                          "line": null
+                        }
+                      ],
+                      "locations_cut": 0,
+                      "decision": {
+                        "type": "Allowed",
+                        "value": {
+                          "type": "User",
+                          "value": {
+                            "option": "Allow"
+                          }
+                        }
+                      },
                       "app": null
                     }
                   }
@@ -523,12 +640,53 @@
                         "type": "Delete"
                       },
                       "status": {
-                        "type": "Done"
+                        "type": "Running"
+                      },
+                      "origin": {
+                        "type": "Caf",
+                        "value": {
+                          "type": "Write"
+                        }
+                      },
+                      "action": {
+                        "type": "Write",
+                        "value": {
+                          "path": "/home/user/project/lib.rs"
+                        }
                       },
                       "input": {
                         "path": "lib.rs"
                       },
-                      "output": "fn main() {}",
+                      "input_cut": null,
+                      "result": [
+                        {
+                          "type": "Diff",
+                          "value": {
+                            "path": "/home/user/project/lib.rs",
+                            "new_file": true,
+                            "added": 1,
+                            "removed": 0,
+                            "hunks": [],
+                            "more": 1
+                          }
+                        }
+                      ],
+                      "locations": [
+                        {
+                          "path": "/home/user/project/lib.rs",
+                          "line": null
+                        }
+                      ],
+                      "locations_cut": 0,
+                      "decision": {
+                        "type": "Refused",
+                        "value": {
+                          "type": "Policy",
+                          "value": {
+                            "reason": null
+                          }
+                        }
+                      },
                       "app": null
                     }
                   }
@@ -551,12 +709,44 @@
                         "type": "Move"
                       },
                       "status": {
-                        "type": "Failed"
+                        "type": "Done"
+                      },
+                      "origin": {
+                        "type": "Server",
+                        "value": {
+                          "server": "files",
+                          "tool": "move"
+                        }
+                      },
+                      "action": {
+                        "type": "Tool",
+                        "value": {
+                          "name": "move"
+                        }
                       },
                       "input": {
                         "path": "lib.rs"
                       },
-                      "output": "fn main() {}",
+                      "input_cut": null,
+                      "result": [
+                        {
+                          "type": "Link",
+                          "value": {
+                            "uri": "file:///home/user/project/lib.rs",
+                            "name": "lib.rs"
+                          }
+                        }
+                      ],
+                      "locations": [
+                        {
+                          "path": "/home/user/project/lib.rs",
+                          "line": null
+                        }
+                      ],
+                      "locations_cut": 0,
+                      "decision": {
+                        "type": "NotAsked"
+                      },
                       "app": null
                     }
                   }
@@ -579,12 +769,42 @@
                         "type": "Search"
                       },
                       "status": {
-                        "type": "Pending"
+                        "type": "Failed"
+                      },
+                      "origin": {
+                        "type": "Agent",
+                        "value": "Grep"
+                      },
+                      "action": {
+                        "type": "Tool",
+                        "value": {
+                          "name": "Grep"
+                        }
                       },
                       "input": {
                         "path": "lib.rs"
                       },
-                      "output": "fn main() {}",
+                      "input_cut": null,
+                      "result": [
+                        {
+                          "type": "Image",
+                          "value": {
+                            "mime": "image/png",
+                            "data": "iVBORw0KGgo=",
+                            "size": 8
+                          }
+                        }
+                      ],
+                      "locations": [
+                        {
+                          "path": "/home/user/project/lib.rs",
+                          "line": null
+                        }
+                      ],
+                      "locations_cut": 1,
+                      "decision": {
+                        "type": "Undecided"
+                      },
                       "app": null
                     }
                   }
@@ -607,12 +827,61 @@
                         "type": "Execute"
                       },
                       "status": {
-                        "type": "Running"
+                        "type": "Refused"
+                      },
+                      "origin": {
+                        "type": "Caf",
+                        "value": {
+                          "type": "Bash"
+                        }
+                      },
+                      "action": {
+                        "type": "Run",
+                        "value": {
+                          "command": "cargo test",
+                          "folder": "/home/user/project",
+                          "background": false
+                        }
                       },
                       "input": {
                         "path": "lib.rs"
                       },
-                      "output": "fn main() {}",
+                      "input_cut": null,
+                      "result": [
+                        {
+                          "type": "Output",
+                          "value": {
+                            "lines": [
+                              "\u001b[32mok\u001b[0m",
+                              "done"
+                            ],
+                            "dropped": 3,
+                            "ending": {
+                              "type": "Exited",
+                              "value": {
+                                "type": "Code",
+                                "value": 0
+                              }
+                            }
+                          }
+                        }
+                      ],
+                      "locations": [
+                        {
+                          "path": "/home/user/project/lib.rs",
+                          "line": null
+                        }
+                      ],
+                      "locations_cut": 0,
+                      "decision": {
+                        "type": "Allowed",
+                        "value": {
+                          "type": "User",
+                          "value": {
+                            "option": "Allow"
+                          }
+                        }
+                      },
                       "app": null
                     }
                   }
@@ -635,12 +904,42 @@
                         "type": "Think"
                       },
                       "status": {
-                        "type": "Done"
+                        "type": "Cancelled"
+                      },
+                      "origin": {
+                        "type": "App",
+                        "value": "note"
+                      },
+                      "action": {
+                        "type": "Tool",
+                        "value": {
+                          "name": "note"
+                        }
                       },
                       "input": {
                         "path": "lib.rs"
                       },
-                      "output": "fn main() {}",
+                      "input_cut": null,
+                      "result": [
+                        {
+                          "type": "Image",
+                          "value": {
+                            "mime": "image/jpeg",
+                            "data": null,
+                            "size": 9000000
+                          }
+                        }
+                      ],
+                      "locations": [
+                        {
+                          "path": "/home/user/project/lib.rs",
+                          "line": null
+                        }
+                      ],
+                      "locations_cut": 0,
+                      "decision": {
+                        "type": "NotRecorded"
+                      },
                       "app": null
                     }
                   }
@@ -663,12 +962,69 @@
                         "type": "Fetch"
                       },
                       "status": {
-                        "type": "Failed"
+                        "type": "Pending"
+                      },
+                      "origin": {
+                        "type": "NotRecorded"
+                      },
+                      "action": {
+                        "type": "Tool",
+                        "value": {
+                          "name": "Fetch"
+                        }
                       },
                       "input": {
                         "path": "lib.rs"
                       },
-                      "output": "fn main() {}",
+                      "input_cut": null,
+                      "result": [
+                        {
+                          "type": "Output",
+                          "value": {
+                            "lines": [
+                              "\u001b[32mok\u001b[0m",
+                              "done"
+                            ],
+                            "dropped": 3,
+                            "ending": {
+                              "type": "Unknown"
+                            }
+                          }
+                        },
+                        {
+                          "type": "Output",
+                          "value": {
+                            "lines": [
+                              "\u001b[32mok\u001b[0m",
+                              "done"
+                            ],
+                            "dropped": 3,
+                            "ending": {
+                              "type": "Exited",
+                              "value": {
+                                "type": "Signal",
+                                "value": 9
+                              }
+                            }
+                          }
+                        }
+                      ],
+                      "locations": [
+                        {
+                          "path": "/home/user/project/lib.rs",
+                          "line": null
+                        }
+                      ],
+                      "locations_cut": 0,
+                      "decision": {
+                        "type": "Refused",
+                        "value": {
+                          "type": "User",
+                          "value": {
+                            "option": "Refuse"
+                          }
+                        }
+                      },
                       "app": null
                     }
                   }
@@ -691,12 +1047,55 @@
                         "type": "Other"
                       },
                       "status": {
-                        "type": "Pending"
+                        "type": "Asking"
+                      },
+                      "origin": {
+                        "type": "NotRecorded"
+                      },
+                      "action": {
+                        "type": "Tool",
+                        "value": {
+                          "name": "hologram"
+                        }
                       },
                       "input": {
                         "path": "lib.rs"
                       },
-                      "output": "fn main() {}",
+                      "input_cut": null,
+                      "result": [
+                        {
+                          "type": "Output",
+                          "value": {
+                            "lines": [
+                              "\u001b[32mok\u001b[0m",
+                              "done"
+                            ],
+                            "dropped": 3,
+                            "ending": null
+                          }
+                        },
+                        {
+                          "type": "Unknown",
+                          "value": {
+                            "what": "hologram",
+                            "raw": {
+                              "type": "hologram"
+                            },
+                            "summary": null,
+                            "cut": null
+                          }
+                        }
+                      ],
+                      "locations": [
+                        {
+                          "path": "/home/user/project/lib.rs",
+                          "line": null
+                        }
+                      ],
+                      "locations_cut": 0,
+                      "decision": {
+                        "type": "NotRecorded"
+                      },
                       "app": null
                     }
                   }
@@ -734,7 +1133,8 @@
                         "sessionUpdate": "plan",
                         "entries": []
                       },
-                      "summary": null
+                      "summary": null,
+                      "cut": null
                     }
                   }
                 }
@@ -2209,10 +2609,59 @@
                       "status": {
                         "type": "Pending"
                       },
+                      "origin": {
+                        "type": "Caf",
+                        "value": {
+                          "type": "Bash"
+                        }
+                      },
+                      "action": {
+                        "type": "Run",
+                        "value": {
+                          "command": "cargo test",
+                          "folder": "/home/user/project",
+                          "background": false
+                        }
+                      },
                       "input": {
                         "path": "lib.rs"
                       },
-                      "output": "fn main() {}",
+                      "input_cut": null,
+                      "result": [
+                        {
+                          "type": "Output",
+                          "value": {
+                            "lines": [
+                              "\u001b[32mok\u001b[0m",
+                              "done"
+                            ],
+                            "dropped": 3,
+                            "ending": {
+                              "type": "Exited",
+                              "value": {
+                                "type": "Code",
+                                "value": 0
+                              }
+                            }
+                          }
+                        }
+                      ],
+                      "locations": [
+                        {
+                          "path": "/home/user/project/lib.rs",
+                          "line": null
+                        }
+                      ],
+                      "locations_cut": 0,
+                      "decision": {
+                        "type": "Allowed",
+                        "value": {
+                          "type": "User",
+                          "value": {
+                            "option": "Allow"
+                          }
+                        }
+                      },
                       "app": null
                     }
                   }
@@ -2244,10 +2693,59 @@
                   "status": {
                     "type": "Done"
                   },
+                  "origin": {
+                    "type": "Caf",
+                    "value": {
+                      "type": "Bash"
+                    }
+                  },
+                  "action": {
+                    "type": "Run",
+                    "value": {
+                      "command": "cargo test",
+                      "folder": "/home/user/project",
+                      "background": false
+                    }
+                  },
                   "input": {
                     "path": "lib.rs"
                   },
-                  "output": "fn main() {}",
+                  "input_cut": null,
+                  "result": [
+                    {
+                      "type": "Output",
+                      "value": {
+                        "lines": [
+                          "\u001b[32mok\u001b[0m",
+                          "done"
+                        ],
+                        "dropped": 3,
+                        "ending": {
+                          "type": "Exited",
+                          "value": {
+                            "type": "Code",
+                            "value": 0
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "locations": [
+                    {
+                      "path": "/home/user/project/lib.rs",
+                      "line": null
+                    }
+                  ],
+                  "locations_cut": 0,
+                  "decision": {
+                    "type": "Allowed",
+                    "value": {
+                      "type": "User",
+                      "value": {
+                        "option": "Allow"
+                      }
+                    }
+                  },
                   "app": null
                 }
               }
@@ -2255,6 +2753,21 @@
           },
           {
             "no": 52,
+            "change": {
+              "type": "OutputChanged",
+              "value": {
+                "item": 33,
+                "from": 1,
+                "lines": [
+                  "50%",
+                  "100%"
+                ],
+                "dropped": 1
+              }
+            }
+          },
+          {
+            "no": 53,
             "change": {
               "type": "ItemEnded",
               "value": {
@@ -2267,7 +2780,7 @@
             }
           },
           {
-            "no": 53,
+            "no": 54,
             "change": {
               "type": "Usage",
               "value": {
@@ -2278,7 +2791,7 @@
             }
           },
           {
-            "no": 54,
+            "no": 55,
             "change": {
               "type": "QuestionAsked",
               "value": {
@@ -2309,14 +2822,14 @@
             }
           },
           {
-            "no": 55,
+            "no": 56,
             "change": {
               "type": "QuestionGone",
               "value": 26
             }
           },
           {
-            "no": 56,
+            "no": 57,
             "change": {
               "type": "TurnSpent",
               "value": {
@@ -2356,7 +2869,7 @@
             }
           },
           {
-            "no": 57,
+            "no": 58,
             "change": {
               "type": "Spend",
               "value": {
@@ -4270,6 +4783,30 @@
           "type": "Refused",
           "value": {
             "type": "NoSuchSetting"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 31,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "ReservedServer"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 32,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "SameServerName"
           }
         }
       }

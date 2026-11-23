@@ -194,7 +194,7 @@ impl Script {
         self.answers(
             PROC,
             new,
-            &json!({ "sessionId": SESSION, "configOptions": options }),
+            &json!({ "modes": super::default_modes(), "sessionId": SESSION, "configOptions": options }),
         )
     }
 }
@@ -217,7 +217,7 @@ fn claudes_settings_are_read_from_its_config_options_and_the_rest_left_alone() {
     let out = script.answers(
         PROC,
         id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
     );
     assert!(writes(&out).is_empty(), "nothing is set: {out:#?}");
     // Its mode and ultracode stay hidden, as the agent set them.
@@ -260,7 +260,7 @@ fn a_chats_choices_are_sent_model_first_before_its_first_message() {
     let out = script.answers(
         PROC,
         new,
-        &json!({ "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
     );
     assert!(prompts(&out).is_empty(), "the message waits");
     let (id, params) = set(&out);
@@ -331,7 +331,7 @@ fn a_choice_the_agent_doesnt_offer_fails_the_waiting_message_and_falls_back() {
     let out = script.answers(
         PROC,
         id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
     );
     // Never a partial match: nothing is set, and nothing is sent.
     assert!(writes(&out).is_empty(), "{out:#?}");
@@ -457,7 +457,7 @@ fn the_chats_choice_beats_the_hosts_default_and_a_default_not_offered_is_skipped
     let out = script.answers(
         PROC,
         id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
     );
     // The host's model isn't offered: dropped, saying nothing.
     let (id, params) = set(&out);
@@ -556,7 +556,7 @@ fn with_no_turn_running_a_change_is_sent_at_once_and_one_not_offered_is_refused(
     let out = script.answers(
         PROC,
         id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
     );
     // Not offered: said, with no message to fail.
     assert!(writes(&out).is_empty());
@@ -920,7 +920,7 @@ fn an_agent_that_offers_nothing_fails_a_message_waiting_on_a_choice() {
     let out = script.answers(
         PROC,
         id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": SESSION }),
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
     );
     assert!(writes(&out).is_empty());
     assert_has(
@@ -1158,7 +1158,7 @@ fn learning_an_agents_settings_opens_a_session_reads_it_and_lets_it_go() {
     let out = script.answers(
         proc,
         id_of(&new),
-        &json!({ "sessionId": "learn", "configOptions": options }),
+        &json!({ "modes": super::default_modes(), "sessionId": "learn", "configOptions": options }),
     );
     assert!(prompts(&out).is_empty(), "it costs nothing");
     // Nothing else needs its adapter: stopped, which ends the session.
@@ -1186,7 +1186,7 @@ fn a_choice_its_session_never_offered_is_named_as_caf_learned_the_agent_offers_i
     let out = script.answers(
         proc,
         id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": "learn", "configOptions": options }),
+        &json!({ "modes": super::default_modes(), "sessionId": "learn", "configOptions": options }),
     );
     assert_eq!(with(&out, "close_input"), [json!({ "close_input": proc })]);
     for event in [
@@ -1207,7 +1207,7 @@ fn a_choice_its_session_never_offered_is_named_as_caf_learned_the_agent_offers_i
     script.answers(
         proc,
         id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
     );
     assert_eq!(
         notes(&script.chat(chat)),
@@ -1271,7 +1271,7 @@ fn learning_with_a_running_adapter_uses_it_strips_the_session_and_closes_it() {
     let out = script.answers(
         PROC,
         id_of(&new),
-        &json!({ "sessionId": "learn", "configOptions": claude_options("default", "default", false) }),
+        &json!({ "modes": super::default_modes(), "sessionId": "learn", "configOptions": claude_options("default", "default", false) }),
     );
     assert_eq!(
         sent(&out, "session/close")["params"],
@@ -1477,7 +1477,7 @@ fn learning_given_up_on_lets_its_adapter_go_and_a_late_answer_changes_nothing() 
     let out = script.answers(
         proc,
         new,
-        &json!({ "sessionId": "late", "configOptions": [] }),
+        &json!({ "modes": super::default_modes(), "sessionId": "late", "configOptions": [] }),
     );
     assert!(prompts(&out).is_empty());
     assert_eq!(
@@ -1721,7 +1721,7 @@ fn learning_on_an_adapter_that_cant_close_sessions_leaves_its_session_until_it_s
     script.answers(
         PROC,
         id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": SESSION }),
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
     );
     let (done, out) = script.learn_settings("plain");
     done.expect("learning");
@@ -1729,7 +1729,7 @@ fn learning_on_an_adapter_that_cant_close_sessions_leaves_its_session_until_it_s
     let out = script.answers(
         PROC,
         id_of(&new),
-        &json!({ "sessionId": "learn", "configOptions": [] }),
+        &json!({ "modes": super::default_modes(), "sessionId": "learn", "configOptions": [] }),
     );
     assert!(writes(&out).is_empty(), "it can't be closed: {out:#?}");
     assert!(
@@ -1861,7 +1861,7 @@ fn learning_again_shows_what_was_learned_until_it_knows_better() {
     script.answers(
         proc,
         id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": "learn-1", "configOptions": options("a") }),
+        &json!({ "modes": super::default_modes(), "sessionId": "learn-1", "configOptions": options("a") }),
     );
     let known = script.agent_status("plain")["settings"].clone();
     assert_eq!(known["type"], "Known");
@@ -1889,7 +1889,7 @@ fn learning_again_shows_what_was_learned_until_it_knows_better() {
     script.answers(
         proc,
         id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": "learn-3", "configOptions": options("b") }),
+        &json!({ "modes": super::default_modes(), "sessionId": "learn-3", "configOptions": options("b") }),
     );
     assert_eq!(
         script.agent_status("plain")["settings"]["value"][0]["current"],
@@ -2022,7 +2022,7 @@ fn the_hosts_default_fallen_back_to_fails_quietly_when_refused_or_unsendable() {
     let out = script.answers(
         PROC,
         id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
     );
     let (default, params) = set(&out);
     assert_eq!(params["value"], "haiku");
@@ -2062,7 +2062,7 @@ fn the_hosts_default_fallen_back_to_fails_quietly_when_refused_or_unsendable() {
     let out = script.answers(
         PROC,
         id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION, "configOptions": claude_options("default", "default", false) }),
     );
     assert!(writes(&out).is_empty(), "{out:#?}");
     assert_eq!(
@@ -2134,7 +2134,7 @@ fn a_change_unanswered_on_an_adapter_busy_with_another_chat_restarts_only_its_se
     let out = script.answers(
         PROC,
         id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": "sess-2", "configOptions": claude_options("default", "default", false) }),
+        &json!({ "modes": super::default_modes(), "sessionId": "sess-2", "configOptions": claude_options("default", "default", false) }),
     );
     assert!(writes(&out).is_empty());
     // The first chat is mid-turn.
@@ -2207,7 +2207,7 @@ fn a_change_nobody_waits_for_any_more_leaves_its_chat_untouched_when_its_deadlin
     script.answers(
         PROC,
         id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": "sess-2", "configOptions": claude_options("default", "default", false) }),
+        &json!({ "modes": super::default_modes(), "sessionId": "sess-2", "configOptions": claude_options("default", "default", false) }),
     );
     let (_, out) = script.set_setting(other, SettingChoice::model("sonnet"));
     set(&out);
@@ -2409,7 +2409,7 @@ fn a_change_nobody_waits_for_restarts_an_idle_adapter_and_a_chat_opening_on_it_o
     script.answers(
         PROC,
         id_of(&sent(&out, "session/new")),
-        &json!({ "sessionId": "sess-2", "configOptions": claude_options("default", "default", false) }),
+        &json!({ "modes": super::default_modes(), "sessionId": "sess-2", "configOptions": claude_options("default", "default", false) }),
     );
     let (_, out) = script.set_setting(away, SettingChoice::model("sonnet"));
     set(&out);
@@ -2439,10 +2439,120 @@ fn a_change_nobody_waits_for_restarts_an_idle_adapter_and_a_chat_opening_on_it_o
     script.answers(
         proc,
         id_of(&new),
-        &json!({ "sessionId": "sess-3", "configOptions": claude_options("default", "default", false) }),
+        &json!({ "modes": super::default_modes(), "sessionId": "sess-3", "configOptions": claude_options("default", "default", false) }),
     );
     assert_has(
         &script.chat(opening),
         &json!({ "state": { "type": "Open", "value": { "session": "sess-3" } } }),
+    );
+}
+
+/// Claude's `modes`, as claude-agent-acp 0.98.0 answers a session it
+/// opens, starting it in `current`.
+fn claude_modes(current: &str) -> Value {
+    json!({ "currentModeId": current, "availableModes": [
+        { "id": "default", "name": "Default" }, { "id": "acceptEdits", "name": "Accept Edits" },
+        { "id": "plan", "name": "Plan Mode" }, { "id": "dontAsk", "name": "Don't Ask" },
+    ] })
+}
+
+#[test]
+fn a_claude_session_opened_in_the_users_own_mode_is_set_to_default_before_any_message() {
+    let mut script = Script::new(host());
+    let (_, out) = script.open(OpenChat::new("claude", "/work"));
+    let (turn, _) = script.send(CHAT, "hello");
+    turn.expect("queued");
+    let out = script.answers(PROC, id_of(&sent(&out, "initialize")), &claude_init());
+    // The user's settings.json says `plan`, so the adapter starts there.
+    let out = script.answers(
+        PROC,
+        id_of(&sent(&out, "session/new")),
+        &json!({ "sessionId": SESSION, "modes": claude_modes("plan"),
+                 "configOptions": claude_options("default", "default", false) }),
+    );
+    let mode = sent(&out, "session/set_mode");
+    assert_eq!(
+        mode["params"],
+        json!({ "sessionId": SESSION, "modeId": "default" })
+    );
+    assert!(prompts(&out).is_empty(), "nothing goes before it: {out:#?}");
+    let out = script.answers(PROC, id_of(&mode), &json!({}));
+    assert_eq!(prompts(&out).len(), 1, "then the message goes: {out:#?}");
+}
+
+#[test]
+fn a_session_already_in_default_mode_or_of_an_agent_without_them_is_left_alone_and_one_that_doesnt_say_is_set()
+ {
+    let mut script = Script::new(host());
+    let (_, out) = script.open(OpenChat::new("claude", "/work"));
+    script.send(CHAT, "hello").0.expect("queued");
+    let out = script.answers(PROC, id_of(&sent(&out, "initialize")), &claude_init());
+    let out = script.answers(
+        PROC,
+        id_of(&sent(&out, "session/new")),
+        &json!({ "sessionId": SESSION, "modes": claude_modes("default") }),
+    );
+    assert_eq!(prompts(&out).len(), 1, "the message goes at once: {out:#?}");
+    // A plain agent's own modes are its own.
+    let mut script = Script::new(host());
+    let (_, out) = script.open(OpenChat::new("plain", "/work"));
+    script.send(CHAT, "hello").0.expect("queued");
+    let out = script.answers(PROC, id_of(&sent(&out, "initialize")), &plain_init(false));
+    let out = script.answers(
+        PROC,
+        id_of(&sent(&out, "session/new")),
+        &json!({ "sessionId": SESSION, "modes": claude_modes("plan") }),
+    );
+    assert_eq!(prompts(&out).len(), 1, "the message goes at once: {out:#?}");
+    // A Claude session that doesn't say its mode is set: CAF can't know
+    // it's right.
+    let mut script = Script::new(host());
+    let (_, out) = script.open(OpenChat::new("claude", "/work"));
+    script.send(CHAT, "hello").0.expect("queued");
+    let out = script.answers(PROC, id_of(&sent(&out, "initialize")), &claude_init());
+    let out = script.answers(
+        PROC,
+        id_of(&sent(&out, "session/new")),
+        &json!({ "sessionId": SESSION }),
+    );
+    let mode = sent(&out, "session/set_mode");
+    assert_eq!(
+        mode["params"],
+        json!({ "sessionId": SESSION, "modeId": "default" })
+    );
+    assert!(prompts(&out).is_empty());
+    let out = script.answers(PROC, id_of(&mode), &json!({}));
+    assert_eq!(prompts(&out).len(), 1, "then the message goes: {out:#?}");
+}
+
+#[test]
+fn a_resumed_claude_session_is_set_to_default_too_and_a_refusal_holds_nothing_up() {
+    let mut script = Script::new(host());
+    let mut open = OpenChat::new("claude", "/work");
+    open.session = crate::core::SessionChoice::Continue(AgentSessionId("old".to_owned()));
+    let (_, out) = script.open(open);
+    script.send(CHAT, "hello").0.expect("queued");
+    let out = script.answers(PROC, id_of(&sent(&out, "initialize")), &claude_init());
+    // Resumed in the mode its transcript ended in.
+    let out = script.answers(
+        PROC,
+        id_of(&sent(&out, "session/resume")),
+        &json!({ "modes": claude_modes("dontAsk") }),
+    );
+    let mode = sent(&out, "session/set_mode");
+    assert_eq!(
+        mode["params"],
+        json!({ "sessionId": "old", "modeId": "default" })
+    );
+    assert!(prompts(&out).is_empty());
+    let out = script.fails(
+        PROC,
+        id_of(&mode),
+        &json!({ "code": -32602, "message": "Invalid mode" }),
+    );
+    assert_eq!(prompts(&out).len(), 1, "the message still goes: {out:#?}");
+    assert!(
+        (with(&out, "report").iter()).any(|report| report.to_string().contains("permission mode")),
+        "the host's log says so: {out:#?}"
     );
 }

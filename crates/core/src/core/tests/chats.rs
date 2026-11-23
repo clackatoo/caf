@@ -51,7 +51,7 @@ fn words_thinking_and_tools_become_items_in_order() {
             "turns": [{ "items": [
                 { "kind": { "type": "Thinking", "value": "Let me look" }, "window": { "end": wall(20) } },
                 { "kind": { "type": "Words", "value": "Looking." }, "window": { "end": wall(30) } },
-                { "kind": { "type": "Tool", "value": { "title": "Read lib.rs", "kind": { "type": "Read" }, "status": { "type": "Done" }, "input": { "path": "lib.rs" }, "output": "fn main() {}" } }, "window": { "end": wall(40) } },
+                { "kind": { "type": "Tool", "value": { "title": "Read lib.rs", "kind": { "type": "Read" }, "status": { "type": "Done" }, "input": { "path": "lib.rs" }, "result": [{ "type": "Text", "value": { "text": "fn main() {}", "cut": null } }] } }, "window": { "end": wall(40) } },
                 { "kind": { "type": "Words", "value": "Found it." } },
                 { "kind": { "type": "Unknown", "value": { "what": "agent_message_chunk" } } }
             ] }]
@@ -176,7 +176,11 @@ fn messages_wait_in_order_up_to_the_hosts_limit() {
     script.send(CHAT, "two").0.expect("waits");
     assert_eq!(script.send(CHAT, "three").0, Err(Refused::QueueFull));
     script.answers(PROC, 1000, &claude_init());
-    let out = script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    let out = script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+    );
     assert_has(
         &sent(&out, "session/prompt"),
         &json!({ "params": { "prompt": [{ "text": "one" }] } }),
@@ -402,7 +406,11 @@ fn viewers_read_changes_or_the_whole_chat() {
     };
     assert_eq!(latest, ChangeNo(999));
     script.answers(PROC, 1000, &claude_init());
-    let out = script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    let out = script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+    );
     assert_eq!(
         with(&out, "changed"),
         [json!({ "changed": CHAT, "latest": 1000 })]
