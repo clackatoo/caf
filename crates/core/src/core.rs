@@ -133,10 +133,9 @@ pub struct Core<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     /// Changes that didn't fit their chat's record since the call began,
     /// and why: bugs, reported when it ends with what they said.
     misfits: Vec<(ChatId, Change<A>, Mismatch)>,
-    /// Work for drivers found where there's no list of work to add it
-    /// to, such as a turn ending: added to the list when the call into
-    /// the core finishes.
-    told: Vec<Directive<A, D>>,
+    /// Work owed to drivers, found where there's no list of work to add
+    /// it to: added to the list when the call into the core finishes.
+    owed: Vec<tools::Owed>,
     /// What tests saw of each chat's record, change by change.
     #[cfg(test)]
     applied: BTreeMap<ChatId, record::Applied<A>>,
@@ -366,7 +365,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             prices: crate::usage::PriceTable::default(),
             limits: limits::Limits::default(),
             misfits: Vec::new(),
-            told: Vec::new(),
+            owed: Vec::new(),
             #[cfg(test)]
             applied: BTreeMap::new(),
             #[cfg(test)]
@@ -1078,7 +1077,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// now can, viewers hear which chats changed, and the timer driver
     /// when to wake the core next.
     fn finish(&mut self, now: Now, out: &mut Vec<Directive<A, D>>) {
-        out.append(&mut self.told);
+        out.extend(self.owed.drain(..).map(tools::Owed::directive));
         self.advance_all(now, out);
         self.save_due(now, out);
         for (chat, change, mismatch) in std::mem::take(&mut self.misfits) {
