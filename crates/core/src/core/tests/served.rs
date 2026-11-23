@@ -145,6 +145,13 @@ fn a_call_comes_first_makes_the_item_and_the_report_joins_it() {
     );
     assert_eq!(the_tool(&script), tool);
     script.policy(1005, PolicyAnswer::Allow);
+    script.tool(
+        1,
+        ToolEvent::Finished {
+            done: true,
+            pieces: Vec::new(),
+        },
+    );
 }
 
 #[test]
@@ -185,7 +192,11 @@ fn without_the_agents_id_a_call_joins_the_oldest_report_with_the_same_input() {
         .0
         .expect("opened");
     script.answers(PROC, 1000, &super::claude_init());
-    script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+    );
     script.send(CHAT, "go").0.expect("sent");
     let a = json!({ "file_path": "/work/a" });
     let b = json!({ "file_path": "/work/b" });
@@ -493,22 +504,27 @@ fn a_stopped_turn_cancels_its_calls_and_a_finished_one_fails_them() {
     let deciding = ticket(&out);
     let out = script.tool(3, called(CafTool::Read, json!({ "file_path": "/b" }), None));
     script.policy(ticket(&out), PolicyAnswer::AskUser);
-    script.stop(CHAT).0.expect("stopping");
+    // Those waiting to be allowed are cancelled at once.
+    let (stopped, out) = script.stop(CHAT);
+    stopped.expect("stopping");
+    assert_eq!(
+        told(&out),
+        [2, 3].map(|call| json!({ "type": "Cancel", "value": { "call": call } }))
+    );
+    assert!(out.contains(&json!({ "withdrawn": deciding })));
+    assert_eq!(script.chat(CHAT)["questions"], json!([]));
     // Stopping, the turn takes no new calls.
     let out = script.tool(4, called(CafTool::Read, json!({ "file_path": "/c" }), None));
     assert_eq!(
         one_told(&out)["value"]["why"],
         json!({ "type": "NotRunning" })
     );
+    // The one running is stopped as the turn ends.
     let out = script.answers(PROC, PROMPT, &json!({ "stopReason": "cancelled" }));
-    let mut cancelled: Vec<Value> = told(&out);
-    cancelled.sort_by_key(|each| each["value"]["call"].as_u64());
     assert_eq!(
-        cancelled,
-        [1, 2, 3].map(|call| json!({ "type": "Cancel", "value": { "call": call } }))
+        told(&out),
+        [json!({ "type": "Cancel", "value": { "call": 1 } })]
     );
-    assert!(out.contains(&json!({ "withdrawn": deciding })));
-    assert_eq!(script.chat(CHAT)["questions"], json!([]));
     for tool in tools(&script) {
         assert_eq!(tool["status"], kind("Cancelled"));
         assert_ne!(tool["end"]["type"], "Open");
@@ -715,4 +731,396 @@ fn the_agent_asking_permission_for_cafs_own_call_is_allowed_at_once() {
         called(CafTool::Bash, json!({ "command": "ls" }), Some("toolu_1")),
     );
     script.policy(ticket(&out), PolicyAnswer::Refuse);
+}
+
+#[test]
+fn a_stop_ends_the_calls_waiting_to_be_allowed_at_once() {
+    let mut script = running();
+    let out = script.tool(
+        1,
+        called(CafTool::Bash, json!({ "command": "rm -rf x" }), None),
+    );
+    let deciding = ticket(&out);
+    let out = script.tool(2, called(CafTool::Read, json!({ "file_path": "/b" }), None));
+    script.policy(ticket(&out), PolicyAnswer::AskUser);
+    let question = QuestionId(
+        script.chat(CHAT)["questions"][0]["id"]
+            .as_u64()
+            .expect("asked"),
+    );
+    let out = script.tool(
+        3,
+        called(
+            CafTool::Edit,
+            json!({ "file_path": "/c", "old_string": "a", "new_string": "b" }),
+            None,
+        ),
+    );
+    assert_eq!(one_told(&out)["type"], "Preview");
+    let (stopped, out) = script.stop(CHAT);
+    stopped.expect("stopping");
+    let mut cancelled = told(&out);
+    cancelled.sort_by_key(|each| each["value"]["call"].as_u64());
+    assert_eq!(
+        cancelled,
+        [1, 2, 3].map(|call| json!({ "type": "Cancel", "value": { "call": call } }))
+    );
+    assert!(out.contains(&json!({ "withdrawn": deciding })));
+    assert_eq!(script.chat(CHAT)["questions"], json!([]));
+    for tool in tools(&script) {
+        assert_eq!(tool["status"], kind("Cancelled"));
+    }
+    // Nothing allows them after.
+    assert!(told(&script.policy(deciding, PolicyAnswer::Allow)).is_empty());
+    let (answered, out) = script.answer(question, Answer::Permission(OptionId("allow".to_owned())));
+    assert_eq!(answered, Err(Refused::NoSuchQuestion));
+    assert!(told(&out).is_empty());
+    assert!(told(&script.tool(3, ToolEvent::Previewed { pieces: Vec::new() })).is_empty());
+    script.answers(PROC, PROMPT, &json!({ "stopReason": "cancelled" }));
+}
+
+#[test]
+fn a_call_without_the_agents_id_joins_a_report_of_input_too_long_to_keep_whole() {
+    let input = json!({ "file_path": "/work/a", "content": "x".repeat(MOST_OUTPUT + 10) });
+    let mut script = running();
+    script.update(PROC, SESSION, &report("r1", "Write", "pending", &input));
+    script.tool(1, called(CafTool::Write, input.clone(), None));
+    assert_eq!(tools(&script).len(), 1, "joined");
+    assert_eq!(the_tool(&script)["title"], "Write a");
+    script.tool(1, ToolEvent::Gone);
+}
+
+#[test]
+fn a_report_whose_input_comes_later_joins_the_call_it_turns_out_to_be() {
+    let mut script = running();
+    let a = json!({ "file_path": "/work/a" });
+    let b = json!({ "file_path": "/work/b" });
+    let first = script.tool(1, called(CafTool::Read, a.clone(), None));
+    let second = script.tool(2, called(CafTool::Read, b.clone(), None));
+    // Reported with no input yet, then with it: it's the second call.
+    script.update(PROC, SESSION, &report("r1", "Read", "pending", &json!({})));
+    let mut update = report("r1", "Read", "pending", &b);
+    update["sessionUpdate"] = json!("tool_call_update");
+    script.update(PROC, SESSION, &update);
+    assert_eq!(tools(&script).len(), 2, "no item of its own");
+    // The first's report then joins the first.
+    script.update(PROC, SESSION, &report("r2", "Read", "pending", &json!({})));
+    let mut update = report("r2", "Read", "pending", &a);
+    update["sessionUpdate"] = json!("tool_call_update");
+    script.update(PROC, SESSION, &update);
+    assert_eq!(tools(&script).len(), 2);
+    let titles: Vec<Value> = tools(&script)
+        .iter()
+        .map(|tool| tool["title"].clone())
+        .collect();
+    assert_eq!(titles, [json!("Read a"), json!("Read b")]);
+    script.policy(ticket(&first), PolicyAnswer::Refuse);
+    script.policy(ticket(&second), PolicyAnswer::Refuse);
+}
+
+/// Opens a plain agent's chat, whose adapter says nothing of whose a
+/// tool is, with a turn running.
+fn plain_running() -> Script {
+    let mut script = Script::new(host());
+    script
+        .open(crate::core::OpenChat::new("plain", "/work"))
+        .0
+        .expect("opened");
+    script.answers(PROC, 1000, &super::plain_init(false));
+    script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    script.send(CHAT, "go").0.expect("sent");
+    script
+}
+
+#[test]
+fn the_agents_own_permission_request_never_changes_a_call_caf_serves() {
+    let mut script = plain_running();
+    let input = json!({ "command": "cargo test" });
+    script.update(
+        PROC,
+        SESSION,
+        &json!({ "sessionUpdate": "tool_call", "toolCallId": "tool-1", "title": "Run", "status": "pending", "rawInput": input }),
+    );
+    // Its adapter doesn't say it's CAF's: the policy is asked.
+    let out = script.says(PROC, &permission(7, "tool-1"));
+    let agents = ticket(&out);
+    let out = script.tool(1, called(CafTool::Bash, input, Some("tool-1")));
+    let cafs = ticket(&out);
+    script.policy(agents, PolicyAnswer::AskUser);
+    assert_eq!(the_tool(&script)["status"], kind("Pending"));
+    let question = QuestionId(
+        script.chat(CHAT)["questions"][0]["id"]
+            .as_u64()
+            .expect("asked"),
+    );
+    script
+        .answer(question, Answer::Permission(OptionId("reject".to_owned())))
+        .0
+        .expect("answered");
+    let tool = the_tool(&script);
+    assert_has(
+        &tool,
+        &json!({ "status": kind("Pending"), "decision": kind("Undecided") }),
+    );
+    script.policy(cafs, PolicyAnswer::Allow);
+    assert_eq!(the_tool(&script)["status"], kind("Running"));
+    script.tool(
+        1,
+        ToolEvent::Finished {
+            done: true,
+            pieces: Vec::new(),
+        },
+    );
+}
+
+#[test]
+fn output_from_past_its_end_keeps_the_drivers_numbering() {
+    let mut script = bash_running("make");
+    let lines = |text: &[&str]| text.iter().map(|&line| line.to_owned()).collect::<Vec<_>>();
+    script.tool(
+        1,
+        ToolEvent::Output {
+            from: 0,
+            lines: lines(&["a"]),
+        },
+    );
+    let out = script.tool(
+        1,
+        ToolEvent::Output {
+            from: 3,
+            lines: lines(&["d", "e"]),
+        },
+    );
+    assert!(
+        with(&out, "report")
+            .iter()
+            .any(|report| report["report"] == "Warn"),
+        "{out:#?}"
+    );
+    assert_eq!(output(&script)["lines"], json!(["a", "d", "e"]));
+    // Its line 4 is "e".
+    script.tool(
+        1,
+        ToolEvent::Output {
+            from: 4,
+            lines: lines(&["E"]),
+        },
+    );
+    assert_eq!(output(&script)["lines"], json!(["a", "d", "E"]));
+    script.tool(
+        1,
+        ToolEvent::Finished {
+            done: true,
+            pieces: Vec::new(),
+        },
+    );
+}
+
+#[test]
+fn a_finished_edit_gives_its_diff_in_place_of_the_previews() {
+    let mut script = running();
+    let out = script.tool(
+        1,
+        called(
+            CafTool::Edit,
+            json!({ "file_path": "/work/a", "old_string": "a", "new_string": "b" }),
+            None,
+        ),
+    );
+    assert_eq!(one_told(&out)["type"], "Preview");
+    let preview = Diff::new("/work/a", Some("a\n"), "b\n");
+    let out = script.tool(
+        1,
+        ToolEvent::Previewed {
+            pieces: vec![Piece::Diff(preview)],
+        },
+    );
+    script.policy(ticket(&out), PolicyAnswer::Allow);
+    let done = Diff::new("/work/a", Some("a\nz\n"), "b\nz\n");
+    script.tool(
+        1,
+        ToolEvent::Finished {
+            done: true,
+            pieces: vec![Piece::Diff(done.clone())],
+        },
+    );
+    assert_eq!(
+        the_tool(&script)["result"],
+        json!([serde_json::to_value(Piece::Diff(done)).expect("JSON")])
+    );
+}
+
+#[test]
+fn a_finished_command_ends_its_last_output() {
+    let mut script = bash_running("make");
+    // A driver giving a second output: the last is the one that ends.
+    script.tool(
+        1,
+        ToolEvent::Finished {
+            done: true,
+            pieces: vec![Piece::Output(Output {
+                lines: Vec::new(),
+                dropped: 0,
+                ending: Some(Ending::Exited(Exit::Code(2))),
+            })],
+        },
+    );
+    let result = &the_tool(&script)["result"];
+    assert_eq!(result.as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        result[0]["value"]["ending"],
+        json!({ "type": "Exited", "value": { "type": "Code", "value": 2 } })
+    );
+}
+
+#[test]
+fn a_call_reported_twice_or_naming_an_earlier_calls_id_is_its_own() {
+    let mut script = running();
+    let out = script.tool(
+        1,
+        called(CafTool::Read, json!({ "file_path": "/a" }), Some("toolu_1")),
+    );
+    let first = ticket(&out);
+    // The same call again: ignored.
+    let out = script.tool(
+        1,
+        called(CafTool::Read, json!({ "file_path": "/z" }), Some("toolu_1")),
+    );
+    assert!(told(&out).is_empty() && with(&out, "decide").is_empty());
+    assert_eq!(tools(&script).len(), 1);
+    // Another call giving the first's id: an item of its own, and the
+    // first's report still lands on the first.
+    let out = script.tool(
+        2,
+        called(CafTool::Read, json!({ "file_path": "/b" }), Some("toolu_1")),
+    );
+    assert!(
+        with(&out, "report")
+            .iter()
+            .any(|report| report["report"] == "Warn")
+    );
+    let second = ticket(&out);
+    assert_eq!(tools(&script).len(), 2);
+    script.update(
+        PROC,
+        SESSION,
+        &report(
+            "toolu_1",
+            "Read",
+            "completed",
+            &json!({ "file_path": "/a" }),
+        ),
+    );
+    let all = tools(&script);
+    assert_eq!(all[0]["title"], "Read /a");
+    assert_eq!(all[1]["title"], "Read /b");
+    assert_eq!(all[0]["status"], kind("Pending"));
+    script.policy(first, PolicyAnswer::Refuse);
+    script.policy(second, PolicyAnswer::Refuse);
+}
+
+#[test]
+fn two_chats_may_use_the_same_agent_id() {
+    const OTHER: crate::ids::ChatId = crate::ids::ChatId::from_number(1004);
+    let mut script = running();
+    let (other, out) = script.open(crate::core::OpenChat::new("claude", "/elsewhere"));
+    assert_eq!(other, Ok(OTHER));
+    let new = super::harness::sent(&out, "session/new")["id"]
+        .as_u64()
+        .expect("an id");
+    script.answers(
+        PROC,
+        new,
+        &json!({ "sessionId": "sess-2", "modes": super::default_modes() }),
+    );
+    script.send(OTHER, "go too").0.expect("sent");
+    let out = script.tool(
+        1,
+        called(CafTool::Read, json!({ "file_path": "/a" }), Some("toolu_1")),
+    );
+    let first = ticket(&out);
+    let out = script.tool(
+        2,
+        ToolEvent::Called {
+            chat: OTHER,
+            tool: CafTool::Read,
+            input: json!({ "file_path": "/b" }),
+            agent_call: Some("toolu_1".to_owned()),
+        },
+    );
+    let second = ticket(&out);
+    assert_eq!(tools(&script).len(), 1);
+    assert_eq!(
+        script.chat(OTHER)["turns"][0]["items"][0]["kind"]["value"]["title"],
+        "Read /b"
+    );
+    script.policy(first, PolicyAnswer::Refuse);
+    script.policy(second, PolicyAnswer::Refuse);
+}
+
+#[test]
+fn a_call_the_agent_gives_up_on_while_previewed_asked_or_running_is_cancelled() {
+    let mut script = running();
+    let out = script.tool(
+        1,
+        called(
+            CafTool::Write,
+            json!({ "file_path": "/a", "content": "" }),
+            None,
+        ),
+    );
+    assert_eq!(one_told(&out)["type"], "Preview");
+    assert!(told(&script.tool(1, ToolEvent::Gone)).is_empty());
+    // Its preview, coming late, asks nobody.
+    let out = script.tool(1, ToolEvent::Previewed { pieces: Vec::new() });
+    assert!(with(&out, "decide").is_empty());
+
+    let out = script.tool(2, called(CafTool::Read, json!({ "file_path": "/b" }), None));
+    script.policy(ticket(&out), PolicyAnswer::AskUser);
+    script.tool(2, ToolEvent::Gone);
+    assert_eq!(script.chat(CHAT)["questions"], json!([]));
+
+    let out = script.tool(3, called(CafTool::Bash, json!({ "command": "ls" }), None));
+    script.policy(ticket(&out), PolicyAnswer::Allow);
+    assert!(told(&script.tool(3, ToolEvent::Gone)).is_empty());
+    let statuses: Vec<Value> = tools(&script)
+        .iter()
+        .map(|tool| tool["status"].clone())
+        .collect();
+    assert_eq!(
+        statuses,
+        [kind("Cancelled"), kind("Cancelled"), kind("Cancelled")]
+    );
+    assert_eq!(
+        tools(&script)[2]["result"][0]["value"]["ending"],
+        kind("Unknown")
+    );
+}
+
+#[test]
+fn a_call_in_a_turn_the_agent_started_is_served_in_it() {
+    let mut script = Script::with_claude();
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Checking" } }));
+    let out = script.tool(1, called(CafTool::Read, json!({ "file_path": "/a" }), None));
+    let turn = &script.chat(CHAT)["turns"][0];
+    assert_eq!(turn["starter"]["type"], "Agent");
+    assert_eq!(turn["items"][1]["kind"]["value"]["title"], "Read /a");
+    script.policy(ticket(&out), PolicyAnswer::Allow);
+    script.tool(
+        1,
+        ToolEvent::Finished {
+            done: true,
+            pieces: Vec::new(),
+        },
+    );
+}
+
+#[test]
+fn input_that_makes_no_action_fails_the_report_waiting_for_it_without_the_agents_id() {
+    let mut script = running();
+    let input = json!({ "file_path": "/a" });
+    script.update(PROC, SESSION, &report("r1", "Edit", "pending", &input));
+    let out = script.tool(1, called(CafTool::Edit, input, None));
+    assert_eq!(one_told(&out)["value"]["why"]["type"], "BadInput");
+    assert_eq!(the_tool(&script)["status"], kind("Failed"));
 }

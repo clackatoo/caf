@@ -110,7 +110,11 @@ fn guarantee_2_every_caf_request_ends() {
         .open(OpenChat::new("claude", "/elsewhere"))
         .0
         .expect("opened");
-    script.answers(PROC, 1002, &json!({ "sessionId": "sess-2" }));
+    script.answers(
+        PROC,
+        1002,
+        &json!({ "modes": super::default_modes(), "sessionId": "sess-2" }),
+    );
     script.send(CHAT, "busy").0.expect("sent");
     // A prompt has no watchdog of its own.
     assert_eq!(script.state()["wake"], Value::Null);
@@ -158,7 +162,7 @@ fn guarantee_2_every_caf_request_ends() {
     let (_, out) = script.send(CHAT, "again");
     let new = with(&out, "start")[0]["start"].as_u64().expect("started");
     script.answers(new, 1000, &super::claude_init());
-    script.answers(new, 1001, &json!({}));
+    script.answers(new, 1001, &json!({ "modes": super::default_modes() }));
     assert_eq!(script.state()["pending"].as_array().map(Vec::len), Some(1));
     script.agent(new, AgentEvent::Exited(Exit::Code(1)));
     script.agent(new, AgentEvent::OutputClosed);
@@ -229,20 +233,25 @@ fn guarantee_4_every_event_names_what_it_belongs_to() {
         .open(OpenChat::new("claude", "/elsewhere"))
         .0
         .expect("opened");
-    script.answers(PROC, 1002, &json!({ "sessionId": "sess-2" }));
+    script.answers(
+        PROC,
+        1002,
+        &json!({ "modes": super::default_modes(), "sessionId": "sess-2" }),
+    );
     script.send(CHAT, "first").0.expect("sent");
     script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Build", "status": "in_progress" }));
     script.answers(PROC, 1003, &json!({ "stopReason": "end_turn" }));
     script.send(CHAT, "second").0.expect("sent");
     script.update(PROC, SESSION, &json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "now" } }));
-    // A late update to the first turn's tool lands on its own item.
+    // A late update to the first turn's tool lands on its own item: what
+    // it gave back comes, though the call stays as its turn ended it.
     script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed", "rawOutput": "ok" }));
     // Another session's update lands in its own chat.
     script.update(PROC, "sess-2", &json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "elsewhere" } }));
     assert_has(
         &script.chat(CHAT),
         &json!({ "turns": [
-        { "items": [{ "kind": { "type": "Tool", "value": { "title": "Build", "status": { "type": "Done" }, "result": [{ "type": "Text", "value": { "text": "ok", "cut": null } }] } } }] },
+        { "items": [{ "kind": { "type": "Tool", "value": { "title": "Build", "status": { "type": "Failed" }, "result": [{ "type": "Text", "value": { "text": "ok", "cut": null } }] } } }] },
         { "items": [{ "kind": { "type": "Words", "value": "now" } }] }
     ] }),
     );
@@ -309,7 +318,11 @@ fn guarantee_6_a_question_is_answered_once_and_only_while_it_stands() {
     let (late, out) = script.answer(slow, Answer::SlowToOpen(SlowChoice::Retry));
     assert_eq!(late, Err(Refused::NoSuchQuestion));
     assert!(out.is_empty());
-    script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+    );
 
     script.send(CHAT, "go").0.expect("sent");
     let out = script.says(PROC, &permission(7, "t1"));
@@ -377,7 +390,11 @@ fn guarantee_8_restarts_are_visible_to_every_chat_on_the_adapter() {
         .open(OpenChat::new("claude", "/elsewhere"))
         .0
         .expect("opened");
-    script.answers(PROC, 1002, &json!({ "sessionId": "sess-2" }));
+    script.answers(
+        PROC,
+        1002,
+        &json!({ "modes": super::default_modes(), "sessionId": "sess-2" }),
+    );
     script.send(CHAT, "stuck").0.expect("sent");
     script.stop(CHAT).0.expect("stopping");
     // Sent while the stuck turn stops: it waits, and survives the restart.
@@ -405,7 +422,7 @@ fn guarantee_8_restarts_are_visible_to_every_chat_on_the_adapter() {
         &sent(&out, "session/resume"),
         &json!({ "params": { "sessionId": SESSION } }),
     );
-    let out = script.answers(new, 1001, &json!({}));
+    let out = script.answers(new, 1001, &json!({ "modes": super::default_modes() }));
     assert_has(
         &sent(&out, "session/prompt"),
         &json!({ "params": { "prompt": [{ "text": "then this" }] } }),

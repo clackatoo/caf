@@ -257,6 +257,7 @@ fn tool(kind: ToolKind, status: ToolStatus) -> ToolCall {
                     what: "hologram".into(),
                     raw: json!({ "type": "hologram" }),
                     summary: None,
+                    cut: None,
                 }),
             ],
         ),
@@ -334,6 +335,7 @@ fn chat() -> Chat {
             what: "an update of a kind CAF doesn't know".into(),
             raw: json!({ "sessionUpdate": "plan", "entries": [] }),
             summary: None,
+            cut: None,
         }),
     ));
     let notes = [

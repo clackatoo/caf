@@ -77,7 +77,7 @@ fn an_adapter_that_dies_mid_turn_is_heard_out_then_replaced_once_its_group_is_em
         &sent(&out, "session/resume"),
         &json!({ "params": { "sessionId": SESSION, "cwd": "/work" } }),
     );
-    let out = script.answers(1005, 1001, &json!({}));
+    let out = script.answers(1005, 1001, &json!({ "modes": super::default_modes() }));
     assert_has(
         &sent(&out, "session/prompt"),
         &json!({ "params": { "prompt": [{ "text": "and then this" }] } }),
@@ -485,7 +485,11 @@ fn giving_up_on_a_slow_session_stops_its_waiting_message() {
         }),
     );
     // The agent answering late gets its session closed.
-    let out = script.answers(PROC, 1001, &json!({ "sessionId": "late" }));
+    let out = script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": "late" }),
+    );
     sent(&out, "session/close");
     script.answers(PROC, 1002, &json!({}));
 }

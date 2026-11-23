@@ -286,8 +286,10 @@ pub enum Refused {
     /// [`Settings::offered`](crate::settings::Settings::offered), once its
     /// session has opened.
     NoSuchSetting,
-    /// One of the MCP servers given is named `caf`, in any case: CAF
-    /// serves its own tools as that, so an agent couldn't tell them apart.
+    /// One of the MCP servers given is named `caf`, in any case, or so that
+    /// an agent writes its tools' names as CAF's own (Claude Code writes
+    /// `caf.x` as `caf_x`, so `caf.` or `caf__`): CAF serves its own tools
+    /// as `caf`, so an agent couldn't tell them apart.
     ReservedServer,
 }
 

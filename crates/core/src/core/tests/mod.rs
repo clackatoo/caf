@@ -70,6 +70,15 @@ fn plain_init(load: bool) -> Value {
     })
 }
 
+/// The modes Claude's adapter says a session is in as it opens it, in
+/// `default`, as every session CAF opens is.
+fn default_modes() -> Value {
+    json!({ "currentModeId": "default", "availableModes": [
+        { "id": "default", "name": "Manual" }, { "id": "acceptEdits", "name": "Accept edits" },
+        { "id": "plan", "name": "Plan mode" }, { "id": "dontAsk", "name": "Don't ask" },
+    ] })
+}
+
 impl Script {
     /// A script with a Claude chat in `/work`, its session open as
     /// [`SESSION`] on [`PROC`].
@@ -82,13 +91,39 @@ impl Script {
     /// Opens a Claude chat in `/work` and its session, on a core with no
     /// chats yet.
     fn open_claude(&mut self) {
-        let (chat, out) = self.open(OpenChat::new("claude", "/work"));
+        self.open_claude_as(OpenChat::new("claude", "/work"));
+    }
+
+    /// A script with a Claude chat in `/work` given MCP servers named
+    /// `servers`, its session open as [`SESSION`] on [`PROC`].
+    fn with_claude_given(servers: &[&str]) -> Self {
+        let mut script = Self::new(host());
+        let mut open = OpenChat::new("claude", "/work");
+        open.mcp_servers = (servers.iter())
+            .map(|name| crate::agent::McpServer::Http {
+                name: (*name).to_owned(),
+                url: "http://localhost:1/mcp".to_owned(),
+                headers: Vec::new(),
+            })
+            .collect();
+        script.open_claude_as(open);
+        script
+    }
+
+    /// Opens `open`, a Claude chat, and its session, on a core with no
+    /// chats yet.
+    fn open_claude_as(&mut self, open: OpenChat) {
+        let (chat, out) = self.open(open);
         assert_eq!(chat, Ok(CHAT));
         let init = sent(&out, "initialize");
         let init_id = init["id"].as_u64().expect("an id");
         let out = self.answers(PROC, init_id, &claude_init());
         let new = sent(&out, "session/new");
         let new_id = new["id"].as_u64().expect("an id");
-        self.answers(PROC, new_id, &json!({ "sessionId": SESSION }));
+        self.answers(
+            PROC,
+            new_id,
+            &json!({ "modes": default_modes(), "sessionId": SESSION }),
+        );
     }
 }

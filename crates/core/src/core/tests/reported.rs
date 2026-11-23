@@ -88,7 +88,7 @@ fn what_a_call_gave_back_is_read_into_pieces_and_nothing_is_dropped() {
             ),
             piece(
                 "Output",
-                json!({ "lines": [], "dropped": 0, "ending": null })
+                json!({ "lines": [], "dropped": 0, "ending": { "type": "Unknown" } })
             ),
             piece(
                 "Image",
@@ -100,11 +100,11 @@ fn what_a_call_gave_back_is_read_into_pieces_and_nothing_is_dropped() {
             ),
             piece(
                 "Unknown",
-                json!({ "what": "content", "raw": audio, "summary": null })
+                json!({ "what": "content", "raw": audio, "summary": null, "cut": null })
             ),
             piece(
                 "Unknown",
-                json!({ "what": "hologram", "raw": newer, "summary": null })
+                json!({ "what": "hologram", "raw": newer, "summary": null, "cut": null })
             ),
         ])
     );
@@ -246,7 +246,11 @@ fn whose_tool_a_call_is_comes_from_the_adapters_metadata_never_its_title() {
         .0
         .expect("opened");
     script.answers(PROC, 1000, &super::plain_init(false));
-    script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+    );
     script.send(CHAT, "go").0.expect("sent");
     script.update(
         PROC,
@@ -369,6 +373,15 @@ fn a_permission_request_for_a_call_not_seen_says_whose_it_is_from_its_own_metada
         the_tool(&script)["origin"],
         json!({ "type": "Server", "value": { "server": "eyes.app", "tool": "look" } })
     );
+    // A call seen with nothing said of whose it is takes the request's.
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "tool-11", "title": "Search", "status": "pending" }));
+    let mut request = permission(9, "tool-11");
+    request["params"]["toolCall"]["_meta"] = named("WebSearch");
+    script.says(PROC, &request);
+    assert_eq!(
+        tools(&script.chat(CHAT))[1]["origin"],
+        json!({ "type": "Agent", "value": "WebSearch" })
+    );
     // One that says nothing is not recorded, and has no action.
     let out = script.says(PROC, &permission(8, "tool-10"));
     assert_has(
@@ -414,12 +427,261 @@ fn every_call_settles_when_its_turn_ends() {
         json!({ "type": "Undecided" })
     );
 
+    // A command's output that never said how it ended ends with its call.
+    let mut script = running();
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "make", "status": "in_progress",
+        "content": [{ "type": "terminal", "terminalId": "term-1" }] }));
+    script.answers(PROC, 1002, &json!({ "stopReason": "end_turn" }));
+    let tool = the_tool(&script);
+    assert_eq!(tool["status"], json!({ "type": "Failed" }));
+    assert_eq!(
+        tool["result"][0]["value"]["ending"],
+        json!({ "type": "Unknown" })
+    );
+
     // Stopped by the user: cancelled.
     let mut script = running();
-    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "make", "status": "in_progress" }));
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "make", "status": "in_progress",
+        "content": [{ "type": "terminal", "terminalId": "term-1" }] }));
     script.stop(CHAT).0.expect("stopping");
     script.answers(PROC, 1002, &json!({ "stopReason": "cancelled" }));
     let tool = the_tool(&script);
     assert_eq!(tool["status"], json!({ "type": "Cancelled" }));
+    assert_eq!(
+        tool["result"][0]["value"]["ending"],
+        json!({ "type": "Unknown" })
+    );
+    // Nothing the agent says after reopens it.
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "in_progress" }));
+    assert_eq!(the_tool(&script)["status"], json!({ "type": "Cancelled" }));
     assert_eq!(tool["decision"], json!({ "type": "NotAsked" }));
+}
+
+#[test]
+fn a_diff_of_part_of_a_file_is_numbered_from_where_its_location_says() {
+    let mut script = running();
+    // Claude's adapter, after an edit at line 500 and one at line 900:
+    // one diff for each hunk, and a location for each, at the same place.
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Edit lib.rs", "kind": "edit", "status": "completed",
+        "content": [
+            { "type": "diff", "path": "/work/lib.rs", "oldText": "a\nb\nc", "newText": "a\nB\nc" },
+            { "type": "diff", "path": "/work/lib.rs", "oldText": null, "newText": "x\ny" },
+        ],
+        "locations": [{ "path": "/work/lib.rs", "line": 500 }, { "path": "/work/lib.rs", "line": 900 }] }));
+    let result = &the_tool(&script)["result"];
+    let numbers = |piece: usize| -> Vec<(Value, Value)> {
+        (result[piece]["value"]["hunks"][0]["lines"]
+            .as_array()
+            .expect("lines")
+            .iter())
+        .map(|line| (line["old"].clone(), line["new"].clone()))
+        .collect()
+    };
+    assert_eq!(
+        numbers(0),
+        [
+            (json!(500), json!(500)),
+            (json!(501), Value::Null),
+            (Value::Null, json!(501)),
+            (json!(502), json!(502))
+        ]
+    );
+    assert_eq!(
+        numbers(1),
+        [(Value::Null, json!(900)), (Value::Null, json!(901))]
+    );
+    // A diff whose location is of another file, or has no line, is
+    // numbered within what was sent.
+    script.update(
+        PROC,
+        SESSION,
+        &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1",
+        "content": [{ "type": "diff", "path": "/work/lib.rs", "oldText": "a", "newText": "b" }],
+        "locations": [{ "path": "/work/other.rs", "line": 7 }] }),
+    );
+    assert_eq!(
+        the_tool(&script)["result"][0]["value"]["hunks"][0]["lines"][0]["old"],
+        1
+    );
+}
+
+#[test]
+fn a_call_has_one_output_and_a_piece_too_big_is_cut() {
+    let mut script = running();
+    script.without_fixtures();
+    let second = json!({ "type": "terminal", "terminalId": "term-2" });
+    let big = json!({ "type": "content", "content": { "type": "audio", "mimeType": "audio/wav", "data": "A".repeat(MOST_INPUT) } });
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "make", "status": "in_progress",
+        "content": [{ "type": "terminal", "terminalId": "term-1" }, second, big] }));
+    let result = the_tool(&script)["result"].clone();
+    // A terminal's output runs as its call does.
+    assert_eq!(
+        result[0],
+        piece(
+            "Output",
+            json!({ "lines": [], "dropped": 0, "ending": null })
+        )
+    );
+    // A second terminal is kept as it came: a call has one output.
+    assert_eq!(
+        result[1],
+        piece(
+            "Unknown",
+            json!({ "what": "terminal", "raw": second, "summary": null, "cut": null })
+        )
+    );
+    let cut = &result[2]["value"];
+    assert_eq!(result[2]["type"], "Unknown", "{cut:#}");
+    let kept = cut["raw"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{}", &cut.to_string()[..300]));
+    assert!(big.to_string().starts_with(kept) && kept.len() == MOST_INPUT);
+    assert_eq!(
+        cut["cut"],
+        json!({ "kept": MOST_INPUT, "total": big.to_string().len() })
+    );
+}
+
+#[test]
+fn a_location_or_a_status_that_cant_be_read_loses_nothing_else() {
+    let mut script = running();
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Look", "status": "in_progress",
+        "locations": [
+            { "path": "/work/a.rs", "line": 4_294_967_296_u64 },
+            { "path": "/work/b.rs", "line": -1 },
+            { "line": 3 },
+            { "path": "/work/c.rs", "line": 3 },
+        ] }));
+    let tool = the_tool(&script);
+    assert_eq!(
+        tool["locations"],
+        json!([{ "path": "/work/a.rs", "line": 4_294_967_296_u64 }, { "path": "/work/b.rs", "line": null }, { "path": "/work/c.rs", "line": 3 }])
+    );
+    assert_eq!(tool["locations_cut"], 1, "the one with no path");
+    // A status newer than CAF, or one of ACP's next version, keeps the
+    // rest of the update.
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "paused", "kind": "teleport",
+        "content": [{ "type": "content", "content": { "type": "text", "text": "half way" } }], "locations": "here" }));
+    let tool = the_tool(&script);
+    assert_eq!(tool["status"], json!({ "type": "Running" }));
+    assert_eq!(tool["result"][0]["value"]["text"], "half way");
+    assert_eq!(
+        (tool["locations"].clone(), tool["locations_cut"].clone()),
+        (json!([]), json!(1))
+    );
+    script.update(
+        PROC,
+        SESSION,
+        &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "cancelled" }),
+    );
+    assert_eq!(the_tool(&script)["status"], json!({ "type": "Cancelled" }));
+}
+
+#[test]
+fn a_servers_name_is_told_from_its_tools_by_the_chats_own_servers() {
+    let mut script = Script::with_claude_given(&["a__b", "my tools", "my"]);
+    script.send(CHAT, "go").0.expect("sent");
+    for (id, name) in [
+        ("t1", "mcp__a__b__x"),
+        ("t2", "mcp__my_tools__look"),
+        ("t3", "mcp__my__look"),
+        ("t4", "mcp__other__a__b"),
+    ] {
+        script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": id, "title": "Go", "status": "pending", "_meta": named(name) }));
+    }
+    let origins: Vec<Value> = (tools(&script.chat(CHAT)).iter())
+        .map(|tool| tool["origin"]["value"].clone())
+        .collect();
+    assert_eq!(
+        origins,
+        [
+            json!({ "server": "a__b", "tool": "x" }),
+            json!({ "server": "my tools", "tool": "look" }),
+            json!({ "server": "my", "tool": "look" }),
+            // Not the chat's: split at its first `__`.
+            json!({ "server": "other", "tool": "a__b" }),
+        ]
+    );
+    // A permission request naming the server corrects what was read.
+    let mut request = permission(7, "t4");
+    request["params"]["toolCall"]["_meta"] = json!({ "claudeCode": { "toolName": "mcp__other__a__b", "mcpServer": { "name": "other__a", "source": "sdk" } } });
+    let out = script.says(PROC, &request);
+    let fixed = json!({ "type": "Server", "value": { "server": "other__a", "tool": "b" } });
+    assert_has(&json!(with(&out, "decide")), &json!([{ "origin": fixed }]));
+    assert_eq!(tools(&script.chat(CHAT))[3]["origin"], fixed);
+    script.answers(PROC, 1002, &json!({ "stopReason": "end_turn" }));
+}
+
+#[test]
+fn a_call_claudes_adapter_says_failed_as_the_user_stops_its_turn_was_cancelled() {
+    let mut script = running();
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "toolu_01", "title": "Search", "kind": "search", "status": "in_progress" }));
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "toolu_02", "title": "Read", "kind": "read", "status": "completed" }));
+    script.stop(CHAT).0.expect("stopping");
+    // claude-agent-acp 0.98.0, to a client of ACP's first version, after
+    // session/cancel and before it answers the prompt.
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "toolu_01", "status": "failed",
+        "content": [{ "type": "content", "content": { "type": "text", "text": "The turn was cancelled before this tool call returned a result" } }] }));
+    script.answers(PROC, 1002, &json!({ "stopReason": "cancelled" }));
+    let tools = tools(&script.chat(CHAT));
+    assert_eq!(tools[0]["status"], json!({ "type": "Cancelled" }));
+    assert_eq!(
+        tools[0]["result"][0]["value"]["text"],
+        "The turn was cancelled before this tool call returned a result"
+    );
+    assert_eq!(tools[1]["status"], json!({ "type": "Done" }));
+    // Not while no one is stopping it: then it failed.
+    let mut script = running();
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Search", "status": "failed" }));
+    assert_eq!(the_tool(&script)["status"], json!({ "type": "Failed" }));
+}
+
+#[test]
+fn a_reported_call_does_what_its_origin_says() {
+    let mut script = running();
+    for (id, name) in [
+        ("t1", Some("WebSearch")),
+        ("t2", Some("mcp__eyespy__look")),
+        ("t3", Some("mcp__caf__Read")),
+        ("t4", None),
+    ] {
+        let mut update = json!({ "sessionUpdate": "tool_call", "toolCallId": id, "title": "Go", "status": "pending" });
+        if let Some(name) = name {
+            update["_meta"] = named(name);
+        }
+        script.update(PROC, SESSION, &update);
+    }
+    let actions: Vec<Value> = (tools(&script.chat(CHAT)).iter())
+        .map(|tool| tool["action"].clone())
+        .collect();
+    assert_eq!(
+        actions,
+        [
+            json!({ "type": "Tool", "value": { "name": "WebSearch" } }),
+            json!({ "type": "Tool", "value": { "name": "look" } }),
+            // CAF reads its own tools' actions itself.
+            Value::Null,
+            Value::Null,
+        ]
+    );
+}
+
+#[test]
+fn a_call_imported_unfinished_failed_and_its_output_ended() {
+    let mut script = Script::new(host());
+    let mut open = OpenChat::new("plain", "/work");
+    open.session =
+        crate::core::SessionChoice::Continue(crate::ids::AgentSessionId("old".to_owned()));
+    script.open(open).0.expect("opened");
+    script.answers(PROC, 1000, &super::plain_init(true));
+    script.update(PROC, "old", &json!({ "sessionUpdate": "user_message_chunk", "content": { "type": "text", "text": "build it" } }));
+    script.update(PROC, "old", &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "make", "status": "in_progress",
+        "content": [{ "type": "terminal", "terminalId": "term-1" }] }));
+    script.answers(PROC, 1001, &json!({}));
+    let tool = the_tool(&script);
+    assert_eq!(tool["status"], json!({ "type": "Failed" }));
+    assert_eq!(
+        tool["result"][0]["value"]["ending"],
+        json!({ "type": "Unknown" })
+    );
 }

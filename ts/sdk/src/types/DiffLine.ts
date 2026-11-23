@@ -11,10 +11,19 @@ export type DiffLine = {
 change: LineChange, 
 /**
  * Its number in the file before, numbered from 1: none if added.
+ *
+ * For a change the agent reports, numbered within what it sent,
+ * which may be only part of the file, as Claude's diffs of a hunk or
+ * an edit's text are; and if the agent gave, in the same place in
+ * the call's [`locations`](ToolCall::locations), where that part is
+ * in the file after, from there, both before and after. The numbers
+ * after are then the file's; those before are too, unless an earlier
+ * part of the change added or removed lines.
  */
 old: number | null, 
 /**
- * Its number in the file after: none if removed.
+ * Its number in the file after: none if removed. Numbered as
+ * [`old`](Self::old) says.
  */
 new: number | null, 
 /**

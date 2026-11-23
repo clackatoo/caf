@@ -293,7 +293,7 @@ chat.turns[].items[].kind<Tool>.value.result[]<Text> {type, value}
 chat.turns[].items[].kind<Tool>.value.result[]<Text>.value {text, cut}
 chat.turns[].items[].kind<Tool>.value.result[]<Text>.value.cut {kept, total}
 chat.turns[].items[].kind<Tool>.value.result[]<Unknown> {type, value}
-chat.turns[].items[].kind<Tool>.value.result[]<Unknown>.value {what, raw, summary}
+chat.turns[].items[].kind<Tool>.value.result[]<Unknown>.value {what, raw, summary, cut}
 chat.turns[].items[].kind<Tool>.value.status<Asking> {type}
 chat.turns[].items[].kind<Tool>.value.status<Cancelled> {type}
 chat.turns[].items[].kind<Tool>.value.status<Done> {type}
@@ -302,7 +302,7 @@ chat.turns[].items[].kind<Tool>.value.status<Pending> {type}
 chat.turns[].items[].kind<Tool>.value.status<Refused> {type}
 chat.turns[].items[].kind<Tool>.value.status<Running> {type}
 chat.turns[].items[].kind<Unknown> {type, value}
-chat.turns[].items[].kind<Unknown>.value {what, raw, summary}
+chat.turns[].items[].kind<Unknown>.value {what, raw, summary, cut}
 chat.turns[].items[].kind<Words> {type, value}
 chat.turns[].items[].window {start, end}
 chat.turns[].items[].window.end<At> {type, value}

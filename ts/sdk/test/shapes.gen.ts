@@ -63,7 +63,7 @@ export const sample57: T.DecidedBy = {"type":"Policy","value":{"reason":null}};
 export const sample58: T.Change = {"type":"OutputChanged","value":{"item":3,"from":0,"lines":["ok"],"dropped":0}};
 export const sample59: T.Compacted = {};
 export const sample60: T.Note = {"type":"SessionGone"};
-export const sample61: T.Unknown = {"what":"hologram","raw":{"sessionUpdate":"hologram"},"summary":null};
+export const sample61: T.Unknown = {"what":"hologram","raw":{"sessionUpdate":"hologram"},"summary":null,"cut":null};
 export const sample62: T.Numbered = {"no":5,"change":{"type":"TurnLife","value":{"turn":2,"life":{"type":"Stopped"},"end":{"type":"At","value":9}}}};
 export const sample63: T.Change = {"type":"TurnLife","value":{"turn":2,"life":{"type":"Stopped"},"end":{"type":"At","value":9}}};
 export const sample64: T.Mismatch = {"type":"NotText","value":3};
@@ -661,6 +661,27 @@ export const sample528: T.Event = {
                 },
                 "outcome": {
                   "Ok": {
+                    "modes": {
+                      "currentModeId": "default",
+                      "availableModes": [
+                        {
+                          "id": "default",
+                          "name": "Manual"
+                        },
+                        {
+                          "id": "acceptEdits",
+                          "name": "Accept edits"
+                        },
+                        {
+                          "id": "plan",
+                          "name": "Plan mode"
+                        },
+                        {
+                          "id": "dontAsk",
+                          "name": "Don't ask"
+                        }
+                      ]
+                    },
                     "sessionId": "sess-1"
                   }
                 }
@@ -671,6 +692,27 @@ export const sample528: T.Event = {
       }
     };
 export const sample529: T.Event = {"type":"Agent","value":{"process":1002,"event":{"type":"Frame","value":{"type":"Message","value":{"type":"Response","value":{"id":{"type":"Number","value":1001},"outcome":{"Ok":{
+                    "modes": {
+                      "currentModeId": "default",
+                      "availableModes": [
+                        {
+                          "id": "default",
+                          "name": "Manual"
+                        },
+                        {
+                          "id": "acceptEdits",
+                          "name": "Accept edits"
+                        },
+                        {
+                          "id": "plan",
+                          "name": "Plan mode"
+                        },
+                        {
+                          "id": "dontAsk",
+                          "name": "Don't ask"
+                        }
+                      ]
+                    },
                     "sessionId": "sess-1"
                   }}}}}}}};
 export const sample530: T.Directive = {"type":"Viewer","value":{"type":"Changed","value":{"chat":"00000000-0000-0000-0000-0000000003e8","latest":1000}}};

@@ -15,7 +15,11 @@ export type Diff = {
  */
 path: string, 
 /**
- * Whether the change makes the file: there was none before.
+ * Whether the change makes the file: there was none before. For a
+ * change the agent reports, that it sent nothing of the file before,
+ * as Claude's adapter does first for a Write, whether or not there
+ * was a file, and for a hunk that only adds lines: its next report
+ * of the call usually replaces the diff with the whole truth.
  */
 new_file: boolean, 
 /**

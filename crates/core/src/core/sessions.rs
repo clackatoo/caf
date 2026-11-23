@@ -27,7 +27,7 @@ use crate::chat::{
 use crate::directive::{Directive, Level};
 use crate::host::Grouping;
 use crate::ids::{AgentName, AgentSessionId, ChatId, ConnectionId, QuestionId, Ticket};
-use crate::profiles::{AUTH_REQUIRED, CAF_SERVER, own_instructions};
+use crate::profiles::{AUTH_REQUIRED, CAF_SERVER, claude_server_name, own_instructions};
 use crate::question::{QuestionKind, SlowChoice, SlowToOpen};
 use crate::time::{Now, Window};
 
@@ -964,19 +964,32 @@ pub(super) fn check_instructions(instructions: Option<&str>) -> Result<(), Refus
     }
 }
 
-/// Checks the MCP servers the app gives a chat: none may be named `caf`,
-/// in any case, the name CAF serves its own tools as, else
-/// [`Refused::ReservedServer`]. An agent couldn't tell the app's tools
-/// from CAF's.
+/// Checks the MCP servers the app gives a chat: none may be named so that
+/// an agent writes its tools' names as CAF's own, `mcp__caf__…`, else
+/// [`Refused::ReservedServer`]: `caf` in any case, or a name Claude Code
+/// writes starting `caf__`, such as `caf.x` or `CAF__x`. An agent
+/// couldn't tell the app's tools from CAF's.
 pub(super) fn check_servers(servers: &[McpServer]) -> Result<(), Refused> {
     let reserved = servers.iter().any(|server| {
         let (McpServer::Stdio { name, .. } | McpServer::Http { name, .. }) = server;
-        name.eq_ignore_ascii_case(CAF_SERVER)
+        format!("{}__", claude_server_name(name))
+            .to_ascii_lowercase()
+            .starts_with(&format!("{CAF_SERVER}__"))
     });
     if reserved {
         return Err(Refused::ReservedServer);
     }
     Ok(())
+}
+
+/// The names of `run`'s MCP servers, as the app gave them.
+pub(super) fn server_names<A: AppItem>(run: &Run<A>) -> Vec<String> {
+    (run.mcp.iter())
+        .map(|server| {
+            let (McpServer::Stdio { name, .. } | McpServer::Http { name, .. }) = server;
+            name.clone()
+        })
+        .collect()
 }
 
 /// Whether CAF keeps `session` as a session id: at most 256 bytes, with

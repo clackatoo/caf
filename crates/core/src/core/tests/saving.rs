@@ -328,7 +328,11 @@ impl Script {
         };
         let out = self.answers(PROC, init, &answer);
         let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
-        self.answers(PROC, new, &json!({ "sessionId": SESSION }));
+        self.answers(
+            PROC,
+            new,
+            &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+        );
     }
 
     /// Gives the store's answers back, in any order it may give them, until
@@ -420,7 +424,11 @@ fn a_new_saved_chat_is_written_whole_a_second_after_it_changes() {
     assert!(storage(&out).is_empty(), "not written at once");
     assert_eq!(with(&out, "wake_at"), [json!({ "wake_at": 1000 })]);
     script.answers(PROC, 1000, &claude_init());
-    script.answers(PROC, 1001, &json!({ "sessionId": SESSION }));
+    script.answers(
+        PROC,
+        1001,
+        &json!({ "modes": super::default_modes(), "sessionId": SESSION }),
+    );
 
     script.at(1000);
     let out = script.woken();
@@ -811,7 +819,11 @@ fn a_restored_session_the_agent_no_longer_has_opens_new_and_the_chat_says_so() {
         &json!({ "code": -32002, "message": "Resource not found: old" }),
     );
     let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
-    script.answers(proc, new, &json!({ "sessionId": "fresh" }));
+    script.answers(
+        proc,
+        new,
+        &json!({ "modes": super::default_modes(), "sessionId": "fresh" }),
+    );
     let chat = script.chat(CHAT);
     let turns = chat["turns"].as_array().expect("turns");
     assert_has(
@@ -851,7 +863,11 @@ fn the_journal_hears_when_the_session_to_continue_changes() {
         &json!({ "code": -32002, "message": "Resource not found: old" }),
     );
     let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
-    script.answers(PROC, new, &json!({ "sessionId": "fresh" }));
+    script.answers(
+        PROC,
+        new,
+        &json!({ "modes": super::default_modes(), "sessionId": "fresh" }),
+    );
     script.at(2000);
     let append = one_storage(&script.woken());
     let entries = append["value"]["entries"].as_array().expect("entries");
@@ -3366,4 +3382,70 @@ fn a_served_command_is_journaled_squashed_and_comes_back_cut_off() {
         } } }),
     );
     assert_ne!(tool["window"]["end"]["type"], "Open");
+}
+
+/// However much a command prints between saves, its journal entry is
+/// about as big as the output kept, and reads back to it.
+#[test]
+fn a_chatty_commands_journal_entry_stays_as_small_as_its_output() {
+    use crate::event::{PolicyAnswer, ToolEvent};
+    use crate::tool::{CafTool, MOST_OUTPUT};
+
+    let mut script = Script::new(host());
+    let mut store = Store::default();
+    script.open_saved("claude");
+    store.take(&script.list_saved(SHELF).1);
+    script.serve(&mut store, false);
+    script.at(1000);
+    store.take(&script.woken());
+    script.serve(&mut store, false);
+    script.send(CHAT, "Say yes").0.expect("sent");
+    let out = script.tool(
+        1,
+        ToolEvent::Called {
+            chat: CHAT,
+            tool: CafTool::Bash,
+            input: json!({ "command": "yes" }),
+            agent_call: None,
+        },
+    );
+    let decide = with(&out, "decide")[0]["decide"]
+        .as_u64()
+        .expect("a ticket");
+    script.policy(decide, PolicyAnswer::Allow);
+    let line = "y".repeat(1000);
+    for batch in 0..200u64 {
+        let lines = (0..16).map(|_| line.clone()).collect();
+        script.tool(
+            1,
+            ToolEvent::Output {
+                from: batch * 16,
+                lines,
+            },
+        );
+    }
+    script.at(2000);
+    let out = script.woken();
+    let append = one_storage(&out);
+    let size = append.to_string().len();
+    assert!(size < 2 * MOST_OUTPUT + 16 * 1024, "{size} bytes");
+    store.take(&out);
+    script.serve(&mut store, false);
+    let (saved, entries) = store.chats.values().next().expect("saved").clone();
+    let mut saved = saved;
+    for entry in &entries {
+        apply(&mut saved, entry);
+    }
+    assert_eq!(
+        serde_json::to_value(&saved.chat.turns).expect("JSON"),
+        script.chat(CHAT)["turns"],
+        "the journal reads back to the chat"
+    );
+    script.tool(
+        1,
+        ToolEvent::Finished {
+            done: true,
+            pieces: Vec::new(),
+        },
+    );
 }

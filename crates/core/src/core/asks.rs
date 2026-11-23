@@ -18,10 +18,10 @@ use crate::chat::AppData;
 use crate::chat::{AppItem, ItemKind};
 use crate::directive::{Directive, Level, PermissionRequest, PolicyDirective};
 use crate::event::PolicyAnswer;
-use crate::ids::{ChatId, QuestionId, Ticket};
+use crate::ids::{ChatId, ItemId, QuestionId, Ticket};
 use crate::question::{Answer, OptionId, OptionKind, Permission, PermissionOption, QuestionKind};
 use crate::time::Now;
-use crate::tool::{Action, DecidedBy, Decision, Origin, ToolStatus};
+use crate::tool::{DecidedBy, Decision, Origin, ToolCall, ToolStatus, reported_action};
 
 /// The most options a permission request keeps: any past it are left
 /// out.
@@ -105,25 +105,29 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let input = (call.get("rawInput").filter(|input| !input.is_null()))
             .map(|input| super::clean::cut(input.to_string(), MOST_INPUT));
         // Whose tool it is: as CAF has it, else as the adapter says in the
-        // request itself. Never from its title.
+        // request itself, which names a server as the app did, so corrects
+        // one read from a tool's name. Never from its title.
         let known = tool.and_then(|item| match &self.item(chat, item)?.kind {
             ItemKind::Tool(tool) => Some(tool.origin.clone()),
             _ => None,
         });
-        let origin = match known {
-            Some(origin) if origin != Origin::NotRecorded => origin,
-            _ => (self.profile_of_chat(chat).origin_of(&call)).unwrap_or(Origin::NotRecorded),
+        let servers = (self.runs.get(&chat))
+            .map(super::sessions::server_names)
+            .unwrap_or_default();
+        let said = self.profile_of_chat(chat).origin_in(&call, &servers);
+        let origin = match (known, said) {
+            (Some(Origin::Server { .. }), Some(said @ Origin::Server { .. })) => said,
+            (Some(known), _) if known != Origin::NotRecorded => known,
+            (_, said) => said.unwrap_or(Origin::NotRecorded),
         };
-        let action = match &origin {
-            Origin::App(name) | Origin::Agent(name) | Origin::Server { tool: name, .. } => {
-                Some(Action::Tool { name: name.clone() })
-            }
-            // CAF's own calls are asked about by CAF itself, with their
-            // actions; nothing reliable is known of one it hasn't seen.
-            Origin::Caf(_) | Origin::NotRecorded => None,
-        };
+        let action = reported_action(&origin);
         if let Some(item) = tool {
-            self.change_tool(chat, item, |tool| {
+            self.change_asked(chat, item, |tool| {
+                // The record says what the policy is told.
+                if tool.origin != origin {
+                    tool.origin = origin.clone();
+                    tool.action = action.clone();
+                }
                 if !tool.status.ended() {
                     tool.decision = Decision::Undecided;
                 }
@@ -216,7 +220,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             ask.question = Some(question);
         }
         if let Some(item) = tool {
-            self.change_tool(chat, item, |tool| {
+            self.change_asked(chat, item, |tool| {
                 if !tool.status.ended() {
                     tool.status = ToolStatus::Asking;
                 }
@@ -263,7 +267,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             )
         });
         if let Some(item) = ask.tool {
-            self.change_tool(ask.chat, item, |tool| {
+            self.change_asked(ask.chat, item, |tool| {
                 if tool.status.ended() {
                     return;
                 }
@@ -412,7 +416,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let ask = self.asks.remove(&ticket)?;
         // Nobody decided: it waits for the agent again.
         if let Some(item) = ask.tool {
-            self.change_tool(ask.chat, item, |tool| {
+            self.change_asked(ask.chat, item, |tool| {
                 if tool.status == ToolStatus::Asking {
                     tool.status = ToolStatus::Pending;
                 }
@@ -423,6 +427,17 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             None => out.push(Directive::Policy(PolicyDirective::Withdrawn { ticket })),
         }
         Some(ask)
+    }
+}
+
+impl<A: AppItem, D: AppData> Core<A, D> {
+    /// Changes the tool call `item` a request of the agent's is about, as
+    /// `change` says: unless it's a call CAF serves, whose record is
+    /// CAF's, and which CAF asks about itself.
+    fn change_asked(&mut self, chat: ChatId, item: ItemId, change: impl FnOnce(&mut ToolCall<A>)) {
+        if !self.is_served(chat, item) {
+            self.change_tool(chat, item, change);
+        }
     }
 }
 

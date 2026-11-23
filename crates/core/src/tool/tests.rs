@@ -220,3 +220,40 @@ fn locations_keep_the_first_and_count_the_rest() {
     assert_eq!((kept.len(), more), (MOST_LOCATIONS, 5));
     assert_eq!(kept[0], at(0));
 }
+
+#[test]
+fn a_diff_too_big_to_work_out_is_counted_not_worked_out() {
+    // Two big files with nothing in common: working out their hunks would
+    // take seconds, and block every chat.
+    let before: String = (0..30_000).map(|n| format!("old {n}\n")).collect();
+    let after: String = (0..30_000).map(|n| format!("new {n}\n")).collect();
+    let diff = Diff::new("/f", Some(&before), &after);
+    assert_eq!(
+        (diff.hunks.len(), diff.added, diff.removed, diff.more),
+        (0, 30_000, 30_000, 1)
+    );
+    // Past 10,000 lines changed, however small they are, it's not done.
+    let short: String = (0..5_001).map(|n| format!("{n}\n")).collect();
+    let others: String = (0..5_000).map(|n| format!("x{n}\n")).collect();
+    let diff = Diff::new("/f", Some(&short), &others);
+    assert_eq!(
+        (diff.hunks.len(), diff.added, diff.removed, diff.more),
+        (0, 5_000, 5_001, 1)
+    );
+    // A big file with a small change is worked out: what's the same at
+    // either end costs nothing.
+    let changed = before.replacen("old 15000\n", "new 15000\n", 1);
+    let diff = Diff::new("/f", Some(&before), &changed);
+    assert_eq!(
+        (diff.hunks.len(), diff.added, diff.removed, diff.more),
+        (1, 1, 1, 0)
+    );
+    assert_eq!(diff.hunks[0].lines[3].old, Some(15_001));
+}
+
+#[test]
+fn short_lines_count_against_a_diffs_cap_too() {
+    // 5,000 empty lines are no text, but far from nothing to keep.
+    let diff = Diff::new("/f", None, &"\n".repeat(5_000));
+    assert_eq!((diff.hunks.len(), diff.added, diff.more), (0, 5_000, 1));
+}
