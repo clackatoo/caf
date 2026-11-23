@@ -74,7 +74,10 @@ as an MCP server named `caf`, so no server of yours may have that name, in
 any case, nor one the agent would write as it: Claude Code writes each
 character but a letter, a digit, `_` and `-` as `_`, so `caf.x` and
 `caf__x` would name tools as CAF's do. Opening or restoring a chat with
-one is refused (`Refused::ReservedServer`). The agent never asks permission for CAF's own
+one is refused (`Refused::ReservedServer`). Nor may two of your servers have
+names the agent would write alike, such as `my tools` and `my.tools`, both
+`my_tools`: a chat with them is refused (`Refused::SameServerName`), as
+the agent couldn't tell their tools apart. The agent never asks permission for CAF's own
 tools; CAF asks your policy, and the user, itself.
 
 Each session starts in the agent's ordinary permission mode, in which it

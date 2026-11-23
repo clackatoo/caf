@@ -968,7 +968,8 @@ pub(super) fn check_instructions(instructions: Option<&str>) -> Result<(), Refus
 /// an agent writes its tools' names as CAF's own, `mcp__caf__…`, else
 /// [`Refused::ReservedServer`]: `caf` in any case, or a name Claude Code
 /// writes starting `caf__`, such as `caf.x` or `CAF__x`. An agent
-/// couldn't tell the app's tools from CAF's.
+/// couldn't tell the app's tools from CAF's. Nor may two be named alike,
+/// as Claude Code writes them, else [`Refused::SameServerName`].
 pub(super) fn check_servers(servers: &[McpServer]) -> Result<(), Refused> {
     let reserved = servers.iter().any(|server| {
         let (McpServer::Stdio { name, .. } | McpServer::Http { name, .. }) = server;
@@ -978,6 +979,13 @@ pub(super) fn check_servers(servers: &[McpServer]) -> Result<(), Refused> {
     });
     if reserved {
         return Err(Refused::ReservedServer);
+    }
+    let mut written = std::collections::BTreeSet::new();
+    for server in servers {
+        let (McpServer::Stdio { name, .. } | McpServer::Http { name, .. }) = server;
+        if !written.insert(claude_server_name(name)) {
+            return Err(Refused::SameServerName);
+        }
     }
     Ok(())
 }

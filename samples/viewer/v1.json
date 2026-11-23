@@ -4798,6 +4798,18 @@
           }
         }
       }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 32,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "SameServerName"
+          }
+        }
+      }
     }
   ]
 }

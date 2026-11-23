@@ -291,6 +291,10 @@ pub enum Refused {
     /// `caf.x` as `caf_x`, so `caf.` or `caf__`): CAF serves its own tools
     /// as `caf`, so an agent couldn't tell them apart.
     ReservedServer,
+    /// Two of the MCP servers given would have the same name to the
+    /// agent, as two the same, or as Claude Code writes `my tools` and
+    /// `my.tools` alike as `my_tools`: it couldn't tell their tools apart.
+    SameServerName,
 }
 
 /// What the host can see of a connection: one adapter process.
