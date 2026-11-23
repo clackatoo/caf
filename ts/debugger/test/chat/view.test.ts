@@ -245,7 +245,9 @@ describe('items', () => {
     expect(summary.querySelector('.title')?.textContent).toBe('cargo test')
     expect(summary.querySelector('.status')?.textContent).toBe('Done')
     expect(summary.querySelector('.time')?.textContent).toBe('1.5 s')
-    const [input, output] = row.querySelectorAll('pre')
+    // What it gave back comes first, as CAF SI lays it out, then its input, folded away.
+    const [output, input] = row.querySelectorAll('pre')
+    expect((row.querySelector('details.input') as HTMLDetailsElement).open).toBe(false)
     expect(JSON.parse(input!.textContent!)).toEqual({ command: 'cargo test' })
     expect(output!.textContent).toBe('ok: 3 passed')
   })
@@ -860,7 +862,8 @@ describe('a tool that ended', () => {
       item({ type: 'Tool', value: { title: 't', kind: { type: 'Read' }, status: { type: status } as never, input: null, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [], app: null } })
     const { container } = draw(chat({ turns: [turn({ items: [tool('Done'), tool('Failed'), tool('Running')] })] }))
     const outputs = [...container.querySelectorAll('.tool .none')].map((none) => none.textContent)
-    expect(outputs).toEqual(['None', 'None', 'None', 'None', 'None', 'None yet'])
+    // Each call's output, then its input.
+    expect(outputs).toEqual(['None', 'None', 'None', 'None', 'None yet', 'None'])
   })
 })
 

@@ -352,13 +352,19 @@ export function toolKind(kind: DeepReadonly<ToolKind>): { icon: string; name: st
 export function toolStatus(status: DeepReadonly<ToolStatus>): string {
   switch (status.type) {
     case 'Pending':
-      return 'Pending'
+      return 'Waiting to start'
+    case 'Asking':
+      return 'Waiting for you ↓'
     case 'Running':
       return 'Running'
     case 'Done':
       return 'Done'
     case 'Failed':
       return 'Failed'
+    case 'Refused':
+      return 'Refused'
+    case 'Cancelled':
+      return 'Cancelled'
     default:
       return `Unknown (${tagOf(status)})`
   }
@@ -421,6 +427,10 @@ export function refusedText(reason: DeepReadonly<Refused>): string {
       return "CAF can't turn off this agent's own tools, so it won't run it."
     case 'NoSuchSetting':
       return "The agent doesn't offer that setting, or that choice of it."
+    case 'ReservedServer':
+      return "An MCP server can't be named caf, nor anything the agent would write as caf_ or starting caf__, such as caf. or caf__tools, as its tools would look like CAF's own."
+    case 'SameServerName':
+      return "Two of the MCP servers have names the agent would write alike, so their tools couldn't be told apart."
     default:
       return `Refused, for a reason this viewer doesn't know (${tagOf(reason)}).`
   }

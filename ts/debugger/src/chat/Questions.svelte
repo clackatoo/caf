@@ -5,18 +5,31 @@
   // - A permission question offers the agent's options as it gave them,
   //   with none chosen beforehand: nothing is focused, and Enter answers
   //   nothing, so an option of kind Other is never the default either.
+  //   Once CAF has seen the call it's about, it shows what the call
+  //   would do: the command it runs, or the change it makes. A question
+  //   about a call to one of CAF's own tools is CAF's own, not the
+  //   agent's: it's marked as CAF's, says in CAF's words what the agent
+  //   wants to do, and what it's about (the file, or the command), never
+  //   the title, which would say it twice, and offers CAF's Allow and
+  //   Refuse.
   // - A session slow to open offers keep waiting, retry or stop. Escape
   //   means keep waiting, as dismissing it does.
-  import type { Answer, DeepReadonly, Question, QuestionId } from '@clackatoo/caf'
+  import type { Answer, DeepReadonly, ItemId, Question, QuestionId, ToolCall } from '@clackatoo/caf'
   import { attempt } from './actions.ts'
+  import DiffView from './DiffView.svelte'
+  import { cafAbout, cafAsks } from './tools.ts'
+  import { unhidden } from './unhidden.ts'
   import { errorText, optionTone, tagOf } from './words.ts'
 
   let {
     questions,
+    toolOf = () => null,
     readOnly,
     answer,
   }: {
     questions: DeepReadonly<Question[]>
+    /** The tool call an item is, if it's one: what a permission question is about. */
+    toolOf?: (id: ItemId) => DeepReadonly<ToolCall> | null
     readOnly: boolean
     answer: (question: QuestionId, answer: Answer) => Promise<unknown> | void
   } = $props()
@@ -75,11 +88,33 @@
   <section class="questions" aria-label="Questions" bind:this={section}>
     {#each keyed as { question, key } (key)}
       {@const kind = question.kind}
-      <div class="question" data-kind={kind.type}>
+      <div
+        class="question"
+        data-kind={kind.type}
+        data-caf={kind.type === 'Permission' && kind.value.tool !== null && toolOf(kind.value.tool)?.origin.type === 'Caf'}
+      >
         {#if kind.type === 'Permission'}
-          <div class="ask">The agent asks permission: <strong>{kind.value.title}</strong></div>
+          {@const tool = kind.value.tool === null ? null : toolOf(kind.value.tool)}
+          {@const action = tool?.action ?? null}
+          {@const diffs = tool?.result.flatMap((piece) => (piece.type === 'Diff' ? [piece.value] : [])) ?? []}
+          {#if tool?.origin.type === 'Caf'}
+            <div class="ask"><span class="who">CAF</span> {cafAsks(action, 'The agent')}: <strong
+                >{unhidden(cafAbout(tool) ?? kind.value.title)}</strong
+              ></div>
+          {:else}
+            <div class="ask">The agent asks permission: <strong>{kind.value.title}</strong></div>
+          {/if}
+          {#if action?.type === 'Run' || diffs.length > 0}
+            <div class="about">
+              {#if action?.type === 'Run'}
+                <pre class="command">{unhidden(action.value.command)}</pre>
+                <div class="folder">In {unhidden(action.value.folder)}{action.value.background ? ', in the background' : ''}</div>
+              {/if}
+              {#each diffs as diff, d (d)}<DiffView {diff} />{/each}
+            </div>
+          {/if}
           <div class="options">
-            <!-- By position: the agent chooses its options' ids. -->
+            <!-- By position: the agent chooses its options' ids, or CAF does for its own. -->
             {#each kind.value.options as option, j (j)}
               <button
                 type="button"
@@ -142,6 +177,36 @@
   }
   .ask {
     margin-bottom: 0.5em;
+    overflow-wrap: anywhere;
+  }
+  .who {
+    color: var(--caf-caf);
+    font-weight: 600;
+    font-size: 0.85em;
+    letter-spacing: 0.04em;
+    margin-right: 0.6em;
+  }
+  .about {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4em;
+    margin-bottom: 0.6em;
+    max-height: 40vh;
+    overflow: auto;
+  }
+  .command {
+    margin: 0;
+    background: var(--caf-inset);
+    border-radius: 4px;
+    padding: 0.5em 0.6em;
+    font-family: var(--caf-mono);
+    font-size: 0.9em;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .folder {
+    color: var(--caf-muted);
+    font-size: 0.85em;
     overflow-wrap: anywhere;
   }
   .options {

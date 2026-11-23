@@ -23,6 +23,8 @@ describe('every fixture', () => {
         expect(drawn.length).toBe(items)
         unmount()
       }
-    })
+      // Some are big, such as a chatty command's output at every change,
+      // and the machine may be busy.
+    }, 60_000)
   }
 })
