@@ -1,12 +1,13 @@
 ---
 title: The Transcript
 type: reference
-description: What a chat shows above the composer, as every CAF app should draw it. A finished turn as one summary line that opens into a timeline of its steps, a running turn live, questions attached to the composer, failures and their remedies, CAF's notes, a chat that lost its agent, and history from the agent's own record, with the words for each and what CAF tells the app.
+description: What a chat shows above the composer, as every CAF app should draw it. A finished turn as one summary line that opens into a timeline of its steps, a running turn live, tool calls with their diffs, output and who allowed them, questions attached to the composer, failures and their remedies, CAF's notes, a chat that lost its agent, and history from the agent's own record, with the words for each and what CAF tells the app.
 related:
   - caf/standard-interface/overview
   - caf/standard-interface/composer
   - caf/standard-interface/agents
   - caf/concepts/chats-turns-and-items
+  - caf/concepts/tool-calls
 ---
 
 The transcript is the chat itself: everything the user sent and everything
@@ -17,7 +18,7 @@ of the chat, a list of turns, each a list of items (see
 [See the transcript live](~attachments/caf-si-transcript), every state, in
 dark and light.
 
-![A finished turn: the message, one summary line, and the answer](transcript-finished.webp "A finished turn: its message, one line of chips for the work, and the answer in full. Later: the edit chip's +/− counts")
+![A finished turn: the message, one summary line, and the answer](transcript-finished.webp "A finished turn: its message, one line of chips for the work, and the answer in full")
 
 **Required, all of it**, but for the time dividers, which are the app's, and
 what's marked **Later**. The transcript is inside the chat, and a user
@@ -40,8 +41,8 @@ Between turns sit dividers (the time, a new model, history from the agent's
 own record) and what CAF says about the chat. Anything waiting on the user
 attaches to the top of the composer, not to the transcript.
 
-Markdown in the agent's words is drawn as Markdown. The agent's titles for
-its steps and questions are shown as plain text, as given.
+Markdown in the agent's words is drawn as Markdown. A step's title and a
+question's are shown as plain text, as given.
 
 **Times.** The time on a turn's line is when the user sent the message
 (the start of `Turn.window`), so a message that waited for the turn before
@@ -60,24 +61,26 @@ chip for each kind of step, counted:
 
 - *Thought 8s* for thinking. Each stretch of thinking is listed, not
   summed: *Thought 8s + 2s*.
-- *Read 1 file*, *Searched 1 time*, *Edited 2 files*, *Fetched 1 page*,
+- *Read 1 file*, *Searched 1 time*, *Edited 2 files +7 −1*, *Fetched 1 page*,
   *Deleted 1 file*, *Moved 1 file*, by the tool's kind, with the plural as it
-  should be. A tool of kind `Think` or `Other` is counted as *Used 1 tool*.
-- A single command is named by the agent's own title for it, here
+  should be. The edit chip adds up its edits' diffs: *+7* lines added and
+  *−1* removed. A tool of kind `Think` or `Other` is counted as *Used 1 tool*.
+- A single command is named by its title, here
   *cargo test -p caf-core config*, with a tick, or a cross in the warning
   colour if it failed. Two or more are counted: *Ran 2 commands*.
 - *? 1 item this app can't show*, if the turn has any.
 - Then *Show steps*, muted, with a chevron.
 
-A chip with a failed step is in the warning colour, so a failure is seen
-without opening the turn. In history, where the times aren't known, the line
+A chip with a step that failed or was refused is in the warning colour, so
+it's seen without opening the turn. A cancelled step isn't a failure: its
+chip stays calm. In history, where the times aren't known, the line
 is led by *Work* alone.
 
 The answer is the turn's last words from the agent (`ItemKind::Words`),
 once the turn has finished, if nothing but CAF's notes comes after them.
 Anything else the agent said along the way is a step.
 
-![The same turn opened](transcript-finished-open.webp "Opened: every step in order, each the agent's own title for it. Later: an edit's diff and its counts")
+![The same turn opened](transcript-finished-open.webp "Opened: every step in order, by its title, an edit open to its diff")
 
 **Opened.** Clicking anywhere on the summary line opens the timeline in its
 place, and the line's last words become *Hide steps*. Clicking again folds
@@ -85,20 +88,18 @@ it. Each step is one line on a rail, with its kind's icon:
 
 - Thinking: *Thought for 8s*, muted and in italics. It opens to the
   thinking itself.
-- A tool: the agent's own title for it, exactly as given, such as
+- A tool call: its title, exactly as given, such as
   *Read crates/core/src/config.rs* or *cargo test -p caf-core config*, with
-  how long it ran on the right. Only the icon comes from its kind; the app
-  never rewords the title. It opens to what the tool gave back.
+  how long it ran on the right. CAF writes the title for its own tools, and
+  the agent writes it for the rest; either way, the app draws the call's
+  title and never rewords it. Only the icon comes from its kind. It opens to
+  what the tool gave back (see [A tool call, opened](#a-tool-call-opened)).
 - What the agent said along the way, muted, in full.
 
-**Later: an edit's diff.** Drawn: an edit opens to its diff, with *+3 −1*
-in its header, and the summary's edit chip adds the counts up:
-*Edited 2 files +7 −1*. CAF doesn't record what an edit changed yet
-(`ToolCall` has its `title`, `input` and `output`). Until it does, an edit
-is a step like any other: it opens to its output, and its chip has no
-counts. The pictures mark it *Later*.
+An edit is open already, to its diff: an edit is what the user most often
+wants to check. Every other step opens when clicked.
 
-![A turn running](transcript-running.webp "Running: the timeline is always open, the step running now at its foot. Later: a command's output as it runs, and the diffs")
+![A turn running](transcript-running.webp "Running: the timeline is always open, the command running now at its foot, its output coming in")
 
 **Running.** A running turn's timeline is always open, and can't be folded,
 so the user can always see what the agent is doing. The summary line says
@@ -108,20 +109,22 @@ spinning dot in the accent. The turn's line says
 *Opus 5.5 · 31s so far · 14:32 · Working*. The composer's round button is
 Stop (see [The composer](~caf/standard-interface/composer)).
 
-A step shows what the agent has sent of its output, which for many tools is
-nothing until it ends. **Later: a command's output as it runs**, drawn with
-a caret at its end, which CAF doesn't carry yet.
+A running command is open, and shows its output as it comes, with a caret
+in the accent at its end, so the user can watch a build or a test run
+without opening anything. Other steps show what they've given back so far,
+which for many tools is nothing until they end.
 
 Once Stop is pressed, and until the agent confirms, the summary says
 *Stopping…* in place of *Working* (not pictured).
 
-![A turn stopped after a step failed](transcript-stopped.webp "Stopped: the failed step's chip is red, and a message that was waiting is stopped too. Later: the edit chip's counts")
+![A turn stopped after a step failed](transcript-stopped.webp "Stopped: the failed step's chip is red, and a message that was waiting is stopped too")
 
 **Stopped.** A turn the user stopped folds like a finished one, and its line
 ends *Stopped*, muted. A step that failed makes its chip red: here,
 *cargo build -p caf-core* with a cross. Opened, a failed step shows its
-output, and a step that was still running when the turn ended counts as
-failed.
+output. A step still waiting or running when the user stopped the turn is
+*Cancelled*, muted; one a turn ended under any other way, such as a failure
+or the app closing, is *Failed*.
 
 **A message that never went.** Stop also stops the messages waiting for the
 turn, and a message that waited for an agent that wasn't installed is
@@ -148,21 +151,105 @@ A message waiting to be sent (CAF queues it while a turn runs or the chat
 opens) isn't drawn in the transcript: it sits on the composer's tray until it
 goes. **Later:** a turn sent by another chat's agent, or by the app.
 
+## Tool calls
+
+A tool call is a step on the timeline (see
+[Tool calls](~caf/concepts/tool-calls) for what CAF records of one). Its
+line is its kind's icon, its title, and on the right how long it ran or
+where it is. Where it is, by its status:
+
+| Status | Its dot | On the right | Role |
+| --- | --- | --- | --- |
+| `Pending` | Its kind's icon | *Waiting to start* | Calm |
+| `Asking` | Its kind's icon, in the accent | *Waiting for you ↓* | Accent |
+| `Running` | A spinner, in the accent | How long so far | Accent |
+| `Done` | Its kind's icon, muted | How long it ran | Muted |
+| `Failed` | A cross, in the warning colour | How long it ran | Warning |
+| `Refused` | A cross, in the warning colour | *Refused* | Warning |
+| `Cancelled` | Its kind's icon, muted | *Cancelled* | Muted |
+
+*Cancelled* is muted, not a warning: the user stopped it, or the agent
+did, so nothing went wrong. *Refused* is a warning, as a failure is: the
+agent wanted to do it and couldn't, which the user should see without
+looking for it, even when it was their own answer.
+
+![A turn with a refused step](transcript-refused.webp "A step the policy refused, in the warning colour, opened to who refused it and why; a command the user allowed; and one cancelled when the turn was stopped")
+
+**Who decided.** A call that needed permission says, first thing when
+opened, who allowed or refused it, muted, in one line:
+
+| `Decision` | It says |
+| --- | --- |
+| `Allowed(User)` | *Allowed by you* |
+| `Allowed(Policy)` | *Allowed by the policy: reads inside the project are fine*, with the policy's reason, or *Allowed by the policy* if it gave none |
+| `Refused(User)` | *Refused by you* |
+| `Refused(Policy)` | *Refused by the policy: writes outside the project folder*, or *Refused by the policy* |
+| `NotAsked`, `Undecided`, `NotRecorded` | Nothing |
+
+*You* is whoever answered the question in this app. A refused call never
+ran, so under that line there's nothing more, unless the agent said why.
+
+### A tool call, opened
+
+A call opens to what it gave back, in order, each piece drawn by its kind.
+Everything an agent sends is drawn as text: never as markup, never run.
+
+- **Text**, such as a file read, in a monospace font. If CAF kept only its
+  start, under it, muted: *Kept 64 KB of 1.2 MB*.
+- **A diff**: the file's path, *New file* if there was none before, and
+  *+3 −1* on the right, the lines added and removed. Then its hunks, as
+  CAF worked them out, each line with its numbers before and after, added
+  lines marked *+* on a green tint and removed ones *−* on a red one, and
+  a gap between hunks. If CAF kept only some hunks, after them, muted:
+  *and 2 more hunks*. The app draws the hunks as they are, and never
+  compares texts itself.
+- **A command's output**: its lines in a monospace font, in the colours
+  the command gave them. Only colours and bold, italic and underline are
+  drawn; any other code a terminal would act on shows as it is, such as
+  `^[[2K`, never acted on. If CAF kept only the last lines, above them,
+  muted: *120 earlier lines not kept*. While it runs, a caret in the
+  accent ends it, and lines come and change as CAF sends them. Once it
+  ends, under it: *Exited with code 0*, muted, or *Exited with code 101*,
+  *Killed by signal 9*, in the warning colour; *Ended, without saying
+  how* if the agent didn't say, muted.
+- **An image**, drawn, as wide as the column at most. One too big for CAF
+  to keep says *An image too big to keep (3.4 MB)*, muted, in its place.
+  Only an image is drawn as one: anything else claiming to be, such as a
+  page, is named by its type and never shown.
+- **A link**: a web address (`http` or `https`) is a link, in the Link
+  colour, by its name, which opens in a new tab. Any other address, such
+  as a file's, is shown as text, its name and then the address, and never
+  followed. Nothing an agent sends ever becomes a `javascript:` link.
+- **A piece CAF couldn't read**, a dashed box:
+  *Something Claude sent that this app can't show*.
+
+**Suggested:** under what it gave back, the files the call is about, as
+*src/main.rs:42*, each opening the file where the app can; and what the
+call was given (its input), folded away. When CAF kept only the start of
+the input, it says *Kept 64 KB of 200 KB* under it.
+
 ## Asking
 
-![A permission question, attached to the composer](transcript-permission.webp "The question attaches to the composer, and the step it's about points to it")
+![A permission question, attached to the composer](transcript-permission.webp "The question attaches to the composer, shows the command it asks about, and the step points to it")
 
 **Asking permission.** When the agent asks before doing something, the
 question attaches to the top of the composer, joined to it with an edge in
 the accent. It says *Claude asks permission:* and then the agent's own title
-for what it wants to do, as plain text. Under that are the agent's own
+for what it wants to do, as plain text.
+
+Once CAF has seen the call it's about (`Permission.tool`), the question
+shows what the user is being asked to allow, under its title: the command
+it would run, in a monospace font, with the folder it runs in under it,
+muted; or the change it would make, as a diff, drawn as an opened step
+draws one. A question asked before CAF has seen its call shows its title
+alone, and gains the rest when the call arrives. Under that are the agent's own
 answers, labelled as it labels them, here *Allow*, *Always allow* and
 *Reject*, all alike: none is chosen or focused beforehand, and Enter answers
 nothing. On the right, muted: *Stop cancels this and stops the turn*.
 
 The step it's about stays in the timeline, its dot in the accent, and says
-*Waiting for you ↓* on the right. The agent may ask before CAF has seen the
-step, so the question never depends on it.
+*Waiting for you ↓* on the right (`ToolStatus::Asking`). The agent may ask
+before CAF has seen the step, so the question never depends on it.
 
 Answering it carries on the turn. Stop answers it as cancelled, and stops
 the turn.
@@ -367,7 +454,7 @@ own items (`ItemKind::App`) as it likes, in their place.
 a muted line inside the turn says *Claude compacted its context: it has a
 summary of everything before this*. CAF doesn't record compaction yet.
 
-![A new model, and a turn cut off](transcript-model.webp "The model divider, then a turn cut off before it finished. Later: the edit chip's counts")
+![A new model, and a turn cut off](transcript-model.webp "The model divider, then a turn cut off before it finished")
 
 **A new model.** A divider marks where the model changed: the agent's mark,
 the new model, and *from* the old one, muted, as on the composer page. The
@@ -380,14 +467,22 @@ app's.
 ## Colour
 
 - **Accent:** what's happening now (the *Working* spinner, the running
-  step's dot), the edge of a question waiting on the user and the dot of the
-  step it's about, and the remedy button.
-- **Warning:** a failure's box, a failed chip, *Failed* on the turn's line.
+  step's dot, the caret of a command's output as it runs), the edge of a
+  question waiting on the user and the dot of the step it's about, and the
+  remedy button.
+- **Warning:** a failure's box, a failed or refused step's dot and chip,
+  *Failed* on the turn's line, and a command that exited with an error or
+  was killed.
 - **Caution:** a lost chat, and a note that the agent remembers nothing.
 - **CAF's voice:** the CAF badge, on notes, failures and CAF's own questions.
-- **Muted:** times, counts, thinking, what the agent said along the way, the
-  turn's line, the dividers, the icons of calm notes, and the agent's own
-  history.
+- **Link:** a web link a call gave back.
+- **Muted:** times, counts, thinking, what the agent said along the way,
+  steps done or cancelled, who allowed a step, what was cut, the turn's
+  line, the dividers, the icons of calm notes, and the agent's own history.
+
+A step waiting to start is calm. A diff's added and removed lines are
+tinted green and red, and its counts drawn in those colours: they say what
+changed, not that anything went right or wrong, so they're no role's.
 
 Everything else is calm.
 
@@ -402,12 +497,14 @@ Everything else is calm.
 | How long the agent worked | From the start of the first `Words`, `Thinking` or `Tool` item's `Item.window` to the end of `Turn.window`. |
 | The turn's model | `Turn.model`, as the agent said when it was sent. |
 | The steps | `Turn.items`: `ItemKind::Words`, `Thinking`, `Tool`, `Note`, `App` and `Unknown`. Thinking is kept only if the app asks for it (`Host.shows.thinking`). |
-| A tool's line | `ToolCall.title`, as given; its `kind` (`ToolKind`) for the icon and the chip; its `status` (`ToolStatus::Pending`, `Running`, `Done` or `Failed`); and its `Item.window`. |
-| A tool, opened | `ToolCall.output`, as text, and `ToolCall.input`. |
-| An edit's diff and counts | **Later:** CAF doesn't record file changes yet. |
-| A command's output as it runs | **Later.** |
+| A tool's line | `ToolCall.title`, as given; its `kind` (`ToolKind`) for the icon and the chip; its `status` (`ToolStatus::Pending`, `Asking`, `Running`, `Done`, `Failed`, `Refused` or `Cancelled`); and its `Item.window`. |
+| Who decided | `ToolCall.decision`: `Decision::Allowed` or `Refused`, each with its `DecidedBy` (`User`, or `Policy` with its `reason`). |
+| A tool, opened | `ToolCall.result`, a list of `Piece`s: `Text` (its `cut`, a `Cut`), `Diff`, `Output`, `Image`, `Link` and `Unknown`. Then `ToolCall.locations` (and `locations_cut`), and `ToolCall.input` (and `input_cut`). |
+| An edit's diff and counts | A `Piece::Diff`: its `path`, `new_file`, `added`, `removed`, its `hunks`, each a list of `DiffLine`s (`change`, `old`, `new`, `text`), and `more`, the hunks not kept. |
+| A command's output | A `Piece::Output`: its `lines`, with their SGR codes; `dropped`, the lines before them not kept; and its `ending` (`Ending::Exited`, with an `Exit`, or `Unknown`), `None` while it runs. |
+| A command's output as it runs | `Change::OutputChanged`: the lines from `from` on replaced by `lines`, then `dropped` more gone from the top. |
 | Compaction | **Later:** `ItemKind::Compacted`. |
-| A question | `Chat.questions`, oldest first: `QuestionKind::Permission` (its `title`, `options` and the `tool` it's about) or `SlowToOpen` (`adapter_answered`). Answered with `Core::answer`, or a viewer's `FromViewer::Answer`. |
+| A question | `Chat.questions`, oldest first: `QuestionKind::Permission` (its `title`, `options` and the `tool` it's about, the `Item` whose `ToolCall` it shows, once there is one) or `SlowToOpen` (`adapter_answered`). Answered with `Core::answer`, or a viewer's `FromViewer::Answer`. |
 | Stop | `Core::stop`, or `FromViewer::Stop`: it answers the agent's questions as cancelled, and stops the waiting messages. |
 | A failure | `TurnLife::Failed(Failure)`: its `reason` (`FailureReason`), `agent_said`, and `remedy` (`Remedy::SendAgain` or `SignIn`). |
 | Send again | Sending the turn's message again: `Core::send`, or `FromViewer::Send`. |

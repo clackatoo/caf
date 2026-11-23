@@ -83,11 +83,11 @@ palette, but keeps these roles, and uses each colour only for its role:
 | Role | Means | Used for |
 | --- | --- | --- |
 | Accent | Act here, or happening now. | For example: the lit Send button, the caret, primary buttons, what's chosen (a tick's row, a lit switch, the slider, a filter's mark, a favourite's star, the focused search box), the edge of something waiting on the user (a question, the agent banner), and what's running now (a spinner, the *Working* mark). Kept to those kinds of thing, so it still means "here". |
-| Warning | It went wrong, or can't go on. | Failed turns and steps; refusals; restores that can't happen; a limit that's out; context past 95%; an action that can't be undone, such as Delete. |
+| Warning | It went wrong, or can't go on. | Failed turns and steps; refusals, a step refused included; restores that can't happen; a limit that's out; context past 95%; an action that can't be undone, such as Delete. |
 | Caution | Held, getting close, or needs the user soon. | A setting change waiting for the turn to end; context or limits filling up; a chat that lost its agent; a note that the agent remembers nothing; extra usage in use; the mark on an agent that still needs installing or signing in, in a list or the agents panel (the agent banner itself, waiting on the user, has its own tone). |
 | Link | Something to follow. | Links that open a page. Never something to act on: *Copy link* and *Learn them now* are buttons. |
 | CAF's voice | CAF is speaking. | The CAF badge on what CAF says in the transcript (its notes, failures, and questions it asks itself), so it never reads as the agent. A box that says what to do next, such as a lost chat's, is the app's own frame and carries none. |
-| Muted | Matters less. | Times, counts, the agent's thinking, steps once they're done, the agent's own history. |
+| Muted | Matters less. | Times, counts, the agent's thinking, steps once they're done or cancelled (the user chose to stop them, so nothing went wrong), the agent's own history. |
 
 Anything else is **calm**: the ordinary text colour, or muted, with no role.
 Buttons come in three looks: **primary**, filled with the accent, for the

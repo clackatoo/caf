@@ -88,11 +88,21 @@
   .diff .path { padding: 4px 10px; color: var(--muted); border-bottom: 1px solid var(--raised-edge); display: flex; justify-content: space-between; }
   .diff .l { padding: 0 10px; white-space: pre; display: flex; gap: 12px; }
   .diff .l .n { color: var(--faint); width: 22px; text-align: right; flex: none; }
+  .diff .gap { padding: 0 10px; color: var(--faint); }
+  .diff .more { padding: 2px 10px; color: var(--muted); border-top: 1px solid var(--raised-edge); font-family: system-ui, sans-serif; font-size: 12px; }
   .diff .l.add { background: var(--added); }
   .diff .l.del { background: var(--removed); }
   .out { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; background: var(--code); border: 1px solid var(--raised-edge); border-radius: 8px; padding: 7px 10px; color: var(--muted); }
   .out .ok { color: var(--ok); }
   .out .bad { color: var(--warning); }
+  .out-end { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .out-end.bad { color: var(--warning); }
+  .by { color: var(--muted); font-size: 12.5px; margin-bottom: 6px; }
+  .tl .node .head .r.bad { color: var(--warning); }
+  .tl .node.muted .dot, .tl .node.muted .head .t { color: var(--faint); }
+  .si-attached .asked { margin: 8px 0 0 24px; }
+  .si-attached .asked .out { color: var(--text); }
+  .si-attached .asked .in { color: var(--muted); font-size: 12px; margin-top: 4px; }
   .plus { color: var(--added-text); }
   .minus { color: var(--removed-text); }
   .st-done { color: var(--faint); }
@@ -118,7 +128,7 @@
   .tl .node .dot { position: absolute; left: 0; top: 4px; width: 22px; height: 22px; border-radius: 50%; background: var(--pane); border: 1.5px solid var(--raised-edge); display: grid; place-items: center; color: var(--muted); }
   .tl .node .dot svg { width: 12px; height: 12px; }
   .tl .node.run .dot { border-color: var(--accent); color: var(--accent-text); }
-  .tl .node.fail .dot { border-color: var(--warning); color: var(--warning); }
+  .tl .node.bad .dot { border-color: var(--warning); color: var(--warning); }
   .tl .node.waiting .dot { border-color: var(--accent); color: var(--accent-text); }
   .tl .node.waiting .r { color: var(--accent-text); }
   .tl .node .head { display: flex; gap: 8px; align-items: baseline; min-height: 24px; }
@@ -163,7 +173,8 @@
           <li>Clicking the summary opens the timeline in its place: every step in order, on a rail. Clicking again folds it.</li>
           <li>A running turn always shows its timeline, live.</li>
           <li>Failures, CAF's notes and a lost chat are never folded away.</li>
-          <li>A question waiting on the user attaches to the top of the composer, and the step it's about points to it.</li>
+          <li>A question waiting on the user attaches to the top of the composer, shows the command or change it asks about, and the step it's about points to it.</li>
+          <li>A step is drawn by its title, as given: CAF's for its own tools, the agent's for the rest.</li>
         </ul>
       </div>
       <div>
@@ -172,7 +183,9 @@
           <li><b>A chat is turns, a turn is items:</b> words, thinking, tool calls, CAF's notes, the app's own items, and anything CAF couldn't read.</li>
           <li><b>A failure is in CAF's words</b> (<code>FailureReason</code>), with what the agent said quoted apart, and CAF's remedy (<code>Remedy</code>).</li>
           <li><b>Questions aren't items:</b> they're a list on the chat (<code>Chat.questions</code>), and come and go.</li>
-          <li><b>Later</b>, marked so in the pictures: an edit's diff and its +/− counts, a command's output as it runs, and the compaction line. CAF doesn't record them yet.</li>
+          <li><b>A tool call's result is pieces</b> (<code>Piece</code>): text, diffs, a command's output, images and links. CAF works out a diff's hunks and keeps a command's output as its terminal showed it; the app draws them as they are.</li>
+          <li><b>Who allowed a call</b> is kept with it (<code>Decision</code>): the user, or the policy with its reason.</li>
+          <li><b>Later</b>, marked so in the pictures: the compaction line. CAF doesn't record it yet.</li>
         </ul>
       </div>
     </div>
@@ -209,8 +222,8 @@
   const mark = SI.mark('claude', 15)
 
   // ---- What the agent does ----
-  // A step is its kind, the agent's own title for it, shown as given
-  // (`ToolCall.title`), and its status.
+  // A step is its kind, its title, shown as given (`ToolCall.title`: CAF's
+  // for its own tools, the agent's for the rest), and its status.
   const T = {
     think: (text, took) => ({ k: 'think', text, took }),
     tool: (kind, title, status, extra = {}) => ({ k: 'tool', kind, title, status, ...extra }),
@@ -218,15 +231,15 @@
     note: (html, tone) => ({ k: 'note', html, tone }),
     compacted: () => ({ k: 'compacted' }),
   }
-  // An edit's diff and its counts are drawn as they'll be once CAF records
-  // file changes: later. Until then an edit opens to its output.
+  // An edit's diff: its hunks, as CAF works them out, each line with its
+  // numbers before (o) and after (n). A null in `hunks` is the gap between two.
   const DIFF_CODE = [
-    { n: 41, t: 'pub fn parse_header(text: &str) -> Result<Header, ConfigError> {' },
-    { n: 42, t: '    let first = text.lines().next().unwrap();', del: true },
+    { o: 41, n: 41, t: 'pub fn parse_header(text: &str) -> Result<Header, ConfigError> {' },
+    { o: 42, t: '    let first = text.lines().next().unwrap();', del: true },
     { n: 42, t: '    let Some(first) = text.lines().next() else {', add: true },
     { n: 43, t: '        return Err(ConfigError::Empty);', add: true },
     { n: 44, t: '    };', add: true },
-    { n: 45, t: '    Header::from_line(first)' },
+    { o: 43, n: 45, t: '    Header::from_line(first)' },
   ]
   const DIFF_TEST = [
     { n: 88, t: '#[test]', add: true },
@@ -246,7 +259,7 @@
     T.words('Found it: <code>parse_header</code> unwraps the first line, which an empty file doesn\'t have.'),
     T.tool('edit', 'Edit crates/core/src/config.rs', 'done', { path: 'crates/core/src/config.rs', plus: 3, minus: 1, diff: DIFF_CODE }),
     T.tool('edit', 'Edit crates/core/tests/config.rs', 'done', { path: 'crates/core/tests/config.rs', plus: 4, minus: 0, diff: DIFF_TEST }),
-    T.tool('execute', 'cargo test -p caf-core config', 'done', { out: OUT_TEST, took: '6s' }),
+    T.tool('execute', 'cargo test -p caf-core config', 'done', { out: OUT_TEST, end: 'Exited with code 0', took: '6s' }),
   ]
   const ANSWER = T.words('<p>Fixed. An empty file now gives <code>ConfigError::Empty</code> instead of panicking: <code>parse_header</code> checks for a first line before reading it.</p><p>I added <code>empty_file_is_an_error</code> to the config tests, and all 14 pass.</p>')
   const done = (extra = {}) => ({ t: 'turn', ask: ASK, life: 'finished', took: '42s', at: '14:32', model: 'Opus 5.5', items: [...WORK, ANSWER], ...extra })
@@ -255,14 +268,14 @@
     { group: 'Turns' },
     { id: 'finished', label: 'A finished turn', what: '<b>A turn that read, searched, edited two files and ran the tests, then answered.</b> Its work is one summary line; the answer is in full.',
       entries: [{ t: 'time', text: 'Today 14:32' }, done()] },
-    { id: 'finished-open', label: 'A finished turn, opened', what: "<b>The same turn with its summary clicked.</b> Each step is the agent's own title for it, in order. An edit opens to its diff, which is Later: CAF doesn't record file changes yet. Click the summary again to fold it.",
+    { id: 'finished-open', label: 'A finished turn, opened', what: "<b>The same turn with its summary clicked.</b> Each step is drawn by its title, in order. An edit is open already, to its diff. Click the summary again to fold it.",
       openFirst: true, entries: [{ t: 'time', text: 'Today 14:32' }, done()] },
-    { id: 'running', label: 'Working now', what: "<b>The same turn while it runs.</b> Its timeline is always open. The tests are running; their output as they run is Later.",
+    { id: 'running', label: 'Working now', what: "<b>The same turn while it runs.</b> Its timeline is always open. The tests are running, and their output comes in as they do, a caret at its end.",
       entries: [{ t: 'time', text: 'Today 14:32' },
         { t: 'turn', ask: ASK, life: 'running', took: '31s', at: '14:32', model: 'Opus 5.5', items: [...WORK.slice(0, 6), T.tool('execute', 'cargo test -p caf-core config', 'running', { out: OUT_LIVE, took: '4s', live: true })] }] },
     { id: 'stopped', label: 'A step failed, then stopped', what: '<b>A build failed partway, the agent started to fix it, and the user pressed Stop.</b> The failed step is a red chip; opened, it shows its output. A message waiting for the turn was dropped by Stop too: it has no steps, so no summary line.',
       entries: [{ t: 'time', text: 'Today 14:32' },
-        { t: 'turn', ask: ASK, life: 'stopped', took: '23s', at: '14:32', model: 'Opus 5.5', items: [...WORK.slice(0, 5), T.tool('execute', 'cargo build -p caf-core', 'failed', { out: OUT_FAIL, took: '3s' }), T.think('The variant doesn\'t exist yet: I need to add <code>Empty</code> to <code>ConfigError</code> first…', '2s')] },
+        { t: 'turn', ask: ASK, life: 'stopped', took: '23s', at: '14:32', model: 'Opus 5.5', items: [...WORK.slice(0, 5), T.tool('execute', 'cargo build -p caf-core', 'failed', { out: OUT_FAIL, end: 'Exited with code 101', bad: true, took: '3s' }), T.think('The variant doesn\'t exist yet: I need to add <code>Empty</code> to <code>ConfigError</code> first…', '2s')] },
         { t: 'turn', ask: 'Then write a changelog line for the fix.', life: 'stopped', at: '14:32', items: [] }] },
     { id: 'on-own', label: 'The agent, on its own', what: "<b>A turn the agent started by itself,</b> here when a command it left running finished. Nobody sent it, so there's no message.",
       entries: [done(),
@@ -270,8 +283,15 @@
     { group: 'Asking and failing' },
     { id: 'permission', label: 'Asking permission', what: "<b>The agent asks before running a command.</b> The question attaches to the composer, and the step points to it. The answers are the agent's own; none is chosen beforehand.",
       entries: [{ t: 'time', text: 'Today 14:50' },
-        { t: 'turn', ask: 'Clear out the build cache and rebuild.', life: 'running', took: '6s', at: '14:50', model: 'Opus 5.5', items: [T.think('Removing <code>target</code> is the simplest way to clear the cache.', '2s'), T.tool('execute', 'rm -rf target', 'pending')],
-          question: { title: 'rm -rf target', options: ['Allow', 'Always allow', 'Reject'] } }] },
+        { t: 'turn', ask: 'Clear out the build cache and rebuild.', life: 'running', took: '6s', at: '14:50', model: 'Opus 5.5', items: [T.think('Removing <code>target</code> is the simplest way to clear the cache.', '2s'), T.tool('execute', 'rm -rf target', 'asking')],
+          question: { title: 'rm -rf target', command: 'rm -rf target', folder: '/home/me/caf', options: ['Allow', 'Always allow', 'Reject'] } }] },
+    { id: 'refused', label: 'Refused, allowed, cancelled', what: "<b>The policy refused an edit outside the project; the user allowed a build; then pressed Stop while the tests ran.</b> The refused step is in the warning colour and says who refused it, and why. The cancelled one is muted: the user chose to stop it.",
+      openFirst: true, entries: [{ t: 'time', text: 'Today 15:20' },
+        { t: 'turn', ask: 'Point the shared config at the new cache folder, then rebuild.', life: 'stopped', took: '14s', at: '15:20', model: 'Opus 5.5', items: [
+          T.tool('edit', 'Edit /home/me/shared/config.toml', 'refused', { by: 'Refused by the policy: writes outside the project folder' }),
+          T.words("I can't change the shared config from here, so I'll rebuild with the cache folder set for this run."),
+          T.tool('execute', 'CACHE=.cache cargo build', 'done', { by: 'Allowed by you', out: '<span class="ok">   Finished</span> `dev` profile in 9.82s', end: 'Exited with code 0', took: '10s' }),
+          T.tool('execute', 'cargo test', 'cancelled')] }] },
     { id: 'usage-limit', label: 'Failed: usage limit', what: "<b>The turn hit a usage limit partway.</b> CAF's sentence says what happened; what the agent said is quoted apart, never as CAF's advice. The remedy is CAF's: Send again.",
       entries: [{ t: 'time', text: 'Today 14:32' },
         { t: 'turn', ask: ASK, life: 'failed', took: '19s', at: '14:32', model: 'Opus 5.5', items: WORK.slice(0, 4),
@@ -310,11 +330,14 @@
   // ---- Pieces ----
   const LATER = '<span class="later">Later</span>'
   const counts = (plus, minus) => `<span class="plus">+${plus}</span> <span class="minus">−${minus}</span>`
-  const diffHtml = (tool) => `<div class="diff"><div class="path"><span>${tool.path} ${LATER}</span><span>${counts(tool.plus, tool.minus)}</span></div>` +
-    tool.diff.map(l => `<div class="l${l.add ? ' add' : l.del ? ' del' : ''}"><span class="n">${l.n}</span>${(l.add ? '+ ' : l.del ? '- ' : '  ') + l.t.replace(/</g, '&lt;')}</div>`).join('') + '</div>'
-  const outHtml = (tool) => `<div class="out">${tool.live ? LATER + '\n' : ''}${tool.out}${tool.live ? '<span class="caret"></span>' : ''}</div>`
-  const toolRight = (tool) => tool.took || ''
-  const toolBody = (tool) => tool.diff ? diffHtml(tool) : tool.out ? outHtml(tool) : ''
+  const diffHtml = (tool) => `<div class="diff"><div class="path"><span>${tool.path}</span><span>${counts(tool.plus, tool.minus)}</span></div>` +
+    tool.diff.map(l => l === null ? '<div class="gap">⋯</div>' : `<div class="l${l.add ? ' add' : l.del ? ' del' : ''}"><span class="n">${l.o ?? ''}</span><span class="n">${l.n ?? ''}</span>${(l.add ? '+ ' : l.del ? '− ' : '  ') + l.t.replace(/</g, '&lt;')}</div>`).join('') +
+    (tool.more ? `<div class="more">and ${tool.more} more ${tool.more === 1 ? 'hunk' : 'hunks'}</div>` : '') + '</div>'
+  const outHtml = (tool) => `<div class="out">${tool.out}${tool.live ? '<span class="caret"></span>' : ''}</div>` +
+    (tool.end ? `<div class="out-end${tool.bad ? ' bad' : ''}">${tool.end}</div>` : '')
+  const STATUS_RIGHT = { pending: 'Waiting to start', refused: 'Refused', cancelled: 'Cancelled' }
+  const toolRight = (tool) => STATUS_RIGHT[tool.status] || tool.took || ''
+  const toolBody = (tool) => (tool.by ? `<div class="by">${tool.by}</div>` : '') + (tool.diff ? diffHtml(tool) : tool.out ? outHtml(tool) : '')
 
   function failure(f) {
     const acts = f.remedy === 'Send again' ? `<span class="btn primary">${icon.restore}Send again</span>`
@@ -364,9 +387,9 @@
       const ts = tools.filter(t => (t.kind === 'think' ? 'other' : t.kind) === kind)
       if (!ts.length) continue
       const [verb, one, many] = KIND_WORD[kind]
-      const fail = ts.some(t => t.status === 'failed')
+      const fail = ts.some(t => t.status === 'failed' || t.status === 'refused')
       let label = kind === 'execute' && ts.length === 1 ? ts[0].title : `${verb} ${ts.length} ${ts.length === 1 ? one : many}`
-      if (kind === 'edit') label += ` ${counts(ts.reduce((a, t) => a + (t.plus || 0), 0), ts.reduce((a, t) => a + (t.minus || 0), 0))} ${LATER}`
+      if (kind === 'edit' && ts.some(t => t.diff)) label += ` ${counts(ts.reduce((a, t) => a + (t.plus || 0), 0), ts.reduce((a, t) => a + (t.minus || 0), 0))}`
       if (kind === 'execute') label += fail ? ` ${icon.x}` : ` <span class="st-done">${icon.check}</span>`
       h += `<span class="chip${fail ? ' fail' : ''}">${icon[kind]}${label}</span>`
     }
@@ -382,16 +405,20 @@
     if (it.k === 'unknown') return `<div class="node"><span class="dot">?</span><div class="unknown">Something Claude sent that this app can't show.</div></div>`
     if (it.k === 'note') return `<div class="node caf"><span class="dot">${icon.info}</span>${noteHtml(it)}</div>`
     if (it.k === 'compacted') return `<div class="node"><span class="dot">${icon.info}</span>${compactedHtml()}</div>`
-    if (it.status === 'pending' && turn.question) return `<div class="node waiting"><span class="dot">${icon[it.kind]}</span><div class="head"><span class="t">${it.title}</span><span class="r">Waiting for you ↓</span></div></div>`
-    const cls = it.status === 'running' ? ' run' : it.status === 'failed' ? ' fail' : ''
-    // An edit opens to its diff, and a running or failed step to its output.
-    const open = it.status === 'running' || it.status === 'failed' || it.kind === 'edit'
+    if (it.status === 'asking') return `<div class="node waiting"><span class="dot">${icon[it.kind]}</span><div class="head"><span class="t">${it.title}</span><span class="r">Waiting for you ↓</span></div></div>`
+    const bad = it.status === 'failed' || it.status === 'refused'
+    const cls = it.status === 'running' ? ' run' : bad ? ' bad' : it.status === 'cancelled' ? ' muted' : ''
+    // An edit opens to its diff, a running or failed step to its output,
+    // and a refused one to who refused it; here, a step who allowed is open too.
+    const open = it.status === 'running' || bad || it.kind === 'edit' || !!it.by
     const body = open && toolBody(it) ? `<div class="body">${toolBody(it)}</div>` : ''
-    return `<div class="node${cls}"><span class="dot">${it.status === 'running' ? icon.spin : icon[it.kind]}</span><div class="head"><span class="t">${it.title}</span><span class="r">${toolRight(it)}</span>${!open ? `<span class="r">${icon.chevR}</span>` : ''}</div>${body}</div>`
+    const dot = it.status === 'running' ? icon.spin : bad ? icon.x : icon[it.kind]
+    return `<div class="node${cls}"><span class="dot">${dot}</span><div class="head"><span class="t">${it.title}</span><span class="r${it.status === 'refused' ? ' bad' : ''}">${toolRight(it)}</span>${!open ? `<span class="r">${icon.chevR}</span>` : ''}</div>${body}</div>`
   }
 
   // A question waiting on the user, attached to the top of the composer.
   const attachedQuestion = (q) => `<div class="si-attached"><div class="what">${icon.shield}<div><b>Claude asks permission:</b> ${q.title}</div></div>` +
+    (q.command ? `<div class="asked"><div class="out">${q.command}</div><div class="in">In ${q.folder}</div></div>` : '') +
     `<div class="acts">${q.options.map(o => `<span class="btn">${o}</span>`).join('')}<span class="hint">Stop cancels this and stops the turn</span></div></div>`
   const attachedSlow = () => `<div class="si-attached si-calm"><div class="what">${icon.clock}<div><span class="caf-badge">CAF</span>Claude is taking a while to open this chat. It may be busy, or stuck.</div></div>` +
     '<div class="acts"><span class="btn">Keep waiting</span><span class="btn">Try again</span><span class="btn quiet">Stop</span></div></div>'
