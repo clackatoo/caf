@@ -92,6 +92,27 @@ pub(super) struct Printed {
     pub(super) pieces: VecDeque<u64>,
 }
 
+/// Work owed to a driver, found where there's no list of work to add it
+/// to, such as a turn ending: added when the call into the core finishes.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(tag = "type", content = "value")]
+pub(super) enum Owed {
+    /// Cancel a call CAF serves.
+    Cancel(CallId),
+    /// Withdraw a request from the policy.
+    Withdrawn(Ticket),
+}
+
+impl Owed {
+    /// The work, as a directive.
+    pub(super) fn directive<A: AppItem, D: AppData>(self) -> Directive<A, D> {
+        match self {
+            Self::Cancel(call) => Directive::Tool(ToolDirective::Cancel { call }),
+            Self::Withdrawn(ticket) => Directive::Policy(PolicyDirective::Withdrawn { ticket }),
+        }
+    }
+}
+
 /// A tool call item CAF serves, in its chat's run: whatever the agent
 /// reports of it changes nothing.
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -121,7 +142,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 input,
                 agent_call,
             } => self.called(now, call, chat, tool, input, agent_call, out),
-            ToolEvent::Previewed { pieces } => self.previewed(now, call, pieces, out),
+            ToolEvent::Previewed { pieces } => self.previewed(call, pieces, out),
             ToolEvent::Output { from, lines } => self.printed(call, from, lines, out),
             ToolEvent::Finished { done, pieces } => self.finished(now, call, done, pieces, out),
             ToolEvent::Gone => self.gone(now, call, out),
@@ -199,34 +220,27 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Some(_) => joins,
             None => self.unjoined_report(chat, tool, &input),
         };
-        let (kept, input_cut) = crate::tool::capped_input(input.clone());
-        let call_of = |status| -> ToolCall<A> {
-            let mut call = ToolCall {
-                title: title_of(&action, &cwd),
-                kind: action.kind(),
-                status,
-                origin: Origin::Caf(tool),
-                action: Some(action.clone()),
-                input: Some(kept.clone()),
-                input_cut,
-                result: Vec::new(),
-                locations: Vec::new(),
-                locations_cut: 0,
-                decision: Decision::Undecided,
-                app: None,
-            };
-            call.locations = locations_of(&action);
-            call
-        };
+        let (kept, input_cut) = crate::tool::capped_input(input);
+        let record = Box::new(ToolCall {
+            title: title_of(&action, &cwd),
+            kind: action.kind(),
+            status: ToolStatus::Pending,
+            origin: Origin::Caf(tool),
+            action: Some(action.clone()),
+            input: Some(kept),
+            input_cut,
+            result: Vec::new(),
+            locations: locations_of(&action),
+            locations_cut: 0,
+            decision: Decision::Undecided,
+            app: None,
+        });
         let item = match joins {
             Some(item) => {
-                self.set_tool(chat, item, Box::new(call_of(ToolStatus::Pending)));
+                self.set_tool(chat, item, record);
                 item
             }
-            None => {
-                let kind = ItemKind::Tool(Box::new(call_of(ToolStatus::Pending)));
-                self.add_live_item(now, chat, turn, kind, Window::open(now))
-            }
+            None => self.add_live_item(now, chat, turn, ItemKind::Tool(record), Window::open(now)),
         };
         if let Some(run) = self.runs.get_mut(&chat) {
             if let Some(id) = &agent_call {
@@ -368,13 +382,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// A call's preview came: its pieces go on it, and the policy is
     /// asked.
-    fn previewed(
-        &mut self,
-        _now: Now,
-        call: CallId,
-        pieces: Vec<Piece>,
-        out: &mut Vec<Directive<A, D>>,
-    ) {
+    fn previewed(&mut self, call: CallId, pieces: Vec<Piece>, out: &mut Vec<Directive<A, D>>) {
         let Some(each) = self.calls.get(&call) else {
             return stale(out, call, "a preview");
         };
@@ -650,25 +658,18 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(each) = self.calls.remove(&call) else {
             return stale(out, call, "its going");
         };
-        self.drop_call(now, &each, ToolStatus::Cancelled, out);
+        if let Some(ticket) = self.drop_call(now, &each, ToolStatus::Cancelled) {
+            out.push(Directive::Policy(PolicyDirective::Withdrawn { ticket }));
+        }
     }
 
-    /// Ends `each` as `status`: its policy decision or question is
-    /// withdrawn, its output, if it has one, ends not saying how, and its
-    /// item ends.
-    fn drop_call(
-        &mut self,
-        now: Now,
-        each: &Call,
-        status: ToolStatus,
-        out: &mut Vec<Directive<A, D>>,
-    ) {
-        match each.stage {
-            Stage::Deciding(ticket) => {
-                out.push(Directive::Policy(PolicyDirective::Withdrawn { ticket }));
-            }
-            Stage::Asking(question) => self.unask(each.chat, question),
-            Stage::Previewing | Stage::Running => {}
+    /// Ends `each` as `status`: its question is taken away, its output,
+    /// if it has one, ends not saying how, and its item ends. Returns the
+    /// ticket of the policy's decision on it to withdraw, if it was still
+    /// deciding.
+    fn drop_call(&mut self, now: Now, each: &Call, status: ToolStatus) -> Option<Ticket> {
+        if let Stage::Asking(question) = each.stage {
+            self.unask(each.chat, question);
         }
         self.change_call(each.chat, each.item, |tool| {
             tool.status = status;
@@ -681,19 +682,17 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
         });
         self.end_item(now, each.chat, each.item);
+        match each.stage {
+            Stage::Deciding(ticket) => Some(ticket),
+            _ => None,
+        }
     }
 
     /// `chat`'s turn `turn` is ending, `stopped` by the user or not: its
     /// calls CAF serves that haven't finished are cancelled, and end
-    /// Cancelled if it was stopped, and Failed otherwise.
-    pub(super) fn settle_calls(
-        &mut self,
-        now: Now,
-        chat: ChatId,
-        turn: TurnId,
-        stopped: bool,
-        out: &mut Vec<Directive<A, D>>,
-    ) {
+    /// Cancelled if it was stopped, and Failed otherwise. The drivers are
+    /// told when this call into the core finishes.
+    pub(super) fn settle_calls(&mut self, now: Now, chat: ChatId, turn: TurnId, stopped: bool) {
         let in_turn = |item: ItemId| {
             self.turn(chat, turn)
                 .is_some_and(|each| each.items.iter().any(|kept| kept.id == item))
@@ -709,8 +708,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         for call in calls {
             if let Some(each) = self.calls.remove(&call) {
-                out.push(Directive::Tool(ToolDirective::Cancel { call }));
-                self.drop_call(now, &each, status, out);
+                self.owed.push(Owed::Cancel(call));
+                if let Some(ticket) = self.drop_call(now, &each, status) {
+                    self.owed.push(Owed::Withdrawn(ticket));
+                }
             }
         }
     }
@@ -726,11 +727,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         for call in calls {
             if let Some(each) = self.calls.remove(&call) {
                 if let Stage::Deciding(ticket) = each.stage {
-                    self.told
-                        .push(Directive::Policy(PolicyDirective::Withdrawn { ticket }));
+                    self.owed.push(Owed::Withdrawn(ticket));
                 }
-                self.told
-                    .push(Directive::Tool(ToolDirective::Cancel { call }));
+                self.owed.push(Owed::Cancel(call));
             }
         }
     }
