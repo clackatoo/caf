@@ -187,7 +187,9 @@ opened, who allowed or refused it, muted, in one line:
 | `NotAsked`, `Undecided`, `NotRecorded` | Nothing |
 
 *You* is whoever answered the question in this app. A refused call never
-ran, so under that line there's nothing more, unless the agent said why.
+ran: under that line is only what it would have done, such as the diff of
+an edit CAF worked out before asking, which never happened, and why, if
+the agent said.
 
 ### A tool call, opened
 

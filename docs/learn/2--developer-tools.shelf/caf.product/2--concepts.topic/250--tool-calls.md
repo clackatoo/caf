@@ -27,8 +27,15 @@ Since CAF runs them itself, it knows exactly what they did, for every
 agent alike: which file was read, the diff an edit made, a command's output
 in colour as it ran, and how it exited. It asks the app's policy, and the
 user if need be, before anything runs, and it writes such a call's title
-itself, from what the call does, such as *Read src/main.rs*: the agent's
-would be a name like `mcp__caf__Read`.
+itself, from what the call does: the agent's would be a name like
+`mcp__caf__Read`. A read, an edit or a write is *Read src/main.rs*,
+*Edit src/main.rs* or *Write src/main.rs*, with the path from the chat's
+folder when the file is inside it, and whole otherwise. A command is its
+first line, followed by *…* if it has more.
+
+For an edit or a write, CAF works out the change before it asks anyone,
+and puts its diff on the call, so whoever is asked sees exactly what they
+allow. A refused change keeps its diff, and never happens.
 
 The agent keeps the tools CAF doesn't replace, such as Claude's web search,
 and reports them as before. CAF records those too, from what the agent
