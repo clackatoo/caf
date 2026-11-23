@@ -277,6 +277,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// Ends `chat`'s turn `turn` as `life`: its words stop growing, and
     /// tools still running fail.
     pub(super) fn end_turn(&mut self, now: Now, chat: ChatId, turn: TurnId, life: TurnLife) {
+        // Calls CAF serves are settled first, and their driver told when
+        // this call into the core finishes.
+        let mut told = std::mem::take(&mut self.told);
+        self.settle_calls(now, chat, turn, life == TurnLife::Stopped, &mut told);
+        self.told = told;
         let items: Vec<_> = (self.turn(chat, turn).into_iter())
             .flat_map(|each| each.items.iter())
             .filter(|item| item.window.end == End::Open)
@@ -284,7 +289,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .collect();
         for (item, kind) in items {
             if let ItemKind::Tool(mut tool) = kind
-                && matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)
+                && !tool.status.ended()
             {
                 tool.status = ToolStatus::Failed;
                 self.set_tool(chat, item, tool);
@@ -382,7 +387,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         let tools = (self.turn(chat, turn).into_iter())
             .flat_map(|each| each.items.iter())
-            .any(|item| matches!(&item.kind, ItemKind::Tool(tool) if matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)));
+            .any(|item| matches!(&item.kind, ItemKind::Tool(tool) if !tool.status.ended()));
         let busy = tools || self.asks.values().any(|ask| ask.chat == chat);
         if busy {
             let quiet_by = now.mono.after(self.host.timers.quiet);

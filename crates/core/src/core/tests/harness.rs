@@ -32,10 +32,12 @@ use crate::core::{Core, OpenChat, Refused};
 use crate::directive::{
     AgentDirective, Directive, PolicyDirective, SetupDirective, TimerDirective, ViewerDirective,
 };
-use crate::event::{AgentEvent, Event, HostCommand, PolicyAnswer, SetupEvent, StorageEvent};
+use crate::event::{
+    AgentEvent, Event, HostCommand, PolicyAnswer, SetupEvent, StorageEvent, ToolEvent,
+};
 use crate::fixtures::{self, After};
 use crate::host::Host;
-use crate::ids::{AgentName, ChatId, QuestionId, Shelf, Ticket, TurnId};
+use crate::ids::{AgentName, CallId, ChatId, QuestionId, Shelf, Ticket, TurnId};
 use crate::profiles::{Builtin, ProfileChoice};
 use crate::question::Answer;
 use crate::save::RestoreChat;
@@ -67,6 +69,11 @@ pub(crate) struct Script {
     answers: BTreeMap<(u64, String), usize>,
     /// Whether its chats' conformance fixtures are checked when it ends.
     fixtures: bool,
+    /// The calls to tools CAF serves the driver reported, by its number
+    /// for each: whether it was run, and whether it has ended: refused or
+    /// cancelled by the core, finished by the driver, or given up on by
+    /// the agent.
+    calls: BTreeMap<u64, (bool, bool)>,
 }
 
 /// The agents a test offers: Claude, as the Claude profile expects it.
@@ -142,6 +149,7 @@ impl Script {
             outs: Vec::new(),
             answers: BTreeMap::new(),
             fixtures: true,
+            calls: BTreeMap::new(),
         }
     }
 
@@ -176,6 +184,27 @@ impl Script {
     /// Gives the core `event`, and returns what it gave out.
     pub(crate) fn event(&mut self, event: Event) -> Vec<Value> {
         self.record(&event);
+        if let Event::Tool { call, event } = &event {
+            match event {
+                ToolEvent::Called { .. } => {
+                    self.calls.entry(call.0).or_default();
+                }
+                // Finished only if the core had it run.
+                ToolEvent::Finished { .. } => {
+                    if self.core.calls.contains_key(call)
+                        && let Some(seen) = self.calls.get_mut(&call.0)
+                    {
+                        seen.1 = true;
+                    }
+                }
+                ToolEvent::Gone => {
+                    if let Some(seen) = self.calls.get_mut(&call.0) {
+                        seen.1 = true;
+                    }
+                }
+                _ => {}
+            }
+        }
         let mut out = Vec::new();
         self.core.handle(self.now(), event, &mut out);
         self.done(&out)
@@ -206,8 +235,55 @@ impl Script {
                 );
             }
         }
+        for directive in &rendered {
+            let Some(tool) = directive.get("tool") else {
+                continue;
+            };
+            if tool["type"] == "Preview" {
+                continue;
+            }
+            let call = tool["value"]["call"].as_u64().expect("a call");
+            let seen = self.calls.get_mut(&call);
+            let seen = seen.unwrap_or_else(|| panic!("call {call} answered, never called"));
+            assert!(
+                !seen.1,
+                "call {call} told more once it ended: {rendered:#?}"
+            );
+            if tool["type"] == "Run" {
+                assert!(!seen.0, "call {call} run twice");
+                seen.0 = true;
+            } else {
+                assert!(
+                    tool["type"] == "Cancel" || !seen.0,
+                    "call {call} refused once run"
+                );
+                seen.1 = true;
+            }
+        }
         self.outs.push(rendered.clone());
         rendered
+    }
+
+    /// The tools driver reports `event` of `call`.
+    pub(crate) fn tool(&mut self, call: u64, event: ToolEvent) -> Vec<Value> {
+        self.event(Event::Tool {
+            call: CallId(call),
+            event,
+        })
+    }
+
+    /// The policy answers `ticket`, giving `reason`.
+    pub(crate) fn policy_saying(
+        &mut self,
+        ticket: u64,
+        answer: PolicyAnswer,
+        reason: &str,
+    ) -> Vec<Value> {
+        self.event(Event::Policy {
+            ticket: Ticket(ticket),
+            answer,
+            reason: Some(reason.to_owned()),
+        })
     }
 
     /// Runs a host method that, if it succeeds, the recording holds as
@@ -625,6 +701,10 @@ impl Script {
     /// Checks every request of the agent's was answered once, unless its
     /// process went before it could be.
     fn check_answers(&self) {
+        for (call, (_, ended)) in &self.calls {
+            let going = self.core.calls.contains_key(&CallId(*call));
+            assert!(*ended || going, "call {call} never ended");
+        }
         for ((proc, id), &count) in &self.answers {
             let writable = self
                 .core
@@ -761,7 +841,10 @@ pub(crate) fn render(directive: &Directive) -> Value {
             chat,
             request,
         }) => {
-            json!({ "decide": ticket.0, "chat": chat, "title": request.title, "input": request.input })
+            json!({
+                "decide": ticket.0, "chat": chat, "item": request.item, "title": request.title,
+                "origin": request.origin, "action": request.action, "input": request.input,
+            })
         }
         Directive::Policy(PolicyDirective::Withdrawn { ticket }) => {
             json!({ "withdrawn": ticket.0 })

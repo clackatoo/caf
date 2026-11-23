@@ -37,8 +37,8 @@ use crate::ids::{CallId, ChatId, ItemId, QuestionId, Ticket, TurnId};
 use crate::question::{OptionId, OptionKind, Permission, PermissionOption, QuestionKind};
 use crate::time::{Now, Window};
 use crate::tool::{
-    Action, CafTool, Cut, DecidedBy, Decision, Ending, Lines, MOST_INPUT, MOST_LINE, MOST_OUTPUT, Origin,
-    Output, Piece,
+    Action, CafTool, DecidedBy, Decision, Ending, Lines, MOST_LINE, MOST_OUTPUT, Origin, Output,
+    Piece,
 };
 
 /// The longest title CAF writes for a call, in bytes.
@@ -174,12 +174,17 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 report(
                     out,
                     Level::Warn,
-                    format!("call {} gave the agent's id of an earlier call: not joined by it", call.0),
+                    format!(
+                        "call {} gave the agent's id of an earlier call: not joined by it",
+                        call.0
+                    ),
                 );
             }
             !taken
         });
-        let joins = agent_call.as_ref().and_then(|id| self.reported_item(chat, id));
+        let joins = agent_call
+            .as_ref()
+            .and_then(|id| self.reported_item(chat, id));
         let action = match action_of(tool, &input, &cwd) {
             Ok(action) => action,
             Err(why) => {
@@ -194,7 +199,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Some(_) => joins,
             None => self.unjoined_report(chat, tool, &input),
         };
-        let (kept, input_cut) = capped_input(&input);
+        let (kept, input_cut) = crate::tool::capped_input(input.clone());
         let call_of = |status| -> ToolCall<A> {
             let mut call = ToolCall {
                 title: title_of(&action, &cwd),
@@ -297,10 +302,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return;
         };
         call.status = ToolStatus::Failed;
-        call.result.push(Piece::Text(crate::tool::Text {
-            text: why.to_owned(),
-            cut: None,
-        }));
+        call.result.push(Piece::Text(crate::tool::Text::new(why)));
         if let Some(run) = self.runs.get_mut(&chat) {
             run.served.insert(
                 item,
@@ -424,8 +426,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         reason: Option<String>,
         out: &mut Vec<Directive<A, D>>,
     ) -> bool {
-        let Some((&call, each)) = (self.calls.iter())
-            .find(|(_, each)| each.stage == Stage::Deciding(ticket))
+        let Some((&call, each)) =
+            (self.calls.iter()).find(|(_, each)| each.stage == Stage::Deciding(ticket))
         else {
             return false;
         };
@@ -476,8 +478,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         option: &OptionId,
         out: &mut Vec<Directive<A, D>>,
     ) -> Option<bool> {
-        let (&call, _) = (self.calls.iter())
-            .find(|(_, each)| each.stage == Stage::Asking(question))?;
+        let (&call, _) =
+            (self.calls.iter()).find(|(_, each)| each.stage == Stage::Asking(question))?;
         let by = |(_, label): (&str, &str)| DecidedBy::User {
             option: label.to_owned(),
         };
@@ -516,7 +518,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Refuses `call`, as `by` decided.
-    fn refuse_call(&mut self, now: Now, call: CallId, by: DecidedBy, out: &mut Vec<Directive<A, D>>) {
+    fn refuse_call(
+        &mut self,
+        now: Now,
+        call: CallId,
+        by: DecidedBy,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
         let Some(each) = self.calls.remove(&call) else {
             return;
         };
@@ -550,7 +558,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return stale(out, call, "output before it ran");
         }
         let (chat, item) = (each.chat, each.item);
-        let Some(mut printed) = self.calls.get_mut(&call).map(|each| std::mem::take(&mut each.printed)) else {
+        let Some(mut printed) = self
+            .calls
+            .get_mut(&call)
+            .map(|each| std::mem::take(&mut each.printed))
+        else {
             return;
         };
         let change = match self.output(chat, item) {
@@ -700,6 +712,26 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
     }
 
+    /// Forgets `chat`'s calls CAF serves, as it's let go: any that
+    /// haven't finished are cancelled. Its turns have ended, so there
+    /// should be none.
+    pub(super) fn forget_calls(&mut self, chat: ChatId) {
+        let calls: Vec<CallId> = (self.calls.iter())
+            .filter(|(_, each)| each.chat == chat)
+            .map(|(&call, _)| call)
+            .collect();
+        for call in calls {
+            if let Some(each) = self.calls.remove(&call) {
+                if let Stage::Deciding(ticket) = each.stage {
+                    self.told
+                        .push(Directive::Policy(PolicyDirective::Withdrawn { ticket }));
+                }
+                self.told
+                    .push(Directive::Tool(ToolDirective::Cancel { call }));
+            }
+        }
+    }
+
     /// Changes `chat`'s call `item` as `change` says.
     fn change_call(&mut self, chat: ChatId, item: ItemId, change: impl FnOnce(&mut ToolCall<A>)) {
         let Some(ItemKind::Tool(tool)) = self.item(chat, item).map(|each| &each.kind) else {
@@ -717,7 +749,10 @@ fn stale<A: AppItem, D: AppData>(out: &mut Vec<Directive<A, D>>, call: CallId, w
     report(
         out,
         Level::Debug,
-        format!("ignored {what} of call {}, which isn't waiting for it", call.0),
+        format!(
+            "ignored {what} of call {}, which isn't waiting for it",
+            call.0
+        ),
     );
 }
 
@@ -738,7 +773,12 @@ impl Printed {
     /// than [`MOST_LINE`] are split, and lines dropped from the top to
     /// keep them within [`MOST_OUTPUT`]. A line rewritten that was
     /// already dropped rewrites from the first kept.
-    pub(super) fn print(&mut self, kept: &[String], from: u64, lines: Vec<String>) -> Option<Printing> {
+    pub(super) fn print(
+        &mut self,
+        kept: &[String],
+        from: u64,
+        lines: Vec<String>,
+    ) -> Option<Printing> {
         let printed = self.first + self.pieces.len() as u64;
         // Lines can't be skipped: anything past the end is added there.
         let from = from.min(printed);
@@ -761,7 +801,9 @@ impl Printed {
             split_line(line, &mut new);
             self.pieces.push_back((new.len() - before) as u64);
         }
-        let kept_from_at = usize::try_from(kept_from).unwrap_or(usize::MAX).min(kept.len());
+        let kept_from_at = usize::try_from(kept_from)
+            .unwrap_or(usize::MAX)
+            .min(kept.len());
         let mut size: usize = (kept[..kept_from_at].iter().chain(&new))
             .map(String::len)
             .sum();
@@ -829,7 +871,12 @@ pub(super) fn action_of(tool: CafTool, input: &Value, cwd: &str) -> Result<Actio
             None | Some(Value::Null) => Ok(None),
             Some(value) => value
                 .as_u64()
-                .or_else(|| value.as_f64().filter(|n| n.fract() == 0.0 && *n >= 0.0).map(|n| n as u64))
+                .or_else(|| {
+                    value
+                        .as_f64()
+                        .filter(|n| n.fract() == 0.0 && *n >= 0.0)
+                        .map(|n| n as u64)
+                })
                 .map(Some)
                 .ok_or_else(|| format!("`{name}` must be a whole number, 0 or more.")),
         }
@@ -924,7 +971,10 @@ pub(super) fn resolve(cwd: &str, path: &str) -> String {
 pub(super) fn title_of(action: &Action, cwd: &str) -> String {
     let shown = |path: &str| {
         let folder = cwd.trim_end_matches('/');
-        match path.strip_prefix(folder).and_then(|rest| rest.strip_prefix('/')) {
+        match path
+            .strip_prefix(folder)
+            .and_then(|rest| rest.strip_prefix('/'))
+        {
             Some(rest) if !rest.is_empty() => rest.to_owned(),
             _ => path.to_owned(),
         }
@@ -960,21 +1010,6 @@ fn locations_of(action: &Action) -> Vec<crate::tool::Location> {
     }
 }
 
-/// A call's input as it's kept: whole, or if its JSON is longer than
-/// [`MOST_INPUT`], the start of that JSON as a string, and how much that
-/// is.
-fn capped_input(input: &Value) -> (Value, Option<Cut>) {
-    let json = input.to_string();
-    if json.len() <= MOST_INPUT {
-        return (input.clone(), None);
-    }
-    let total = json.len() as u64;
-    let mut start = json;
-    start.truncate(start.floor_char_boundary(MOST_INPUT));
-    let kept = start.len() as u64;
-    (Value::String(start), Some(Cut { kept, total }))
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -997,18 +1032,31 @@ mod tests {
             read(json!({ "file_path": "src/a.rs", "offset": 10, "limit": 5 })),
             Ok(Action::Read {
                 path: "/work/src/a.rs".to_owned(),
-                lines: Some(Lines { first: 10, last: Some(14) }),
+                lines: Some(Lines {
+                    first: 10,
+                    last: Some(14)
+                }),
             })
         );
         assert_eq!(
             read(json!({ "file_path": "/x" })),
-            Ok(Action::Read { path: "/x".to_owned(), lines: None })
+            Ok(Action::Read {
+                path: "/x".to_owned(),
+                lines: None
+            })
         );
         assert!(read(json!({ "file_path": 3 })).is_err());
         assert!(read(json!({})).is_err());
         assert!(read(json!({ "file_path": "/x", "limit": 0 })).is_err());
         assert!(read(json!("/x")).is_err());
-        assert!(action_of(CafTool::Edit, &json!({ "file_path": "/x", "old_string": "a" }), "/w").is_err());
+        assert!(
+            action_of(
+                CafTool::Edit,
+                &json!({ "file_path": "/x", "old_string": "a" }),
+                "/w"
+            )
+            .is_err()
+        );
         assert_eq!(
             action_of(
                 CafTool::Bash,
@@ -1026,8 +1074,13 @@ mod tests {
 
     #[test]
     fn titles_say_what_a_call_does_from_the_chats_folder() {
-        let path = |path: &str| Action::Edit { path: path.to_owned() };
-        assert_eq!(title_of(&path("/work/src/main.rs"), "/work"), "Edit src/main.rs");
+        let path = |path: &str| Action::Edit {
+            path: path.to_owned(),
+        };
+        assert_eq!(
+            title_of(&path("/work/src/main.rs"), "/work"),
+            "Edit src/main.rs"
+        );
         assert_eq!(title_of(&path("/workshop/a"), "/work"), "Edit /workshop/a");
         assert_eq!(title_of(&path("/work"), "/work"), "Edit /work");
         let run = Action::Run {
@@ -1053,10 +1106,19 @@ mod tests {
     fn output_grows_and_a_progress_bar_rewrites_its_line() {
         let mut printed = Printed::default();
         let mut kept = Vec::new();
-        let change = printed.print(&kept, 0, lines(&["one", "10%"])).expect("a change");
+        let change = printed
+            .print(&kept, 0, lines(&["one", "10%"]))
+            .expect("a change");
         apply(&mut kept, &change);
         let change = printed.print(&kept, 1, lines(&["50%"])).expect("a change");
-        assert_eq!(change, Printing { from: 1, lines: lines(&["50%"]), dropped: 0 });
+        assert_eq!(
+            change,
+            Printing {
+                from: 1,
+                lines: lines(&["50%"]),
+                dropped: 0
+            }
+        );
         apply(&mut kept, &change);
         assert_eq!(kept, lines(&["one", "50%"]));
         assert_eq!(printed.print(&kept, 2, Vec::new()), None);
@@ -1067,7 +1129,9 @@ mod tests {
         let mut printed = Printed::default();
         let mut kept = Vec::new();
         let long = "é".repeat(MOST_LINE); // 2 bytes each
-        let change = printed.print(&kept, 0, vec![long.clone()]).expect("a change");
+        let change = printed
+            .print(&kept, 0, vec![long.clone()])
+            .expect("a change");
         assert_eq!(change.lines.len(), 2);
         assert!(change.lines.iter().all(|line| line.len() <= MOST_LINE));
         assert_eq!(change.lines.concat(), long);
@@ -1083,8 +1147,17 @@ mod tests {
         assert_eq!(printed.first, 0, "the long line is partly kept");
         assert_eq!(printed.pieces, [1, 1, 1, 1]);
         // Rewriting the line partly dropped rewrites what's kept of it.
-        let change = printed.print(&kept, 0, lines(&["short"])).expect("a change");
-        assert_eq!(change, Printing { from: 0, lines: lines(&["short"]), dropped: 0 });
+        let change = printed
+            .print(&kept, 0, lines(&["short"]))
+            .expect("a change");
+        assert_eq!(
+            change,
+            Printing {
+                from: 0,
+                lines: lines(&["short"]),
+                dropped: 0
+            }
+        );
         apply(&mut kept, &change);
         assert_eq!(kept, lines(&["short"]));
         // Then all of it goes, and a rewrite before the first kept line
@@ -1094,8 +1167,17 @@ mod tests {
         apply(&mut kept, &change);
         assert_eq!(change.dropped, 2);
         assert_eq!(printed.first, 2);
-        let change = printed.print(&kept, 0, lines(&["again"])).expect("a change");
-        assert_eq!(change, Printing { from: 0, lines: lines(&["again"]), dropped: 0 });
+        let change = printed
+            .print(&kept, 0, lines(&["again"]))
+            .expect("a change");
+        assert_eq!(
+            change,
+            Printing {
+                from: 0,
+                lines: lines(&["again"]),
+                dropped: 0
+            }
+        );
         assert_eq!(printed.first, 0);
     }
 }

@@ -15,6 +15,7 @@ mod patching;
 mod permissions;
 mod process;
 mod saving;
+mod served;
 mod settings;
 mod setup;
 mod shared;

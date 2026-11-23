@@ -613,7 +613,6 @@ fn start_of(mut text: String, most: usize) -> (String, Option<Cut>) {
 
 /// A call's raw input, capped: if its JSON is longer than [`MOST_INPUT`],
 /// the start of that JSON as a string, and how much of it was kept.
-#[cfg_attr(not(test), expect(dead_code, reason = "read from ACP next"))]
 pub(crate) fn capped_input(input: serde_json::Value) -> (serde_json::Value, Option<Cut>) {
     let json = input.to_string();
     if json.len() <= MOST_INPUT {
