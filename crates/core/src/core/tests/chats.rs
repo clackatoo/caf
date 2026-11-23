@@ -51,7 +51,7 @@ fn words_thinking_and_tools_become_items_in_order() {
             "turns": [{ "items": [
                 { "kind": { "type": "Thinking", "value": "Let me look" }, "window": { "end": wall(20) } },
                 { "kind": { "type": "Words", "value": "Looking." }, "window": { "end": wall(30) } },
-                { "kind": { "type": "Tool", "value": { "title": "Read lib.rs", "kind": { "type": "Read" }, "status": { "type": "Done" }, "input": { "path": "lib.rs" }, "output": "fn main() {}" } }, "window": { "end": wall(40) } },
+                { "kind": { "type": "Tool", "value": { "title": "Read lib.rs", "kind": { "type": "Read" }, "status": { "type": "Done" }, "input": { "path": "lib.rs" }, "result": [{ "type": "Text", "value": { "text": "fn main() {}", "cut": null } }] } }, "window": { "end": wall(40) } },
                 { "kind": { "type": "Words", "value": "Found it." } },
                 { "kind": { "type": "Unknown", "value": { "what": "agent_message_chunk" } } }
             ] }]

@@ -387,7 +387,7 @@ fn saved(chat: &Value, session: Option<&str>, changed: i64) -> Saved {
 fn mid_turn(agent: &str) -> Value {
     let at = |ms: i64| json!(EPOCH - 50_000 + ms);
     let text = |text: &str| json!({ "type": "User", "value": { "parts": [{ "type": "Text", "value": text }] } });
-    let tool = |status: &str| json!({ "type": "Tool", "value": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": status }, "input": null, "output": "", "app": null } });
+    let tool = |status: &str| json!({ "type": "Tool", "value": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": status }, "input": null, "origin": { "type": "NotRecorded" }, "action": null, "input_cut": null, "result": [], "locations": [], "locations_cut": 0, "decision": { "type": "NotRecorded" }, "app": null } });
     json!({
         "id": CHAT, "agent": agent, "cwd": "/work",
         "state": { "type": "Open", "value": { "session": "old" } },
@@ -659,7 +659,7 @@ fn a_restore_finds_what_was_under_way_and_tidies_it() {
         serde_json::to_value(&changes).expect("JSON"),
         json!([
             { "type": "ItemEnded", "value": { "item": 5003, "end": end } },
-            { "type": "ToolChanged", "value": { "item": 5005, "tool": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Failed" }, "input": null, "output": "", "app": null } } },
+            { "type": "ToolChanged", "value": { "item": 5005, "tool": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Failed" }, "input": null, "origin": { "type": "NotRecorded" }, "action": null, "input_cut": null, "result": [], "locations": [], "locations_cut": 0, "decision": { "type": "NotRecorded" }, "app": null } } },
             { "type": "ItemEnded", "value": { "item": 5005, "end": end } },
             { "type": "TurnLife", "value": { "turn": 5002, "life": { "type": "CutOff" }, "end": end } },
             { "type": "TurnLife", "value": { "turn": 5006, "life": { "type": "Stopped" }, "end": end } },
@@ -2928,7 +2928,10 @@ fn a_tool_call_that_changes_again_is_one_entry() {
         .filter(|entry| entry["value"]["type"] == "ToolChanged")
         .collect();
     assert_eq!(changed.len(), 1, "{append:#}");
-    assert_eq!(changed[0]["value"]["value"]["tool"]["output"], "three");
+    assert_eq!(
+        changed[0]["value"]["value"]["tool"]["result"][0]["value"]["text"],
+        "three"
+    );
 }
 
 #[test]

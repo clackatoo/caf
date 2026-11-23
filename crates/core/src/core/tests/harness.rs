@@ -571,6 +571,7 @@ impl Script {
         self.event(Event::Policy {
             ticket: Ticket(ticket),
             answer,
+            reason: None,
         })
     }
 
@@ -772,6 +773,9 @@ pub(crate) fn render(directive: &Directive) -> Value {
         Directive::Setup(setup) => render_setup(setup),
         Directive::Usage(usage) => {
             json!({ "usage": serde_json::to_value(usage).expect("usage directives serialise") })
+        }
+        Directive::Tool(tool) => {
+            json!({ "tool": serde_json::to_value(tool).expect("tool directives serialise") })
         }
         Directive::Report(report) => {
             json!({ "report": format!("{:?}", report.level), "message": report.message })

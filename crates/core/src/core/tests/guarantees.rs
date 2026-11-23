@@ -242,7 +242,7 @@ fn guarantee_4_every_event_names_what_it_belongs_to() {
     assert_has(
         &script.chat(CHAT),
         &json!({ "turns": [
-        { "items": [{ "kind": { "type": "Tool", "value": { "title": "Build", "status": { "type": "Done" }, "output": "ok" } } }] },
+        { "items": [{ "kind": { "type": "Tool", "value": { "title": "Build", "status": { "type": "Done" }, "result": [{ "type": "Text", "value": { "text": "ok", "cut": null } }] } } }] },
         { "items": [{ "kind": { "type": "Words", "value": "now" } }] }
     ] }),
     );

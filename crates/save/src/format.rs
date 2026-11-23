@@ -380,16 +380,26 @@ enum Root {
 ///    [`Note::NotApplied`](caf_core::chat::Note::NotApplied)) hold the
 ///    choice with the agent's name for it, which older versions didn't
 ///    keep, rather than the choice alone.
+/// 6. tool calls ([`ToolCall`](caf_core::tool::ToolCall)) hold where they
+///    came from, what they do, who allowed them, their result as pieces
+///    and their locations, rather than their output as text.
 ///
 /// Only where a saved type has them is looked at: never inside what an
 /// agent, a tool or the app wrote.
 fn migrate(version: u32, inside: Vec<u8>, root: Root) -> Result<Vec<u8>, String> {
-    if version >= 5 {
+    if version >= 6 {
         return Ok(inside);
     }
     let mut tree: Tree = parse(&inside)?;
-    let mut changed = false;
-    let mut note = |item: &mut Tree| changed |= name_note(item);
+    let changed = std::cell::Cell::new(false);
+    let mut note = |item: &mut Tree| {
+        if version < 5 && name_note(item) {
+            changed.set(true);
+        }
+        if reshape_tool_item(item) {
+            changed.set(true);
+        }
+    };
     match root {
         Root::Snapshot => {
             if let Some(Tree::List(turns)) =
@@ -426,13 +436,20 @@ fn migrate(version: u32, inside: Vec<u8>, root: Root) -> Result<Vec<u8>, String>
                                 note(item);
                             }
                         }
+                        "ToolChanged" => {
+                            if let Some(tool) = value.get_mut("tool")
+                                && reshape_tool(tool)
+                            {
+                                changed.set(true);
+                            }
+                        }
                         _ => {}
                     }
                 }
             }
         }
     }
-    if !changed {
+    if !changed.get() {
         return Ok(inside);
     }
     named(&tree)
@@ -443,6 +460,67 @@ fn items(turn: &mut Tree, each: &mut impl FnMut(&mut Tree)) {
     if let Some(Tree::List(items)) = turn.get_mut("items") {
         items.iter_mut().for_each(each);
     }
+}
+
+/// Makes `item`, if it's a tool call of the shape before version 6, a
+/// tool call of this version's: whether it was.
+fn reshape_tool_item(item: &mut Tree) -> bool {
+    let Some(kind) = item.get_mut("kind") else {
+        return false;
+    };
+    if kind.get("type") != Some(&Tree::Str("Tool".into())) {
+        return false;
+    }
+    kind.get_mut("value").is_some_and(reshape_tool)
+}
+
+/// Makes `tool`, a tool call of the shape before version 6, one of this
+/// version's: its output one piece of text, if it had any; its action the
+/// tool by its title; where it came from and who allowed it not recorded.
+/// Whether it was the old shape.
+fn reshape_tool(tool: &mut Tree) -> bool {
+    let Tree::Map(fields) = tool else {
+        return false;
+    };
+    let Some(at) =
+        (fields.iter()).position(|(key, _)| matches!(key, Tree::Str(key) if key == "output"))
+    else {
+        return false;
+    };
+    let (_, output) = fields.remove(at);
+    let text = |key: &str| Tree::Str(key.into());
+    let tagged = |kind: &str, value: Option<Tree>| {
+        let mut map = vec![(text("type"), text(kind))];
+        map.extend(value.map(|value| (text("value"), value)));
+        Tree::Map(map)
+    };
+    let title = tool.get("title").cloned().unwrap_or_else(|| text(""));
+    let result = match output {
+        Tree::Str(output) if !output.is_empty() => vec![tagged(
+            "Text",
+            Some(Tree::Map(vec![
+                (text("text"), Tree::Str(output)),
+                (text("cut"), Tree::Nil),
+            ])),
+        )],
+        _ => Vec::new(),
+    };
+    let Tree::Map(fields) = tool else {
+        return false;
+    };
+    fields.extend([
+        (text("origin"), tagged("NotRecorded", None)),
+        (
+            text("action"),
+            tagged("Tool", Some(Tree::Map(vec![(text("name"), title)]))),
+        ),
+        (text("input_cut"), Tree::Nil),
+        (text("result"), Tree::List(result)),
+        (text("locations"), Tree::List(Vec::new())),
+        (text("locations_cut"), Tree::Int(0)),
+        (text("decision"), tagged("NotRecorded", None)),
+    ]);
+    true
 }
 
 /// Makes `item`, if it's a note about a setting holding the choice

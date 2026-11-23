@@ -2,5 +2,10 @@
 
 /**
  * Where a tool call is.
+ *
+ * Every call ends Done, Failed, Refused or Cancelled: when its turn ends,
+ * one still Pending, Asking or Running is Cancelled if the user stopped
+ * the turn, and Failed otherwise, and so is one a restored chat was cut
+ * off in.
  */
-export type ToolStatus = { "type": "Pending" } | { "type": "Running" } | { "type": "Done" } | { "type": "Failed" };
+export type ToolStatus = { "type": "Pending" } | { "type": "Asking" } | { "type": "Running" } | { "type": "Done" } | { "type": "Failed" } | { "type": "Refused" } | { "type": "Cancelled" };

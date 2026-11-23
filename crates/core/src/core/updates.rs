@@ -25,6 +25,7 @@ use crate::directive::{Directive, Level};
 use crate::ids::{ChatId, ItemId, Ticket, TurnId};
 use crate::profiles::ProfileChoice;
 use crate::time::{End, Now, Window};
+use crate::tool::{Decision, Origin, Piece, Text};
 
 /// The longest tool title kept, in bytes.
 const MOST_TITLE: usize = 1024;
@@ -376,7 +377,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 } else {
                     Window::open(now)
                 };
-                let item = self.add_live_item(now, chat, turn, ItemKind::Tool(tool), window);
+                let item =
+                    self.add_live_item(now, chat, turn, ItemKind::Tool(Box::new(tool)), window);
                 if let Some(run) = self.runs.get_mut(&chat) {
                     run.tools.insert(id, item);
                 }
@@ -431,7 +433,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     change.apply(tool);
                     return;
                 }
-                let item = self.import_item(chat, ItemKind::Tool(change.new_tool()));
+                let item = self.import_item(chat, ItemKind::Tool(Box::new(change.new_tool())));
                 if let Some(run) = self.runs.get_mut(&chat) {
                     run.tools.insert(id, item);
                 }
@@ -545,7 +547,16 @@ impl ToolChange {
             tool.input = self.input;
         }
         if let Some(output) = self.output {
-            tool.output = output;
+            // As text, until the pieces are read (feature 10).
+            tool.result = (!output.is_empty())
+                .then(|| {
+                    Piece::Text(Text {
+                        text: output,
+                        cut: None,
+                    })
+                })
+                .into_iter()
+                .collect();
         }
     }
 
@@ -555,8 +566,14 @@ impl ToolChange {
             title: String::new(),
             kind: ToolKind::Other,
             status: ToolStatus::Pending,
+            origin: Origin::NotRecorded,
+            action: None,
             input: None,
-            output: String::new(),
+            input_cut: None,
+            result: Vec::new(),
+            locations: Vec::new(),
+            locations_cut: 0,
+            decision: Decision::NotAsked,
             app: None,
         };
         self.apply(&mut tool);

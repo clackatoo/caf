@@ -12,7 +12,8 @@ export type Mismatch =
   | { type: "NoItem"; value: ItemId }
   | { type: "NotText"; value: ItemId }
   | { type: "NotTool"; value: ItemId }
-  | { type: "NoQuestion"; value: QuestionId };
+  | { type: "NoQuestion"; value: QuestionId }
+  | { type: "NoOutput"; value: ItemId };
 
 /**
  * Applies one change to a chat, as Rust's `Chat::apply` does.
@@ -68,6 +69,25 @@ export function apply(chat: RChat, change: Change): { chat: RChat } | { mismatch
       const { item, tool } = change.value;
       return withItem(chat, item, (each) => {
         if (each.kind.type !== "Tool") return { type: "NotTool", value: item };
+        return { ...each, kind: { ...each.kind, value: tool } };
+      });
+    }
+    case "OutputChanged": {
+      // Lines from `from` on are replaced, then `dropped` go from the top:
+      // CAF worked `dropped` out, so this never repeats its sums.
+      const { item, from, lines, dropped } = change.value;
+      return withItem(chat, item, (each) => {
+        if (each.kind.type !== "Tool") return { type: "NotTool", value: item };
+        const result = each.kind.value.result;
+        let at = result.length - 1;
+        while (at >= 0 && result[at]!.type !== "Output") at--;
+        const piece = result[at];
+        if (piece === undefined || piece.type !== "Output") return { type: "NoOutput", value: item };
+        const output = piece.value;
+        if (from > output.lines.length || dropped > from + lines.length) return { type: "NoOutput", value: item };
+        const kept = [...output.lines.slice(0, from), ...lines].slice(dropped);
+        const changed = { type: "Output" as const, value: { ...output, lines: kept, dropped: output.dropped + dropped } };
+        const tool = { ...each.kind.value, result: replaced(result, at, changed) };
         return { ...each, kind: { ...each.kind, value: tool } };
       });
     }

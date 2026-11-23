@@ -222,7 +222,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Sets a tool call as it is now.
-    pub(super) fn set_tool(&mut self, chat: ChatId, item: ItemId, tool: ToolCall<A>) {
+    pub(super) fn set_tool(&mut self, chat: ChatId, item: ItemId, tool: Box<ToolCall<A>>) {
         let Some(each) = self.item(chat, item) else {
             return;
         };

@@ -16,6 +16,7 @@ mod setup;
 mod spending;
 mod state;
 mod timers;
+mod tools;
 mod turns;
 mod updates;
 mod wire;
@@ -374,7 +375,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
             Event::Agent { process, event } => self.agent_event(now, process, event, out),
             Event::Woken => self.woken(now, out),
-            Event::Policy { ticket, answer } => self.policy_answered(now, ticket, answer, out),
+            // The policy's reason is kept on the call: feature 10.
+            Event::Policy { ticket, answer, .. } => self.policy_answered(now, ticket, answer, out),
+            Event::Tool { call, event } => self.tool_event(now, call, event, out),
             Event::Storage { ticket, event } => self.storage_event(now, ticket, event, out),
             Event::Setup { ticket, event } => self.setup_event(now, ticket, event, out),
             Event::Prices(prices) => self.prices_given(prices),

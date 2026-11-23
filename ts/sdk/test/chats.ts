@@ -26,8 +26,14 @@ export function tool(title: string): ToolCall {
     title,
     kind: { type: "Execute" },
     status: { type: "Running" },
+    origin: { type: "Caf", value: { type: "Bash" } },
+    action: { type: "Run", value: { command: "ls", folder: "/work", background: false } },
     input: { command: "ls" },
-    output: "",
+    input_cut: null,
+    result: [],
+    locations: [],
+    locations_cut: 0,
+    decision: { type: "Undecided" },
     app: null,
   };
 }

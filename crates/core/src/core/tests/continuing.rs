@@ -120,7 +120,7 @@ fn a_loaded_session_imports_its_history_and_nothing_replayed_acts() {
                     "items": [
                         { "kind": { "type": "Thinking", "value": "hmm" }, "window": unknown },
                         { "kind": { "type": "Words", "value": "Sure, done." } },
-                        { "kind": { "type": "Tool", "value": { "title": "Edit", "kind": { "type": "Edit" }, "status": { "type": "Failed" }, "output": "edited" } } }
+                        { "kind": { "type": "Tool", "value": { "title": "Edit", "kind": { "type": "Edit" }, "status": { "type": "Failed" }, "result": [{ "type": "Text", "value": { "text": "edited", "cut": null } }] } } }
                     ]
                 },
                 { "starter": { "type": "User", "value": { "parts": [{ "type": "Text", "value": "second" }] } }, "imported": true, "items": [] },

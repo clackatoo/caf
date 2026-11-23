@@ -21,9 +21,11 @@ use crate::chat::{
     Starter, ToolCall, ToolKind, ToolStatus, Turn, TurnLife, UserMessage,
 };
 use crate::core::{Refused, SessionChoice};
+use crate::event::Exit;
 use crate::install::SignedInAs;
 use crate::question::{Answer, OptionKind, Question, QuestionKind, SlowChoice};
 use crate::time::{End, Window};
+use crate::tool::{Action, CafTool, DecidedBy, Decision, Ending, LineChange, Origin, Piece};
 use crate::usage::{BadQuery, PriceLayer, Resolution, UsageQuery};
 use crate::viewer::{AgentAction, FromViewer, Outcome, ToViewer};
 
@@ -198,6 +200,7 @@ kinds!(Change {
     "ItemAdded" => Change::ItemAdded { .. },
     "Appended" => Change::Appended { .. },
     "ToolChanged" => Change::ToolChanged { .. },
+    "OutputChanged" => Change::OutputChanged { .. },
     "ItemEnded" => Change::ItemEnded { .. },
     "Usage" => Change::Usage(_),
     "TurnSpent" => Change::TurnSpent { .. },
@@ -214,6 +217,7 @@ kinds!(Mismatch {
     "NotText" => Mismatch::NotText(_),
     "NotTool" => Mismatch::NotTool(_),
     "NoQuestion" => Mismatch::NoQuestion(_),
+    "NoOutput" => Mismatch::NoOutput(_),
 });
 
 kinds!(ChatState {
@@ -323,9 +327,73 @@ kinds!(ToolKind {
 
 kinds!(ToolStatus {
     "Pending" => ToolStatus::Pending,
+    "Asking" => ToolStatus::Asking,
     "Running" => ToolStatus::Running,
     "Done" => ToolStatus::Done,
     "Failed" => ToolStatus::Failed,
+    "Refused" => ToolStatus::Refused,
+    "Cancelled" => ToolStatus::Cancelled,
+});
+
+kinds!(Origin {
+    "Caf" => Origin::Caf(_),
+    "App" => Origin::App(_),
+    "Server" => Origin::Server { .. },
+    "Agent" => Origin::Agent(_),
+    "NotRecorded" => Origin::NotRecorded,
+});
+
+kinds!(CafTool {
+    "Read" => CafTool::Read,
+    "Edit" => CafTool::Edit,
+    "Write" => CafTool::Write,
+    "Bash" => CafTool::Bash,
+});
+
+kinds!(Action {
+    "Read" => Action::Read { .. },
+    "Edit" => Action::Edit { .. },
+    "Write" => Action::Write { .. },
+    "Run" => Action::Run { .. },
+    "Tool" => Action::Tool { .. },
+});
+
+kinds!(Piece {
+    "Text" => Piece::Text(_),
+    "Diff" => Piece::Diff(_),
+    "Output" => Piece::Output(_),
+    "Image" => Piece::Image(_),
+    "Link" => Piece::Link(_),
+    "Unknown" => Piece::Unknown(_),
+});
+
+kinds!(LineChange {
+    "Kept" => LineChange::Kept,
+    "Added" => LineChange::Added,
+    "Removed" => LineChange::Removed,
+});
+
+kinds!(Ending {
+    "Exited" => Ending::Exited(_),
+    "Unknown" => Ending::Unknown,
+});
+
+kinds!(Exit {
+    "Code" => Exit::Code(_),
+    "Signal" => Exit::Signal(_),
+});
+
+kinds!(Decision {
+    "Undecided" => Decision::Undecided,
+    "NotAsked" => Decision::NotAsked,
+    "Allowed" => Decision::Allowed(_),
+    "Refused" => Decision::Refused(_),
+    "NotRecorded" => Decision::NotRecorded,
+});
+
+kinds!(DecidedBy {
+    "Policy" => DecidedBy::Policy { .. },
+    "User" => DecidedBy::User { .. },
 });
 
 kinds!(Note {
@@ -505,6 +573,7 @@ impl Seen {
             Change::ItemEnded { end, .. } => self.mark(end),
             Change::QuestionAsked(question) => self.question(question),
             Change::Appended { .. }
+            | Change::OutputChanged { .. }
             | Change::TurnModel { .. }
             | Change::Usage(_)
             | Change::TurnSpent { .. }
@@ -594,6 +663,34 @@ impl Seen {
     fn tool(&mut self, tool: &ToolCall) {
         self.mark(&tool.kind);
         self.mark(&tool.status);
+        self.mark(&tool.origin);
+        if let Origin::Caf(caf) = &tool.origin {
+            self.mark(caf);
+        }
+        if let Some(action) = &tool.action {
+            self.mark(action);
+        }
+        self.mark(&tool.decision);
+        if let Decision::Allowed(by) | Decision::Refused(by) = &tool.decision {
+            self.mark(by);
+        }
+        for piece in &tool.result {
+            self.mark(piece);
+            match piece {
+                Piece::Diff(diff) => (diff.hunks.iter())
+                    .flat_map(|hunk| &hunk.lines)
+                    .for_each(|line| self.mark(&line.change)),
+                Piece::Output(output) => {
+                    if let Some(ending) = &output.ending {
+                        self.mark(ending);
+                        if let Ending::Exited(exit) = ending {
+                            self.mark(exit);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn question(&mut self, question: &Question) {

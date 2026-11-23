@@ -193,6 +193,7 @@ pub mod settings;
 #[cfg(test)]
 mod shape;
 pub mod time;
+pub mod tool;
 #[cfg(feature = "ts")]
 mod ts;
 pub mod usage;

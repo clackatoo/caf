@@ -7,6 +7,7 @@
 //! Where nobody can answer, CAF refuses safely: a reject option if the
 //! agent offered one, else "cancelled".
 
+use crate::tool::Origin;
 use serde_json::{Value, json};
 
 use super::clean::agent_text;
@@ -91,7 +92,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         out.push(Directive::Policy(PolicyDirective::Decide {
             ticket,
             chat,
-            request: PermissionRequest { title, input },
+            request: PermissionRequest {
+                item: tool,
+                title,
+                // Read from the adapter's metadata, and CAF's own calls
+                // asked by CAF itself: feature 10.
+                origin: Origin::NotRecorded,
+                action: None,
+                input,
+            },
         }));
     }
 
