@@ -723,7 +723,7 @@ fn the_diffs_of_one_update_share_what_working_them_out_may_cost() {
             diff["added"].clone(),
         )
     };
-    assert_eq!(shape(0).0, true, "the first is worked out");
+    assert!(shape(0).0, "the first is worked out");
     for at in [1, 2] {
         assert_eq!(shape(at), (false, json!(1), json!(3_991)), "diff {at}");
     }
