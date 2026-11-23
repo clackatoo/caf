@@ -712,8 +712,10 @@ async fn whole_lines(path: &Path) -> std::io::Result<(Body, u64)> {
 /// images and sockets, and no page may frame it. The agent's words are
 /// drawn as Markdown with HTML off, but should anything slip through, it
 /// can't load or run anything from elsewhere, or send the token there.
+/// Images may also be `data:` URIs, which load nothing from anywhere: a
+/// tool call's pictures are drawn as those.
 pub const CSP: &str =
-    "default-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'";
+    "default-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'";
 
 /// Everything else: a file of the built app, under [`CSP`].
 async fn static_file(State(app): State<Arc<App>>, uri: Uri) -> Response {

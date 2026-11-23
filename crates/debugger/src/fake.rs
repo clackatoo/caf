@@ -51,6 +51,13 @@
 //!   command, and once that's answered, the turn ends. While the question
 //!   waits, Stop ends the turn as a real adapter does, with
 //!   `cancelled`.
+//! - **The message `tools`**, exactly, is answered at once with a tool
+//!   call of each kind it can report, as Claude's adapter reports them,
+//!   then a few words: an edit with its diff and the place it's about, a
+//!   command with its terminal, and a web search giving back text, a
+//!   picture, a web link, a link that mustn't be followed, and a piece CAF
+//!   can't read. So the debugger's drawing of each can be seen, and its
+//!   end-to-end tests drive it.
 //! - **Its settings**, so the debugger's picker can be tried: two models,
 //!   three effort levels and fast mode, offered as Claude offers its own,
 //!   as ACP's session config options, whenever its session opens, new or
@@ -76,6 +83,9 @@ use serde_json::{Value, json};
 
 /// The message that makes the fake ask permission.
 pub const ASK: &str = "ask";
+
+/// The message that makes the fake report a tool call of every kind.
+pub const TOOLS: &str = "tools";
 
 /// The message that makes the fake fail the turn, the first time.
 pub const FAIL: &str = "fail";
@@ -113,8 +123,8 @@ const SESSION: &str = "fake-1";
 /// The words the fake says to any message.
 const REPLY: &str = "This is CAF's fake agent, with no model behind it, so it says this to \
                      every message. Send exactly \"ask\" to see it ask permission to run a \
-                     command, \"fail\" to see a turn fail, or \"sign in\" to see one fail for \
-                     want of signing in.";
+                     command, \"tools\" to see a tool call of every kind, \"fail\" to see a \
+                     turn fail, or \"sign in\" to see one fail for want of signing in.";
 
 /// The words it adds when it says its limits.
 const REPLY_LIMITS: &str = " Send \"limit\" to see one refused for its account's limits.";
@@ -143,6 +153,7 @@ pub fn script(usage: bool, limits: Option<SystemTime>) -> String {
                 {"respond": {"error": {"code": -32603, "message": "The fake agent failed, as it was asked to. Send the message again, and it won't."}}},
             ]}}),
         ),
+        line(&json!({"on": {"method": "session/prompt", "match": prompt(TOOLS), "do": tools()}})),
         line(
             &json!({"on": {"method": "session/prompt", "match": prompt(SIGN_IN), "once": true, "do": [
                 {"respond": {"error": {"code": -32000, "message": "Authentication required: the fake agent wants a sign-in, as it was asked to."}}},
@@ -367,6 +378,36 @@ fn said_limits(limits: &Value) -> Value {
     }}})
 }
 
+/// A picture of one red pixel, as a PNG, in base64.
+const PIXEL: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+
+/// The answer to `tools`: a call of each kind, as Claude's adapter reports
+/// them, then a few words. The edit is reported, then finished with its
+/// diff, as an adapter does; the others come whole.
+fn tools() -> Value {
+    let mut steps = vec![
+        json!({"tool": {"session": SESSION, "id": "edit", "title": "Edit src/lib.rs", "kind": "edit", "status": "pending",
+            "tool_name": "Edit", "raw_input": {"file_path": "/work/src/lib.rs"},
+            "locations": [{"path": "/work/src/lib.rs", "line": 2}]}}),
+        json!({"tool": {"session": SESSION, "id": "edit", "update": true, "status": "completed", "content": [
+            {"diff": {"path": "/work/src/lib.rs", "old": "fn main() {\n    old();\n}\n", "new": "fn main() {\n    new();\n    more();\n}\n"}},
+        ]}}),
+        json!({"tool": {"session": SESSION, "id": "run", "title": "cargo test", "kind": "execute", "status": "completed",
+            "tool_name": "Bash", "raw_input": {"command": "cargo test"}, "content": [{"terminal": "term-1"}]}}),
+        json!({"tool": {"session": SESSION, "id": "search", "title": "Search the web for CAF", "kind": "fetch", "status": "completed",
+            "tool_name": "WebSearch", "raw_input": {"query": "CAF"}, "content": [
+                {"text": "Two hits."},
+                {"image": {"mime": "image/png", "data": PIXEL}},
+                {"link": {"uri": "https://example.com/caf", "name": "CAF on the web"}},
+                {"link": {"uri": "javascript:alert(1)", "name": "Not a link"}},
+                {"raw": {"type": "hologram"}},
+            ]}}),
+    ];
+    steps.extend(words("I used a tool of every kind.").map(|word| json!({"say": {"session": SESSION, "text": word}})));
+    steps.push(json!({"respond": {"result": {"stopReason": "end_turn"}}}));
+    Value::Array(steps)
+}
+
 /// One round of asking, for the message `ask`.
 fn asking(round: u32) -> Vec<Value> {
     let tool = format!("fake-{round}");
@@ -469,6 +510,29 @@ mod tests {
         limits["unifiedWindows"][window]["utilization"]
             .as_f64()
             .unwrap()
+    }
+
+    #[test]
+    fn the_message_tools_reports_a_call_of_every_kind_and_ends_the_turn() {
+        for (usage, limits) in every() {
+            let handler = (steps(&script(usage, limits)).into_iter())
+                .filter_map(|step| step.get("on").cloned())
+                .find(|on| on["match"] == super::prompt(super::TOOLS))
+                .expect("a handler for tools");
+            let done = handler["do"].as_array().unwrap();
+            let content: Vec<String> = (done.iter())
+                .filter_map(|step| step["tool"]["content"].as_array())
+                .flatten()
+                .map(|piece| piece.as_object().unwrap().keys().next().unwrap().clone())
+                .collect();
+            for kind in ["diff", "terminal", "text", "image", "link", "raw"] {
+                assert!(content.iter().any(|c| c == kind), "no {kind}");
+            }
+            assert_eq!(
+                done.last().unwrap()["respond"]["result"]["stopReason"],
+                "end_turn"
+            );
+        }
     }
 
     #[test]
