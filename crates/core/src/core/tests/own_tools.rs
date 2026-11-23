@@ -266,7 +266,7 @@ fn an_mcp_server_named_caf_is_refused_as_cafs_own() {
         assert!(out.is_empty(), "nothing is read: {out:#?}");
     }
     // A name with `caf` in it is the app's own.
-    for name in ["caffeine", "caf_tools", "my caf"] {
+    for name in ["caffeine", "caf_tools", "my caf", "caf\u{e9}x"] {
         let mut script = Script::new(host());
         let mut open = OpenChat::new("claude", "/work");
         open.mcp_servers = vec![server(name)];

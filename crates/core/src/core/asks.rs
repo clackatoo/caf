@@ -126,6 +126,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 // The record says what the policy is told.
                 if tool.origin != origin {
                     tool.origin = origin.clone();
+                }
+                // Only a tool named otherwise changes what it does: not
+                // its server's name corrected.
+                if action.is_some() && tool.action != action {
                     tool.action = action.clone();
                 }
                 if !tool.status.ended() {

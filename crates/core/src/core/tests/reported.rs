@@ -579,13 +579,15 @@ fn a_location_or_a_status_that_cant_be_read_loses_nothing_else() {
 
 #[test]
 fn a_servers_name_is_told_from_its_tools_by_the_chats_own_servers() {
-    let mut script = Script::with_claude_given(&["a__b", "my tools", "my"]);
+    let mut script = Script::with_claude_given(&["a__b", "my tools", "my", "my\u{1F600}"]);
     script.send(CHAT, "go").0.expect("sent");
     for (id, name) in [
         ("t1", "mcp__a__b__x"),
         ("t2", "mcp__my_tools__look"),
         ("t3", "mcp__my__look"),
         ("t4", "mcp__other__a__b"),
+        // Claude writes an emoji as two `_`, one for each half of it.
+        ("t5", "mcp__my____look"),
     ] {
         script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": id, "title": "Go", "status": "pending", "_meta": named(name) }));
     }
@@ -600,6 +602,7 @@ fn a_servers_name_is_told_from_its_tools_by_the_chats_own_servers() {
             json!({ "server": "my", "tool": "look" }),
             // Not the chat's: split at its first `__`.
             json!({ "server": "other", "tool": "a__b" }),
+            json!({ "server": "my\u{1F600}", "tool": "look" }),
         ]
     );
     // A permission request naming the server corrects what was read.
@@ -609,6 +612,11 @@ fn a_servers_name_is_told_from_its_tools_by_the_chats_own_servers() {
     let fixed = json!({ "type": "Server", "value": { "server": "other__a", "tool": "b" } });
     assert_has(&json!(with(&out, "decide")), &json!([{ "origin": fixed }]));
     assert_eq!(tools(&script.chat(CHAT))[3]["origin"], fixed);
+    // The tool named otherwise, what it does is too.
+    assert_eq!(
+        tools(&script.chat(CHAT))[3]["action"],
+        json!({ "type": "Tool", "value": { "name": "b" } })
+    );
     script.answers(PROC, 1002, &json!({ "stopReason": "end_turn" }));
 }
 
@@ -684,4 +692,39 @@ fn a_call_imported_unfinished_failed_and_its_output_ended() {
         tool["result"][0]["value"]["ending"],
         json!({ "type": "Unknown" })
     );
+}
+
+#[test]
+fn the_diffs_of_one_update_share_what_working_them_out_may_cost() {
+    let mut script = running();
+    script.without_fixtures();
+    // Three diffs of 4,000 lines, every tenth changed: 8,000 lines to
+    // compare each, and 10,000 between them all.
+    let before: String = (0..4_000).map(|n| format!("{n}\n")).collect();
+    let after: String = (0..4_000)
+        .map(|n| {
+            if n % 10 == 0 {
+                format!("x{n}\n")
+            } else {
+                format!("{n}\n")
+            }
+        })
+        .collect();
+    let diff =
+        |path: &str| json!({ "type": "diff", "path": path, "oldText": before, "newText": after });
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Edit", "status": "completed",
+        "content": [diff("/a"), diff("/b"), diff("/c")] }));
+    let result = the_tool(&script)["result"].clone();
+    let shape = |at: usize| {
+        let diff = &result[at]["value"];
+        (
+            diff["hunks"].as_array().map_or(0, Vec::len) > 0,
+            diff["more"].clone(),
+            diff["added"].clone(),
+        )
+    };
+    assert!(shape(0).0, "the first is worked out");
+    for at in [1, 2] {
+        assert_eq!(shape(at), (false, json!(1), json!(3_991)), "diff {at}");
+    }
 }

@@ -993,17 +993,18 @@ impl ProfileChoice {
 
 /// An MCP server's name as Claude Code writes it into its tools' names,
 /// `mcp__<server>__<tool>`: each character but an ASCII letter, a digit,
-/// `_` and `-` as `_`.
+/// `_` and `-` as `_`, one for each UTF-16 unit of it, as JavaScript
+/// counts characters, so an emoji is two.
 pub(crate) fn claude_server_name(name: &str) -> String {
-    name.chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    let mut written = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            written.push(ch);
+        } else {
+            (0..ch.len_utf16()).for_each(|_| written.push('_'));
+        }
+    }
+    written
 }
 
 /// The name of the MCP server CAF serves its own tools as, and so a name
