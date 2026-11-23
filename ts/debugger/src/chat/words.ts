@@ -428,7 +428,7 @@ export function refusedText(reason: DeepReadonly<Refused>): string {
     case 'NoSuchSetting':
       return "The agent doesn't offer that setting, or that choice of it."
     case 'ReservedServer':
-      return "An MCP server can't be named caf, nor anything the agent would write as it."
+      return "An MCP server can't be named caf, nor anything the agent would confuse with CAF's own tools, such as caf.tools."
     case 'SameServerName':
       return "Two of the MCP servers have names the agent would write alike, so their tools couldn't be told apart."
     default:
