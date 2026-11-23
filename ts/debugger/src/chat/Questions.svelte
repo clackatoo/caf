@@ -9,25 +9,30 @@
   //   would do: the command it runs, or the change it makes. A question
   //   about a call to one of CAF's own tools is CAF's own, not the
   //   agent's: it's marked as CAF's, says in CAF's words what the agent
-  //   wants to do, and offers CAF's Allow and Refuse.
+  //   wants to do, and what it's about (the file, or the command), never
+  //   the title, which would say it twice, and offers CAF's Allow and
+  //   Refuse.
   // - A session slow to open offers keep waiting, retry or stop. Escape
   //   means keep waiting, as dismissing it does.
   import type { Answer, DeepReadonly, ItemId, Question, QuestionId, ToolCall } from '@clackatoo/caf'
   import { attempt } from './actions.ts'
   import DiffView from './DiffView.svelte'
-  import { cafAsks } from './tools.ts'
+  import { cafAbout, cafAsks } from './tools.ts'
   import { unhidden } from './unhidden.ts'
   import { errorText, optionTone, tagOf } from './words.ts'
 
   let {
     questions,
     toolOf = () => null,
+    cwd = '',
     readOnly,
     answer,
   }: {
     questions: DeepReadonly<Question[]>
     /** The tool call an item is, if it's one: what a permission question is about. */
     toolOf?: (id: ItemId) => DeepReadonly<ToolCall> | null
+    /** The chat's folder: CAF's question names a file in it from there. */
+    cwd?: string
     readOnly: boolean
     answer: (question: QuestionId, answer: Answer) => Promise<unknown> | void
   } = $props()
@@ -96,7 +101,9 @@
           {@const action = tool?.action ?? null}
           {@const diffs = tool?.result.flatMap((piece) => (piece.type === 'Diff' ? [piece.value] : [])) ?? []}
           {#if tool?.origin.type === 'Caf'}
-            <div class="ask"><span class="who">CAF</span> {cafAsks(action, 'The agent')}: <strong>{kind.value.title}</strong></div>
+            <div class="ask"><span class="who">CAF</span> {cafAsks(action, 'The agent')}: <strong
+                >{unhidden(cafAbout(action, cwd) ?? kind.value.title)}</strong
+              ></div>
           {:else}
             <div class="ask">The agent asks permission: <strong>{kind.value.title}</strong></div>
           {/if}

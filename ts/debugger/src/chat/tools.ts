@@ -151,3 +151,28 @@ export function cafAsks(action: DeepReadonly<Action> | null, agent: string): str
       return `${agent} wants to use a tool`
   }
 }
+
+/**
+ * What a call to one of CAF's own tools is about, for CAF's question
+ * about it: the file, from the chat's folder `cwd` when it's inside it,
+ * as CAF's titles say it, or the command's first line, `…` after it if
+ * it has more. Null for an action that's about neither.
+ */
+export function cafAbout(action: DeepReadonly<Action> | null, cwd: string): string | null {
+  switch (action?.type) {
+    case 'Read':
+    case 'Edit':
+    case 'Write': {
+      const path = action.value.path
+      const folder = cwd.replace(/\/+$/, '')
+      const inside = path.startsWith(`${folder}/`) ? path.slice(folder.length + 1) : ''
+      return inside === '' ? path : inside
+    }
+    case 'Run': {
+      const [first = '', ...rest] = action.value.command.trim().split('\n')
+      return rest.length > 0 ? `${first} …` : first
+    }
+    default:
+      return null
+  }
+}

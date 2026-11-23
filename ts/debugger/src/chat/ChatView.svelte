@@ -199,7 +199,7 @@
     {/each}
   </div>
 
-  <Questions questions={chat.questions} {toolOf} readOnly={!acting} answer={actions.answer} />
+  <Questions questions={chat.questions} {toolOf} cwd={chat.cwd} readOnly={!acting} answer={actions.answer} />
   {#if archived}
     <!-- Sending brings it back, so the composer stays: only its settings
          wait, as CAF won't change them while it's archived. -->

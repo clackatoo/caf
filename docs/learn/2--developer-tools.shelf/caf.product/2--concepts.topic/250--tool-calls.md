@@ -100,7 +100,7 @@ A call's `result` is a list of pieces, in order:
 | `Output` | A command's output, as its terminal showed it: its lines, with their colours, and how it ended (an exit code or a signal), or that it ended without saying how. |
 | `Image` | A picture, by its type, such as `image/png`. |
 | `Link` | A file or web address the call points to, and its name. |
-| `Unknown` | A piece CAF can't read yet, kept as it came. |
+| `Unknown` | A piece CAF can't read yet, kept as it came, up to its cap. |
 
 CAF works a diff's hunks out itself, from the file before and after,
 whether CAF made the change or the agent sent both texts. An app draws them
@@ -130,6 +130,7 @@ Anything cut says how much of it was kept, of how much (a `Cut`, in bytes):
 | `Image` | 2 MB | all of it, or none, with its size |
 | `locations` | 256 | the first, then how many more (`locations_cut`) |
 | `input` | 64 KB of its JSON | its start, as a string (`input_cut`) |
+| `Unknown` | 64 KB of its JSON | its start, as a string in `raw` (its `cut`) |
 
 An output keeps its last lines, as a terminal's scrollback does, and says
 how many before them weren't kept (`dropped`). An image too big to keep

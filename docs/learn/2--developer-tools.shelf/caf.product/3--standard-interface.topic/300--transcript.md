@@ -234,7 +234,8 @@ Everything an agent sends is drawn as text: never as markup, never run.
   never followed. Nothing an agent sends ever becomes a `javascript:`
   link.
 - **A piece CAF couldn't read**, a dashed box:
-  *Something Claude sent that this app can't show*.
+  *Something Claude sent that this app can't show*. If CAF kept only the
+  start of it, that says so, muted: *Kept 64 KB of 90 KB*.
 
 **Suggested:** under what it gave back, the files the call is about, as
 *src/main.rs:42*, each opening the file where the app can; and what the
@@ -253,10 +254,13 @@ Whose question it is depends on whose tool the call is:
 
 - **One of CAF's own tools** (`Origin::Caf`: Read, Edit, Write, Bash). CAF
   asks, in its own voice, with the CAF badge. It says what the agent wants
-  to do in CAF's words, from what the call does, then the call's title, as
-  plain text: *Claude wants to run a command: rm -rf target*,
+  to do in CAF's words, from what the call does (its `Action`), then what
+  it's about, as plain text: the file (`path`), from the chat's folder when
+  it's inside it, or the command's first line, with *…* after it if it has
+  more. Never the call's title, which says the same and would double it:
+  *Claude wants to run a command: rm -rf target*,
   *Claude wants to change a file: src/config.rs*, *Claude wants to read a
-  file: …*, *Claude wants to write a file: …*. Its answers are CAF's
+  file: /etc/hosts*, *Claude wants to write a file: notes.md*. Its answers are CAF's
   own two, *Allow* and *Refuse*. Its edge stays in the accent, unlike CAF's
   question about a chat slow to open: like any permission question, it
   holds up the turn.
@@ -528,7 +532,7 @@ Everything else is calm.
 | The steps | `Turn.items`: `ItemKind::Words`, `Thinking`, `Tool`, `Note`, `App` and `Unknown`. Thinking is kept only if the app asks for it (`Host.shows.thinking`). |
 | A tool's line | `ToolCall.title`, as given; its `kind` (`ToolKind`) for the icon and the chip; its `status` (`ToolStatus::Pending`, `Asking`, `Running`, `Done`, `Failed`, `Refused` or `Cancelled`); and its `Item.window`. |
 | Who decided | `ToolCall.decision`: `Decision::Allowed` or `Refused`, each with its `DecidedBy` (`User`, or `Policy` with its `reason`). |
-| A tool, opened | `ToolCall.result`, a list of `Piece`s: `Text` (its `cut`, a `Cut`), `Diff`, `Output`, `Image`, `Link` and `Unknown`. Then `ToolCall.locations` (and `locations_cut`), and `ToolCall.input` (and `input_cut`). |
+| A tool, opened | `ToolCall.result`, a list of `Piece`s: `Text` (its `cut`, a `Cut`), `Diff`, `Output`, `Image`, `Link` and `Unknown` (its `cut`: if CAF kept only the start of its data, `raw` is the start of its JSON, as a string). Then `ToolCall.locations` (and `locations_cut`), and `ToolCall.input` (and `input_cut`). |
 | An edit's diff and counts | A `Piece::Diff`: its `path`, `new_file`, `added`, `removed`, its `hunks`, each a list of `DiffLine`s (`change`, `old`, `new`, `text`), and `more`, the hunks not kept. |
 | A command's output | A `Piece::Output`: its `lines`, with their SGR codes; `dropped`, the lines before them not kept; and its `ending` (`Ending::Exited`, with an `Exit`, or `Unknown`), `None` while it runs. |
 | A command's output as it runs | `Change::OutputChanged`: the lines from `from` on replaced by `lines`, then `dropped` more gone from the top. |

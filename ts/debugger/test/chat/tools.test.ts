@@ -10,7 +10,7 @@ import { cleanup, fireEvent } from '@testing-library/svelte'
 import { afterEach, describe, expect, it } from 'vitest'
 import { apply, type Change, type Chat, type Decision, type Piece, type ToolCall, type ToolStatus } from '@clackatoo/caf'
 import { colour } from '../../src/chat/ansi.ts'
-import { bytes, cafAsks, decisionText, endingText, followable, imageShown, linkName } from '../../src/chat/tools.ts'
+import { bytes, cafAbout, cafAsks, decisionText, endingText, followable, imageShown, linkName } from '../../src/chat/tools.ts'
 import { chat, draw, item, question, turn } from './build.ts'
 
 afterEach(cleanup)
@@ -664,6 +664,42 @@ describe('a permission question about a call', () => {
     expect(text(asked.querySelector('.ask'))).toBe('CAF The agent wants to run a command: rm -rf target')
     expect(text(asked)).not.toContain('asks permission')
     expect([...asked.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Allow', 'Refuse'])
+  })
+
+  it('names what CAF\'s question is about by the file or the command, never the call\'s title', () => {
+    const tool = item({
+      type: 'Tool',
+      value: call({
+        title: 'Edit src/config.rs',
+        kind: { type: 'Edit' },
+        status: { type: 'Asking' },
+        origin: { type: 'Caf', value: { type: 'Edit' } },
+        action: { type: 'Edit', value: { path: '/home/me/project/src/config.rs' } },
+      }),
+    })
+    const { container } = draw(
+      chat({
+        turns: [turn({ life: { type: 'Running' }, items: [tool] })],
+        questions: [question({ type: 'Permission', value: { tool: tool.id, title: 'Edit src/config.rs', options } })],
+      }),
+    )
+    // The chat's folder is /home/me/project: the file is named from there.
+    expect(text(container.querySelector('.questions .ask'))).toBe('CAF The agent wants to change a file: src/config.rs')
+  })
+
+  it('names a file from the chat\'s folder only when it\'s inside it, and a command by its first line', () => {
+    const edit = (path: string) => ({ type: 'Edit' as const, value: { path } })
+    expect(cafAbout(edit('/work/src/main.rs'), '/work')).toBe('src/main.rs')
+    expect(cafAbout(edit('/work/src/main.rs'), '/work/')).toBe('src/main.rs')
+    expect(cafAbout(edit('/workshop/a'), '/work')).toBe('/workshop/a')
+    expect(cafAbout(edit('/work'), '/work')).toBe('/work')
+    expect(cafAbout({ type: 'Read', value: { path: '/etc/hosts', lines: null } }, '/work')).toBe('/etc/hosts')
+    expect(cafAbout({ type: 'Write', value: { path: '/work/new.txt' } }, '/work')).toBe('new.txt')
+    const run = (command: string) => ({ type: 'Run' as const, value: { command, folder: '/work', background: false } })
+    expect(cafAbout(run('cargo test'), '/work')).toBe('cargo test')
+    expect(cafAbout(run('  cargo test\ncargo build\n'), '/work')).toBe('cargo test …')
+    expect(cafAbout({ type: 'Tool', value: { name: 'x' } }, '/work')).toBeNull()
+    expect(cafAbout(null, '/work')).toBeNull()
   })
 
   it('says in CAF\'s words what each of its own tools wants to do', () => {

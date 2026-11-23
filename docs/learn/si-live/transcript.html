@@ -674,7 +674,7 @@
     { id: 'permission', label: 'Asking permission', what: "<b>Claude wants to run a command through CAF's own Bash, so CAF asks</b>, in its own voice, with the command and CAF's two answers. The question attaches to the composer, and the step points to it. None is chosen beforehand. A question about a tool of the agent's own is the agent's: <i>Claude asks permission:</i>, with its own answers.",
       entries: [{ t: 'time', text: 'Today 14:50' },
         { t: 'turn', ask: 'Clear out the build cache and rebuild.', life: 'running', took: '6s', at: '14:50', model: 'Opus 5.5', items: [T.think('Removing <code>target</code> is the simplest way to clear the cache.', '2s'), T.tool('execute', 'rm -rf target', 'asking')],
-          question: { caf: 'Claude wants to run a command', title: 'rm -rf target', command: 'rm -rf target', folder: '/home/me/caf', options: ['Allow', 'Refuse'] } }] },
+          question: { caf: 'Claude wants to run a command', about: 'rm -rf target', command: 'rm -rf target', folder: '/home/me/caf', options: ['Allow', 'Refuse'] } }] },
     { id: 'refused', label: 'Refused, allowed, cancelled', what: "<b>The policy refused an edit outside the project; the user allowed a build; then pressed Stop while the tests ran.</b> The refused step is in the warning colour and says who refused it, and why. The cancelled one is muted: the user chose to stop it.",
       openFirst: true, entries: [{ t: 'time', text: 'Today 15:20' },
         { t: 'turn', ask: 'Point the shared config at the new cache folder, then rebuild.', life: 'stopped', took: '14s', at: '15:20', model: 'Opus 5.5', items: [
@@ -813,8 +813,9 @@
 
   // A question waiting on the user, attached to the top of the composer.
   // CAF's own question, about a call to one of its own tools, is in CAF's
-  // voice and words; the agent's, about one of its own, is the agent's.
-  const attachedQuestion = (q) => `<div class="si-attached"><div class="what">${icon.shield}<div>${q.caf ? `<span class="caf-badge">CAF</span><b>${q.caf}:</b>` : '<b>Claude asks permission:</b>'} ${q.title}</div></div>` +
+  // voice and words, naming the file or command it's about, never the
+  // call's title; the agent's, about one of its own, is the agent's.
+  const attachedQuestion = (q) => `<div class="si-attached"><div class="what">${icon.shield}<div>${q.caf ? `<span class="caf-badge">CAF</span><b>${q.caf}:</b> ${q.about}` : `<b>Claude asks permission:</b> ${q.title}`}</div></div>` +
     (q.command ? `<div class="asked"><div class="out">${q.command}</div><div class="in">In ${q.folder}</div></div>` : '') +
     `<div class="acts">${q.options.map(o => `<span class="btn">${o}</span>`).join('')}<span class="hint">Stop cancels this and stops the turn</span></div></div>`
   const attachedSlow = () => `<div class="si-attached si-calm"><div class="what">${icon.clock}<div><span class="caf-badge">CAF</span>Claude is taking a while to open this chat. It may be busy, or stuck.</div></div>` +
