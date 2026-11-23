@@ -339,7 +339,7 @@ fn an_edit_is_previewed_before_its_asked_about() {
         &the_tool(&script),
         &json!({
             "title": "Edit lib.rs", "status": kind("Running"),
-            "decision": { "type": "Allowed", "value": { "type": "Policy", "value": { "reason": "edits\u{202e} are fine" } } },
+            "decision": { "type": "Allowed", "value": { "type": "Policy", "value": { "reason": "edits<U+202E> are fine" } } },
         }),
     );
     let out = script.tool(

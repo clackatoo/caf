@@ -37,6 +37,9 @@ pub enum Step {
     Say(Chunk),
     /// Sends an `agent_thought_chunk` update with this text.
     Think(Chunk),
+    /// Sends a `tool_call` or `tool_call_update` update, as Claude's
+    /// adapter reports a tool call.
+    Tool(Tool),
     /// Sends the client a request.
     Request(Request),
     /// Waits for the client's answer to one of the fake's requests.
@@ -211,6 +214,111 @@ pub struct Chunk {
     pub session: String,
     /// The text.
     pub text: String,
+}
+
+/// A tool call reported, as a `tool_call` update, or a change to one, as a
+/// `tool_call_update`: only what's given is sent.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tool {
+    /// The session it's in.
+    pub session: String,
+    /// The call's id, `toolCallId`.
+    pub id: String,
+    /// Whether it's a change to a call reported already: a
+    /// `tool_call_update`, else a `tool_call`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub update: bool,
+    /// Its title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Its kind, as ACP says it, such as `read` or `execute`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Its status, as ACP says it: `pending`, `in_progress`, `completed`
+    /// or `failed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// The tool's name, as Claude's adapter gives it in
+    /// `_meta.claudeCode.toolName`: `WebSearch` for one of the agent's
+    /// own, `mcp__eyespy__look` for one of an MCP server's,
+    /// `mcp__caf__Read` for one of CAF's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    /// What it gave back, `content`, in order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<Vec<ToolContent>>,
+    /// The files it's about, `locations`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locations: Option<Vec<ToolLocation>>,
+    /// What it was given, `rawInput`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_input: Option<Value>,
+    /// What it gave back, raw, `rawOutput`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_output: Option<Value>,
+}
+
+/// One piece of what a tool call gave back, as ACP's `ToolCallContent`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolContent {
+    /// Text.
+    Text(String),
+    /// A file's change: `old` left out for a new file.
+    Diff(ToolDiff),
+    /// A terminal, by its id.
+    Terminal(String),
+    /// A picture: its type, and its bytes in base64.
+    Image(ToolImage),
+    /// A file or web address, `resource_link`.
+    Link(ToolLink),
+    /// Any content, as is: for kinds CAF can't read.
+    Raw(Value),
+}
+
+/// A file's change, in [`ToolContent::Diff`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolDiff {
+    /// The file, as an absolute path.
+    pub path: String,
+    /// What it held before, if there was a file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old: Option<String>,
+    /// What it holds after.
+    pub new: String,
+}
+
+/// A picture, in [`ToolContent::Image`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolImage {
+    /// Its type, such as `image/png`.
+    pub mime: String,
+    /// Its bytes, in base64.
+    pub data: String,
+}
+
+/// A file or web address, in [`ToolContent::Link`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolLink {
+    /// The address.
+    pub uri: String,
+    /// What it's called.
+    pub name: String,
+}
+
+/// A file a tool call is about, and the line.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolLocation {
+    /// The file, as an absolute path.
+    pub path: String,
+    /// The line, numbered from 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
 }
 
 /// A request for the client, such as `session/request_permission`.
@@ -549,7 +657,7 @@ fn check(step: &Step, in_handler: bool) -> Result<(), String> {
 mod tests {
     use serde_json::json;
 
-    use super::{LongLine, On, Respond, Script, Step};
+    use super::{LongLine, On, Respond, Script, Step, Tool, ToolContent, ToolDiff, ToolLocation};
 
     #[test]
     fn steps_without_settings_are_strings_or_null() {
@@ -573,6 +681,35 @@ mod tests {
                 ..Respond::default()
             })]
         );
+    }
+
+    #[test]
+    fn a_tool_call_reads_and_writes_back_the_same() {
+        let text = r#"{"tool": {"session": "s1", "id": "t1", "update": true, "tool_name": "mcp__caf__Read", "content": [{"diff": {"path": "/a", "new": "x"}}, {"raw": {"type": "hologram"}}], "locations": [{"path": "/a", "line": 3}]}}"#;
+        let script = Script::parse(text).unwrap();
+        assert_eq!(
+            script.steps,
+            [Step::Tool(Tool {
+                session: "s1".into(),
+                id: "t1".into(),
+                update: true,
+                tool_name: Some("mcp__caf__Read".into()),
+                content: Some(vec![
+                    ToolContent::Diff(ToolDiff {
+                        path: "/a".into(),
+                        old: None,
+                        new: "x".into(),
+                    }),
+                    ToolContent::Raw(json!({ "type": "hologram" })),
+                ]),
+                locations: Some(vec![ToolLocation {
+                    path: "/a".into(),
+                    line: Some(3),
+                }]),
+                ..Tool::default()
+            })]
+        );
+        assert_eq!(Script::parse(&script.to_text()), Ok(script));
     }
 
     #[test]

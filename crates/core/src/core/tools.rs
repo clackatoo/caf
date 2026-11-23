@@ -317,10 +317,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.end_item(now, chat, item);
     }
 
-    /// The agent reported a call to CAF's tool `tool`, as `id`, given
-    /// `input` if it said: the item of the call CAF serves it's a report
-    /// of, if it's one, which it then joins. A report that's of no call
-    /// CAF serves, yet, is the reported calls' to keep, as any other.
+    /// The agent reported a call as `id`, to CAF's tool `tool` if its
+    /// adapter says so, given `input` if it said: the item of the call
+    /// CAF serves it's a report of, if it's one, which it then joins. A
+    /// report that's of no call CAF serves, yet, is the reported calls'
+    /// to keep, as any other.
     ///
     /// What the agent reports of a call CAF serves changes nothing of it:
     /// it added only its id, and when it started, if it came first.
@@ -328,7 +329,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         &mut self,
         chat: ChatId,
         id: &str,
-        tool: CafTool,
+        tool: Option<CafTool>,
         input: Option<&Value>,
     ) -> Option<ItemId> {
         let run = self.runs.get_mut(&chat)?;
@@ -339,7 +340,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         // A call that came without the agent's id for it: the oldest of
         // the same tool, with the same input, that no report has joined.
-        let input = input?;
+        let (tool, input) = (tool?, input?);
         let mut waiting: Vec<ItemId> = (run.served.iter())
             .filter(|(_, served)| served.tool == tool && !served.reported && !served.keyed)
             .map(|(&item, _)| item)
@@ -423,7 +424,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         now: Now,
         ticket: Ticket,
         answer: &PolicyAnswer,
-        reason: Option<String>,
+        reason: Option<&str>,
         out: &mut Vec<Directive<A, D>>,
     ) -> bool {
         let Some((&call, each)) =
@@ -431,7 +432,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         else {
             return false;
         };
-        let by = DecidedBy::Policy { reason };
+        let by = DecidedBy::Policy {
+            reason: reason.map(|reason| agent_text(reason, MOST_TITLE)),
+        };
         match answer {
             PolicyAnswer::Allow => self.run_call(call, by, out),
             PolicyAnswer::AskUser if self.host.shows.permission_questions => {
@@ -1179,5 +1182,94 @@ mod tests {
             }
         );
         assert_eq!(printed.first, 0);
+    }
+}
+
+#[cfg(test)]
+mod squashing {
+    use super::*;
+    use crate::change::Change;
+    use crate::chat::NoAppItems;
+    use crate::core::saving::squash_output;
+
+    /// Applies `change`, an output change, to `kept`, as the record does.
+    fn apply(kept: &mut Vec<String>, change: &Change<NoAppItems>) {
+        let Change::OutputChanged {
+            from,
+            lines,
+            dropped,
+            ..
+        } = change
+        else {
+            panic!("an output change");
+        };
+        let from = usize::try_from(*from).expect("small");
+        let dropped = usize::try_from(*dropped).expect("small");
+        assert!(from <= kept.len() && dropped <= from + lines.len());
+        kept.truncate(from);
+        kept.extend(lines.iter().cloned());
+        kept.drain(..dropped);
+    }
+
+    #[test]
+    fn a_run_of_output_changes_squashes_to_one_doing_the_same() {
+        let block = |n: usize| "x".repeat(MOST_LINE / 2 + n);
+        // Every pair of a few outputs: growing, rewriting, dropping.
+        let steps: Vec<(u64, Vec<String>)> = vec![
+            (0, vec!["a".into(), "b".into(), "c".into()]),
+            (2, vec!["C".into()]),
+            (3, (0..6).map(block).collect()),
+            (1, vec!["B".into(), "c".into()]),
+            (5, (0..5).map(block).collect()),
+            (0, vec!["top".into()]),
+            (13, vec!["end".into()]),
+        ];
+        for start in 0..steps.len() {
+            let mut printed = Printed::default();
+            let mut kept = Vec::new();
+            // Up to `start` as it was, then the rest squashed into one.
+            let mut squashed: Option<Change<NoAppItems>> = None;
+            let mut before = Vec::new();
+            for (at, (from, lines)) in steps.iter().enumerate() {
+                let Some(change) = printed.print(&kept, *from, lines.clone()) else {
+                    continue;
+                };
+                let change = Change::OutputChanged {
+                    item: ItemId(1),
+                    from: change.from,
+                    lines: change.lines,
+                    dropped: change.dropped,
+                };
+                if at == start {
+                    before = kept.clone();
+                }
+                apply(&mut kept, &change);
+                if at < start {
+                    continue;
+                }
+                match &mut squashed {
+                    Some(last) => assert!(squash_output(last, &change)),
+                    None => squashed = Some(change),
+                }
+            }
+            if let Some(squashed) = squashed {
+                apply(&mut before, &squashed);
+                assert_eq!(before, kept, "squashed from step {start}");
+            }
+        }
+        // Another call's changes aren't squashed.
+        let mut one = Change::<NoAppItems>::OutputChanged {
+            item: ItemId(1),
+            from: 0,
+            lines: Vec::new(),
+            dropped: 0,
+        };
+        let other = Change::OutputChanged {
+            item: ItemId(2),
+            from: 0,
+            lines: Vec::new(),
+            dropped: 0,
+        };
+        assert!(!squash_output(&mut one, &other));
     }
 }

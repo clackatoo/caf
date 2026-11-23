@@ -3268,3 +3268,102 @@ fn a_chat_let_go_behind_a_move_and_called_back_is_let_go_then_written_whole_afte
         ]),
     );
 }
+
+/// A command CAF runs for the agent, saved: its output's changes are one
+/// entry, and put away while it runs, it's cancelled, and comes back
+/// failed, its output kept, ended not saying how.
+#[test]
+fn a_served_command_is_journaled_squashed_and_comes_back_cut_off() {
+    use crate::event::{PolicyAnswer, ToolEvent};
+    use crate::tool::CafTool;
+
+    let mut script = Script::new(host());
+    let mut store = Store::default();
+    script.open_saved("claude");
+    store.take(&script.list_saved(SHELF).1);
+    script.serve(&mut store, false);
+    script.at(1000);
+    store.take(&script.woken());
+    script.serve(&mut store, false);
+    script.send(CHAT, "Build it").0.expect("sent");
+    let out = script.tool(
+        1,
+        ToolEvent::Called {
+            chat: CHAT,
+            tool: CafTool::Bash,
+            input: json!({ "command": "cargo build" }),
+            agent_call: None,
+        },
+    );
+    let decide = with(&out, "decide")[0]["decide"]
+        .as_u64()
+        .expect("a ticket");
+    script.policy(decide, PolicyAnswer::Allow);
+    let lines = |text: &[&str]| text.iter().map(|&line| line.to_owned()).collect();
+    script.tool(
+        1,
+        ToolEvent::Output {
+            from: 0,
+            lines: lines(&["Compiling", "[=> ]"]),
+        },
+    );
+    script.tool(
+        1,
+        ToolEvent::Output {
+            from: 1,
+            lines: lines(&["[==>]"]),
+        },
+    );
+    script.tool(
+        1,
+        ToolEvent::Output {
+            from: 2,
+            lines: lines(&["more"]),
+        },
+    );
+
+    script.at(2000);
+    let out = script.woken();
+    let append = one_storage(&out);
+    let changed: Vec<&Value> = (append["value"]["entries"].as_array().into_iter())
+        .flatten()
+        .filter(|entry| entry["value"]["type"] == "OutputChanged")
+        .collect();
+    assert_eq!(
+        changed,
+        [
+            &json!({ "type": "Change", "value": { "type": "OutputChanged", "value": {
+            "item": 1006, "from": 0, "lines": ["Compiling", "[==>]", "more"], "dropped": 0
+        } } })
+        ],
+        "{append:#}"
+    );
+    store.take(&out);
+    script.serve(&mut store, false);
+
+    script.at(2500);
+    let out = script.put_away(CHAT).1;
+    assert_eq!(
+        with(&out, "tool"),
+        [json!({ "tool": { "type": "Cancel", "value": { "call": 1 } } })]
+    );
+    store.take(&out);
+    script.serve(&mut store, false);
+    script.at(3000);
+    let out = script
+        .restore(RestoreChat::new(CHAT, Shelf(SHELF.to_owned())))
+        .1;
+    store.take(&out);
+    script.serve(&mut store, false);
+    let tool = &script.chat(CHAT)["turns"][0]["items"][0];
+    assert_has(
+        tool,
+        &json!({ "kind": { "type": "Tool", "value": {
+            "title": "cargo build", "status": { "type": "Failed" },
+            "result": [{ "type": "Output", "value": {
+                "lines": ["Compiling", "[==>]", "more"], "dropped": 0, "ending": { "type": "Unknown" }
+            } }],
+        } } }),
+    );
+    assert_ne!(tool["window"]["end"]["type"], "Open");
+}

@@ -624,7 +624,6 @@ pub(crate) fn capped_input(input: serde_json::Value) -> (serde_json::Value, Opti
 
 /// An image of type `mime`, `data` in base64: kept whole if it's at most
 /// [`MOST_IMAGE`] bytes, and only its size otherwise.
-#[cfg_attr(not(test), expect(dead_code, reason = "read from ACP next"))]
 pub(crate) fn image(mime: String, data: String) -> Image {
     // What base64 of this length decodes to: whitespace and padding
     // don't count.
@@ -642,7 +641,6 @@ pub(crate) fn image(mime: String, data: String) -> Image {
 
 /// `locations`, the first [`MOST_LOCATIONS`] of them, and how many more
 /// there were.
-#[cfg_attr(not(test), expect(dead_code, reason = "read from ACP next"))]
 pub(crate) fn capped_locations(mut locations: Vec<Location>) -> (Vec<Location>, u64) {
     let more = locations.len().saturating_sub(MOST_LOCATIONS) as u64;
     locations.truncate(MOST_LOCATIONS);

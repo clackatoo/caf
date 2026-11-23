@@ -275,26 +275,33 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Ends `chat`'s turn `turn` as `life`: its words stop growing, and
-    /// tools still running fail.
+    /// every tool call in it that hasn't ended does: Cancelled if the user
+    /// stopped the turn, else Failed.
     pub(super) fn end_turn(&mut self, now: Now, chat: ChatId, turn: TurnId, life: TurnLife) {
         // Calls CAF serves are settled first, and their driver told when
         // this call into the core finishes.
         let mut told = std::mem::take(&mut self.told);
         self.settle_calls(now, chat, turn, life == TurnLife::Stopped, &mut told);
         self.told = told;
+        let settled = if life == TurnLife::Stopped {
+            ToolStatus::Cancelled
+        } else {
+            ToolStatus::Failed
+        };
         let items: Vec<_> = (self.turn(chat, turn).into_iter())
             .flat_map(|each| each.items.iter())
-            .filter(|item| item.window.end == End::Open)
-            .map(|item| (item.id, item.kind.clone()))
+            .map(|item| (item.id, item.window.end == End::Open, item.kind.clone()))
             .collect();
-        for (item, kind) in items {
+        for (item, open, kind) in items {
             if let ItemKind::Tool(mut tool) = kind
                 && !tool.status.ended()
             {
-                tool.status = ToolStatus::Failed;
+                tool.status = settled;
                 self.set_tool(chat, item, tool);
             }
-            self.end_item(now, chat, item);
+            if open {
+                self.end_item(now, chat, item);
+            }
         }
         self.set_life(now, chat, turn, life);
         if let Some(run) = self.runs.get_mut(&chat)

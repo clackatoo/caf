@@ -62,7 +62,7 @@ fn stop_answers_the_agents_questions_then_tells_it_and_waits() {
         &json!({ "turns": [{
         "id": turn.0,
         "life": { "type": "Stopped" },
-        "items": [{ "id": 1004, "kind": { "type": "Tool", "value": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Failed" } } } }]
+        "items": [{ "id": 1004, "kind": { "type": "Tool", "value": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Cancelled" } } } }]
     }] }),
     );
 }

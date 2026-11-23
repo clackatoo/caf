@@ -7,7 +7,6 @@
 //! Where nobody can answer, CAF refuses safely: a reject option if the
 //! agent offered one, else "cancelled".
 
-use crate::tool::Origin;
 use serde_json::{Value, json};
 
 use super::clean::agent_text;
@@ -22,6 +21,7 @@ use crate::event::PolicyAnswer;
 use crate::ids::{ChatId, QuestionId, Ticket};
 use crate::question::{Answer, OptionId, OptionKind, Permission, PermissionOption, QuestionKind};
 use crate::time::Now;
+use crate::tool::{Action, DecidedBy, Decision, Origin, ToolStatus};
 
 /// The most options a permission request keeps: any past it are left
 /// out.
@@ -66,7 +66,35 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         let options = options(params.get("options"));
         let call = params.get("toolCall").cloned().unwrap_or(Value::Null);
+        // CAF asks about its own tools itself, with what it knows of each
+        // call: the agent asking too is answered at once. Known by the
+        // adapter's metadata, or the call CAF has, never its title.
+        let caf = matches!(
+            self.profile_of_chat(chat).origin_of(&call),
+            Some(Origin::Caf(_))
+        ) || (call.get("toolCallId").and_then(Value::as_str))
+            .and_then(|id| self.runs.get(&chat)?.tools.get(id).copied())
+            .is_some_and(|item| self.is_served(chat, item));
         let tool = self.tool_named(now, chat, &call, out);
+        if caf {
+            let allow = (options.iter())
+                .find(|option| option.kind == OptionKind::AllowOnce)
+                .or_else(|| (options.iter()).find(|option| option.kind == OptionKind::AllowAlways));
+            let outcome = match allow {
+                Some(option) => {
+                    json!({ "outcome": { "outcome": "selected", "optionId": option.id.0 } })
+                }
+                None => cancelled(),
+            };
+            report(
+                out,
+                Level::Debug,
+                "allowed the agent's asking about one of CAF's own tools: CAF asks itself"
+                    .to_owned(),
+            );
+            self.reply_or_report(proc, id, Ok(outcome), out);
+            return;
+        }
         let title = (call.get("title").and_then(Value::as_str))
             .map(|title| agent_text(title, MOST_LABEL))
             .or_else(|| match &self.item(chat, tool?)?.kind {
@@ -76,6 +104,31 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .unwrap_or_default();
         let input = (call.get("rawInput").filter(|input| !input.is_null()))
             .map(|input| super::clean::cut(input.to_string(), MOST_INPUT));
+        // Whose tool it is: as CAF has it, else as the adapter says in the
+        // request itself. Never from its title.
+        let known = tool.and_then(|item| match &self.item(chat, item)?.kind {
+            ItemKind::Tool(tool) => Some(tool.origin.clone()),
+            _ => None,
+        });
+        let origin = match known {
+            Some(origin) if origin != Origin::NotRecorded => origin,
+            _ => (self.profile_of_chat(chat).origin_of(&call)).unwrap_or(Origin::NotRecorded),
+        };
+        let action = match &origin {
+            Origin::App(name) | Origin::Agent(name) | Origin::Server { tool: name, .. } => {
+                Some(Action::Tool { name: name.clone() })
+            }
+            // CAF's own calls are asked about by CAF itself, with their
+            // actions; nothing reliable is known of one it hasn't seen.
+            Origin::Caf(_) | Origin::NotRecorded => None,
+        };
+        if let Some(item) = tool {
+            self.change_tool(chat, item, |tool| {
+                if !tool.status.ended() {
+                    tool.decision = Decision::Undecided;
+                }
+            });
+        }
         let ticket = Ticket(self.ids.take());
         self.asks.insert(
             ticket,
@@ -95,10 +148,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             request: PermissionRequest {
                 item: tool,
                 title,
-                // Read from the adapter's metadata, and CAF's own calls
-                // asked by CAF itself: feature 10.
-                origin: Origin::NotRecorded,
-                action: None,
+                origin,
+                action,
                 input,
             },
         }));
@@ -110,6 +161,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         now: Now,
         ticket: Ticket,
         answer: PolicyAnswer,
+        reason: Option<String>,
         out: &mut Vec<Directive<A, D>>,
     ) {
         let Some(ask) = self.asks.get(&ticket) else {
@@ -128,14 +180,17 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             );
             return;
         }
+        let by = DecidedBy::Policy {
+            reason: reason.map(|reason| agent_text(&reason, MOST_LABEL)),
+        };
         match answer {
             PolicyAnswer::Allow => match option(ask, OptionKind::AllowOnce) {
-                Some(option) => self.settle(ticket, Some(option), out),
+                Some(option) => self.settle(ticket, Some(option), by, out),
                 // It allowed once, which the agent doesn't offer: anything
                 // more is the user's to choose.
                 None => self.ask_user(now, ticket, out),
             },
-            PolicyAnswer::Refuse => self.refuse(ticket, out),
+            PolicyAnswer::Refuse => self.refuse(ticket, by, out),
             PolicyAnswer::AskUser => self.ask_user(now, ticket, out),
         }
     }
@@ -144,7 +199,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// refuses safely otherwise.
     fn ask_user(&mut self, now: Now, ticket: Ticket, out: &mut Vec<Directive<A, D>>) {
         if !self.host.shows.permission_questions {
-            return self.refuse(ticket, out);
+            // Nobody can answer: CAF refuses, as its policy.
+            return self.refuse(ticket, DecidedBy::Policy { reason: None }, out);
         }
         let Some(ask) = self.asks.get(&ticket) else {
             return;
@@ -154,32 +210,73 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             title: ask.title.clone(),
             options: ask.options.clone(),
         });
-        let chat = ask.chat;
+        let (chat, tool) = (ask.chat, ask.tool);
         let question = self.ask(now, chat, kind);
         if let Some(ask) = self.asks.get_mut(&ticket) {
             ask.question = Some(question);
+        }
+        if let Some(item) = tool {
+            self.change_tool(chat, item, |tool| {
+                if !tool.status.ended() {
+                    tool.status = ToolStatus::Asking;
+                }
+            });
         }
     }
 
     /// Refuses safely: once if the agent offers that, else always, else
     /// "cancelled".
-    fn refuse(&mut self, ticket: Ticket, out: &mut Vec<Directive<A, D>>) {
+    fn refuse(&mut self, ticket: Ticket, by: DecidedBy, out: &mut Vec<Directive<A, D>>) {
         let Some(ask) = self.asks.get(&ticket) else {
             return;
         };
         let option =
             option(ask, OptionKind::RejectOnce).or_else(|| option(ask, OptionKind::RejectAlways));
-        self.settle(ticket, option, out);
+        self.settle(ticket, option, by, out);
     }
 
     /// Answers the request kept under `ticket` with `option`, or
-    /// "cancelled", and forgets it.
-    fn settle(&mut self, ticket: Ticket, option: Option<OptionId>, out: &mut Vec<Directive<A, D>>) {
+    /// "cancelled", as `by` decided, and forgets it. Its call is allowed
+    /// unless that's a refusal: an option of a kind CAF doesn't know may
+    /// let it run. A call refused is Refused, and never runs; one allowed
+    /// waits for the agent to run it.
+    fn settle(
+        &mut self,
+        ticket: Ticket,
+        option: Option<OptionId>,
+        by: DecidedBy,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
         let Some(ask) = self.asks.remove(&ticket) else {
             return;
         };
         if let Some(question) = ask.question {
             self.unask(ask.chat, question);
+        }
+        let chosen = option
+            .as_ref()
+            .and_then(|option| ask.options.iter().find(|offered| offered.id == *option));
+        let refused = chosen.is_none_or(|option| {
+            matches!(
+                option.kind,
+                OptionKind::RejectOnce | OptionKind::RejectAlways
+            )
+        });
+        if let Some(item) = ask.tool {
+            self.change_tool(ask.chat, item, |tool| {
+                if tool.status.ended() {
+                    return;
+                }
+                if refused {
+                    tool.status = ToolStatus::Refused;
+                    tool.decision = Decision::Refused(by);
+                } else {
+                    if tool.status == ToolStatus::Asking {
+                        tool.status = ToolStatus::Pending;
+                    }
+                    tool.decision = Decision::Allowed(by);
+                }
+            });
         }
         let outcome = match option {
             Some(option) => json!({ "outcome": { "outcome": "selected", "optionId": option.0 } }),
@@ -231,10 +328,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             let Answer::Permission(option) = answer else {
                 return Err(Refused::WrongAnswer);
             };
-            if !ask.options.iter().any(|offered| offered.id == option) {
+            let Some(offered) = ask.options.iter().find(|offered| offered.id == option) else {
                 return Err(Refused::WrongAnswer);
-            }
-            self.settle(ticket, Some(option), out);
+            };
+            let by = DecidedBy::User {
+                option: offered.label.clone(),
+            };
+            self.settle(ticket, Some(option), by, out);
             return Ok(());
         }
         let slow = self.runs.iter().find(|(_, run)| run.slow == Some(question));
@@ -310,6 +410,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// policy is told if it was still deciding.
     fn forget_ask(&mut self, ticket: Ticket, out: &mut Vec<Directive<A, D>>) -> Option<Ask> {
         let ask = self.asks.remove(&ticket)?;
+        // Nobody decided: it waits for the agent again.
+        if let Some(item) = ask.tool {
+            self.change_tool(ask.chat, item, |tool| {
+                if tool.status == ToolStatus::Asking {
+                    tool.status = ToolStatus::Pending;
+                }
+            });
+        }
         match ask.question {
             Some(question) => self.unask(ask.chat, question),
             None => out.push(Directive::Policy(PolicyDirective::Withdrawn { ticket })),

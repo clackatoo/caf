@@ -29,7 +29,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) use self::clean::unhidden;
+pub(crate) use self::clean::{agent_text, unhidden};
 use self::record::Log;
 use self::saving::Saving;
 use self::state::{Ask, Conn, Ids, Pending, Proc, Run, Setup};
@@ -394,8 +394,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 answer,
                 reason,
             } => {
-                if !self.served_policy(now, ticket, &answer, reason, out) {
-                    self.policy_answered(now, ticket, answer, out);
+                if !self.served_policy(now, ticket, &answer, reason.as_deref(), out) {
+                    self.policy_answered(now, ticket, answer, reason, out);
                 }
             }
             Event::Tool { call, event } => self.tool_event(now, call, event, out),

@@ -14,6 +14,7 @@ mod own_tools;
 mod patching;
 mod permissions;
 mod process;
+mod reported;
 mod saving;
 mod served;
 mod settings;
