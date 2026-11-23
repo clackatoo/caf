@@ -95,9 +95,13 @@ pub struct ToolCall<A: AppItem = NoAppItems> {
     pub status: ToolStatus,
     /// Whose tool it is.
     pub origin: Origin,
-    /// What it does, as CAF reads it: set once, when CAF has the call's
-    /// whole input, and never changed. `None` until then, and for a call
-    /// whose input never came whole.
+    /// What it does, as CAF reads it. For CAF's own tools, set once, when
+    /// CAF has the call's whole input, and never changed: `None` until
+    /// then, and for a call whose input never came whole. For any other,
+    /// [`Action::Tool`] by the tool's name, once its [`origin`](Self::origin)
+    /// is known: it changes only if the agent's permission request names
+    /// the tool otherwise than its report did. `None` while whose tool it
+    /// is isn't known, and for a call saved before CAF kept actions.
     pub action: Option<Action>,
     /// What it was given, as the model wrote it. If its JSON was longer
     /// than [`MOST_INPUT`], it's the start of that JSON as a string, and
@@ -565,13 +569,31 @@ impl Diff {
     ///
     /// Working out hunks takes time that grows with the square of the
     /// lines changed, so past 10,000 lines between the two files, not
-    /// counting those the same at either end, it isn't done: the diff has
+    /// counting those the same at either end, it isn't done (and past
+    /// 10,000 between all the diffs of one report of a call, for those
+    /// after): the diff has
     /// no hunks and one [`more`](Self::more), and says it removes every
     /// one of those lines of `before` and adds every one of `after`.
     #[must_use]
     pub fn new(path: impl Into<String>, before: Option<&str>, after: &str) -> Self {
-        let old: Vec<&str> = before.unwrap_or_default().split_inclusive('\n').collect();
-        let new: Vec<&str> = after.split_inclusive('\n').collect();
+        let mut budget = MOST_DIFF_WORK;
+        Self::within(path, before, after, &mut budget)
+    }
+
+    /// [`Diff::new`], its hunks worked out only if the lines to compare fit
+    /// in `budget`, which they then use up: what the diffs of one report
+    /// share.
+    pub(crate) fn within(
+        path: impl Into<String>,
+        before: Option<&str>,
+        after: &str,
+        budget: &mut usize,
+    ) -> Self {
+        use similar::DiffableStr as _;
+        // Lines as the diff splits them: `\r\n`, `\n`, or `\r` alone ends
+        // one.
+        let old = before.unwrap_or_default().tokenize_lines();
+        let new = after.tokenize_lines();
         let same_start = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
         let same_end = (old[same_start..].iter().rev())
             .zip(new[same_start..].iter().rev())
@@ -579,7 +601,7 @@ impl Diff {
             .count();
         let removed = old.len() - same_start - same_end;
         let added = new.len() - same_start - same_end;
-        if removed + added > MOST_DIFF_WORK {
+        if removed + added > *budget {
             return Self {
                 path: path.into(),
                 new_file: before.is_none(),
@@ -589,6 +611,7 @@ impl Diff {
                 more: 1,
             };
         }
+        *budget -= removed + added;
         let diff = similar::TextDiff::from_lines(before.unwrap_or_default(), after);
         let (mut added, mut removed) = (0, 0);
         let mut hunks = Vec::new();
@@ -691,7 +714,7 @@ const CONTEXT: usize = 3;
 
 /// The most lines, of both files, a diff's hunks are worked out for, not
 /// counting those the same at either end.
-const MOST_DIFF_WORK: usize = 10_000;
+pub(crate) const MOST_DIFF_WORK: usize = 10_000;
 
 /// What each line of a diff counts against [`MOST_DIFF`] beyond its text:
 /// about what keeping it costs, its numbers and its change.

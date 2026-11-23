@@ -257,3 +257,28 @@ fn short_lines_count_against_a_diffs_cap_too() {
     let diff = Diff::new("/f", None, &"\n".repeat(5_000));
     assert_eq!((diff.hunks.len(), diff.added, diff.more), (0, 5_000, 1));
 }
+
+#[test]
+fn a_diffs_lines_are_counted_as_they_are_compared_a_lone_return_ending_one() {
+    // Old Mac line endings: no `\n` at all, but 6,000 lines, every tenth
+    // changed: 11,982 lines between the first change and the last.
+    let before: String = (0..6_000).map(|n| format!("{n}\r")).collect();
+    let after: String = (0..6_000)
+        .map(|n| {
+            if n % 10 == 0 {
+                format!("x{n}\r")
+            } else {
+                format!("{n}\r")
+            }
+        })
+        .collect();
+    let diff = Diff::new("/f", Some(&before), &after);
+    assert_eq!(
+        (diff.hunks.len(), diff.added, diff.removed, diff.more),
+        (0, 5_991, 5_991, 1)
+    );
+    // Lines that end in either way are each a line.
+    let diff = Diff::new("/f", Some("a\rb\r\nc\n"), "a\rB\r\nc\n");
+    assert_eq!((diff.added, diff.removed), (1, 1));
+    assert_eq!(diff.hunks[0].lines[1].text, "b");
+}

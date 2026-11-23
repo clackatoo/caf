@@ -26,7 +26,7 @@ use crate::ids::{ChatId, ItemId, Ticket, TurnId};
 use crate::profiles::ProfileChoice;
 use crate::time::{End, Now, Window};
 use crate::tool::{
-    Cut, Decision, Diff, Link, Location, Origin, Output, Piece, Text, capped_input,
+    Cut, Decision, Diff, Link, Location, MOST_DIFF_WORK, Origin, Output, Piece, Text, capped_input,
     capped_locations, image, reported_action,
 };
 
@@ -740,6 +740,8 @@ fn pieces(
         return raw.and_then(raw_output).into_iter().collect();
     }
     let mut output = false;
+    // What working out their diffs may cost, between them all.
+    let mut budget = MOST_DIFF_WORK;
     (content.iter().enumerate())
         .map(|(at, each)| {
             match serde_json::from_value::<acp::ToolCallContent>(each.clone()) {
@@ -761,7 +763,8 @@ fn pieces(
                         .and_then(Option::as_ref)
                         .filter(|place| place.path == path)
                         .and_then(|place| place.line);
-                    let mut diff = Diff::new(path, diff.old_text.as_deref(), &diff.new_text);
+                    let mut diff =
+                        Diff::within(path, diff.old_text.as_deref(), &diff.new_text, &mut budget);
                     if let Some(line) = line {
                         diff.number_from(line);
                     }
