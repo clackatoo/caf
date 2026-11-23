@@ -168,7 +168,7 @@ test('draws the tool calls the agent reports: a diff, a terminal, text, an image
   await expect(search.locator('.piece.text pre')).toHaveText('Two hits.')
   const image = search.locator('.piece.image img')
   await expect(image).toHaveAttribute('src', /^data:image\/png;base64,/)
-  await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1)
+  await expect.poll(() => image.evaluate((img) => (img as unknown as { naturalWidth: number }).naturalWidth)).toBe(1)
   const link = search.locator('.piece.link a')
   await expect(link).toHaveCount(1)
   await expect(link).toHaveText('CAF on the web')

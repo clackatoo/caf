@@ -395,15 +395,18 @@ fn tools() -> Value {
         json!({"tool": {"session": SESSION, "id": "run", "title": "cargo test", "kind": "execute", "status": "completed",
             "tool_name": "Bash", "raw_input": {"command": "cargo test"}, "content": [{"terminal": "term-1"}]}}),
         json!({"tool": {"session": SESSION, "id": "search", "title": "Search the web for CAF", "kind": "fetch", "status": "completed",
-            "tool_name": "WebSearch", "raw_input": {"query": "CAF"}, "content": [
-                {"text": "Two hits."},
-                {"image": {"mime": "image/png", "data": PIXEL}},
-                {"link": {"uri": "https://example.com/caf", "name": "CAF on the web"}},
-                {"link": {"uri": "javascript:alert(1)", "name": "Not a link"}},
-                {"raw": {"type": "hologram"}},
-            ]}}),
+        "tool_name": "WebSearch", "raw_input": {"query": "CAF"}, "content": [
+            {"text": "Two hits."},
+            {"image": {"mime": "image/png", "data": PIXEL}},
+            {"link": {"uri": "https://example.com/caf", "name": "CAF on the web"}},
+            {"link": {"uri": "javascript:alert(1)", "name": "Not a link"}},
+            {"raw": {"type": "hologram"}},
+        ]}}),
     ];
-    steps.extend(words("I used a tool of every kind.").map(|word| json!({"say": {"session": SESSION, "text": word}})));
+    steps.extend(
+        words("I used a tool of every kind.")
+            .map(|word| json!({"say": {"session": SESSION, "text": word}})),
+    );
     steps.push(json!({"respond": {"result": {"stopReason": "end_turn"}}}));
     Value::Array(steps)
 }
