@@ -5,6 +5,7 @@ description: CAF keeps its own record of every chat, in one format for every age
 related:
   - caf/concepts/the-core
   - caf/concepts/agents-and-profiles
+  - caf/concepts/tool-calls
 ---
 
 CAF keeps its own record of every chat, in one format for every agent. The
@@ -34,6 +35,8 @@ agent, or the program) and where it is in its life:
 An item is one thing the agent did: its words, its thinking, a tool it used,
 a summary of its memory to make room, a note from CAF, the program's own kind
 of item, or something CAF couldn't read, kept as it came so nothing is lost.
+A tool call is recorded the same way for every agent and every tool, with
+its diffs and output: see [Tool calls](~caf/concepts/tool-calls).
 
 Every turn and item has a permanent id, never a position, and a window of
 time: when CAF first heard of it, and when it ended. The times are when CAF
