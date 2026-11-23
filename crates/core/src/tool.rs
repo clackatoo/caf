@@ -175,7 +175,10 @@ impl ToolStatus {
     /// Whether it has ended: Done, Failed, Refused or Cancelled.
     #[must_use]
     pub fn ended(self) -> bool {
-        todo!()
+        matches!(
+            self,
+            Self::Done | Self::Failed | Self::Refused | Self::Cancelled
+        )
     }
 }
 
@@ -221,10 +224,25 @@ pub enum CafTool {
 }
 
 impl CafTool {
+    /// Every one of CAF's own tools.
+    pub const ALL: [Self; 4] = [Self::Read, Self::Edit, Self::Write, Self::Bash];
+
+    /// The tool CAF serves as `name`, such as `Read`, if it's one of its
+    /// own.
+    #[must_use]
+    pub fn named(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|tool| tool.name() == name)
+    }
+
     /// Its name, as CAF serves it, such as `Read`.
     #[must_use]
     pub fn name(self) -> &'static str {
-        todo!()
+        match self {
+            Self::Read => "Read",
+            Self::Edit => "Edit",
+            Self::Write => "Write",
+            Self::Bash => "Bash",
+        }
     }
 }
 
@@ -279,7 +297,12 @@ impl Action {
     /// another tool is [`ToolKind::Other`].
     #[must_use]
     pub fn kind(&self) -> ToolKind {
-        todo!()
+        match self {
+            Self::Read { .. } => ToolKind::Read,
+            Self::Edit { .. } | Self::Write { .. } => ToolKind::Edit,
+            Self::Run { .. } => ToolKind::Execute,
+            Self::Tool { .. } => ToolKind::Other,
+        }
     }
 }
 
@@ -500,3 +523,132 @@ pub enum DecidedBy {
         option: String,
     },
 }
+
+impl Text {
+    /// `text`, cut to its first [`MOST_TEXT`] bytes, at a character
+    /// boundary, if it's longer.
+    #[must_use]
+    pub fn new(text: impl Into<String>) -> Self {
+        let (text, cut) = start_of(text.into(), MOST_TEXT);
+        Self { text, cut }
+    }
+}
+
+impl Diff {
+    /// The change to the file at `path` from `before`, `None` if there was
+    /// no file, to `after`: its hunks, with three lines either side as
+    /// they were, whole ones up to [`MOST_DIFF`]. Lines are compared
+    /// whole, their endings included, and kept without them, with nothing
+    /// in them hidden, as an agent's text is: a control character or one
+    /// that reorders text shows as a code.
+    #[must_use]
+    pub fn new(path: impl Into<String>, before: Option<&str>, after: &str) -> Self {
+        let diff = similar::TextDiff::from_lines(before.unwrap_or_default(), after);
+        let (mut added, mut removed) = (0, 0);
+        let mut hunks = Vec::new();
+        for group in diff.grouped_ops(CONTEXT) {
+            let mut lines = Vec::new();
+            for op in &group {
+                for change in diff.iter_changes(op) {
+                    let (change_of, old, new) = match change.tag() {
+                        similar::ChangeTag::Equal => {
+                            (LineChange::Kept, change.old_index(), change.new_index())
+                        }
+                        similar::ChangeTag::Delete => {
+                            removed += 1;
+                            (LineChange::Removed, change.old_index(), None)
+                        }
+                        similar::ChangeTag::Insert => {
+                            added += 1;
+                            (LineChange::Added, None, change.new_index())
+                        }
+                    };
+                    let text = change.value();
+                    let text = text.strip_suffix('\n').unwrap_or(text);
+                    let text = text.strip_suffix('\r').unwrap_or(text);
+                    lines.push(DiffLine {
+                        change: change_of,
+                        old: old.map(|at| at as u64 + 1),
+                        new: new.map(|at| at as u64 + 1),
+                        text: crate::core::unhidden(text),
+                    });
+                }
+            }
+            hunks.push(Hunk { lines });
+        }
+        let mut size = 0;
+        let kept = (hunks.iter())
+            .take_while(|hunk| {
+                size += hunk.lines.iter().map(|line| line.text.len()).sum::<usize>();
+                size <= MOST_DIFF
+            })
+            .count();
+        let more = (hunks.len() - kept) as u64;
+        hunks.truncate(kept);
+        Self {
+            path: path.into(),
+            new_file: before.is_none(),
+            added,
+            removed,
+            hunks,
+            more,
+        }
+    }
+}
+
+/// The lines kept as they were either side of a diff's changes.
+const CONTEXT: usize = 3;
+
+/// `text`'s first `most` bytes, at a character boundary, and how much was
+/// kept if that's not all of it.
+fn start_of(mut text: String, most: usize) -> (String, Option<Cut>) {
+    if text.len() <= most {
+        return (text, None);
+    }
+    let total = text.len() as u64;
+    text.truncate(text.floor_char_boundary(most));
+    let kept = text.len() as u64;
+    (text, Some(Cut { kept, total }))
+}
+
+/// A call's raw input, capped: if its JSON is longer than [`MOST_INPUT`],
+/// the start of that JSON as a string, and how much of it was kept.
+#[cfg_attr(not(test), expect(dead_code, reason = "read from ACP next"))]
+pub(crate) fn capped_input(input: serde_json::Value) -> (serde_json::Value, Option<Cut>) {
+    let json = input.to_string();
+    if json.len() <= MOST_INPUT {
+        return (input, None);
+    }
+    let (start, cut) = start_of(json, MOST_INPUT);
+    (serde_json::Value::String(start), cut)
+}
+
+/// An image of type `mime`, `data` in base64: kept whole if it's at most
+/// [`MOST_IMAGE`] bytes, and only its size otherwise.
+#[cfg_attr(not(test), expect(dead_code, reason = "read from ACP next"))]
+pub(crate) fn image(mime: String, data: String) -> Image {
+    // What base64 of this length decodes to: whitespace and padding
+    // don't count.
+    let digits = data
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace() && *byte != b'=')
+        .count();
+    let size = (digits * 3 / 4) as u64;
+    Image {
+        mime,
+        data: (size <= MOST_IMAGE as u64).then_some(data),
+        size,
+    }
+}
+
+/// `locations`, the first [`MOST_LOCATIONS`] of them, and how many more
+/// there were.
+#[cfg_attr(not(test), expect(dead_code, reason = "read from ACP next"))]
+pub(crate) fn capped_locations(mut locations: Vec<Location>) -> (Vec<Location>, u64) {
+    let more = locations.len().saturating_sub(MOST_LOCATIONS) as u64;
+    locations.truncate(MOST_LOCATIONS);
+    (locations, more)
+}
+
+#[cfg(test)]
+mod tests;

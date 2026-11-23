@@ -169,6 +169,7 @@ kinds!(Refused {
     "BadShelf" => Refused::BadShelf,
     "OwnTools" => Refused::OwnTools,
     "NoSuchSetting" => Refused::NoSuchSetting,
+    "ReservedServer" => Refused::ReservedServer,
 });
 
 kinds!(SessionChoice {

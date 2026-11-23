@@ -925,6 +925,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         check_shelf(&restore.shelf)?;
+        super::sessions::check_servers(&restore.mcp_servers)?;
         (restore.mcp_servers.iter())
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
@@ -1624,7 +1625,7 @@ pub(super) fn tidy<A: AppItem>(chat: &Chat<A>, at: Wall, now: Wall) -> Vec<Chang
             .filter(|item| item.window.end == End::Open)
         {
             if let ItemKind::Tool(tool) = &item.kind
-                && matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)
+                && !tool.status.ended()
             {
                 let mut tool = tool.clone();
                 tool.status = ToolStatus::Failed;
