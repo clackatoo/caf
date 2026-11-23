@@ -124,6 +124,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         if let Some(item) = tool {
             self.change_tool(chat, item, |tool| {
+                // The record says what the policy is told.
+                if tool.origin == Origin::NotRecorded {
+                    tool.origin = origin.clone();
+                }
                 if !tool.status.ended() {
                     tool.decision = Decision::Undecided;
                 }

@@ -369,6 +369,15 @@ fn a_permission_request_for_a_call_not_seen_says_whose_it_is_from_its_own_metada
         the_tool(&script)["origin"],
         json!({ "type": "Server", "value": { "server": "eyes.app", "tool": "look" } })
     );
+    // A call seen with nothing said of whose it is takes the request's.
+    script.update(PROC, SESSION, &json!({ "sessionUpdate": "tool_call", "toolCallId": "tool-11", "title": "Search", "status": "pending" }));
+    let mut request = permission(9, "tool-11");
+    request["params"]["toolCall"]["_meta"] = named("WebSearch");
+    script.says(PROC, &request);
+    assert_eq!(
+        tools(&script.chat(CHAT))[1]["origin"],
+        json!({ "type": "Agent", "value": "WebSearch" })
+    );
     // One that says nothing is not recorded, and has no action.
     let out = script.says(PROC, &permission(8, "tool-10"));
     assert_has(
