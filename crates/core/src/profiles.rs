@@ -923,6 +923,28 @@ impl ProfileChoice {
     }
 }
 
+impl ProfileChoice {
+    /// The permission mode every session of an agent with this profile is
+    /// set to as it opens, if the session says it's in another: Claude's
+    /// adapter starts one in the user's own `permissions.defaultMode`
+    /// from `~/.claude/settings.json`, which `settingSources: []` doesn't
+    /// keep out, and overwrites the `permissionMode` CAF would give it.
+    /// CAF's is `default`: the agent asks before anything not allowed.
+    pub(crate) fn start_mode(&self) -> Option<&'static str> {
+        match self {
+            Self::Builtin(Builtin::ClaudeAgentAcp) => Some("default"),
+            #[cfg(test)]
+            Self::Builtin(
+                Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain | Builtin::TestModels,
+            ) => None,
+            // The fake has no modes.
+            #[cfg(feature = "fake")]
+            Self::Builtin(Builtin::Fake) => None,
+            Self::Cautious => None,
+        }
+    }
+}
+
 /// The longest name of a window CAF keeps, in bytes.
 const MOST_WINDOW_NAME: usize = 64;
 

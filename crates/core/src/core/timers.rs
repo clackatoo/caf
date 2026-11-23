@@ -261,6 +261,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                     self.lose_process(now, proc, Cause::Restarted, out);
                 }
             }
+            // Nothing waits on it but what's to go after it: that goes.
+            Purpose::Mode { chat } => {
+                self.pending.remove(&(proc, id));
+                self.mode_answered(now, (proc, id), chat, false, out);
+            }
             // As an abandoned open: a session it opens even so is closed.
             Purpose::Learn { conn } => {
                 self.pending.remove(&(proc, id));

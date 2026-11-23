@@ -2446,3 +2446,90 @@ fn a_change_nobody_waits_for_restarts_an_idle_adapter_and_a_chat_opening_on_it_o
         &json!({ "state": { "type": "Open", "value": { "session": "sess-3" } } }),
     );
 }
+
+/// Claude's `modes`, as claude-agent-acp 0.98.0 answers a session it
+/// opens, starting it in `current`.
+fn claude_modes(current: &str) -> Value {
+    json!({ "currentModeId": current, "availableModes": [
+        { "id": "default", "name": "Default" }, { "id": "acceptEdits", "name": "Accept Edits" },
+        { "id": "plan", "name": "Plan Mode" }, { "id": "dontAsk", "name": "Don't Ask" },
+    ] })
+}
+
+#[test]
+fn a_claude_session_opened_in_the_users_own_mode_is_set_to_default_before_any_message() {
+    let mut script = Script::new(host());
+    let (_, out) = script.open(OpenChat::new("claude", "/work"));
+    let (turn, _) = script.send(CHAT, "hello");
+    turn.expect("queued");
+    let out = script.answers(PROC, id_of(&sent(&out, "initialize")), &claude_init());
+    // The user's settings.json says `plan`, so the adapter starts there.
+    let out = script.answers(
+        PROC,
+        id_of(&sent(&out, "session/new")),
+        &json!({ "sessionId": SESSION, "modes": claude_modes("plan"),
+                 "configOptions": claude_options("default", "default", false) }),
+    );
+    let mode = sent(&out, "session/set_mode");
+    assert_eq!(
+        mode["params"],
+        json!({ "sessionId": SESSION, "modeId": "default" })
+    );
+    assert!(prompts(&out).is_empty(), "nothing goes before it: {out:#?}");
+    let out = script.answers(PROC, id_of(&mode), &json!({}));
+    assert_eq!(prompts(&out).len(), 1, "then the message goes: {out:#?}");
+}
+
+#[test]
+fn a_session_already_in_default_mode_or_of_an_agent_without_them_is_left_alone() {
+    let mut script = Script::new(host());
+    let (_, out) = script.open(OpenChat::new("claude", "/work"));
+    script.send(CHAT, "hello").0.expect("queued");
+    let out = script.answers(PROC, id_of(&sent(&out, "initialize")), &claude_init());
+    let out = script.answers(
+        PROC,
+        id_of(&sent(&out, "session/new")),
+        &json!({ "sessionId": SESSION, "modes": claude_modes("default") }),
+    );
+    assert_eq!(prompts(&out).len(), 1, "the message goes at once: {out:#?}");
+    // A plain agent's own modes are its own.
+    let mut script = Script::new(host());
+    let (_, out) = script.open(OpenChat::new("plain", "/work"));
+    script.send(CHAT, "hello").0.expect("queued");
+    let out = script.answers(PROC, id_of(&sent(&out, "initialize")), &plain_init(false));
+    let out = script.answers(
+        PROC,
+        id_of(&sent(&out, "session/new")),
+        &json!({ "sessionId": SESSION, "modes": claude_modes("plan") }),
+    );
+    assert_eq!(prompts(&out).len(), 1, "the message goes at once: {out:#?}");
+}
+
+#[test]
+fn a_resumed_claude_session_is_set_to_default_too_and_a_refusal_holds_nothing_up() {
+    let mut script = Script::new(host());
+    let mut open = OpenChat::new("claude", "/work");
+    open.session = crate::core::SessionChoice::Continue(AgentSessionId("old".to_owned()));
+    let (_, out) = script.open(open);
+    script.send(CHAT, "hello").0.expect("queued");
+    let out = script.answers(PROC, id_of(&sent(&out, "initialize")), &claude_init());
+    // Resumed in the mode its transcript ended in.
+    let out = script.answers(
+        PROC,
+        id_of(&sent(&out, "session/resume")),
+        &json!({ "modes": claude_modes("dontAsk") }),
+    );
+    let mode = sent(&out, "session/set_mode");
+    assert_eq!(mode["params"], json!({ "sessionId": "old", "modeId": "default" }));
+    assert!(prompts(&out).is_empty());
+    let out = script.fails(
+        PROC,
+        id_of(&mode),
+        &json!({ "code": -32602, "message": "Invalid mode" }),
+    );
+    assert_eq!(prompts(&out).len(), 1, "the message still goes: {out:#?}");
+    assert!(
+        (with(&out, "report").iter()).any(|report| report.to_string().contains("permission mode")),
+        "the host's log says so: {out:#?}"
+    );
+}

@@ -460,6 +460,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         // What it offers, and the choices to send before any message.
         self.settings_opened(chat, result);
+        self.mode_opened(chat, result);
         self.pump(now, chat, out);
     }
 
