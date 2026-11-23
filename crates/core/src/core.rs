@@ -29,6 +29,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub(crate) use self::clean::unhidden;
 use self::record::Log;
 use self::saving::Saving;
 use self::state::{Ask, Conn, Ids, Pending, Proc, Run, Setup};
