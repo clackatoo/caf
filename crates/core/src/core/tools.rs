@@ -219,15 +219,18 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
             !taken
         });
-        let joins = match &agent_call {
-            Some(id) => self.reported_item(chat, id),
-            None => self.unjoined_report(chat, tool, &input),
+        let (joins, joined) = match &agent_call {
+            Some(id) => (self.reported_item(chat, id), Joined::Yes),
+            None => match self.unjoined_report(chat, tool, &input) {
+                Some((item, joined)) => (Some(item), joined),
+                None => (None, Joined::No),
+            },
         };
         let action = match action_of(tool, &input, &cwd) {
             Ok(action) => action,
             Err(why) => {
                 // The agent's report of it is all there is: it failed.
-                if let Some(item) = joins {
+                if let (Some(item), Joined::Yes) = (joins, &joined) {
                     self.fail_report(now, chat, item, tool, &why);
                 }
                 return refuse(out, RefusedCall::BadInput(why));
@@ -263,11 +266,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 item,
                 Served {
                     tool,
-                    report: if joins.is_some() {
-                        Joined::Yes
-                    } else {
-                        Joined::No
-                    },
+                    report: joined,
                     keyed: agent_call.is_some(),
                 },
             );
@@ -303,20 +302,39 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// The oldest item an agent's report made in `chat` of a call to
     /// `tool` given `input`, that nothing has joined yet and is still
-    /// going: for a call that came without the agent's id for it.
-    fn unjoined_report(&self, chat: ChatId, tool: CafTool, input: &Value) -> Option<ItemId> {
+    /// going: for a call that came without the agent's id for it. Else
+    /// the oldest such report that hasn't said its input yet (none, or
+    /// `{}`), as adapters report a call before making it: joined for now
+    /// ([`Joined::Maybe`]), until its input says whether it's this call.
+    fn unjoined_report(
+        &self,
+        chat: ChatId,
+        tool: CafTool,
+        input: &Value,
+    ) -> Option<(ItemId, Joined)> {
         let run = self.runs.get(&chat)?;
         // The report's input is kept as the call's is: cut, if long.
         let input = &crate::tool::capped_input(input.clone()).0;
-        let mut items: Vec<ItemId> = (run.tools.values())
-            .filter(|item| !run.served.contains_key(item))
-            .copied()
+        let mut reports: Vec<(ItemId, &String)> = (run.tools.iter())
+            .filter(|(_, item)| !run.served.contains_key(item))
+            .map(|(id, &item)| (item, id))
             .collect();
-        items.sort_unstable();
-        items.into_iter().find(|&item| {
-            self.unended_tool(chat, item).is_some_and(|call| {
-                call.origin == Origin::Caf(tool) && call.input.as_ref() == Some(input)
-            })
+        reports.sort_unstable();
+        let mine = |item: ItemId| {
+            (self.unended_tool(chat, item)).filter(|call| call.origin == Origin::Caf(tool))
+        };
+        let sure = (reports.iter())
+            .find(|(item, _)| mine(*item).is_some_and(|call| call.input.as_ref() == Some(input)));
+        if let Some((item, _)) = sure {
+            return Some((*item, Joined::Yes));
+        }
+        reports.into_iter().find_map(|(item, id)| {
+            let call = mine(item)?;
+            let unsaid = call
+                .input
+                .as_ref()
+                .is_none_or(|input| input.is_null() || *input == json!({}));
+            unsaid.then(|| (item, Joined::Maybe(id.clone())))
         })
     }
 
