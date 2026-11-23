@@ -966,8 +966,9 @@ pub(super) fn check_instructions(instructions: Option<&str>) -> Result<(), Refus
 
 /// Checks the MCP servers the app gives a chat: none may be named so that
 /// an agent writes its tools' names as CAF's own, `mcp__caf__…`, else
-/// [`Refused::ReservedServer`]: `caf` in any case, or a name Claude Code
-/// writes starting `caf__`, such as `caf.x` or `CAF__x`. An agent
+/// [`Refused::ReservedServer`]: one Claude Code writes as `caf`, in any
+/// case, or as `caf_` or anything starting `caf__`, such as `caf.` or
+/// `CAF__x` (`caf.x`, written `caf_x`, is fine). An agent
 /// couldn't tell the app's tools from CAF's. Nor may two be named alike,
 /// as Claude Code writes them, else [`Refused::SameServerName`].
 pub(super) fn check_servers(servers: &[McpServer]) -> Result<(), Refused> {

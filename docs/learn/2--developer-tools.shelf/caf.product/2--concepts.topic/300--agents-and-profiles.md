@@ -71,9 +71,10 @@ Each of the agent's own tools will come back, one at a time, once CAF
 supports it fully: what it does, in CAF's own terms, the permission it
 needs, and how it shows in the chat. CAF serves its own tools to the agent
 as an MCP server named `caf`, so no server of yours may have that name, in
-any case, nor one the agent would write as it: Claude Code writes each
-character but a letter, a digit, `_` and `-` as `_`, so `caf.x` and
-`caf__x` would name tools as CAF's do. Opening or restoring a chat with
+any case, nor one the agent would write as `caf`, or as `caf_` or
+anything starting `caf__`: Claude Code writes each character but a
+letter, a digit, `_` and `-` as `_`, so `caf.` and `caf__x` would name
+tools as CAF's do (`caf.x`, written `caf_x`, is fine). Opening or restoring a chat with
 one is refused (`Refused::ReservedServer`). Nor may two of your servers have
 names the agent would write alike, such as `my tools` and `my.tools`, both
 `my_tools`: a chat with them is refused (`Refused::SameServerName`), as

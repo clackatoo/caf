@@ -242,7 +242,8 @@ fn an_mcp_server_named_caf_is_refused_as_cafs_own() {
         url: "http://localhost:1/mcp".to_owned(),
         headers: Vec::new(),
     };
-    // Claude Code writes `caf.x` as `caf_x`, so its tools as `mcp__caf__…`.
+    // Claude Code writes `caf.` as `caf_` and `caf._x` as `caf__x`, so
+    // their tools as `mcp__caf__…`; `caf.x`, written `caf_x`, is fine.
     for name in [
         "caf",
         "CAF",
@@ -266,7 +267,7 @@ fn an_mcp_server_named_caf_is_refused_as_cafs_own() {
         assert!(out.is_empty(), "nothing is read: {out:#?}");
     }
     // A name with `caf` in it is the app's own.
-    for name in ["caffeine", "caf_tools", "my caf", "caf\u{e9}x"] {
+    for name in ["caffeine", "caf_tools", "caf.x", "my caf", "caf\u{e9}x"] {
         let mut script = Script::new(host());
         let mut open = OpenChat::new("claude", "/work");
         open.mcp_servers = vec![server(name)];
