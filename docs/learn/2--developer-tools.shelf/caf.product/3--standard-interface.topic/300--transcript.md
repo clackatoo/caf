@@ -255,9 +255,11 @@ Whose question it is depends on whose tool the call is:
 - **One of CAF's own tools** (`Origin::Caf`: Read, Edit, Write, Bash). CAF
   asks, in its own voice, with the CAF badge. It says what the agent wants
   to do in CAF's words, from what the call does (its `Action`), then what
-  it's about, as plain text: the file (`path`), from the chat's folder when
-  it's inside it, or the command's first line, with *…* after it if it has
-  more. Never the call's title, which says the same and would double it:
+  it's about, as plain text, from the title CAF wrote for the call: for a
+  file, the title without its *Read*, *Edit* or *Write* (the path, from
+  the chat's folder when it's inside it); for a command, the title as it
+  is (its first line, with *…* after it if it has more, capped). Never the
+  whole title, whose verb would say it twice:
   *Claude wants to run a command: rm -rf target*,
   *Claude wants to change a file: src/config.rs*, *Claude wants to read a
   file: /etc/hosts*, *Claude wants to write a file: notes.md*. Its answers are CAF's

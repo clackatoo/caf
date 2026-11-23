@@ -24,15 +24,12 @@
   let {
     questions,
     toolOf = () => null,
-    cwd = '',
     readOnly,
     answer,
   }: {
     questions: DeepReadonly<Question[]>
     /** The tool call an item is, if it's one: what a permission question is about. */
     toolOf?: (id: ItemId) => DeepReadonly<ToolCall> | null
-    /** The chat's folder: CAF's question names a file in it from there. */
-    cwd?: string
     readOnly: boolean
     answer: (question: QuestionId, answer: Answer) => Promise<unknown> | void
   } = $props()
@@ -102,7 +99,7 @@
           {@const diffs = tool?.result.flatMap((piece) => (piece.type === 'Diff' ? [piece.value] : [])) ?? []}
           {#if tool?.origin.type === 'Caf'}
             <div class="ask"><span class="who">CAF</span> {cafAsks(action, 'The agent')}: <strong
-                >{unhidden(cafAbout(action, cwd) ?? kind.value.title)}</strong
+                >{unhidden(cafAbout(tool) ?? kind.value.title)}</strong
               ></div>
           {:else}
             <div class="ask">The agent asks permission: <strong>{kind.value.title}</strong></div>

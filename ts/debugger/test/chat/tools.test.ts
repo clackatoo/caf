@@ -687,19 +687,44 @@ describe('a permission question about a call', () => {
     expect(text(container.querySelector('.questions .ask'))).toBe('CAF The agent wants to change a file: src/config.rs')
   })
 
-  it('names a file from the chat\'s folder only when it\'s inside it, and a command by its first line', () => {
-    const edit = (path: string) => ({ type: 'Edit' as const, value: { path } })
-    expect(cafAbout(edit('/work/src/main.rs'), '/work')).toBe('src/main.rs')
-    expect(cafAbout(edit('/work/src/main.rs'), '/work/')).toBe('src/main.rs')
-    expect(cafAbout(edit('/workshop/a'), '/work')).toBe('/workshop/a')
-    expect(cafAbout(edit('/work'), '/work')).toBe('/work')
-    expect(cafAbout({ type: 'Read', value: { path: '/etc/hosts', lines: null } }, '/work')).toBe('/etc/hosts')
-    expect(cafAbout({ type: 'Write', value: { path: '/work/new.txt' } }, '/work')).toBe('new.txt')
+  it('names what a call is about from the title CAF wrote, without its verb, never working it out again', () => {
+    const about = (action: ToolCall['action'], title: string) => cafAbout({ action, title })
+    const edit = { type: 'Edit' as const, value: { path: '/work/src/main.rs' } }
+    expect(about(edit, 'Edit src/main.rs')).toBe('src/main.rs')
+    expect(about({ type: 'Read', value: { path: '/etc/hosts', lines: null } }, 'Read /etc/hosts')).toBe('/etc/hosts')
+    expect(about({ type: 'Write', value: { path: '/work/new.txt' } }, 'Write new.txt')).toBe('new.txt')
+    // A title without CAF's verb is shown whole.
+    expect(about(edit, 'src/main.rs')).toBe('src/main.rs')
     const run = (command: string) => ({ type: 'Run' as const, value: { command, folder: '/work', background: false } })
-    expect(cafAbout(run('cargo test'), '/work')).toBe('cargo test')
-    expect(cafAbout(run('  cargo test\ncargo build\n'), '/work')).toBe('cargo test …')
-    expect(cafAbout({ type: 'Tool', value: { name: 'x' } }, '/work')).toBeNull()
-    expect(cafAbout(null, '/work')).toBeNull()
+    // A command is its title as CAF wrote it: its first line, capped, a
+    // line ended by CRLF included, whatever the command itself says.
+    expect(about(run('cargo test\r\ncargo build'), 'cargo test …')).toBe('cargo test …')
+    const long = 'x'.repeat(5000)
+    expect(about(run(long), `${'x'.repeat(1021)}…`)).toBe(`${'x'.repeat(1021)}…`)
+    expect(about({ type: 'Tool', value: { name: 'x' } }, 'x')).toBeNull()
+    expect(about(null, 'x')).toBeNull()
+  })
+
+  it('names a command in CAF\'s question by its title, so a CRLF or a long line reads as CAF cut it', () => {
+    const title = 'cargo test …'
+    const tool = item({
+      type: 'Tool',
+      value: call({
+        title,
+        status: { type: 'Asking' },
+        origin: { type: 'Caf', value: { type: 'Bash' } },
+        action: { type: 'Run', value: { command: 'cargo test\r\ncargo build', folder: '/p', background: false } },
+      }),
+    })
+    const { container } = draw(
+      chat({
+        turns: [turn({ life: { type: 'Running' }, items: [tool] })],
+        questions: [question({ type: 'Permission', value: { tool: tool.id, title, options } })],
+      }),
+    )
+    const ask = container.querySelector('.questions .ask')!
+    expect(text(ask)).toBe('CAF The agent wants to run a command: cargo test …')
+    expect(ask.textContent).not.toContain('\r')
   })
 
   it('says in CAF\'s words what each of its own tools wants to do', () => {

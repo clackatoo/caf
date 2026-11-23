@@ -1,7 +1,7 @@
 // What the chat view says about a tool call, and what it lets through of
 // what an agent gave: an image only as a picture, a link only to the web.
 
-import type { Action, Cut, Decision, DeepReadonly, Ending, Location, ToolStatus } from '@clackatoo/caf'
+import type { Action, Cut, Decision, DeepReadonly, Ending, Location, ToolCall, ToolStatus } from '@clackatoo/caf'
 import { count } from './figures.ts'
 import { tagOf } from './words.ts'
 
@@ -154,24 +154,23 @@ export function cafAsks(action: DeepReadonly<Action> | null, agent: string): str
 
 /**
  * What a call to one of CAF's own tools is about, for CAF's question
- * about it: the file, from the chat's folder `cwd` when it's inside it,
- * as CAF's titles say it, or the command's first line, `…` after it if
- * it has more. Null for an action that's about neither.
+ * about it, from the title CAF wrote for it: the file, without the title's
+ * `Read `, `Edit ` or `Write `, or for a command, the title as it is,
+ * which is already its first line, capped. So the question never says
+ * the verb twice, nor works anything out the core didn't. Null for any
+ * other action.
  */
-export function cafAbout(action: DeepReadonly<Action> | null, cwd: string): string | null {
-  switch (action?.type) {
+export function cafAbout(tool: DeepReadonly<Pick<ToolCall, 'action' | 'title'>>): string | null {
+  const verb = { Read: 'Read ', Edit: 'Edit ', Write: 'Write ' } as Record<string, string>
+  switch (tool.action?.type) {
     case 'Read':
     case 'Edit':
     case 'Write': {
-      const path = action.value.path
-      const folder = cwd.replace(/\/+$/, '')
-      const inside = path.startsWith(`${folder}/`) ? path.slice(folder.length + 1) : ''
-      return inside === '' ? path : inside
+      const prefix = verb[tool.action.type]!
+      return tool.title.startsWith(prefix) ? tool.title.slice(prefix.length) : tool.title
     }
-    case 'Run': {
-      const [first = '', ...rest] = action.value.command.trim().split('\n')
-      return rest.length > 0 ? `${first} …` : first
-    }
+    case 'Run':
+      return tool.title
     default:
       return null
   }
