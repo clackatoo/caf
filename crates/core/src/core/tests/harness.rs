@@ -761,7 +761,8 @@ pub(crate) fn render(directive: &Directive) -> Value {
             chat,
             request,
         }) => {
-            json!({ "decide": ticket.0, "chat": chat, "title": request.title, "input": request.input })
+            json!({ "decide": ticket.0, "chat": chat, "item": request.item, "title": request.title,
+                    "origin": request.origin, "action": request.action, "input": request.input })
         }
         Directive::Policy(PolicyDirective::Withdrawn { ticket }) => {
             json!({ "withdrawn": ticket.0 })

@@ -187,6 +187,7 @@ use serde_json::{Value, json};
 
 use crate::acp::RpcError;
 use crate::chat::{FailureReason, Remedy};
+use crate::core::agent_text;
 use crate::install::{
     Bundled, Edit, FilePatch, Install, LinkFrom, Needs, NpmPackage, Patch, Program, Recipe, SignIn,
     SignedInAs, Status, StatusCommand,
@@ -195,6 +196,7 @@ use crate::limits::{
     AccountLimits, EARLIEST_RESET, ExtraUsage, LATEST_RESET, LimitState, LimitWindow, WindowKind,
 };
 use crate::time::Wall;
+use crate::tool::{CafTool, Origin};
 use crate::usage::Tokens;
 
 /// Which profile an agent should have.
@@ -946,11 +948,63 @@ impl ProfileChoice {
             Self::Cautious => None,
         }
     }
+
+    /// Whose tool a call the agent reports is, from what its adapter says
+    /// of it in `call`, a `tool_call`, a `tool_call_update` or a
+    /// permission request's `toolCall`: never from its title, nor anything
+    /// else the model wrote. `None` if the adapter says nothing of it.
+    ///
+    /// Claude's adapter, and the fake, name the tool in
+    /// `_meta.claudeCode.toolName`, an MCP server's as
+    /// `mcp__<server>__<tool>`, and in a permission request also the
+    /// server, as it was named, in `_meta.claudeCode.mcpServer.name`. A
+    /// tool of the server `caf`, a name no app may give its own, that is
+    /// one of [`CafTool`]'s, is CAF's own.
+    pub(crate) fn origin_of(&self, call: &Value) -> Option<Origin> {
+        match self {
+            Self::Builtin(Builtin::ClaudeAgentAcp) => claude_origin(call),
+            #[cfg(test)]
+            Self::Builtin(
+                Builtin::TestNpm | Builtin::TestDownload | Builtin::TestPlain | Builtin::TestModels,
+            ) => None,
+            #[cfg(feature = "fake")]
+            Self::Builtin(Builtin::Fake) => claude_origin(call),
+            Self::Cautious => None,
+        }
+    }
 }
 
 /// The name of the MCP server CAF serves its own tools as, and so a name
 /// no app may give one of its own.
 pub(crate) const CAF_SERVER: &str = "caf";
+
+/// The longest tool or server name kept, in bytes.
+const MOST_TOOL_NAME: usize = 256;
+
+/// Whose tool a call Claude's adapter reports is: see
+/// [`ProfileChoice::origin_of`].
+fn claude_origin(call: &Value) -> Option<Origin> {
+    let claude = call.pointer("/_meta/claudeCode")?;
+    let name = claude.get("toolName")?.as_str()?;
+    let Some((server, tool)) = (name.strip_prefix("mcp__")).and_then(|rest| rest.split_once("__"))
+    else {
+        return Some(Origin::Agent(agent_text(name, MOST_TOOL_NAME)));
+    };
+    // The server as it was named, if the adapter says: the tool's name
+    // has it as Claude Code normalised it.
+    let named = (claude.pointer("/mcpServer/name"))
+        .and_then(Value::as_str)
+        .unwrap_or(server);
+    if named == CAF_SERVER
+        && let Some(caf) = CafTool::named(tool)
+    {
+        return Some(Origin::Caf(caf));
+    }
+    Some(Origin::Server {
+        server: agent_text(named, MOST_TOOL_NAME),
+        tool: agent_text(tool, MOST_TOOL_NAME),
+    })
+}
 
 /// The longest name of a window CAF keeps, in bytes.
 const MOST_WINDOW_NAME: usize = 64;

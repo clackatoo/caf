@@ -4784,6 +4784,18 @@
           }
         }
       }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 31,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "ReservedServer"
+          }
+        }
+      }
     }
   ]
 }
