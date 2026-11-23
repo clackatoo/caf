@@ -64,7 +64,7 @@ chip for each kind of step, counted:
 - *Read 1 file*, *Searched 1 time*, *Edited 2 files +7 −1*, *Fetched 1 page*,
   *Deleted 1 file*, *Moved 1 file*, by the tool's kind, with the plural as it
   should be. The edit chip adds up its edits' diffs: *+7* lines added and
-  *−1* removed. A tool of kind `Think` or `Other` is counted as *Used 1 tool*.
+  *−1* removed. A refused edit's diff never happened, so it isn't counted. A tool of kind `Think` or `Other` is counted as *Used 1 tool*.
 - A single command is named by its title, here
   *cargo test -p caf-core config*, with a tick, or a cross in the warning
   colour if it failed. Two or more are counted: *Ran 2 commands*.
@@ -188,8 +188,9 @@ opened, who allowed or refused it, muted, in one line:
 
 *You* is whoever answered the question in this app. A refused call never
 ran: under that line is only what it would have done, such as the diff of
-an edit CAF worked out before asking, which never happened, and why, if
-the agent said.
+an edit CAF worked out before asking, and why, if the agent said. It's
+headed *What it would have done (never ran)*, muted, in place of nothing,
+so it's never read as something that happened.
 
 ### A tool call, opened
 
@@ -206,22 +207,32 @@ Everything an agent sends is drawn as text: never as markup, never run.
   *and 2 more hunks*. The app draws the hunks as they are, and never
   compares texts itself.
 - **A command's output**: its lines in a monospace font, in the colours
-  the command gave them. Only colours and bold, italic and underline are
-  drawn; any other code a terminal would act on shows as it is, such as
-  `^[[2K`, never acted on. If CAF kept only the last lines, above them,
+  the command gave them. Only its colours (text and background) and
+  bold, dim, italic, underline, strikethrough and inverse are drawn; any
+  other code a terminal would act on shows as it is, such as `^[[2K`,
+  never acted on. Text whose background is its own colour keeps the
+  app's background, so it can't hide itself. If CAF kept only the last lines, above them,
   muted: *120 earlier lines not kept*. While it runs, a caret in the
   accent ends it, and lines come and change as CAF sends them. Once it
   ends, under it: *Exited with code 0*, muted, or *Exited with code 101*,
   *Killed by signal 9*, in the warning colour; *Ended, without saying
-  how* if the agent didn't say, muted.
+  how* if the agent didn't say, muted. **Suggested:** an output of
+  thousands of lines draws only its last 2,000, with *Show 500 earlier
+  lines* above them, so the page keeps up as it grows.
 - **An image**, drawn, as wide as the column at most. One too big for CAF
   to keep says *An image too big to keep (3.4 MB)*, muted, in its place.
   Only an image is drawn as one: anything else claiming to be, such as a
-  page, is named by its type and never shown.
+  page, is named by its type and never shown. One whose data can't be read
+  as a picture says *An image this app couldn't read*.
 - **A link**: a web address (`http` or `https`) is a link, in the Link
-  colour, by its name, which opens in a new tab. Any other address, such
-  as a file's, is shown as text, its name and then the address, and never
-  followed. Nothing an agent sends ever becomes a `javascript:` link.
+  colour, by its name, which opens in a new tab, and beside it, muted,
+  the address it goes to, as the browser reads it, so a name can't say
+  one place and go to another. A host spelled in another script is shown
+  as the browser goes to it (`xn--pple-43d.com`). A link with no name,
+  or a name of only spaces, is shown by its address. Any other address,
+  such as a file's, is shown as text, its name and then the address, and
+  never followed. Nothing an agent sends ever becomes a `javascript:`
+  link.
 - **A piece CAF couldn't read**, a dashed box:
   *Something Claude sent that this app can't show*.
 
@@ -232,22 +243,37 @@ the input, it says *Kept 64 KB of 200 KB* under it.
 
 ## Asking
 
-![A permission question, attached to the composer](transcript-permission.webp "The question attaches to the composer, shows the command it asks about, and the step points to it")
+![A permission question, attached to the composer](transcript-permission.webp "CAF asks about a call to its own Bash: in its own voice, with the command, and its own two answers; the step points to it")
 
-**Asking permission.** When the agent asks before doing something, the
-question attaches to the top of the composer, joined to it with an edge in
-the accent. It says *Claude asks permission:* and then the agent's own title
-for what it wants to do, as plain text.
+**Asking permission.** When the agent wants to do something that needs the
+user's say, the question attaches to the top of the composer, joined to it
+with an edge in the accent: the turn can't go on until it's answered.
+
+Whose question it is depends on whose tool the call is:
+
+- **One of CAF's own tools** (`Origin::Caf`: Read, Edit, Write, Bash). CAF
+  asks, in its own voice, with the CAF badge. It says what the agent wants
+  to do in CAF's words, from what the call does, then the call's title, as
+  plain text: *Claude wants to run a command: rm -rf target*,
+  *Claude wants to change a file: src/config.rs*, *Claude wants to read a
+  file: …*, *Claude wants to write a file: …*. Its answers are CAF's
+  own two, *Allow* and *Refuse*. Its edge stays in the accent, unlike CAF's
+  question about a chat slow to open: like any permission question, it
+  holds up the turn.
+- **Any other tool.** The agent asks: *Claude asks permission:* and then
+  the agent's own title for what it wants to do, as plain text, with the
+  agent's own answers.
 
 Once CAF has seen the call it's about (`Permission.tool`), the question
 shows what the user is being asked to allow, under its title: the command
 it would run, in a monospace font, with the folder it runs in under it,
 muted; or the change it would make, as a diff, drawn as an opened step
 draws one. A question asked before CAF has seen its call shows its title
-alone, and gains the rest when the call arrives. Under that are the agent's own
-answers, labelled as it labels them, here *Allow*, *Always allow* and
-*Reject*, all alike: none is chosen or focused beforehand, and Enter answers
-nothing. On the right, muted: *Stop cancels this and stops the turn*.
+alone, and gains the rest when the call arrives (CAF's own questions always
+have their call). Under that are the answers, labelled as their asker
+labels them, *Allow* and *Refuse* for CAF's, or for the agent's, such as
+*Allow*, *Always allow* and *Reject*, all alike: none is chosen or focused
+beforehand, and Enter answers nothing. On the right, muted: *Stop cancels this and stops the turn*.
 
 The step it's about stays in the timeline, its dot in the accent, and says
 *Waiting for you ↓* on the right (`ToolStatus::Asking`). The agent may ask
@@ -476,7 +502,8 @@ app's.
   *Failed* on the turn's line, and a command that exited with an error or
   was killed.
 - **Caution:** a lost chat, and a note that the agent remembers nothing.
-- **CAF's voice:** the CAF badge, on notes, failures and CAF's own questions.
+- **CAF's voice:** the CAF badge, on notes, failures and CAF's own
+  questions, permission questions about its own tools included.
 - **Link:** a web link a call gave back.
 - **Muted:** times, counts, thinking, what the agent said along the way,
   steps done or cancelled, who allowed a step, what was cut, the turn's
@@ -506,7 +533,7 @@ Everything else is calm.
 | A command's output | A `Piece::Output`: its `lines`, with their SGR codes; `dropped`, the lines before them not kept; and its `ending` (`Ending::Exited`, with an `Exit`, or `Unknown`), `None` while it runs. |
 | A command's output as it runs | `Change::OutputChanged`: the lines from `from` on replaced by `lines`, then `dropped` more gone from the top. |
 | Compaction | **Later:** `ItemKind::Compacted`. |
-| A question | `Chat.questions`, oldest first: `QuestionKind::Permission` (its `title`, `options` and the `tool` it's about, the `Item` whose `ToolCall` it shows, once there is one) or `SlowToOpen` (`adapter_answered`). Answered with `Core::answer`, or a viewer's `FromViewer::Answer`. |
+| A question | `Chat.questions`, oldest first: `QuestionKind::Permission` (its `title`, `options` and the `tool` it's about, the `Item` whose `ToolCall` it shows, once there is one; CAF's own question when that call's `origin` is `Origin::Caf`) or `SlowToOpen` (`adapter_answered`). Answered with `Core::answer`, or a viewer's `FromViewer::Answer`. |
 | Stop | `Core::stop`, or `FromViewer::Stop`: it answers the agent's questions as cancelled, and stops the waiting messages. |
 | A failure | `TurnLife::Failed(Failure)`: its `reason` (`FailureReason`), `agent_said`, and `remedy` (`Remedy::SendAgain` or `SignIn`). |
 | Send again | Sending the turn's message again: `Core::send`, or `FromViewer::Send`. |

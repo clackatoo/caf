@@ -281,14 +281,15 @@
       entries: [done(),
         { t: 'turn', starter: 'agent', life: 'finished', took: '3s', at: '14:41', model: 'Opus 5.5', items: [T.tool('other', 'Read output of cargo bench', 'done'), T.words('<p>The benchmark you asked for finished: parsing a 1 MB config takes <b>2.1 ms</b>, down from 2.4 ms before the change.</p>')] }] },
     { group: 'Asking and failing' },
-    { id: 'permission', label: 'Asking permission', what: "<b>The agent asks before running a command.</b> The question attaches to the composer, and the step points to it. The answers are the agent's own; none is chosen beforehand.",
+    { id: 'permission', label: 'Asking permission', what: "<b>Claude wants to run a command through CAF's own Bash, so CAF asks</b>, in its own voice, with the command and CAF's two answers. The question attaches to the composer, and the step points to it. None is chosen beforehand. A question about a tool of the agent's own is the agent's: <i>Claude asks permission:</i>, with its own answers.",
       entries: [{ t: 'time', text: 'Today 14:50' },
         { t: 'turn', ask: 'Clear out the build cache and rebuild.', life: 'running', took: '6s', at: '14:50', model: 'Opus 5.5', items: [T.think('Removing <code>target</code> is the simplest way to clear the cache.', '2s'), T.tool('execute', 'rm -rf target', 'asking')],
-          question: { title: 'rm -rf target', command: 'rm -rf target', folder: '/home/me/caf', options: ['Allow', 'Always allow', 'Reject'] } }] },
+          question: { caf: 'Claude wants to run a command', title: 'rm -rf target', command: 'rm -rf target', folder: '/home/me/caf', options: ['Allow', 'Refuse'] } }] },
     { id: 'refused', label: 'Refused, allowed, cancelled', what: "<b>The policy refused an edit outside the project; the user allowed a build; then pressed Stop while the tests ran.</b> The refused step is in the warning colour and says who refused it, and why. The cancelled one is muted: the user chose to stop it.",
       openFirst: true, entries: [{ t: 'time', text: 'Today 15:20' },
         { t: 'turn', ask: 'Point the shared config at the new cache folder, then rebuild.', life: 'stopped', took: '14s', at: '15:20', model: 'Opus 5.5', items: [
-          T.tool('edit', 'Edit /home/me/shared/config.toml', 'refused', { by: 'Refused by the policy: writes outside the project folder' }),
+          T.tool('edit', 'Edit /home/me/shared/config.toml', 'refused', { by: 'Refused by the policy: writes outside the project folder', never: true, path: '/home/me/shared/config.toml', plus: 1, minus: 1,
+            diff: [{ o: 3, n: 3, t: '[cache]' }, { o: 4, t: 'folder = "~/.cache/caf"', del: true }, { n: 4, t: 'folder = ".cache"', add: true }] }),
           T.words("I can't change the shared config from here, so I'll rebuild with the cache folder set for this run."),
           T.tool('execute', 'CACHE=.cache cargo build', 'done', { by: 'Allowed by you', out: '<span class="ok">   Finished</span> `dev` profile in 9.82s', end: 'Exited with code 0', took: '10s' }),
           T.tool('execute', 'cargo test', 'cancelled')] }] },
@@ -337,7 +338,9 @@
     (tool.end ? `<div class="out-end${tool.bad ? ' bad' : ''}">${tool.end}</div>` : '')
   const STATUS_RIGHT = { pending: 'Waiting to start', refused: 'Refused', cancelled: 'Cancelled' }
   const toolRight = (tool) => STATUS_RIGHT[tool.status] || tool.took || ''
-  const toolBody = (tool) => (tool.by ? `<div class="by">${tool.by}</div>` : '') + (tool.diff ? diffHtml(tool) : tool.out ? outHtml(tool) : '')
+  // A refused call's result is what it would have done, said so in words.
+  const toolBody = (tool) => (tool.by ? `<div class="by">${tool.by}</div>` : '') + (tool.never && (tool.diff || tool.out) ? '<div class="by">What it would have done (never ran)</div>' : '') +
+    (tool.diff ? diffHtml(tool) : tool.out ? outHtml(tool) : '')
 
   function failure(f) {
     const acts = f.remedy === 'Send again' ? `<span class="btn primary">${icon.restore}Send again</span>`
@@ -389,7 +392,9 @@
       const [verb, one, many] = KIND_WORD[kind]
       const fail = ts.some(t => t.status === 'failed' || t.status === 'refused')
       let label = kind === 'execute' && ts.length === 1 ? ts[0].title : `${verb} ${ts.length} ${ts.length === 1 ? one : many}`
-      if (kind === 'edit' && ts.some(t => t.diff)) label += ` ${counts(ts.reduce((a, t) => a + (t.plus || 0), 0), ts.reduce((a, t) => a + (t.minus || 0), 0))}`
+      // A refused edit's diff never happened, so it isn't counted.
+      const made = ts.filter(t => t.diff && t.status !== 'refused')
+      if (kind === 'edit' && made.length) label += ` ${counts(made.reduce((a, t) => a + (t.plus || 0), 0), made.reduce((a, t) => a + (t.minus || 0), 0))}`
       if (kind === 'execute') label += fail ? ` ${icon.x}` : ` <span class="st-done">${icon.check}</span>`
       h += `<span class="chip${fail ? ' fail' : ''}">${icon[kind]}${label}</span>`
     }
@@ -417,7 +422,9 @@
   }
 
   // A question waiting on the user, attached to the top of the composer.
-  const attachedQuestion = (q) => `<div class="si-attached"><div class="what">${icon.shield}<div><b>Claude asks permission:</b> ${q.title}</div></div>` +
+  // CAF's own question, about a call to one of its own tools, is in CAF's
+  // voice and words; the agent's, about one of its own, is the agent's.
+  const attachedQuestion = (q) => `<div class="si-attached"><div class="what">${icon.shield}<div>${q.caf ? `<span class="caf-badge">CAF</span><b>${q.caf}:</b>` : '<b>Claude asks permission:</b>'} ${q.title}</div></div>` +
     (q.command ? `<div class="asked"><div class="out">${q.command}</div><div class="in">In ${q.folder}</div></div>` : '') +
     `<div class="acts">${q.options.map(o => `<span class="btn">${o}</span>`).join('')}<span class="hint">Stop cancels this and stops the turn</span></div></div>`
   const attachedSlow = () => `<div class="si-attached si-calm"><div class="what">${icon.clock}<div><span class="caf-badge">CAF</span>Claude is taking a while to open this chat. It may be busy, or stuck.</div></div>` +
