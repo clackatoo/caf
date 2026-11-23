@@ -364,6 +364,9 @@ pub(super) struct Run<A: AppItem> {
     pub(super) dropped_tools: BTreeSet<String>,
     /// Its tool calls, by the agent's ids.
     pub(super) tools: BTreeMap<String, ItemId>,
+    /// Its tool calls CAF serves, whose record the agent's reports never
+    /// change.
+    pub(super) served: BTreeMap<ItemId, super::tools::Served>,
     /// The history being replayed by `session/load`, the turn being
     /// built.
     pub(super) import: Option<Turn<A>>,

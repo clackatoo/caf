@@ -118,6 +118,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 held_until: None,
                 dropped_tools: std::collections::BTreeSet::new(),
                 tools: BTreeMap::new(),
+                served: BTreeMap::new(),
                 import: None,
                 replaying: false,
                 slow: None,

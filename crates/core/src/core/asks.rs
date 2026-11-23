@@ -214,6 +214,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         answer: Answer,
         out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
+        if let Answer::Permission(option) = &answer
+            && let Some(offered) = self.served_answer(now, question, option, out)
+        {
+            return if offered {
+                Ok(())
+            } else {
+                Err(Refused::WrongAnswer)
+            };
+        }
         if let Some((&ticket, ask)) = self
             .asks
             .iter()

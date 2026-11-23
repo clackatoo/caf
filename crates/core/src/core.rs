@@ -40,7 +40,8 @@ use crate::directive::{Directive, Level, Report};
 use crate::event::{Event, HostCommand};
 use crate::host::Host;
 use crate::ids::{
-    AgentName, AgentSessionId, ChangeNo, ChatId, ConnectionId, QuestionId, Shelf, Ticket, TurnId,
+    AgentName, AgentSessionId, CallId, ChangeNo, ChatId, ConnectionId, QuestionId, Shelf, Ticket,
+    TurnId,
 };
 use crate::install::Recipe;
 use crate::profiles::ProfileReport;
@@ -113,6 +114,9 @@ pub struct Core<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     /// The agent's requests waiting for CAF's answer, by the ticket of
     /// the policy's decision.
     asks: BTreeMap<Ticket, Ask>,
+    /// The calls to the tools CAF serves that haven't finished, by the
+    /// driver's number for each.
+    calls: BTreeMap<CallId, tools::Call>,
     /// The time the timer driver was last asked to wake the core at.
     wake: Option<Mono>,
     /// Chats changed since viewers were last told.
@@ -347,6 +351,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             procs: BTreeMap::new(),
             pending: BTreeMap::new(),
             asks: BTreeMap::new(),
+            calls: BTreeMap::new(),
             wake: None,
             dirty: BTreeSet::new(),
             shutting_down: false,
@@ -375,8 +380,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
             Event::Agent { process, event } => self.agent_event(now, process, event, out),
             Event::Woken => self.woken(now, out),
-            // The policy's reason is kept on the call: feature 10.
-            Event::Policy { ticket, answer, .. } => self.policy_answered(now, ticket, answer, out),
+            Event::Policy {
+                ticket,
+                answer,
+                reason,
+            } => {
+                if !self.served_policy(now, ticket, &answer, reason, out) {
+                    self.policy_answered(now, ticket, answer, out);
+                }
+            }
             Event::Tool { call, event } => self.tool_event(now, call, event, out),
             Event::Storage { ticket, event } => self.storage_event(now, ticket, event, out),
             Event::Setup { ticket, event } => self.setup_event(now, ticket, event, out),
@@ -939,6 +951,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.procs.is_empty()
             && self.pending.is_empty()
             && self.asks.is_empty()
+            && self.calls.is_empty()
             && self.runs.values().all(|run| run.running.is_none())
             && self.saving.settled()
             && (!self.shutting_down || self.saving.all_written())
@@ -1123,6 +1136,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             "procs": self.procs,
             "pending": pending,
             "asks": self.asks,
+            "calls": self.calls,
             "wake": self.wake,
             "next_id": self.ids.next,
             "first_id": self.ids.first,
