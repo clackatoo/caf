@@ -1124,3 +1124,41 @@ fn input_that_makes_no_action_fails_the_report_waiting_for_it_without_the_agents
     assert_eq!(one_told(&out)["value"]["why"]["type"], "BadInput");
     assert_eq!(the_tool(&script)["status"], kind("Failed"));
 }
+
+#[test]
+fn a_report_before_its_input_is_joined_by_the_call_without_the_agents_id() {
+    let mut script = running();
+    let input = json!({ "file_path": "/work/a" });
+    // The usual order: the adapter reports the call, then calls.
+    script.update(PROC, SESSION, &report("r1", "Read", "pending", &json!({})));
+    let started = the_tool(&script)["id"].clone();
+    let out = script.tool(1, called(CafTool::Read, input.clone(), None));
+    assert_eq!(tools(&script).len(), 1, "joined");
+    assert_eq!(the_tool(&script)["id"], started);
+    assert_eq!(the_tool(&script)["title"], "Read a");
+    // Its input then comes, and it's the same call: still one item, CAF's.
+    let mut update = report("r1", "Read", "pending", &input);
+    update["sessionUpdate"] = json!("tool_call_update");
+    update["title"] = json!("mcp__caf__Read");
+    script.update(PROC, SESSION, &update);
+    assert_eq!(tools(&script).len(), 1);
+    assert_eq!(the_tool(&script)["title"], "Read a");
+    // A report then saying another input was another call's: let go.
+    script.update(PROC, SESSION, &report("r2", "Read", "pending", &json!({})));
+    let other = script.tool(
+        2,
+        called(CafTool::Read, json!({ "file_path": "/work/b" }), None),
+    );
+    let mut update = report("r2", "Read", "pending", &json!({ "file_path": "/work/c" }));
+    update["sessionUpdate"] = json!("tool_call_update");
+    script.update(PROC, SESSION, &update);
+    let titles: Vec<Value> = tools(&script)
+        .iter()
+        .map(|tool| tool["title"].clone())
+        .collect();
+    assert_eq!(titles.len(), 3, "{titles:?}");
+    assert_eq!(titles[1], "Read b", "the call keeps the item");
+    script.policy(ticket(&out), PolicyAnswer::Refuse);
+    script.policy(ticket(&other), PolicyAnswer::Refuse);
+    script.answers(PROC, PROMPT, &json!({ "stopReason": "end_turn" }));
+}
