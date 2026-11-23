@@ -84,7 +84,9 @@ describe('the Agents panel', () => {
     // agent-13: a failed install may be tried again.
     expect(buttons('agent-13')).toEqual(['Try again'])
     for (const agent of all) expect(text(row(agent.name))).not.toContain('Unknown (')
-  })
+    // Dozens of queries of the accessibility tree: over half a second on
+    // an idle machine, and past vitest's 5 s on a busy one.
+  }, 60_000)
 
   it('installs, stops, signs in and out, each agent by name', async () => {
     const { actions: given } = draw([
