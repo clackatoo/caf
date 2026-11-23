@@ -35,9 +35,13 @@ status: ToolStatus,
  */
 origin: Origin, 
 /**
- * What it does, as CAF reads it: set once, when CAF has the call's
- * whole input, and never changed. `None` until then, and for a call
- * whose input never came whole.
+ * What it does, as CAF reads it. For CAF's own tools, set once, when
+ * CAF has the call's whole input, and never changed: `None` until
+ * then, and for a call whose input never came whole. For any other,
+ * [`Action::Tool`] by the tool's name, once its [`origin`](Self::origin)
+ * is known: it changes only if the agent's permission request names
+ * the tool otherwise than its report did. `None` while whose tool it
+ * is isn't known, and for a call saved before CAF kept actions.
  */
 action: Action | null, 
 /**
