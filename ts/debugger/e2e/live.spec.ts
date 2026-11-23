@@ -45,7 +45,7 @@ test('answers a permission question, with none chosen beforehand', async ({ page
   await expect(turn.locator('.words .markdown')).toContainText("I'd like to run a command.")
   await expect(turn.locator('.tool .title')).toHaveText('Run `echo hello`')
   await expect(turn.locator('.tool')).toHaveAttribute('data-status', 'Asking')
-  await expect(turn.locator('.tool .status')).toHaveText('Waiting for you')
+  await expect(turn.locator('.tool .status')).toHaveText('Waiting for you ↓')
   await question.getByRole('button', { name: 'Allow' }).click()
   await expect(question).toHaveCount(0)
   await expect(turn.locator('.life')).toHaveText('Finished')
@@ -53,14 +53,35 @@ test('answers a permission question, with none chosen beforehand', async ({ page
   await expect(turn.locator('.tool .decision')).toHaveText('Allowed by you')
 })
 
-test('stops a running turn', async ({ page, server }) => {
+test('stops a running turn, and the call waiting for the user is cancelled', async ({ page, server }) => {
   await page.goto(server.url)
   await openChat(page, process.cwd())
   await send(page, 'ask')
   const turn = page.locator('.caf-chat .turn').last()
   await expect(turn.locator('.life')).toHaveText('Running')
+  await expect(turn.locator('.tool')).toHaveAttribute('data-status', 'Asking', { timeout: 15_000 })
   await page.getByRole('button', { name: 'Stop' }).click()
   await expect(turn.locator('.life')).toHaveText('Stopped')
+  await expect(turn.locator('.tool')).toHaveAttribute('data-status', 'Cancelled')
+  await expect(turn.locator('.tool .status')).toHaveText('Cancelled')
+})
+
+test('a call the user refuses says so, and never ran', async ({ page, server }) => {
+  await page.goto(server.url)
+  await openChat(page, process.cwd())
+  await send(page, 'ask')
+  const question = page.locator('.questions .question')
+  await expect(question).toContainText('Run `echo hello`', { timeout: 15_000 })
+  // The agent's own question, not CAF's.
+  await expect(question).toHaveAttribute('data-caf', 'false')
+  await expect(question).toContainText('The agent asks permission')
+  await question.getByRole('button', { name: 'Reject' }).click()
+  await expect(question).toHaveCount(0)
+  const tool = page.locator('.caf-chat .turn').last().locator('.tool')
+  await expect(tool).toHaveAttribute('data-status', 'Refused')
+  await expect(tool.locator('.status')).toHaveText('Refused')
+  await tool.locator(':scope > summary').click()
+  await expect(tool.locator('.decision')).toHaveText('Refused by you')
 })
 
 test('a message sent while a turn runs waits for it, then runs', async ({ page, server }) => {
@@ -145,8 +166,11 @@ test('draws the tool calls the agent reports: a diff, a terminal, text, an image
   const turn = page.locator('.caf-chat .turn').last()
   await expect(turn.locator('.life')).toHaveText('Finished', { timeout: 15_000 })
   const tools = turn.locator('details.tool')
-  await expect(tools).toHaveCount(3)
-  for (const row of await tools.all()) await row.locator(':scope > summary').click()
+  await expect(tools).toHaveCount(4)
+  // The edit opens by itself, to its diff; the rest are opened here.
+  await expect(tools.nth(0)).toHaveAttribute('open', '')
+  await expect(tools.nth(1)).not.toHaveAttribute('open', '')
+  for (const row of await tools.all()) await row.evaluate((details) => details.setAttribute('open', ''))
 
   const edit = tools.nth(0)
   await expect(edit.locator('.title')).toHaveText('Edit src/lib.rs')
@@ -174,5 +198,11 @@ test('draws the tool calls the agent reports: a diff, a terminal, text, an image
   await expect(link).toHaveText('CAF on the web')
   await expect(link).toHaveAttribute('href', 'https://example.com/caf')
   await expect(search.locator('.piece.link').nth(1)).toContainText('javascript:alert(1)')
-  await expect(search.locator('.piece.unknown summary')).toContainText("A piece this viewer can't show")
+  await expect(search.locator('.piece.unknown summary')).toContainText("Something the agent sent that this viewer can't show")
+
+  const failed = tools.nth(3)
+  await expect(failed.locator('.title')).toHaveText('Fetch https://caf.example/down')
+  await expect(failed).toHaveAttribute('data-status', 'Failed')
+  await expect(failed.locator('.status')).toHaveText('Failed')
+  await expect(failed.locator('.piece.text pre')).toHaveText("The site didn't answer.")
 })

@@ -56,8 +56,11 @@
 //!   then a few words: an edit with its diff and the place it's about, a
 //!   command with its terminal, and a web search giving back text, a
 //!   picture, a web link, a link that mustn't be followed, and a piece CAF
-//!   can't read. So the debugger's drawing of each can be seen, and its
-//!   end-to-end tests drive it.
+//!   can't read; and a fetch that failed. So the debugger's drawing of
+//!   each can be seen, and its end-to-end tests drive it. A call refused
+//!   or cancelled is the `ask` round's, answered with Reject or Stop: a
+//!   handler can't wait for an answer, and ACP has no status for a call
+//!   cancelled.
 //! - **Its settings**, so the debugger's picker can be tried: two models,
 //!   three effort levels and fast mode, offered as Claude offers its own,
 //!   as ACP's session config options, whenever its session opens, new or
@@ -402,6 +405,8 @@ fn tools() -> Value {
             {"link": {"uri": "javascript:alert(1)", "name": "Not a link"}},
             {"raw": {"type": "hologram"}},
         ]}}),
+        json!({"tool": {"session": SESSION, "id": "fetch", "title": "Fetch https://caf.example/down", "kind": "fetch", "status": "failed",
+            "tool_name": "WebFetch", "raw_input": {"url": "https://caf.example/down"}, "content": [{"text": "The site didn't answer."}]}}),
     ];
     steps.extend(
         words("I used a tool of every kind.")

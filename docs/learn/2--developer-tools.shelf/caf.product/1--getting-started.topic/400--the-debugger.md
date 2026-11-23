@@ -78,8 +78,9 @@ With no `--agents`, the debugger offers:
   at once with a few words. Send it exactly `ask`, and it asks permission
   to run a command: answer it, or try Stop while it waits. Send it exactly
   `tools`, and it uses a tool of every kind it can report: an edit, with
-  its diff, a command, and a web search giving back text, a picture and
-  links. Send it exactly
+  its diff, a command, a web search giving back text, a picture and
+  links, and a fetch that failed. Answer its `ask` with Reject to see a
+  call refused, or Stop to see one cancelled. Send it exactly
   `fail`, and the turn fails, the first time in each chat, so sending it
   again shows Send again working. Send it exactly `sign in`, and the turn
   fails for want of signing in, the first time in each chat. It offers two
