@@ -321,10 +321,9 @@ pub enum ToolEvent {
         done: bool,
         /// What it gave back, for the record: for a failure, why, as a
         /// [`Piece::Text`]. A command's output is ended with its
-        /// [`ending`](crate::tool::Output::ending). A
-        /// [`Piece::Diff`](crate::tool::Piece::Diff) is the change as
-        /// made, in place of the preview's diffs; without one, the
-        /// preview's stay.
+        /// [`ending`](crate::tool::Output::ending). A [`Piece::Diff`] is
+        /// the change as made, in place of the preview's diffs; without
+        /// one, the preview's stay.
         pieces: Vec<Piece>,
     },
     /// The agent cancelled it, or its connection closed: nothing more
