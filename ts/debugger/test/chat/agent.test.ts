@@ -388,7 +388,7 @@ describe("CAF's notes and refusals", () => {
     ['CannotSignIn', "CAF can't sign in to or out of this agent now."],
     ['NotSigningIn', "The agent isn't being signed in to."],
     ['OwnTools', "CAF can't turn off this agent's own tools, so it won't run it."],
-    ['ReservedServer', "An MCP server can't be named caf, nor anything the agent would confuse with CAF's own tools, such as caf.tools."],
+    ['ReservedServer', "An MCP server can't be named caf, nor anything the agent would write as caf followed by __, such as caf__tools or caf., as its tools would look like CAF's own."],
     ['SameServerName', "Two of the MCP servers have names the agent would write alike, so their tools couldn't be told apart."],
   ])('says %s', (reason, says) => {
     expect(refusedText({ type: reason } as never)).toContain(says)
