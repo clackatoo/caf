@@ -1162,3 +1162,51 @@ fn a_report_before_its_input_is_joined_by_the_call_without_the_agents_id() {
     script.policy(ticket(&other), PolicyAnswer::Refuse);
     script.answers(PROC, PROMPT, &json!({ "stopReason": "end_turn" }));
 }
+
+#[test]
+fn a_call_naming_a_report_held_only_for_now_takes_it() {
+    let mut script = running();
+    script.update(PROC, SESSION, &report("r1", "Read", "pending", &json!({})));
+    // A call without the agent's id holds the report for now.
+    let first = script.tool(
+        1,
+        called(CafTool::Read, json!({ "file_path": "/work/a" }), None),
+    );
+    assert_eq!(tools(&script).len(), 1);
+    // Then the call the report is of names it: it's that call's.
+    let out = script.tool(
+        2,
+        called(CafTool::Read, json!({ "file_path": "/work/b" }), Some("r1")),
+    );
+    assert!(
+        with(&out, "report")
+            .iter()
+            .all(|report| report["report"] != "Warn"),
+        "not an earlier call's id: {out:#?}"
+    );
+    let second = ticket(&out);
+    assert_eq!(tools(&script).len(), 2);
+    let mut update = report(
+        "r1",
+        "Read",
+        "completed",
+        &json!({ "file_path": "/work/b" }),
+    );
+    update["sessionUpdate"] = json!("tool_call_update");
+    script.update(PROC, SESSION, &update);
+    assert_eq!(tools(&script).len(), 2, "it landed on the second call");
+    // The first is free for its own report.
+    script.update(
+        PROC,
+        SESSION,
+        &report("r2", "Read", "pending", &json!({ "file_path": "/work/a" })),
+    );
+    assert_eq!(tools(&script).len(), 2, "joined the first");
+    let statuses: Vec<Value> = tools(&script)
+        .iter()
+        .map(|tool| tool["status"].clone())
+        .collect();
+    assert_eq!(statuses, [kind("Pending"), kind("Pending")]);
+    script.policy(ticket(&first), PolicyAnswer::Refuse);
+    script.policy(second, PolicyAnswer::Refuse);
+}
