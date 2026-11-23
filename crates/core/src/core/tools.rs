@@ -38,7 +38,7 @@ use crate::question::{OptionId, OptionKind, Permission, PermissionOption, Questi
 use crate::time::{Now, Window};
 use crate::tool::{
     Action, CafTool, DecidedBy, Decision, Ending, Lines, MOST_LINE, MOST_OUTPUT, Origin, Output,
-    Piece,
+    Piece, output_size,
 };
 
 /// The longest title CAF writes for a call, in bytes.
@@ -912,14 +912,12 @@ impl Printed {
         let kept_from_at = usize::try_from(kept_from)
             .unwrap_or(usize::MAX)
             .min(kept.len());
-        let mut size: usize = (kept[..kept_from_at].iter().chain(&new))
-            .map(String::len)
-            .sum();
+        let mut size = output_size(kept[..kept_from_at].iter().chain(&new));
         let mut dropped = 0u64;
         let mut all = kept[..kept_from_at].iter().chain(&new);
         while size > MOST_OUTPUT {
             let Some(line) = all.next() else { break };
-            size -= line.len();
+            size -= output_size([line]);
             dropped += 1;
         }
         // Drop those lines: the fixed first, then the driver's lines'
@@ -1249,14 +1247,15 @@ mod tests {
         assert!(change.lines.iter().all(|line| line.len() <= MOST_LINE));
         assert_eq!(change.lines.concat(), long);
         apply(&mut kept, &change);
-        // Enough more to drop past the long line's first piece.
-        let block = "x".repeat(MOST_LINE);
+        // Enough more to drop past the long line's first piece, each line
+        // costing its ending too.
+        let block = "x".repeat(MOST_LINE - 2);
         let more: Vec<String> = (0..3).map(|_| block.clone()).collect();
         let change = printed.print(&kept, 1, more).expect("a change");
         assert_eq!(change.from, 2);
         assert_eq!(change.dropped, 1);
         apply(&mut kept, &change);
-        assert!(kept.iter().map(String::len).sum::<usize>() <= MOST_OUTPUT);
+        assert!(output_size(&kept) <= MOST_OUTPUT);
         assert_eq!(printed.first, 0, "the long line is partly kept");
         assert_eq!(printed.pieces, [1, 1, 1, 1]);
         // Rewriting the line partly dropped rewrites what's kept of it.
@@ -1385,5 +1384,20 @@ mod squashing {
             dropped: 0,
         };
         assert!(!squash_output(&mut one, &other));
+    }
+}
+
+#[cfg(test)]
+mod empty_lines {
+    use super::*;
+
+    #[test]
+    fn empty_lines_count_their_endings_so_the_output_stays_bounded() {
+        let mut printed = Printed::default();
+        let change = printed
+            .print(&[], 0, vec![String::new(); 1_000_000])
+            .expect("a change");
+        let kept = 1_000_000 - change.dropped;
+        assert_eq!(kept, MOST_OUTPUT as u64, "each empty line costs its ending");
     }
 }

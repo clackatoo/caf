@@ -44,7 +44,7 @@
 //! | What | Most kept | Which part |
 //! | --- | --- | --- |
 //! | [`Text`] | [`MOST_TEXT`] | its start |
-//! | [`Output`] | [`MOST_OUTPUT`] | its end, in whole lines of at most [`MOST_LINE`] |
+//! | [`Output`] | [`MOST_OUTPUT`], each line a byte more than its text | its end, in whole lines of at most [`MOST_LINE`] |
 //! | [`Diff`] | [`MOST_DIFF`], each line 64 bytes more than its text | whole hunks, then how many more; none past 10,000 lines changed |
 //! | [`Image`] | [`MOST_IMAGE`] | all of it, or none, with its size |
 //! | [`ToolCall::locations`] | [`MOST_LOCATIONS`] | the first |
@@ -58,7 +58,9 @@ use crate::event::Exit;
 
 /// The most of a [`Text`] kept, in bytes: its start.
 pub const MOST_TEXT: usize = 64 * 1024;
-/// The most of an [`Output`] kept, in bytes: its end.
+/// The most of an [`Output`] kept, in bytes: its end. Each line counts
+/// its ending too, so a line costs at least a byte, and empty lines
+/// can't make an output any longer than this many lines.
 pub const MOST_OUTPUT: usize = 64 * 1024;
 /// The longest line of an [`Output`], in bytes. A longer one is split
 /// into lines this long, at character boundaries, before it's kept, so
@@ -745,3 +747,9 @@ pub(crate) fn capped_locations(mut locations: Vec<Location>) -> (Vec<Location>, 
 
 #[cfg(test)]
 mod tests;
+
+/// What `lines` of an [`Output`] cost of [`MOST_OUTPUT`], in bytes: each
+/// one's text and its ending.
+pub(crate) fn output_size<'a>(lines: impl IntoIterator<Item = &'a String>) -> usize {
+    lines.into_iter().map(|line| line.len() + 1).sum()
+}
