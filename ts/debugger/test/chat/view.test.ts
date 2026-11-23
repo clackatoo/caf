@@ -276,7 +276,7 @@ describe('items', () => {
   }
 
   it('folds an unknown item, with what it was and its raw data', () => {
-    const unknown = item({ type: 'Unknown', value: { what: 'plan_v2', raw: { steps: ['a'] }, summary: null } })
+    const unknown = item({ type: 'Unknown', value: { what: 'plan_v2', raw: { steps: ['a'] }, summary: null, cut: null } })
     const { container } = draw(chat({ turns: [turn({ items: [unknown] })] }))
     const details = container.querySelector('details.unknown') as HTMLDetailsElement
     expect(details.open).toBe(false)
@@ -290,7 +290,7 @@ describe('items', () => {
   })
 
   it("draws an app item this version of the app can't read by the summary it had, and keeps its data", () => {
-    const unreadable = item({ type: 'Unknown', value: { what: 'App', raw: { route: ['Kyiv'] }, summary: 'Planned a route' } })
+    const unreadable = item({ type: 'Unknown', value: { what: 'App', raw: { route: ['Kyiv'] }, summary: 'Planned a route', cut: null } })
     const { container } = draw(chat({ turns: [turn({ items: [unreadable] })] }))
     const details = container.querySelector('details.unreadable') as HTMLDetailsElement
     expect(details.open).toBe(false)
@@ -870,7 +870,7 @@ describe("text that hides or reorders itself", () => {
       type: 'Tool',
       value: { title: 't', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'echo \u202Egnp.exe\u200B' }, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [{ type: 'Text', value: { text: 'out\u2066put', cut: null } }], app: null },
     })
-    const unknown = item({ type: 'Unknown', value: { what: 'x\u202E', raw: { a: '\u202Eb' }, summary: null } })
+    const unknown = item({ type: 'Unknown', value: { what: 'x\u202E', raw: { a: '\u202Eb' }, summary: null, cut: null } })
     const { container } = draw(chat({ turns: [turn({ items: [tool, unknown] })] }))
     const all = container.textContent ?? ''
     expect(all).not.toMatch(/[\u202A-\u202E\u2066-\u2069\u200B]/)
