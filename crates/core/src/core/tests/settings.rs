@@ -2520,7 +2520,10 @@ fn a_resumed_claude_session_is_set_to_default_too_and_a_refusal_holds_nothing_up
         &json!({ "modes": claude_modes("dontAsk") }),
     );
     let mode = sent(&out, "session/set_mode");
-    assert_eq!(mode["params"], json!({ "sessionId": "old", "modeId": "default" }));
+    assert_eq!(
+        mode["params"],
+        json!({ "sessionId": "old", "modeId": "default" })
+    );
     assert!(prompts(&out).is_empty());
     let out = script.fails(
         PROC,

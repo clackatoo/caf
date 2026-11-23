@@ -279,6 +279,9 @@ pub enum Refused {
     /// [`Settings::offered`](crate::settings::Settings::offered), once its
     /// session has opened.
     NoSuchSetting,
+    /// One of the MCP servers given is named `caf`, in any case: CAF
+    /// serves its own tools as that, so an agent couldn't tell them apart.
+    ReservedServer,
 }
 
 /// What the host can see of a connection: one adapter process.

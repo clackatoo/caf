@@ -11,6 +11,8 @@ use crate::core::sessions::MOST_INSTRUCTIONS;
 use crate::core::{OpenChat, Refused, SessionChoice};
 use crate::ids::AgentSessionId;
 use crate::profiles::ProfileChoice;
+use crate::agent::McpServer;
+use crate::ids::Shelf;
 use crate::save::RestoreChat;
 
 /// CAF's own instructions, to an agent of the tests' host.
@@ -24,6 +26,7 @@ fn stripped(prompt: &str) -> Value {
         "tools": [],
         "settingSources": [],
         "strictMcpConfig": true,
+        "allowedTools": ["mcp__caf"],
         "systemPrompt": prompt,
         "promptSuggestions": false,
         "verbatimPrompts": true,
@@ -226,4 +229,32 @@ fn an_agents_status_follows_the_adapter_that_last_answered() {
     let out = script.answers(proc, init, &claude_init());
     sent(&out, "session/new");
     assert_eq!(script.agent_status("claude")["own_tools_off"], true);
+}
+
+#[test]
+fn an_mcp_server_named_caf_is_refused_as_cafs_own() {
+    let server = |name: &str| McpServer::Http {
+        name: name.to_owned(),
+        url: "http://localhost:1/mcp".to_owned(),
+        headers: Vec::new(),
+    };
+    for name in ["caf", "CAF"] {
+        let mut script = Script::new(host());
+        let mut open = OpenChat::new("claude", "/work");
+        open.mcp_servers = vec![server("eyespy"), server(name)];
+        let (chat, out) = script.open(open);
+        assert_eq!(chat, Err(Refused::ReservedServer), "{name}");
+        assert!(writes(&out).is_empty() && with(&out, "start").is_empty());
+        assert_eq!(script.state()["chats"], json!([]), "no chat is made");
+        let mut restore = RestoreChat::new(CHAT, Shelf("work".to_owned()));
+        restore.mcp_servers = vec![server(name)];
+        let (restored, out) = script.restore(restore);
+        assert_eq!(restored, Err(Refused::ReservedServer), "{name}");
+        assert!(out.is_empty(), "nothing is read: {out:#?}");
+    }
+    // A name with `caf` in it is the app's own.
+    let mut script = Script::new(host());
+    let mut open = OpenChat::new("claude", "/work");
+    open.mcp_servers = vec![server("caffeine")];
+    assert_eq!(script.open(open).0, Ok(CHAT));
 }
