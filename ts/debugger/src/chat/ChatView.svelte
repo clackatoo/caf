@@ -7,7 +7,7 @@
   // so the same view draws a live chat or one played back from a
   // recording. With `readOnly` (such as while looking back in time), it
   // draws the chat as it was, and nothing can be done in it.
-  import type { AgentStatus, Chat, DeepReadonly, Rights } from '@clackatoo/caf'
+  import type { AgentStatus, Chat, DeepReadonly, ItemId, Rights, ToolCall } from '@clackatoo/caf'
   import { untrack } from 'svelte'
   import { attempt, type ChatActions } from './actions.ts'
   import AgentBanner from './AgentBanner.svelte'
@@ -73,6 +73,15 @@
   const archived = $derived(chat.archived !== null)
   /** Whether anything can be done in the chat: it isn't read-only, and the host lets this viewer act. */
   const acting = $derived(!readOnly && may.act)
+  /** The chat's tool calls, by their items' ids: a permission question shows the call it's about. */
+  const tools = $derived(
+    new Map(
+      chat.turns.flatMap((turn) =>
+        turn.items.flatMap((item) => (item.kind.type === 'Tool' ? [[item.id, item.kind.value] as const] : [])),
+      ),
+    ),
+  )
+  const toolOf = (id: ItemId): DeepReadonly<ToolCall> | null => tools.get(id) ?? null
   let problem = $state<string | null>(null)
   // Follow the end of the chat as it grows, unless the user has scrolled up.
   let scroller = $state<HTMLElement>()
@@ -178,7 +187,7 @@
     {/each}
   </div>
 
-  <Questions questions={chat.questions} readOnly={!acting} answer={actions.answer} />
+  <Questions questions={chat.questions} {toolOf} readOnly={!acting} answer={actions.answer} />
   {#if archived}
     <!-- Sending brings it back, so the composer stays: only its settings
          wait, as CAF won't change them while it's archived. -->

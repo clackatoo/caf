@@ -352,13 +352,19 @@ export function toolKind(kind: DeepReadonly<ToolKind>): { icon: string; name: st
 export function toolStatus(status: DeepReadonly<ToolStatus>): string {
   switch (status.type) {
     case 'Pending':
-      return 'Pending'
+      return 'Waiting to start'
+    case 'Asking':
+      return 'Waiting for you'
     case 'Running':
       return 'Running'
     case 'Done':
       return 'Done'
     case 'Failed':
       return 'Failed'
+    case 'Refused':
+      return 'Refused'
+    case 'Cancelled':
+      return 'Cancelled'
     default:
       return `Unknown (${tagOf(status)})`
   }

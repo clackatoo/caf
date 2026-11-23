@@ -5,18 +5,25 @@
   // - A permission question offers the agent's options as it gave them,
   //   with none chosen beforehand: nothing is focused, and Enter answers
   //   nothing, so an option of kind Other is never the default either.
+  //   Once CAF has seen the call it's about, it shows what the call
+  //   would do: the command it runs, or the change it makes.
   // - A session slow to open offers keep waiting, retry or stop. Escape
   //   means keep waiting, as dismissing it does.
-  import type { Answer, DeepReadonly, Question, QuestionId } from '@clackatoo/caf'
+  import type { Answer, DeepReadonly, ItemId, Question, QuestionId, ToolCall } from '@clackatoo/caf'
   import { attempt } from './actions.ts'
+  import DiffView from './DiffView.svelte'
+  import { unhidden } from './unhidden.ts'
   import { errorText, optionTone, tagOf } from './words.ts'
 
   let {
     questions,
+    toolOf = () => null,
     readOnly,
     answer,
   }: {
     questions: DeepReadonly<Question[]>
+    /** The tool call an item is, if it's one: what a permission question is about. */
+    toolOf?: (id: ItemId) => DeepReadonly<ToolCall> | null
     readOnly: boolean
     answer: (question: QuestionId, answer: Answer) => Promise<unknown> | void
   } = $props()
@@ -77,7 +84,19 @@
       {@const kind = question.kind}
       <div class="question" data-kind={kind.type}>
         {#if kind.type === 'Permission'}
+          {@const tool = kind.value.tool === null ? null : toolOf(kind.value.tool)}
+          {@const action = tool?.action ?? null}
+          {@const diffs = tool?.result.flatMap((piece) => (piece.type === 'Diff' ? [piece.value] : [])) ?? []}
           <div class="ask">The agent asks permission: <strong>{kind.value.title}</strong></div>
+          {#if action?.type === 'Run' || diffs.length > 0}
+            <div class="about">
+              {#if action?.type === 'Run'}
+                <pre class="command">{unhidden(action.value.command)}</pre>
+                <div class="folder">In {unhidden(action.value.folder)}{action.value.background ? ', in the background' : ''}</div>
+              {/if}
+              {#each diffs as diff, d (d)}<DiffView {diff} />{/each}
+            </div>
+          {/if}
           <div class="options">
             <!-- By position: the agent chooses its options' ids. -->
             {#each kind.value.options as option, j (j)}
@@ -142,6 +161,29 @@
   }
   .ask {
     margin-bottom: 0.5em;
+    overflow-wrap: anywhere;
+  }
+  .about {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4em;
+    margin-bottom: 0.6em;
+    max-height: 40vh;
+    overflow: auto;
+  }
+  .command {
+    margin: 0;
+    background: var(--caf-inset);
+    border-radius: 4px;
+    padding: 0.5em 0.6em;
+    font-family: var(--caf-mono);
+    font-size: 0.9em;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .folder {
+    color: var(--caf-muted);
+    font-size: 0.85em;
     overflow-wrap: anywhere;
   }
   .options {
