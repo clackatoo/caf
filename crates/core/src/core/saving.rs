@@ -272,8 +272,7 @@ impl<A: AppItem, D: AppData> Kept<A, D> {
         else {
             return;
         };
-        if *last != item || lines.iter().map(String::len).sum::<usize>() <= crate::tool::MOST_OUTPUT
-        {
+        if *last != item || crate::tool::output_size(lines) <= crate::tool::MOST_OUTPUT {
             return;
         }
         let tool = (chat.turns.iter().rev())
