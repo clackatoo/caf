@@ -58,6 +58,7 @@
 //! | `{"notify": {"method", "params"}}` | Sends a notification ([`Notify`]) |
 //! | `{"update": {"session", "update"}}` | Sends `session/update` ([`Update`]) |
 //! | `{"say": {"session", "text"}}`, `{"think": …}` | Sends an `agent_message_chunk` or `agent_thought_chunk` ([`Chunk`]) |
+//! | `{"tool": {"session", "id", "update", "title", "kind", "status", "tool_name", "content", "locations", "raw_input", "raw_output"}}` | Sends a `tool_call`, or a `tool_call_update` ([`Tool`]) |
 //! | `{"request": {"method", "params", "id", "as"}}` | Sends a request ([`Request`]) |
 //! | `{"await": {"to", "expect", "timeout"}}` | Waits for the answer to one, and checks it ([`Await`]) |
 //! | `{"cancel_request": {"to"}}` | Withdraws one, with `$/cancel_request` ([`CancelRequest`]) |
@@ -216,6 +217,22 @@
 //! {"respond": {"to": "prompt", "result": {"stopReason": "end_turn", "usage": {"inputTokens": 2, "cachedReadTokens": 12799, "cachedWriteTokens": 12123, "outputTokens": 4, "totalTokens": 24928}, "_meta": {"quota": {"model_usage": [{"model": "small", "token_count": {"totalTokens": 24928, "inputTokens": 2, "cachedInputTokens": 12799, "cachedWriteTokens": 12123, "outputTokens": 4, "reasoningOutputTokens": 0}}]}}}}}
 //! ```
 //!
+//! Tool calls, as Claude's adapter reports them: an edit, its diff
+//! (`old` left out for a new file) and the file it's about, then a web
+//! search of the agent's own, giving back a picture, a link, and content
+//! of a kind CAF can't read. `tool_name` is what says whose tool it is,
+//! as `_meta.claudeCode.toolName`: `mcp__eyespy__look` for an MCP
+//! server's, `mcp__caf__Read` for one of CAF's own. A `content` item is
+//! one of `{"text": TEXT}`, `{"diff": {"path", "old", "new"}}`,
+//! `{"terminal": ID}`, `{"image": {"mime", "data"}}`, `{"link": {"uri",
+//! "name"}}`, or `{"raw": CONTENT}`, sent as is.
+//!
+//! ```text
+//! {"tool": {"session": "s1", "id": "t1", "title": "Edit lib.rs", "kind": "edit", "status": "pending", "tool_name": "mcp__eyespy__edit", "raw_input": {"path": "/work/lib.rs"}, "locations": [{"path": "/work/lib.rs", "line": 2}]}}
+//! {"tool": {"session": "s1", "id": "t1", "update": true, "status": "completed", "content": [{"diff": {"path": "/work/lib.rs", "old": "a\nb\n", "new": "a\nc\n"}}]}}
+//! {"tool": {"session": "s1", "id": "t2", "title": "Search the web", "kind": "fetch", "status": "completed", "tool_name": "WebSearch", "content": [{"image": {"mime": "image/png", "data": "aGVsbG8="}}, {"link": {"uri": "https://example.com", "name": "Example"}}, {"raw": {"type": "hologram"}}]}}
+//! ```
+//!
 //! Asking permission, and checking the client allowed it:
 //!
 //! ```text
@@ -313,7 +330,8 @@ pub use binary::binary;
 pub use run::run;
 pub use script::{
     Await, CancelRequest, Chunk, LongLine, Notify, On, Output, Request, Respond, RpcError, Script,
-    ScriptError, SpawnHolder, Step, Update, Wait, WaitFile,
+    ScriptError, SpawnHolder, Step, Tool, ToolContent, ToolDiff, ToolImage, ToolLink, ToolLocation,
+    Update, Wait, WaitFile,
 };
 
 /// The environment variable that names the program for [`binary`] to

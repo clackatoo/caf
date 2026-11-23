@@ -290,6 +290,60 @@ fn a_prompt_streams_then_ends() {
 }
 
 #[test]
+fn tool_calls_are_reported_as_claudes_adapter_reports_them() {
+    let mut fake = Fake::start(&format!(
+        "{HANDSHAKE}{}",
+        r#"
+{"wait": {"method": "session/prompt", "as": "prompt"}}
+{"tool": {"session": "s1", "id": "t1", "title": "Edit lib.rs", "kind": "edit", "status": "pending", "tool_name": "mcp__eyespy__edit", "raw_input": {"path": "/work/lib.rs"}, "locations": [{"path": "/work/lib.rs", "line": 2}, {"path": "/work/a.rs"}]}}
+{"tool": {"session": "s1", "id": "t1", "update": true, "status": "completed", "content": [{"diff": {"path": "/work/lib.rs", "old": "a\nb\n", "new": "a\nc\n"}}, {"diff": {"path": "/work/new.rs", "new": "x\n"}}, {"terminal": "term-1"}]}}
+{"tool": {"session": "s1", "id": "t2", "title": "Search", "status": "completed", "tool_name": "WebSearch", "raw_output": "found", "content": [{"text": "two hits"}, {"image": {"mime": "image/png", "data": "aGVsbG8="}}, {"link": {"uri": "https://example.com", "name": "Example"}}, {"raw": {"type": "hologram"}}]}}
+{"respond": {"to": "prompt", "result": {"stopReason": "end_turn"}}}
+"#
+    ));
+    handshake(&mut fake);
+    let prompt = json!({"sessionId": "s1", "prompt": [{"type": "text", "text": "hi"}]});
+    fake.send(&request(2, "session/prompt", &prompt));
+    let update = |update: Value| json!({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s1", "update": update}});
+    assert_eq!(
+        fake.recv(),
+        update(
+            json!({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Edit lib.rs", "kind": "edit", "status": "pending",
+            "_meta": {"claudeCode": {"toolName": "mcp__eyespy__edit"}}, "rawInput": {"path": "/work/lib.rs"},
+            "locations": [{"path": "/work/lib.rs", "line": 2}, {"path": "/work/a.rs"}]})
+        )
+    );
+    assert_eq!(
+        fake.recv(),
+        update(
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed", "content": [
+                {"type": "diff", "path": "/work/lib.rs", "oldText": "a\nb\n", "newText": "a\nc\n"},
+                {"type": "diff", "path": "/work/new.rs", "oldText": null, "newText": "x\n"},
+                {"type": "terminal", "terminalId": "term-1"},
+            ]})
+        )
+    );
+    assert_eq!(
+        fake.recv(),
+        update(
+            json!({"sessionUpdate": "tool_call", "toolCallId": "t2", "title": "Search", "status": "completed",
+                "_meta": {"claudeCode": {"toolName": "WebSearch"}}, "rawOutput": "found", "content": [
+                {"type": "content", "content": {"type": "text", "text": "two hits"}},
+                {"type": "content", "content": {"type": "image", "mimeType": "image/png", "data": "aGVsbG8="}},
+                {"type": "content", "content": {"type": "resource_link", "uri": "https://example.com", "name": "Example"}},
+                {"type": "hologram"},
+            ]})
+        )
+    );
+    assert_eq!(
+        fake.recv(),
+        json!({"jsonrpc": "2.0", "id": 2, "result": {"stopReason": "end_turn"}})
+    );
+    fake.close_stdin();
+    assert_eq!(fake.exit().code(), Some(0));
+}
+
+#[test]
 fn a_prompt_says_what_it_spent_as_claudes_adapter_does() {
     let cost = json!({"sessionUpdate": "usage_update", "used": 24928, "size": 200000, "cost": {"amount": 0.0125, "currency": "USD"}});
     let result = json!({
