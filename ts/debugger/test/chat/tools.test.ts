@@ -8,9 +8,9 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { cleanup, fireEvent } from '@testing-library/svelte'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { Decision, Piece, ToolCall, ToolStatus } from '@clackatoo/caf'
+import { apply, type Change, type Chat, type Decision, type Piece, type ToolCall, type ToolStatus } from '@clackatoo/caf'
 import { colour } from '../../src/chat/ansi.ts'
-import { bytes, decisionText, endingText, followable, imageSource } from '../../src/chat/tools.ts'
+import { bytes, cafAsks, decisionText, endingText, followable, imageShown, linkName } from '../../src/chat/tools.ts'
 import { chat, draw, item, question, turn } from './build.ts'
 
 afterEach(cleanup)
@@ -54,7 +54,7 @@ function text(element: Element | null): string {
 describe('a call\'s status', () => {
   const statuses: [ToolStatus['type'], string, string | null][] = [
     ['Pending', 'Waiting to start', null],
-    ['Asking', 'Waiting for you', 'accent'],
+    ['Asking', 'Waiting for you ↓', 'accent'],
     ['Running', 'Running', 'accent'],
     ['Done', 'Done', 'muted'],
     ['Failed', 'Failed', 'error'],
@@ -108,6 +108,56 @@ describe('who decided', () => {
     expect(decisionText({ type: 'Allowed', value: { type: 'Oracle' } as never })).toBe(
       "Allowed, by someone this viewer doesn't know (Oracle)",
     )
+  })
+})
+
+describe('a call opened', () => {
+  const edit: Piece = {
+    type: 'Diff',
+    value: { path: '/p/a.rs', new_file: false, added: 1, removed: 0, more: 0, hunks: [{ lines: [{ change: { type: 'Added' }, old: null, new: 1, text: 'b' }] }] },
+  }
+
+  it('opens by itself, once, to an edit\'s diff, as an edit is what the user most wants to check', async () => {
+    const items = [item({ type: 'Tool', value: call({ kind: { type: 'Edit' }, result: [edit] }) })]
+    const done = turn({ items })
+    const view = draw(chat({ turns: [done] }))
+    const row = rowOf(view.container) as HTMLDetailsElement
+    await Promise.resolve()
+    expect(row.open).toBe(true)
+    row.open = false
+    await fireEvent(row, new Event('toggle'))
+    await view.rerender({ chat: chat({ turns: [{ ...done }] }) })
+    expect((rowOf(view.container) as HTMLDetailsElement).open).toBe(false)
+  })
+
+  it('stays folded with no diff and nothing running', async () => {
+    const view = draw(chat({ turns: [turn({ items: [item({ type: 'Tool', value: call({ result: [{ type: 'Text', value: { text: 'x', cut: null } }] }) })] })] }))
+    await Promise.resolve()
+    expect((rowOf(view.container) as HTMLDetailsElement).open).toBe(false)
+  })
+
+  it('says a refused call\'s result is what it would have done, which never happened', () => {
+    const refused = drawCalls(call({ status: { type: 'Refused' }, result: [edit], decision: { type: 'Refused', value: { type: 'Policy', value: { reason: 'outside the project' } } } }))
+    const labels = [...rowOf(refused.container).querySelectorAll('.label')].map((label) => text(label))
+    expect(labels[0]).toBe('What it would have done (never ran)')
+    cleanup()
+    const done = drawCalls(call({ result: [edit] }))
+    expect(text(rowOf(done.container).querySelector('.label'))).toBe('Output')
+  })
+
+  it('draws who decided muted, whatever they decided, as CAF SI says', () => {
+    expect(TOOL_CSS).toMatch(/\.decision \{[^}]*color: var\(--caf-muted\)/)
+    expect(TOOL_CSS).not.toMatch(/\.decision\[/)
+  })
+
+  it('lays it out as CAF SI does: who decided, what it gave back, its files, then its input, folded away', () => {
+    const { container } = drawCalls(
+      call({ input: { command: 'ls' }, result: [{ type: 'Text', value: { text: 'x', cut: null } }], locations: [{ path: '/p/a', line: null }], decision: { type: 'Allowed', value: { type: 'User', value: { option: 'Allow' } } } }),
+    )
+    const row = rowOf(container)
+    const order = [...row.querySelectorAll('.body > .decision, .body > .label, .body > details.input > summary')].map((part) => text(part))
+    expect(order).toEqual(['Allowed by you', 'Output', 'Files', 'Input'])
+    expect((row.querySelector('details.input') as HTMLDetailsElement).open).toBe(false)
   })
 })
 
@@ -248,8 +298,23 @@ describe('what a call gave back', () => {
       { type: 'Image', value: { mime: 'image/png', data: 'AA"onerror="x', size: 3 } },
     ])
     expect(row.querySelector('img')).toBeNull()
-    expect(text(row.querySelector('.piece.image'))).toBe("An image of a type this viewer doesn't show (text/html)")
-    expect(imageSource('IMAGE/PNG', 'AAAA')).toBe('data:image/png;base64,AAAA')
+    const said = [...row.querySelectorAll('.piece.image')].map((image) => text(image))
+    expect(said).toEqual([
+      "An image of a type this viewer doesn't show (text/html)",
+      "An image of a type this viewer doesn't show (image/png;x=1)",
+      "An image this viewer couldn't read (image/png, 3 B)",
+    ])
+    expect(imageShown('IMAGE/PNG', 'AAAA')).toEqual({ type: 'Drawn', source: 'data:image/png;base64,AAAA' })
+  })
+
+  it('says it couldn\'t read an image whose data is empty, cut short, or not a picture', async () => {
+    for (const data of ['', 'A', 'AAA', 'AAAAA', 'AA=A', 'AA===']) expect(imageShown('image/png', data)).toEqual({ type: 'Unreadable' })
+    for (const data of ['AA==', 'AAA=', 'AAAA']) expect(imageShown('image/png', data).type).toBe('Drawn')
+    const { row } = drawPieces([{ type: 'Image', value: { mime: 'image/png', data: 'AAAA', size: 3 } }])
+    // Whole base64, but not a picture: the browser can't read it.
+    await fireEvent.error(row.querySelector('img')!)
+    expect(row.querySelector('img')).toBeNull()
+    expect(text(row.querySelector('.piece.image'))).toBe("An image this viewer couldn't read (image/png, 3 B)")
   })
 
   it('draws a web link to follow, and any other address as text', () => {
@@ -264,22 +329,49 @@ describe('what a call gave back', () => {
     expect(followed.getAttribute('href')).toBe('https://example.com/docs')
     expect(followed.getAttribute('rel')).toBe('noopener noreferrer')
     expect(followed.textContent).toBe('The docs')
+    expect(followed.getAttribute('title')).toBe('https://example.com/docs')
+    expect(text(links[0]!.querySelector('.uri'))).toBe('https://example.com/docs')
     for (const link of [...links].slice(1)) expect(link.querySelector('a')).toBeNull()
     expect(text(links[1]!)).toBe('Click me javascript:alert(1)')
     expect(text(links[2]!)).toBe('lib.rs file:///p/src/lib.rs')
     expect(row.querySelectorAll('a')).toHaveLength(1)
     expect(followable('JavaScript:alert(1)')).toBeNull()
     expect(followable(' javascript:alert(1)')).toBeNull()
+    expect(followable('jav\tascript:alert(1)')).toBeNull()
+    expect(followable('//example.com')).toBeNull()
     expect(followable('not a url')).toBeNull()
+  })
+
+  it('shows where a link goes as the browser reads it, whatever its name or spelling says', () => {
+    const { row } = drawPieces([
+      { type: 'Link', value: { uri: 'https://\u0430pple.com/', name: 'apple.com' } },
+      { type: 'Link', value: { uri: 'https://exa\tmple.com/x', name: '   ' } },
+      { type: 'Link', value: { uri: 'https://example.com/y', name: '' } },
+    ])
+    const links = [...row.querySelectorAll('.piece.link')]
+    // A host in another script is shown as the browser goes to it.
+    expect(links[0]!.querySelector('a')!.getAttribute('href')).toBe('https://xn--pple-43d.com/')
+    expect(text(links[0]!.querySelector('.uri'))).toBe('https://xn--pple-43d.com/')
+    // A name of only spaces is none: the link is its address, never invisible.
+    expect(text(links[1]!.querySelector('a'))).toBe('https://example.com/x')
+    expect(links[1]!.querySelector('.uri')).toBeNull()
+    expect(text(links[2]!.querySelector('a'))).toBe('https://example.com/y')
+    expect(linkName(' \t ')).toBeNull()
   })
 
   it('draws a piece CAF couldn\'t read by what it said it was, and one this viewer doesn\'t know by its tag', () => {
     const { row } = drawPieces([
-      { type: 'Unknown', value: { what: 'resource', raw: { uri: 'x' }, summary: null } },
+      { type: 'Unknown', value: { what: 'resource', raw: { uri: 'x' }, summary: null, cut: null } },
       { type: 'Hologram', value: {} } as never,
+      { type: 'Unknown', value: { what: 'resource', raw: '{"uri":"aaaa', summary: null, cut: { kept: 12, total: 90000 } } },
     ])
     const unknown = row.querySelectorAll('.piece.unknown')
-    expect(text(unknown[0]!.querySelector('summary'))).toBe("A piece this viewer can't show: resource")
+    expect(text(unknown[0]!.querySelector('summary'))).toBe("Something the agent sent that this viewer can't show: resource")
+    expect(JSON.parse(unknown[0]!.querySelector('pre')!.textContent!)).toEqual({ uri: 'x' })
+    expect(unknown[0]!.querySelector('.cut')).toBeNull()
+    // Cut, its data is the start of its JSON, shown as it is.
+    expect(unknown[2]!.querySelector('pre')!.textContent).toBe('{"uri":"aaaa')
+    expect(text(unknown[2]!.querySelector('.cut'))).toBe('Kept 12 B of 88 KB')
     expect(text(unknown[1]!.querySelector('summary'))).toBe("A piece of a kind this viewer doesn't know: Hologram")
   })
 
@@ -318,6 +410,28 @@ describe('colour in output', () => {
     expect(style('\x1b[38:2:10:20:30ma')).toEqual([['a', 'color: rgb(10, 20, 30)']])
     expect(style('\x1b[38;2;999;0;0ma')).toEqual([['a', '']])
     expect(style('\x1b[38;5;256ma')).toEqual([['a', '']])
+  })
+
+  it('reads a parameter with sub-parameters as one, never as codes of its own', () => {
+    // A colour space's id, empty or not, before r, g and b.
+    expect(style('\x1b[38:2::255:0:1ma')).toEqual([['a', 'color: rgb(255, 0, 1)']])
+    expect(style('\x1b[38:2:0:10:20:30ma')).toEqual([['a', 'color: rgb(10, 20, 30)']])
+    expect(style('\x1b[48:2:10:20:30ma')).toEqual([['a', 'background: rgb(10, 20, 30)']])
+    expect(style('\x1b[38:5:196ma')).toEqual([['a', 'color: rgb(255, 0, 0)']])
+    // An underline's style is an underline; 4:0 is none.
+    expect(style('\x1b[4:3ma')).toEqual([['a', 'text-decoration: underline']])
+    expect(style('\x1b[4m\x1b[4:0ma')).toEqual([['a', '']])
+    // Groups it doesn't know, or that make no sense, change nothing.
+    expect(style('\x1b[58:2::1:2:3;1ma')).toEqual([['a', 'font-weight: bold']])
+    expect(style('\x1b[38:2:1:2ma')).toEqual([['a', '']])
+    expect(style('\x1b[1:2ma')).toEqual([['a', '']])
+  })
+
+  it('never draws text on a background of its own colour', () => {
+    expect(style('\x1b[30;40msecret')).toEqual([['secret', 'color: var(--caf-ansi-0)']])
+    expect(style('\x1b[38;2;1;1;1;48;2;1;1;1msecret')).toEqual([['secret', 'color: rgb(1, 1, 1)']])
+    expect(style('\x1b[7;38;2;1;1;1;48;2;1;1;1msecret')).toEqual([['secret', 'color: rgb(1, 1, 1)']])
+    expect(style('\x1b[31;42ma')).toEqual([['a', 'color: var(--caf-ansi-1); background: var(--caf-ansi-2)']])
   })
 
   it('carries the colour from one line to the next, as a terminal does', () => {
@@ -408,6 +522,68 @@ describe('live output', () => {
   })
 })
 
+describe('output as CAF changes it', () => {
+  /** A chat whose one turn runs a command, its output as given. */
+  function running(lines: string[]) {
+    const tool = item({ type: 'Tool', value: call({ status: { type: 'Running' }, result: [{ type: 'Output', value: { lines, dropped: 0, ending: null } }] }) })
+    return { chat: chat({ turns: [turn({ life: { type: 'Running' }, items: [tool] })] }), id: tool.id }
+  }
+
+  function applied(before: Chat, change: Change): Chat {
+    const after = apply(before, change)
+    if (!('chat' in after)) throw new Error(`apply refused: ${JSON.stringify(after)}`)
+    return after.chat
+  }
+
+  it('grows, changes its last line and drops from the top as OutputChanged says, through the SDK\'s apply', async () => {
+    const start = running(['\x1b[32mCompiling\x1b[0m a', 'progress 10%'])
+    const view = draw(start.chat)
+    const lines = () => rowOf(view.container).querySelector('.output .lines')!.textContent
+    expect(lines()).toBe('Compiling a\nprogress 10%▍')
+
+    // The progress bar's line is rewritten, and a line added.
+    let now = applied(start.chat, { type: 'OutputChanged', value: { item: start.id, from: 1, lines: ['progress 100%', '\x1b[1;31merror\x1b[0m: oh'], dropped: 0 } })
+    await view.rerender({ chat: now })
+    expect(lines()).toBe('Compiling a\nprogress 100%\nerror: oh▍')
+    expect(rowOf(view.container).querySelector('.output .lines span[style*="--caf-ansi-1"]')?.textContent).toBe('error')
+    expect(rowOf(view.container).querySelector('.output .dropped')).toBeNull()
+
+    // Two lines dropped from the top, to keep under the cap.
+    now = applied(now, { type: 'OutputChanged', value: { item: start.id, from: 3, lines: ['done'], dropped: 2 } })
+    await view.rerender({ chat: now })
+    expect(lines()).toBe('error: oh\ndone▍')
+    expect(text(rowOf(view.container).querySelector('.output .dropped'))).toBe('2 earlier lines not kept')
+
+    // It ends, without saying how.
+    const tool = now.turns[0]!.items[0]!
+    if (tool.kind.type !== 'Tool') throw new Error('not a tool')
+    const output = tool.kind.value.result[0]!
+    if (output.type !== 'Output') throw new Error('not output')
+    const ended: ToolCall = { ...tool.kind.value, status: { type: 'Done' }, result: [{ type: 'Output', value: { ...output.value, ending: { type: 'Unknown' } } }] }
+    now = applied(now, { type: 'ToolChanged', value: { item: start.id, tool: ended } })
+    await view.rerender({ chat: now })
+    expect(lines()).toBe('error: oh\ndone')
+    expect(text(rowOf(view.container).querySelector('.output .ending'))).toBe('Ended, without saying how')
+    expect(rowOf(view.container).querySelector('.output .caret')).toBeNull()
+  })
+
+  it('draws only the last 2,000 lines until asked for the rest, keeping their colours', async () => {
+    const many = ['\x1b[34mfirst', ...Array.from({ length: 2499 }, (_, n) => `line ${n + 1}`)]
+    const { chat: big } = running(many)
+    const view = draw(big)
+    const output = () => rowOf(view.container).querySelector('.output')!
+    expect(output().querySelectorAll('.line')).toHaveLength(2000)
+    // A colour set before the lines drawn still carries on into them.
+    expect(output().querySelector('.line span')?.getAttribute('style')).toContain('--caf-ansi-4')
+    const more = output().querySelector('button.all') as HTMLButtonElement
+    expect(text(more)).toBe('Show 500 earlier lines')
+    await fireEvent.click(more)
+    expect(output().querySelectorAll('.line')).toHaveLength(2500)
+    expect(output().querySelector('button.all')).toBeNull()
+    // Thousands of lines in jsdom, on a machine that may be busy.
+  }, 60_000)
+})
+
 describe('a permission question about a call', () => {
   const options = [
     { id: 'y', label: 'Allow', kind: { type: 'AllowOnce' as const } },
@@ -459,6 +635,56 @@ describe('a permission question about a call', () => {
     expect(text(asked.querySelector('.diff .path'))).toBe('/p/a.rs')
     expect(text(asked.querySelector('.diff .counts'))).toBe('+1 −1')
     expect(asked.querySelector('.command')).toBeNull()
+  })
+
+  it('is CAF\'s own question for a call to one of CAF\'s tools: marked as CAF\'s, in CAF\'s words', () => {
+    const tool = item({
+      type: 'Tool',
+      value: call({
+        title: 'rm -rf target',
+        status: { type: 'Asking' },
+        decision: { type: 'Undecided' },
+        origin: { type: 'Caf', value: { type: 'Bash' } },
+        action: { type: 'Run', value: { command: 'rm -rf target', folder: '/p', background: false } },
+      }),
+    })
+    const caf = [
+      { id: 'allow', label: 'Allow', kind: { type: 'AllowOnce' as const } },
+      { id: 'refuse', label: 'Refuse', kind: { type: 'RejectOnce' as const } },
+    ]
+    const { container } = draw(
+      chat({
+        turns: [turn({ life: { type: 'Running' }, items: [tool] })],
+        questions: [question({ type: 'Permission', value: { tool: tool.id, title: 'rm -rf target', options: caf } })],
+      }),
+    )
+    const asked = container.querySelector('.questions .question') as HTMLElement
+    expect(asked.dataset.caf).toBe('true')
+    expect(text(asked.querySelector('.ask .who'))).toBe('CAF')
+    expect(text(asked.querySelector('.ask'))).toBe('CAF The agent wants to run a command: rm -rf target')
+    expect(text(asked)).not.toContain('asks permission')
+    expect([...asked.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Allow', 'Refuse'])
+  })
+
+  it('says in CAF\'s words what each of its own tools wants to do', () => {
+    expect(cafAsks({ type: 'Read', value: { path: '/p/a', lines: null } }, 'Claude')).toBe('Claude wants to read a file')
+    expect(cafAsks({ type: 'Edit', value: { path: '/p/a' } }, 'Claude')).toBe('Claude wants to change a file')
+    expect(cafAsks({ type: 'Write', value: { path: '/p/a' } }, 'Claude')).toBe('Claude wants to write a file')
+    expect(cafAsks(null, 'Claude')).toBe('Claude wants to use a tool')
+  })
+
+  it('stays the agent\'s question for a call to the agent\'s own tool', () => {
+    const tool = item({ type: 'Tool', value: call({ status: { type: 'Asking' }, origin: { type: 'Agent', value: 'Bash' } }) })
+    const { container } = draw(
+      chat({
+        turns: [turn({ life: { type: 'Running' }, items: [tool] })],
+        questions: [question({ type: 'Permission', value: { tool: tool.id, title: 'echo hi', options } })],
+      }),
+    )
+    const asked = container.querySelector('.questions .question') as HTMLElement
+    expect(asked.dataset.caf).toBe('false')
+    expect(asked.querySelector('.who')).toBeNull()
+    expect(text(asked.querySelector('.ask'))).toBe('The agent asks permission: echo hi')
   })
 
   it('shows only its title before CAF has seen the call, or for a call with nothing to show', () => {

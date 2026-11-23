@@ -2,17 +2,34 @@
   // A command's output, as its terminal showed it: its lines in colour,
   // how many earlier ones weren't kept, a caret while it runs, and how it
   // ended. Lines come and change as CAF sends them (`OutputChanged`).
+  //
+  // Only the last MOST_DRAWN lines are drawn until the user asks for the
+  // rest, so a command printing many short lines doesn't hold the page
+  // up as each change redraws it. Colours are still worked out from the
+  // first line kept, as a colour set early carries on down.
   import type { DeepReadonly, Output } from '@clackatoo/caf'
   import { colour } from './ansi.ts'
+  import { count } from './figures.ts'
   import { droppedText, endedBadly, endingText } from './tools.ts'
 
   let { output, running }: { output: DeepReadonly<Output>; running: boolean } = $props()
 
-  const lines = $derived(colour(output.lines))
+  /** The most lines drawn before the user asks for all of them. */
+  const MOST_DRAWN = 2000
+
+  let all = $state(false)
+  const coloured = $derived(colour(output.lines))
+  const hidden = $derived(all ? 0 : Math.max(0, coloured.length - MOST_DRAWN))
+  const lines = $derived(hidden === 0 ? coloured : coloured.slice(hidden))
 </script>
 
 <div class="output">
   {#if output.dropped > 0}<div class="dropped">{droppedText(output.dropped)}</div>{/if}
+  {#if hidden > 0}
+    <button type="button" class="all" onclick={() => (all = true)}
+      >Show {count(hidden)} earlier {hidden === 1 ? 'line' : 'lines'}</button
+    >
+  {/if}
   <pre class="lines">{#each lines as runs, n (n)}<span class="line"
         >{#each runs as run, r (r)}{#if run.style === ''}{run.text}{:else}<span style={run.style}>{run.text}</span
             >{/if}{/each}</span
@@ -82,6 +99,17 @@
     color: var(--caf-faint);
     font-size: 0.85em;
     margin: 0.2em 0;
+  }
+  .all {
+    font: inherit;
+    font-size: 0.85em;
+    margin: 0.2em 0;
+    padding: 0.1em 0.6em;
+    border-radius: 4px;
+    border: 1px solid var(--caf-border);
+    background: var(--caf-bg);
+    color: var(--caf-text);
+    cursor: pointer;
   }
   .ending.bad {
     color: var(--caf-error);

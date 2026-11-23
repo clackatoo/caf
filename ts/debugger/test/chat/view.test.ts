@@ -245,7 +245,9 @@ describe('items', () => {
     expect(summary.querySelector('.title')?.textContent).toBe('cargo test')
     expect(summary.querySelector('.status')?.textContent).toBe('Done')
     expect(summary.querySelector('.time')?.textContent).toBe('1.5 s')
-    const [input, output] = row.querySelectorAll('pre')
+    // What it gave back comes first, as CAF SI lays it out, then its input, folded away.
+    const [output, input] = row.querySelectorAll('pre')
+    expect((row.querySelector('details.input') as HTMLDetailsElement).open).toBe(false)
     expect(JSON.parse(input!.textContent!)).toEqual({ command: 'cargo test' })
     expect(output!.textContent).toBe('ok: 3 passed')
   })
@@ -276,7 +278,7 @@ describe('items', () => {
   }
 
   it('folds an unknown item, with what it was and its raw data', () => {
-    const unknown = item({ type: 'Unknown', value: { what: 'plan_v2', raw: { steps: ['a'] }, summary: null } })
+    const unknown = item({ type: 'Unknown', value: { what: 'plan_v2', raw: { steps: ['a'] }, summary: null, cut: null } })
     const { container } = draw(chat({ turns: [turn({ items: [unknown] })] }))
     const details = container.querySelector('details.unknown') as HTMLDetailsElement
     expect(details.open).toBe(false)
@@ -290,7 +292,7 @@ describe('items', () => {
   })
 
   it("draws an app item this version of the app can't read by the summary it had, and keeps its data", () => {
-    const unreadable = item({ type: 'Unknown', value: { what: 'App', raw: { route: ['Kyiv'] }, summary: 'Planned a route' } })
+    const unreadable = item({ type: 'Unknown', value: { what: 'App', raw: { route: ['Kyiv'] }, summary: 'Planned a route', cut: null } })
     const { container } = draw(chat({ turns: [turn({ items: [unreadable] })] }))
     const details = container.querySelector('details.unreadable') as HTMLDetailsElement
     expect(details.open).toBe(false)
@@ -860,7 +862,8 @@ describe('a tool that ended', () => {
       item({ type: 'Tool', value: { title: 't', kind: { type: 'Read' }, status: { type: status } as never, input: null, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [], app: null } })
     const { container } = draw(chat({ turns: [turn({ items: [tool('Done'), tool('Failed'), tool('Running')] })] }))
     const outputs = [...container.querySelectorAll('.tool .none')].map((none) => none.textContent)
-    expect(outputs).toEqual(['None', 'None', 'None', 'None', 'None', 'None yet'])
+    // Each call's output, then its input.
+    expect(outputs).toEqual(['None', 'None', 'None', 'None', 'None yet', 'None'])
   })
 })
 
@@ -870,7 +873,7 @@ describe("text that hides or reorders itself", () => {
       type: 'Tool',
       value: { title: 't', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'echo \u202Egnp.exe\u200B' }, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [{ type: 'Text', value: { text: 'out\u2066put', cut: null } }], app: null },
     })
-    const unknown = item({ type: 'Unknown', value: { what: 'x\u202E', raw: { a: '\u202Eb' }, summary: null } })
+    const unknown = item({ type: 'Unknown', value: { what: 'x\u202E', raw: { a: '\u202Eb' }, summary: null, cut: null } })
     const { container } = draw(chat({ turns: [turn({ items: [tool, unknown] })] }))
     const all = container.textContent ?? ''
     expect(all).not.toMatch(/[\u202A-\u202E\u2066-\u2069\u200B]/)

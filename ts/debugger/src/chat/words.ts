@@ -354,7 +354,7 @@ export function toolStatus(status: DeepReadonly<ToolStatus>): string {
     case 'Pending':
       return 'Waiting to start'
     case 'Asking':
-      return 'Waiting for you'
+      return 'Waiting for you ↓'
     case 'Running':
       return 'Running'
     case 'Done':

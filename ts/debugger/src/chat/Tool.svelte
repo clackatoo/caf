@@ -1,8 +1,10 @@
 <script lang="ts">
   // A tool call as a row: its kind, title, status and how long it ran,
-  // unfolding to who allowed it, the files it's about, what it was given
-  // and what it gave back. A command running with output unfolds by
-  // itself, once, so its output can be watched as it comes.
+  // unfolding, as CAF SI lays it out, to who allowed it, what it gave back,
+  // the files it's about, and what it was given, folded away. A call with
+  // a diff unfolds by itself, once, as an edit is what the user most
+  // wants to check, and so does a command running with output, so it can
+  // be watched as it comes.
   import type { DeepReadonly, ToolCall, Window } from '@clackatoo/caf'
   import PieceView from './PieceView.svelte'
   import { took } from './time.ts'
@@ -22,11 +24,15 @@
     tool.input === null ? null : tool.input_cut !== null && typeof tool.input === 'string' ? unhidden(tool.input) : rawJson(tool.input),
   )
   const live = $derived(!ended && tool.result.some((piece) => piece.type === 'Output'))
+  const diff = $derived(tool.result.some((piece) => piece.type === 'Diff'))
+  // A refused call never ran: what it gave back is what it would have
+  // done, such as the diff CAF worked out before asking.
+  const resultLabel = $derived(tool.status.type === 'Refused' ? 'What it would have done (never ran)' : 'Output')
 
   let open = $state(false)
   let unfolded = false
   $effect(() => {
-    if (live && !unfolded) {
+    if ((live || diff) && !unfolded) {
       unfolded = true
       open = true
     }
@@ -45,6 +51,14 @@
     {#if decision !== null}
       <div class="decision" data-decision={tool.decision.type}>{decision}</div>
     {/if}
+    <div class="label">{resultLabel}</div>
+    {#if tool.result.length === 0}
+      <div class="none">{ended ? 'None' : 'None yet'}</div>
+    {:else}
+      <div class="result">
+        {#each tool.result as piece, n (n)}<PieceView {piece} running={!ended} />{/each}
+      </div>
+    {/if}
     {#if tool.locations.length > 0}
       <div class="label">Files</div>
       <ul class="locations">
@@ -52,20 +66,15 @@
         {#if tool.locations_cut > 0}<li class="more">and {count(tool.locations_cut)} more</li>{/if}
       </ul>
     {/if}
-    <div class="label">Input</div>
     {#if input === null}
+      <div class="label">Input</div>
       <div class="none">None</div>
     {:else}
-      <pre>{input}</pre>
-      {#if tool.input_cut !== null}<div class="cut">{cutText(tool.input_cut)}</div>{/if}
-    {/if}
-    <div class="label">Output</div>
-    {#if tool.result.length === 0}
-      <div class="none">{ended ? 'None' : 'None yet'}</div>
-    {:else}
-      <div class="result">
-        {#each tool.result as piece, n (n)}<PieceView {piece} running={!ended} />{/each}
-      </div>
+      <details class="input">
+        <summary class="label">Input</summary>
+        <pre>{input}</pre>
+        {#if tool.input_cut !== null}<div class="cut">{cutText(tool.input_cut)}</div>{/if}
+      </details>
     {/if}
   </div>
 </details>
@@ -147,13 +156,13 @@
     font-size: 0.9em;
     overflow-wrap: anywhere;
   }
-  .decision[data-decision='Refused'] {
-    color: var(--caf-error);
-  }
   .label {
     color: var(--caf-muted);
     font-size: 0.85em;
     margin: 0.4em 0 0.2em;
+  }
+  .input > summary {
+    cursor: pointer;
   }
   .locations {
     margin: 0;

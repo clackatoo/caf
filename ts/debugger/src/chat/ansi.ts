@@ -2,7 +2,9 @@
 // with their SGR codes (`ESC [ … m`) turned into styles. Nothing else a
 // terminal would act on is: any other escape, and every other control
 // character, shows as `unhidden` shows it (`^[`), so output can never
-// move, hide or reorder what's drawn.
+// move or reorder what's drawn. Nor is text drawn on a background of its
+// own colour: such a background is dropped. (Two colours merely close to
+// each other can still be hard to read: that's the command's own doing.)
 //
 // A style comes only from the codes' numbers, read here, never from the
 // output's own text: a span's style is one of the strings built below.
@@ -50,28 +52,68 @@ function rgb(r: number, g: number, b: number): string {
 const byte = (n: number | undefined): n is number => n !== undefined && Number.isInteger(n) && n >= 0 && n <= 255
 
 /**
- * An extended colour from `38` or `48`'s parameters after it: `5;n` or
- * `2;r;g;b`. Returns the colour, or null for one that makes no sense, and
- * how many parameters it took.
+ * The parameters of an SGR sequence, as groups: each is one parameter
+ * and its sub-parameters, which `:` separates and `;` never does, as in
+ * `38:2::255:0:0` (a colour in one group) beside `38;2;255;0;0` (the same
+ * in five). An empty one is 0.
  */
-function extended(params: number[], at: number): { colour: string | null; took: number } {
-  if (params[at] === 5) {
-    const n = params[at + 1]
+type Group = number[]
+
+/** The group at `at`, if it's a lone number: what `38;5;n` and `38;2;r;g;b` take after them. */
+function lone(groups: readonly Group[], at: number): number | undefined {
+  const group = groups[at]
+  return group !== undefined && group.length === 1 ? group[0] : undefined
+}
+
+/**
+ * An extended colour from `38` or `48`'s parameters after it, `5;n` or
+ * `2;r;g;b`. Returns the colour, or null for one that makes no sense, and
+ * how many groups it took.
+ */
+function extended(groups: readonly Group[], at: number): { colour: string | null; took: number } {
+  const how = lone(groups, at)
+  if (how === 5) {
+    const n = lone(groups, at + 1)
     return { colour: byte(n) ? indexed(n) : null, took: 2 }
   }
-  if (params[at] === 2) {
-    const [r, g, b] = [params[at + 1], params[at + 2], params[at + 3]]
+  if (how === 2) {
+    const [r, g, b] = [lone(groups, at + 1), lone(groups, at + 2), lone(groups, at + 3)]
     return { colour: byte(r) && byte(g) && byte(b) ? rgb(r, g, b) : null, took: 4 }
   }
   return { colour: null, took: 1 }
 }
 
+/**
+ * An extended colour in one group, after its `38` or `48`: `5:n`, or
+ * `2:r:g:b` with any colour space's id before them, as `2::r:g:b` or
+ * `2:0:r:g:b`. Null for one that makes no sense.
+ */
+function subColour(sub: readonly number[]): string | null {
+  if (sub[0] === 5 && sub.length === 2) return byte(sub[1]) ? indexed(sub[1]) : null
+  if (sub[0] === 2 && (sub.length === 4 || sub.length === 5)) {
+    const [r, g, b] = sub.slice(-3)
+    return byte(r) && byte(g) && byte(b) ? rgb(r, g, b) : null
+  }
+  return null
+}
+
 /** The pen after an SGR sequence's parameters. */
-function apply(pen: Pen, params: number[]): Pen {
+function apply(pen: Pen, groups: readonly Group[]): Pen {
   const next = { ...pen }
-  if (params.length === 0) return { ...PLAIN }
-  for (let i = 0; i < params.length; i++) {
-    const p = params[i]!
+  if (groups.length === 0) return { ...PLAIN }
+  for (let i = 0; i < groups.length; i++) {
+    const group = groups[i]!
+    const p = group[0]!
+    if (group.length > 1) {
+      // A parameter with sub-parameters: a colour, or an underline's
+      // style (`4:0` none, `4:3` curly, drawn as any underline). Any
+      // other is left alone, whole.
+      const sub = group.slice(1)
+      if (p === 38) next.fg = subColour(sub) ?? next.fg
+      else if (p === 48) next.bg = subColour(sub) ?? next.bg
+      else if (p === 4 && sub.length === 1) next.underline = sub[0] !== 0
+      continue
+    }
     if (p === 0) Object.assign(next, PLAIN)
     else if (p === 1) next.bold = true
     else if (p === 2) next.dim = true
@@ -91,7 +133,7 @@ function apply(pen: Pen, params: number[]): Pen {
     else if (p >= 90 && p <= 97) next.fg = named(p - 90 + 8)
     else if (p >= 100 && p <= 107) next.bg = named(p - 100 + 8)
     else if (p === 38 || p === 48) {
-      const { colour, took } = extended(params, i + 1)
+      const { colour, took } = extended(groups, i + 1)
       if (p === 38) next.fg = colour ?? next.fg
       else next.bg = colour ?? next.bg
       i += took
@@ -106,6 +148,8 @@ function css(pen: Pen): string {
   let fg = pen.fg
   let bg = pen.bg
   if (pen.inverse) [fg, bg] = [bg ?? 'var(--caf-inset)', fg ?? 'var(--caf-text)']
+  // Text on its own colour can't be read: it keeps the view's background.
+  if (bg !== null && bg === fg) bg = null
   const rules: string[] = []
   if (fg !== null) rules.push(`color: ${fg}`)
   if (bg !== null) rules.push(`background: ${bg}`)
@@ -139,9 +183,8 @@ export function colour(lines: readonly string[]): Run[][] {
     let at = 0
     for (const match of line.matchAll(SGR)) {
       push(line.slice(at, match.index))
-      // `:` separates a colour's parts as `;` does, as some programs write it.
-      const params = match[1] === '' ? [] : match[1]!.split(/[;:]/).map((p) => (p === '' ? 0 : Number(p)))
-      pen = apply(pen, params)
+      const groups = match[1] === '' ? [] : match[1]!.split(';').map((group) => group.split(':').map((p) => (p === '' ? 0 : Number(p))))
+      pen = apply(pen, groups)
       at = match.index + match[0].length
     }
     push(line.slice(at))

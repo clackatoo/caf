@@ -73,14 +73,26 @@
   const archived = $derived(chat.archived !== null)
   /** Whether anything can be done in the chat: it isn't read-only, and the host lets this viewer act. */
   const acting = $derived(!readOnly && may.act)
-  /** The chat's tool calls, by their items' ids: a permission question shows the call it's about. */
-  const tools = $derived(
-    new Map(
-      chat.turns.flatMap((turn) =>
-        turn.items.flatMap((item) => (item.kind.type === 'Tool' ? [[item.id, item.kind.value] as const] : [])),
+  /**
+   * The tool calls the permission questions are about, by their items'
+   * ids: a question shows its call. Worked out only while one is open,
+   * from the newest turn back, as a question is about a call of the turn
+   * running, so a long chat isn't searched on every change.
+   */
+  const tools = $derived.by(() => {
+    const wanted = new Set(
+      chat.questions.flatMap((question) =>
+        question.kind.type === 'Permission' && question.kind.value.tool !== null ? [question.kind.value.tool] : [],
       ),
-    ),
-  )
+    )
+    const found = new Map<ItemId, DeepReadonly<ToolCall>>()
+    for (let t = chat.turns.length - 1; t >= 0 && found.size < wanted.size; t--) {
+      for (const item of chat.turns[t]!.items) {
+        if (item.kind.type === 'Tool' && wanted.has(item.id)) found.set(item.id, item.kind.value)
+      }
+    }
+    return found
+  })
   const toolOf = (id: ItemId): DeepReadonly<ToolCall> | null => tools.get(id) ?? null
   let problem = $state<string | null>(null)
   // Follow the end of the chat as it grows, unless the user has scrolled up.

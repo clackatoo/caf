@@ -1,7 +1,7 @@
 // What the chat view says about a tool call, and what it lets through of
 // what an agent gave: an image only as a picture, a link only to the web.
 
-import type { Cut, Decision, DeepReadonly, Ending, Location, ToolStatus } from '@clackatoo/caf'
+import type { Action, Cut, Decision, DeepReadonly, Ending, Location, ToolStatus } from '@clackatoo/caf'
 import { count } from './figures.ts'
 import { tagOf } from './words.ts'
 
@@ -86,22 +86,36 @@ export function moreHunks(more: number): string {
 
 // A picture's type: `image/` and a subtype of the letters a type has.
 const IMAGE = /^image\/[a-z0-9][a-z0-9.+-]*$/i
-const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
+// Base64, whole: groups of four, the last padded.
+const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+
+/** How a picture is shown: drawn from its data URI, or why it isn't. */
+export type Shown =
+  | { type: 'Drawn'; source: string }
+  | { type: 'TooBig' }
+  | { type: 'NotImage' }
+  | { type: 'Unreadable' }
 
 /**
- * A picture's data URI, or null if it isn't one this view draws: kept
- * whole, of an image type, its data base64. Anything else, such as
- * `text/html`, never becomes a URI.
+ * How a picture is shown. It's drawn only from a data URI of an image
+ * type, with whole base64 data. Anything else, such as `text/html`, never
+ * becomes a URI: one too big to keep has no data; one of another type
+ * isn't an image; one of an image type whose data isn't whole base64
+ * can't be read.
  */
-export function imageSource(mime: string, data: string | null): string | null {
-  if (data === null || !IMAGE.test(mime) || !BASE64.test(data)) return null
-  return `data:${mime.toLowerCase()};base64,${data}`
+export function imageShown(mime: string, data: string | null): Shown {
+  if (data === null) return { type: 'TooBig' }
+  if (!IMAGE.test(mime)) return { type: 'NotImage' }
+  if (data === '' || !BASE64.test(data)) return { type: 'Unreadable' }
+  return { type: 'Drawn', source: `data:${mime.toLowerCase()};base64,${data}` }
 }
 
 /**
- * A link's address, if it's one this view lets the user follow: a web
- * page, over http or https. Anything else (`javascript:`, `data:`, a
- * file) is shown as text, never followed.
+ * A link's address, parsed, if it's one this view lets the user follow: a
+ * web page, over http or https. Anything else (`javascript:`, `data:`, a
+ * file) is shown as text, never followed. The address is the parsed one,
+ * the one the browser would go to, its host in ASCII (`xn--…` for one
+ * spelled in other scripts), so what's shown is where it goes.
  */
 export function followable(uri: string): string | null {
   let url: URL
@@ -111,4 +125,29 @@ export function followable(uri: string): string | null {
     return null
   }
   return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null
+}
+
+/** A link's name, or null if it has none worth showing: empty, or only spaces. */
+export function linkName(name: string): string | null {
+  return name.trim() === '' ? null : name
+}
+
+/**
+ * What CAF asks about a call to one of its own tools, in its own words,
+ * from what the call does: never the agent's words. `agent` names the
+ * agent, such as `The agent`.
+ */
+export function cafAsks(action: DeepReadonly<Action> | null, agent: string): string {
+  switch (action?.type) {
+    case 'Read':
+      return `${agent} wants to read a file`
+    case 'Edit':
+      return `${agent} wants to change a file`
+    case 'Write':
+      return `${agent} wants to write a file`
+    case 'Run':
+      return `${agent} wants to run a command`
+    default:
+      return `${agent} wants to use a tool`
+  }
 }

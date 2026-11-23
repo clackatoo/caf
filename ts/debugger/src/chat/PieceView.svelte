@@ -3,11 +3,14 @@
   import type { DeepReadonly, Piece } from '@clackatoo/caf'
   import DiffView from './DiffView.svelte'
   import OutputView from './OutputView.svelte'
-  import { bytes, cutText, followable, imageSource } from './tools.ts'
+  import { bytes, cutText, followable, imageShown, linkName } from './tools.ts'
   import { rawJson, unhidden } from './unhidden.ts'
   import { tagOf } from './words.ts'
 
   let { piece, running }: { piece: DeepReadonly<Piece>; running: boolean } = $props()
+
+  /** The picture the browser couldn't read, if it couldn't: by its source, so another drawn here is tried afresh. */
+  let broken = $state<string | null>(null)
 </script>
 
 {#if piece.type === 'Text'}
@@ -21,31 +24,43 @@
   <div class="piece"><OutputView output={piece.value} {running} /></div>
 {:else if piece.type === 'Image'}
   {@const image = piece.value}
-  {@const source = imageSource(image.mime, image.data)}
+  {@const shown = imageShown(image.mime, image.data)}
   <div class="piece image">
-    {#if source !== null}
-      <img src={source} alt={`An image (${unhidden(image.mime)}, ${bytes(image.size)})`} />
-    {:else if image.data === null}
+    {#if shown.type === 'Drawn' && broken !== shown.source}
+      <img
+        src={shown.source}
+        alt={`An image (${unhidden(image.mime)}, ${bytes(image.size)})`}
+        onerror={() => (broken = shown.source)}
+      />
+    {:else if shown.type === 'TooBig'}
       <div class="none">An image too big to keep ({bytes(image.size)})</div>
-    {:else}
+    {:else if shown.type === 'NotImage'}
       <div class="none">An image of a type this viewer doesn't show ({unhidden(image.mime)})</div>
+    {:else}
+      <div class="none">An image this viewer couldn't read ({unhidden(image.mime)}, {bytes(image.size)})</div>
     {/if}
   </div>
 {:else if piece.type === 'Link'}
   {@const link = piece.value}
   {@const href = followable(link.uri)}
+  {@const name = linkName(link.name)}
+  <!-- A link followed is shown by where it goes, as parsed, beside its
+       name: never by its name alone, which could say anything. -->
   <div class="piece link">
     {#if href !== null}
-      <a {href} target="_blank" rel="noopener noreferrer">{unhidden(link.name || link.uri)}</a>
+      <a {href} title={href} target="_blank" rel="noopener noreferrer">{unhidden(name ?? href)}</a>
+      {#if name !== null}<code class="uri">{unhidden(href)}</code>{/if}
     {:else}
-      <span class="name">{unhidden(link.name)}</span>
+      {#if name !== null}<span class="name">{unhidden(name)}</span>{/if}
+      <code class="uri">{unhidden(link.uri)}</code>
     {/if}
-    {#if href === null || (link.name !== '' && link.name !== link.uri)}<code class="uri">{unhidden(link.uri)}</code>{/if}
   </div>
 {:else if piece.type === 'Unknown'}
   <details class="piece unknown">
-    <summary>A piece this viewer can't show: <code>{unhidden(piece.value.what)}</code></summary>
-    <pre>{rawJson(piece.value.raw)}</pre>
+    <summary>Something the agent sent that this viewer can't show: <code>{unhidden(piece.value.what)}</code></summary>
+    <!-- Cut, its data is the start of its JSON, as a string: shown as it is. -->
+    <pre>{piece.value.cut !== null && typeof piece.value.raw === 'string' ? unhidden(piece.value.raw) : rawJson(piece.value.raw)}</pre>
+    {#if piece.value.cut !== null}<div class="cut">{cutText(piece.value.cut)}</div>{/if}
   </details>
 {:else}
   <details class="piece unknown">
@@ -96,6 +111,11 @@
     color: var(--caf-muted);
     font-family: var(--caf-mono);
     font-size: 0.9em;
+  }
+  .unknown {
+    border: 1px dashed var(--caf-border);
+    border-radius: 6px;
+    padding: 0.3em 0.6em;
   }
   .unknown > summary {
     cursor: pointer;

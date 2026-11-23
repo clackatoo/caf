@@ -6,12 +6,16 @@
   //   with none chosen beforehand: nothing is focused, and Enter answers
   //   nothing, so an option of kind Other is never the default either.
   //   Once CAF has seen the call it's about, it shows what the call
-  //   would do: the command it runs, or the change it makes.
+  //   would do: the command it runs, or the change it makes. A question
+  //   about a call to one of CAF's own tools is CAF's own, not the
+  //   agent's: it's marked as CAF's, says in CAF's words what the agent
+  //   wants to do, and offers CAF's Allow and Refuse.
   // - A session slow to open offers keep waiting, retry or stop. Escape
   //   means keep waiting, as dismissing it does.
   import type { Answer, DeepReadonly, ItemId, Question, QuestionId, ToolCall } from '@clackatoo/caf'
   import { attempt } from './actions.ts'
   import DiffView from './DiffView.svelte'
+  import { cafAsks } from './tools.ts'
   import { unhidden } from './unhidden.ts'
   import { errorText, optionTone, tagOf } from './words.ts'
 
@@ -82,12 +86,20 @@
   <section class="questions" aria-label="Questions" bind:this={section}>
     {#each keyed as { question, key } (key)}
       {@const kind = question.kind}
-      <div class="question" data-kind={kind.type}>
+      <div
+        class="question"
+        data-kind={kind.type}
+        data-caf={kind.type === 'Permission' && kind.value.tool !== null && toolOf(kind.value.tool)?.origin.type === 'Caf'}
+      >
         {#if kind.type === 'Permission'}
           {@const tool = kind.value.tool === null ? null : toolOf(kind.value.tool)}
           {@const action = tool?.action ?? null}
           {@const diffs = tool?.result.flatMap((piece) => (piece.type === 'Diff' ? [piece.value] : [])) ?? []}
-          <div class="ask">The agent asks permission: <strong>{kind.value.title}</strong></div>
+          {#if tool?.origin.type === 'Caf'}
+            <div class="ask"><span class="who">CAF</span> {cafAsks(action, 'The agent')}: <strong>{kind.value.title}</strong></div>
+          {:else}
+            <div class="ask">The agent asks permission: <strong>{kind.value.title}</strong></div>
+          {/if}
           {#if action?.type === 'Run' || diffs.length > 0}
             <div class="about">
               {#if action?.type === 'Run'}
@@ -98,7 +110,7 @@
             </div>
           {/if}
           <div class="options">
-            <!-- By position: the agent chooses its options' ids. -->
+            <!-- By position: the agent chooses its options' ids, or CAF does for its own. -->
             {#each kind.value.options as option, j (j)}
               <button
                 type="button"
@@ -162,6 +174,13 @@
   .ask {
     margin-bottom: 0.5em;
     overflow-wrap: anywhere;
+  }
+  .who {
+    color: var(--caf-caf);
+    font-weight: 600;
+    font-size: 0.85em;
+    letter-spacing: 0.04em;
+    margin-right: 0.6em;
   }
   .about {
     display: flex;
