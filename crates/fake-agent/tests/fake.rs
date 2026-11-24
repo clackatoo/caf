@@ -1366,7 +1366,11 @@ fn an_mcp_servers_answers_are_checked() {
 {"mcp_await": {"expect": {"result": {"isError": false}}, "timeout": 10000}}"#
             )
         ),
-        r#"caf's answer to 2 was {"id":2,"jsonrpc":"2.0","result":{"content":[],"isError":true}}, not {"result":{"isError":false}}"#
+        format!(
+            "caf's answer to 2 was {}, not {}",
+            json!({"jsonrpc": "2.0", "id": 2, "result": {"content": [], "isError": true}}),
+            json!({"result": {"isError": false}})
+        )
     );
     assert_eq!(
         check(
@@ -1392,7 +1396,10 @@ fn an_mcp_servers_answers_are_checked() {
 {"mcp_await": {"none": true, "timeout": 5000}}"#
             )
         ),
-        r#"caf answered 2, with {"id":2,"jsonrpc":"2.0","result":{"content":[]}}"#
+        format!(
+            "caf answered 2, with {}",
+            json!({"jsonrpc": "2.0", "id": 2, "result": {"content": []}})
+        )
     );
     assert_eq!(
         check("", r#"{"mcp_start": {"server": "eyespy"}}"#),
