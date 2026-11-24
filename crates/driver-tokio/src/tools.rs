@@ -249,6 +249,13 @@ pub(crate) struct ToolsDriver {
     printed: mpsc::UnboundedReceiver<Print>,
     /// Reports waiting to be handed out.
     reports: VecDeque<Report>,
+    /// The answer to each call that finished, held until the core has
+    /// taken its [`ToolEvent::Finished`]: so the agent can't end its turn
+    /// on hearing it before the core knows the call is done.
+    held: HashMap<CallId, (u64, Vec<u8>)>,
+    /// The call whose `Finished` was handed out last, its answer to be
+    /// written once the core has it ([`ToolsDriver::taken`]).
+    finished: Option<CallId>,
     /// One sleep, moved to the next batch or progress due.
     sleep: Pin<Box<Sleep>>,
     /// The tasks writing to relays, waited for as CAF shuts down.
@@ -371,6 +378,8 @@ impl ToolsDriver {
             prints,
             printed,
             reports: VecDeque::new(),
+            held: HashMap::new(),
+            finished: None,
             sleep: Box::pin(tokio::time::sleep_until(far_off())),
             writers: JoinSet::new(),
         }
@@ -514,7 +523,7 @@ impl ToolsDriver {
     }
 
     fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Report> {
-        if let Some(report) = self.reports.pop_front() {
+        if let Some(report) = self.pop() {
             return Poll::Ready(report);
         }
         self.poll_accept(cx);
@@ -522,9 +531,36 @@ impl ToolsDriver {
         self.poll_prints(cx);
         self.poll_calls(cx);
         self.poll_due(cx);
-        match self.reports.pop_front() {
+        match self.pop() {
             Some(report) => Poll::Ready(report),
             None => Poll::Pending,
+        }
+    }
+
+    /// The next report, noting a call's `Finished`, whose answer waits for
+    /// it.
+    fn pop(&mut self) -> Option<Report> {
+        let report = self.reports.pop_front()?;
+        if let Report::Tool {
+            call,
+            event: ToolEvent::Finished { .. },
+        } = &report
+        {
+            self.finished = Some(*call);
+        }
+        Some(report)
+    }
+
+    /// The core has taken the report [`ToolsDriver::next`] gave last: if it
+    /// was a call's `Finished`, the agent is answered now.
+    pub(crate) fn taken(&mut self) {
+        let Some(call) = self.finished.take() else {
+            return;
+        };
+        if let Some((conn, bytes)) = self.held.remove(&call)
+            && let Some(conn) = self.conns.get(&conn)
+        {
+            let _ = conn.write.send(bytes);
         }
     }
 
@@ -827,7 +863,11 @@ impl ToolsDriver {
             if let Some(batch) = batch {
                 self.reports.push_back(output(call, batch));
             }
-            self.answer(conn, &request, &ran.answer);
+            let answer =
+                (self.conns.get_mut(&conn)).and_then(|each| each.mcp.answer(&request, &ran.answer));
+            if let Some(bytes) = answer {
+                self.held.insert(call, (conn, bytes));
+            }
             self.reports.push_back(Report::Tool {
                 call,
                 event: ToolEvent::Finished {
@@ -890,6 +930,11 @@ impl ToolsDriver {
     /// cancelled, every connection closed, and the socket removed. Waits
     /// a moment for the answers to be written.
     pub(crate) async fn finish(&mut self) {
+        for (_, (conn, bytes)) in self.held.drain() {
+            if let Some(conn) = self.conns.get(&conn) {
+                let _ = conn.write.send(bytes);
+            }
+        }
         let conns: Vec<u64> = self.conns.keys().copied().collect();
         for conn in conns {
             self.close(conn, Closing::Ended);
@@ -1383,6 +1428,7 @@ mod tests {
                     },
                     report = driver.next() => {
                         let _ = reported.send(report);
+                        driver.taken();
                     }
                 }
             }
