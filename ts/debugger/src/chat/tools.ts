@@ -1,13 +1,60 @@
 // What the chat view says about a tool call, and what it lets through of
 // what an agent gave: an image only as a picture, a link only to the web.
 
-import type { Action, Cut, Decision, DeepReadonly, Ending, Location, ToolCall, ToolStatus } from '@clackatoo/caf'
+import type { Action, CafTool, Cut, Decision, DeepReadonly, Ending, Location, ToolCall, ToolStatus } from '@clackatoo/caf'
 import { count } from './figures.ts'
 import { tagOf } from './words.ts'
+
+/** Every one of CAF's own tools, as caf-core's `CafTool::ALL`. */
+export const CAF_TOOLS: readonly CafTool[] = [{ type: 'Read' }, { type: 'Edit' }, { type: 'Write' }, { type: 'Bash' }, { type: 'TaskStop' }]
 
 /** Whether a call has ended: Done, Failed, Refused or Cancelled. */
 export function ended(status: DeepReadonly<ToolStatus>): boolean {
   return ['Done', 'Failed', 'Refused', 'Cancelled'].includes(status.type)
+}
+
+/**
+ * What a job is, as TaskStop names it, from how its call stands: running
+ * in the background, the agent answered as it went there; or how it
+ * ended. CAF tells the agent only of a job that ended by itself, so only
+ * a Done one says so: a Failed one may have been cut off as the chat was
+ * put away or the app shut down, which tells no one, and a Cancelled one
+ * was stopped by the agent's TaskStop or with its chat.
+ */
+export function jobText(tool: DeepReadonly<Pick<ToolCall, 'job' | 'status' | 'stopped_by'>>): string | null {
+  if (tool.job === null) return null
+  const task = `task ${tool.job}`
+  switch (tool.status.type) {
+    case 'Done':
+      return `Ran in the background, as ${task}: the agent was told when it ended.`
+    case 'Failed':
+      return `Ran in the background, as ${task}, and failed.`
+    case 'Cancelled':
+      return tool.stopped_by?.type === 'Agent'
+        ? `Ran in the background, as ${task}, until the agent stopped it.`
+        : `Ran in the background, as ${task}, until it was stopped with its chat.`
+    default:
+      return `Running in the background, as ${task}: the agent was answered and goes on, and is told when it ends.`
+  }
+}
+
+// CAF's notice of a job's end, as caf_tools::notice writes it: its parts,
+// in its order, each with &, < and > escaped, so none holds a tag. One
+// with no output file is the tools driver's, for a job whose run failed
+// before it had one.
+const NOTIFICATION =
+  /^<task-notification>\n<task-id>[^<]*<\/task-id>\n(?:<tool-use-id>[^<]*<\/tool-use-id>\n)?(?:<output-file>[^<]*<\/output-file>\n)?<status>[^<]*<\/status>\n<summary>([^<]*)<\/summary>\n<\/task-notification>$/
+
+/**
+ * What CAF told the agent of a background job's end, from a notice turn's
+ * text, in words for the user: its summary, read back unescaped. Null for
+ * anything else, such as the app's own notice, even one in tags of the
+ * same names: only CAF's own parts, in its order, are CAF's.
+ */
+export function jobNotice(text: string): string | null {
+  const summary = NOTIFICATION.exec(text)?.[1]
+  if (summary === undefined) return null
+  return summary.replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&')
 }
 
 /** A size in bytes, short: `512 B`, `64 KB`, `2.4 MB`, counting 1,024 to a KB as CAF's caps do. */

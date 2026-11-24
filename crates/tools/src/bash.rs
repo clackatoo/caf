@@ -354,7 +354,8 @@ impl JobEnd {
 /// The notice the agent is sent when job `job` ended, as Claude Code's:
 /// the model's call that started it (`tool_use`, the agent's id for it, if
 /// known), what it is (`description`, the call's, or its command), and
-/// where its output is (`path`).
+/// where its output is (`path`). Each is escaped as XML, so none can end
+/// its tag, or forge another part: the agent's id is the agent's to choose.
 ///
 /// A job that exited is "completed", with its code, whatever the code, as
 /// Claude Code says it.

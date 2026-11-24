@@ -236,6 +236,7 @@ impl Debugger {
         let mut app = App::new(Arc::clone(&live.book), port, token.clone());
         app.live = Some((live.caf.clone(), Arc::clone(&live.rules)));
         app.recording = Some(recording.clone());
+        app.tools = live.serves_tools;
         let router = server::router(Arc::new(app));
         tokio::spawn(async move { axum::serve(listener, router).await });
         Self {
@@ -395,12 +396,17 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
     })
     .await;
     let ToInspector::Hello {
-        mode, run, file, ..
+        mode,
+        run,
+        file,
+        tools,
+        ..
     } = &seen.others[0]
     else {
         panic!("Hello first");
     };
     assert_eq!(*mode, Mode::Live);
+    assert!(!tools, "this debugger serves no tools");
     assert_eq!(run.as_deref(), Some(running.caf.run()));
     assert_eq!(
         file.as_deref(),

@@ -4,6 +4,7 @@ type: concept
 description: How CAF gives an agent its own tools, Read, Edit, Write and Bash, over MCP. The one line every app adds to its main, choosing a chat's tools, how a connection is bound to its chat and what that does and doesn't guarantee, keeping long calls alive, cancelling, losing the tools mid-session, and what isn't built yet.
 related:
   - caf/concepts/tool-calls
+  - caf/concepts/cafs-own-tools
   - caf/concepts/agents-and-profiles
   - caf/getting-started/a-chat-on-tokio
   - caf/getting-started/saving-and-restoring-chats
@@ -16,11 +17,10 @@ It serves them to the agent over MCP, as a server named `caf`, from inside
 your program, so it knows exactly what each call does and can ask your
 policy, and the user, before anything runs.
 
+What the tools themselves do is [CAF's own tools](~caf/concepts/cafs-own-tools).
+
 > [!NOTE]
-> This is being built in steps. Today CAF serves the tools, binds each
-> connection to its chat, and records each call, but the tools themselves
-> aren't built yet: **every call fails**, with "CAF's tools aren't built
-> yet". Windows isn't supported yet either: serving needs Unix sockets.
+> Windows isn't supported yet: serving needs Unix sockets.
 
 ## The relay
 

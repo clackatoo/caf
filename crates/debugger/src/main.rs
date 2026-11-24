@@ -220,7 +220,8 @@ async fn run(args: Args) -> Result<(), String> {
                 usage
             });
             // Served through the debugger itself, run again: its `main`
-            // is the relay. Its chats are given no tools yet.
+            // is the relay. Its chats are given CAF's tools as New chat
+            // asks, on the disk and in CAF's own ptys.
             let mut tools = ToolsConfig::default();
             tools.relay = Relay::ThisProgram;
             let live = live::start(agents, Some(recording), store, usage, tools);
@@ -244,6 +245,7 @@ async fn run(args: Args) -> Result<(), String> {
             let mut app = App::new(Arc::clone(&live.book), port, token.clone());
             app.live = Some((live.caf.clone(), Arc::clone(&live.rules)));
             app.recording.clone_from(&live.recording);
+            app.tools = live.serves_tools;
             (app, Some(live))
         }
     };

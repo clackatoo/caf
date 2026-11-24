@@ -3,11 +3,13 @@
   // from the ones CAF offers,
   // a folder for it to work in, and its model, where CAF knows the
   // agent's models. Where it doesn't, the chat view offers them once the
-  // chat is open, before anything is sent.
-  import type { AgentName, AgentStatus, ChatId, ChatSummary, DeepReadonly, SettingChoice } from '@clackatoo/caf'
+  // chat is open, before anything is sent. Where the host offers them,
+  // CAF's own tools too, on unless the user unticks them.
+  import type { AgentName, AgentStatus, CafTool, ChatId, ChatSummary, DeepReadonly, SettingChoice } from '@clackatoo/caf'
   import { untrack } from 'svelte'
   import { attempt, type ListActions } from './actions.ts'
   import { runs } from './settings.ts'
+  import { CAF_TOOLS } from './tools.ts'
   import { errorText, folderName, shortId } from './words.ts'
   import './theme.css'
 
@@ -18,6 +20,7 @@
     selected,
     actions,
     readOnly = false,
+    offersTools = false,
   }: {
     chats: DeepReadonly<ChatSummary[]>
     agents: readonly AgentName[]
@@ -27,6 +30,8 @@
     actions: ListActions
     /** Nothing can be opened: looking back, or a recording. */
     readOnly?: boolean
+    /** Whether New chat offers CAF's own tools, Read, Edit, Write and Bash, which the host serves: ticked by default. */
+    offersTools?: boolean
   } = $props()
 
   let adding = $state(false)
@@ -42,6 +47,8 @@
   const uid = $props.id()
   let opening = $state(false)
   let problem = $state<string | null>(null)
+  /** Whether the chat is to have CAF's own tools, where they're offered. */
+  let tools = $state(true)
 
   const absolute = $derived(cwd.startsWith('/') || /^[A-Za-z]:[\\/]/.test(cwd))
   /** The agent's models, if CAF knows them, as their setting. */
@@ -73,6 +80,7 @@
   function start() {
     adding = true
     problem = null
+    tools = true
     picked = false
     model = theirs
     if (!agents.includes(agent)) agent = agents[0] ?? ''
@@ -86,7 +94,8 @@
     // Only a model the user changed is chosen: otherwise the agent's own,
     // or the host's default for it, applies.
     const settings: SettingChoice[] = picked && model !== theirs ? [{ kind: { type: 'Model' }, value: { type: 'Choice', value: model } }] : []
-    const error = await attempt(() => actions.open(agent, cwd.trim(), settings))
+    const given: CafTool[] = offersTools && tools ? [...CAF_TOOLS] : []
+    const error = await attempt(() => actions.open(agent, cwd.trim(), settings, given))
     opening = false
     if (error === null) adding = false
     else problem = errorText(error)
@@ -132,6 +141,15 @@
           </select>
         </label>
         {#if about !== null}<div class="hint" id="{uid}-about">{about}</div>{/if}
+      {/if}
+      {#if offersTools}
+        <label class="check">
+          <input type="checkbox" bind:checked={tools} aria-describedby="{uid}-tools" />
+          CAF's tools
+        </label>
+        <div class="hint" id="{uid}-tools">
+          {tools ? 'Read, Edit, Write and Bash, run by CAF, which asks you first.' : "Only the agent's own tools, if it has any."}
+        </div>
       {/if}
       {#if problem !== null}<div class="problem" role="alert">{problem}</div>{/if}
       <div class="buttons">
@@ -233,6 +251,15 @@
   }
   input {
     font-family: var(--caf-mono);
+  }
+  .check {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4em;
+    color: var(--caf-text);
+  }
+  .check input {
+    margin: 0;
   }
   .buttons {
     display: flex;

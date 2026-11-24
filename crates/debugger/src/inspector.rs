@@ -67,7 +67,7 @@ use caf_core::viewer::ToViewer;
 /// time it changes. The app is built apart from the server, from the
 /// same checkout, so after a pull one may be older than the other: an
 /// app that meets a protocol it wasn't built for asks to be rebuilt.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
@@ -93,6 +93,9 @@ pub enum ToInspector {
         /// Live, this run of CAF, as `/viewer`'s `Welcome` names it. Null
         /// in replay.
         run: Option<String>,
+        /// Whether CAF serves its own tools, so New chat may offer them:
+        /// false in replay.
+        tools: bool,
     },
     /// Steps, in order, with no gaps: the steps so far once the link
     /// starts, then each new one as it happens. The first is step `from`,

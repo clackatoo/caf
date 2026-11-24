@@ -4,6 +4,7 @@ type: concept
 description: What CAF records of each tool call, whoever ran it. Where a call came from, what CAF reads it as doing, the pieces it gave back (text, diffs, a command's output in colour, images and links), how much of each is kept, output that grows while it runs, who allowed it, and why CAF runs the tools that matter itself.
 related:
   - caf/concepts/chats-turns-and-items
+  - caf/concepts/cafs-own-tools
   - caf/concepts/agents-and-profiles
   - caf/concepts/viewers
   - caf/standard-interface/transcript
@@ -31,7 +32,8 @@ itself, from what the call does: the agent's would be a name like
 `mcp__caf__Read`. A read, an edit or a write is *Read src/main.rs*,
 *Edit src/main.rs* or *Write src/main.rs*, with the path from the chat's
 folder when the file is inside it, and whole otherwise. A command is its
-first line, followed by *…* if it has more.
+first line, followed by *…* if it has more. What each tool does is
+[CAF's own tools](~caf/concepts/cafs-own-tools).
 
 For an edit or a write, CAF works out the change before it asks anyone,
 and puts its diff on the call, so whoever is asked sees exactly what they

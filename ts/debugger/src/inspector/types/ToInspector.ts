@@ -26,7 +26,12 @@ file: string | null,
  * Live, this run of CAF, as `/viewer`'s `Welcome` names it. Null
  * in replay.
  */
-run: string | null, } } | { "type": "Steps", "value": { 
+run: string | null, 
+/**
+ * Whether CAF serves its own tools, so New chat may offer them:
+ * false in replay.
+ */
+tools: boolean, } } | { "type": "Steps", "value": { 
 /**
  * The first one's number.
  */

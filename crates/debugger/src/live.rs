@@ -5,16 +5,22 @@
 //! restore them. Usage goes in a usage ledger, and the page may read its
 //! summaries and set prices: the debugger is CAF's own app.
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use caf_core::agent::AgentSpec;
+use caf_core::event::{Event, HostCommand, StorageEvent};
 use caf_core::host::Grouping;
 use caf_core::save::RestoreChat;
 use caf_core::time::Now;
-use caf_core::{Core, Host, NoAppItems, OpenChat, Shelf};
+use caf_core::tool::{CafTool, Tools};
+use caf_core::{ChatId, Core, Host, NoAppItems, OpenChat, Shelf};
 use caf_driver_tokio::viewer::ViewerRules;
-use caf_driver_tokio::{Caf, Config, Running, Step as CafStep, Steps, ToolsConfig, UsageConfig};
+use caf_driver_tokio::{
+    Caf, Config, Relay, Running, Step as CafStep, Steps, ToolsConfig, UsageConfig,
+};
 use caf_save::{FileStore, Store};
 use serde_json::value::RawValue;
 use tokio::sync::mpsc;
@@ -39,6 +45,8 @@ pub struct Live {
     pub store: Option<PathBuf>,
     /// The usage ledger's folder, if there's a ledger.
     pub usage: Option<PathBuf>,
+    /// Whether CAF serves its own tools: a relay was given.
+    pub serves_tools: bool,
 }
 
 /// The shelf the debugger keeps its chats on.
@@ -66,13 +74,22 @@ pub fn host() -> Host {
 }
 
 /// What viewers may do: open a chat with any of `agents` in any absolute
-/// folder, with no MCP servers, act on every chat, install agents and
-/// sign in and out of them, and read usage and set prices. If chats are
-/// `saved`, each opened is kept on
-/// [`SHELF`], and viewers may restore those kept there, with no MCP
-/// servers, as new chats have.
+/// folder, with no MCP servers, and, if CAF's tools are `served`, those
+/// of them the viewer asks for (its open-chat form's "CAF's tools", on
+/// unless unticked), act on every chat, install agents and sign in and
+/// out of them, and read usage and set prices. If chats are `saved`, each
+/// opened is kept on [`SHELF`], and viewers may restore those kept there,
+/// with no MCP servers, and, if they're served, all of CAF's tools,
+/// unless `untooled` notes it was opened without them: what a chat was
+/// given isn't saved. Where they aren't served, chats are given none,
+/// which CAF would refuse.
 #[must_use]
-pub fn rules(agents: &[AgentSpec], saved: bool) -> ViewerRules {
+pub fn rules(
+    agents: &[AgentSpec],
+    saved: bool,
+    served: bool,
+    untooled: Arc<Untooled>,
+) -> ViewerRules {
     let names: Vec<_> = agents.iter().map(|agent| agent.name.clone()).collect();
     let mut rules = ViewerRules::default();
     rules.agents = true;
@@ -84,13 +101,221 @@ pub fn rules(agents: &[AgentSpec], saved: bool) -> ViewerRules {
         let mut open = OpenChat::new(request.agent.0.clone(), request.cwd.clone());
         open.session = request.session.clone();
         open.shelf = saved.then(shelf);
+        if served {
+            open.tools = request.tools.clone();
+        }
         Some(open)
     });
     if saved {
-        rules.restore =
-            Box::new(|chat, on| (on.0 == SHELF).then(|| RestoreChat::new(chat, shelf())));
+        rules.restore = Box::new(move |chat, on| {
+            let tools = if served && !untooled.has(chat) {
+                Tools::caf(CafTool::ALL)
+            } else {
+                Tools::none()
+            };
+            (on.0 == SHELF).then(|| RestoreChat::new(chat, shelf()).with_tools(tools))
+        });
     }
     rules
+}
+
+/// The debugger's chats opened without CAF's tools, noted so a restored
+/// one is given none again: what a chat was given isn't in its save, and
+/// a restore is decided before the chat is read.
+///
+/// - **Noted as it happens:** CAF's steps are tapped as CAF takes them
+///   ([`Untooled::step`]), so a chat is noted before anything can restore
+///   it. A deleted chat is forgotten, and so is any chat that was in the
+///   note as this debugger started that the store's first listing doesn't
+///   have, deleted while no debugger was running: never one noted since,
+///   by this debugger or another sharing the store, which a listing may
+///   not have yet.
+/// - **Kept in a file of the debugger's own** in the store's folder,
+///   [`UNTOOLED_FILE`]: a JSON list of chat ids, its user's alone. A
+///   thread of its own writes it, never CAF's, reading it again before
+///   each write, so another debugger's notes in the same store are kept,
+///   and writing it whole, renamed into place. It's done once this is
+///   dropped. Without a store, it's kept in memory only.
+/// - **A note that's missing or can't be read** notes none, so every
+///   chat is restored with CAF's tools, the default.
+#[derive(Debug, Default)]
+pub struct Untooled {
+    chats: Mutex<BTreeSet<ChatId>>,
+    /// The chats noted since this debugger started: never pruned.
+    noted: Mutex<BTreeSet<ChatId>>,
+    /// The chats in the note as this debugger started: the only ones the
+    /// first listing may prune.
+    at_start: BTreeSet<ChatId>,
+    /// Whether the store's first listing has been seen.
+    listed: AtomicBool,
+    /// The thread writing the file, and what it's to write, if there's a
+    /// file.
+    writer: Mutex<Option<(std::sync::mpsc::Sender<Change>, std::thread::JoinHandle<()>)>>,
+}
+
+/// A change to [`Untooled`]'s notes.
+#[derive(Debug)]
+enum Change {
+    /// A chat opened without CAF's tools.
+    Add(ChatId),
+    /// A chat deleted.
+    Remove(ChatId),
+    /// These chats are no longer in the store.
+    Prune(BTreeSet<ChatId>),
+}
+
+impl Change {
+    fn apply(&self, chats: &mut BTreeSet<ChatId>) {
+        match self {
+            Self::Add(chat) => {
+                chats.insert(*chat);
+            }
+            Self::Remove(chat) => {
+                chats.remove(chat);
+            }
+            Self::Prune(gone) => chats.retain(|chat| !gone.contains(chat)),
+        }
+    }
+}
+
+/// The file [`Untooled`] is kept in, in the store's folder: the store
+/// keeps each shelf in a folder of its own, and never reads its root's
+/// files.
+pub const UNTOOLED_FILE: &str = "caf-debugger-untooled.json";
+
+impl Untooled {
+    /// What's noted in the store at `store`, or nothing if there's no
+    /// note yet, with a thread to write its changes.
+    #[must_use]
+    pub fn in_store(store: &Path) -> Self {
+        let file = store.join(UNTOOLED_FILE);
+        let chats = read_untooled(&file);
+        let (changes, coming) = std::sync::mpsc::channel::<Change>();
+        let writer = std::thread::spawn(move || {
+            while let Ok(change) = coming.recv() {
+                let mut chats = read_untooled(&file);
+                change.apply(&mut chats);
+                let partial = file.with_extension(format!("json.{}", std::process::id()));
+                let written = serde_json::to_vec(&chats)
+                    .map_err(std::io::Error::other)
+                    .and_then(|bytes| write_private(&partial, &bytes))
+                    .and_then(|()| std::fs::rename(&partial, &file));
+                if let Err(error) = written {
+                    log::warn!(
+                        "{} can't be written, so a restored chat may be given CAF's tools: {error}",
+                        file.display()
+                    );
+                }
+            }
+        });
+        Self {
+            at_start: chats.clone(),
+            chats: Mutex::new(chats),
+            noted: Mutex::new(BTreeSet::new()),
+            listed: AtomicBool::new(false),
+            writer: Mutex::new(Some((changes, writer))),
+        }
+    }
+
+    /// Whether `chat` was opened without CAF's tools.
+    #[must_use]
+    pub fn has(&self, chat: ChatId) -> bool {
+        self.chats.lock().is_ok_and(|chats| chats.contains(&chat))
+    }
+
+    /// Notes what a step of CAF's says: a chat opened without CAF's
+    /// tools, a chat deleted, or the store's first listing. Quick: on
+    /// CAF's task, it only changes what's in memory, and hands the file's
+    /// change to its thread.
+    pub fn step(&self, event: &Event<NoAppItems>) {
+        let change = match event {
+            Event::Host(HostCommand::OpenChat { chat, open }) if open.tools.is_empty() => {
+                if let Ok(mut noted) = self.noted.lock() {
+                    noted.insert(*chat);
+                }
+                Change::Add(*chat)
+            }
+            Event::Host(HostCommand::Delete { chat, .. }) => Change::Remove(*chat),
+            Event::Storage {
+                event:
+                    StorageEvent::Listed {
+                        chats, unreadable, ..
+                    },
+                ..
+            } if !self.listed.swap(true, Ordering::Relaxed) => {
+                let noted = self
+                    .noted
+                    .lock()
+                    .map(|noted| noted.clone())
+                    .unwrap_or_default();
+                let there: BTreeSet<ChatId> = (chats.iter().map(|header| header.chat))
+                    .chain(unreadable.iter().map(|(chat, _)| *chat))
+                    .collect();
+                Change::Prune(
+                    (self.at_start.iter())
+                        .filter(|chat| !there.contains(chat) && !noted.contains(chat))
+                        .copied()
+                        .collect(),
+                )
+            }
+            _ => return,
+        };
+        if let Ok(mut chats) = self.chats.lock() {
+            change.apply(&mut chats);
+        }
+        if let Ok(writer) = self.writer.lock()
+            && let Some((changes, _)) = writer.as_ref()
+        {
+            let _ = changes.send(change);
+        }
+    }
+}
+
+impl Drop for Untooled {
+    /// Waits for the file's last write.
+    fn drop(&mut self) {
+        let writer = self.writer.get_mut().ok().and_then(Option::take);
+        if let Some((changes, writer)) = writer {
+            drop(changes);
+            let _ = writer.join();
+        }
+    }
+}
+
+/// The chats noted in `file`: none if there's none, or it can't be read,
+/// which is warned of.
+fn read_untooled(file: &Path) -> BTreeSet<ChatId> {
+    let read = std::fs::read(file).and_then(|bytes| {
+        serde_json::from_slice(&bytes)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+    });
+    match read {
+        Ok(chats) => chats,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeSet::new(),
+        Err(error) => {
+            log::warn!(
+                "{} can't be read, so it notes no chat: {error}",
+                file.display()
+            );
+            BTreeSet::new()
+        }
+    }
+}
+
+/// Writes `bytes` to a file at `path` that only its user may read or
+/// write, made so, or emptied and made so if it's there.
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 /// Starts CAF with `agents`, recording to `record` if given, keeping chats
@@ -109,7 +334,17 @@ pub fn start(
         host: host(),
         agents: agents.clone(),
     };
-    let rules = Arc::new(rules(&agents, store.is_some()));
+    let served = !matches!(tools.relay, Relay::None);
+    let untooled = Arc::new(match &store {
+        Some(store) => Untooled::in_store(store),
+        None => Untooled::default(),
+    });
+    let rules = Arc::new(rules(
+        &agents,
+        store.is_some(),
+        served,
+        Arc::clone(&untooled),
+    ));
     let mut config = Config::new(base.host.clone(), agents);
     config.record.clone_from(&record);
     config.store = (store.as_ref()).map(|root| Box::new(FileStore::new(root)) as Box<dyn Store>);
@@ -117,7 +352,11 @@ pub fn start(
     config.usage = usage;
     config.tools = tools;
     let (tap, steps) = mpsc::unbounded_channel();
-    let (caf, running) = Caf::start_watching(config, Tap(tap));
+    let tap = Tap {
+        steps: tap,
+        untooled: Arc::clone(&untooled),
+    };
+    let (caf, running) = Caf::start_watching(config, tap);
     if store.is_some() {
         let listing = caf.clone();
         tokio::spawn(async move {
@@ -146,6 +385,7 @@ pub fn start(
         recording,
         store,
         usage: ledger,
+        serves_tools: served,
     }
 }
 
@@ -160,10 +400,15 @@ struct Raw {
 
 /// Takes each step on CAF's task: it writes the event and directives as
 /// JSON, which is all the time it takes there, and hands them on.
-struct Tap(mpsc::UnboundedSender<Raw>);
+struct Tap {
+    steps: mpsc::UnboundedSender<Raw>,
+    /// Noted at once, so a chat is noted before it can be restored.
+    untooled: Arc<Untooled>,
+}
 
 impl Steps<NoAppItems> for Tap {
     fn step(&mut self, step: CafStep<'_, NoAppItems>) {
+        self.untooled.step(step.event);
         // An event that won't write is left as `null`, which won't read
         // back, so the check reports it.
         let event = serde_json::value::to_raw_value(step.event).unwrap_or_else(|error| {
@@ -177,7 +422,7 @@ impl Steps<NoAppItems> for Tap {
             line: step.line.map(str::to_owned),
         };
         // Once the checker has gone, so has the debugger.
-        let _ = self.0.send(raw);
+        let _ = self.steps.send(raw);
     }
 }
 
@@ -423,9 +668,11 @@ mod tests {
     use serde_json::json;
     use serde_json::value::RawValue;
 
+    use std::sync::Arc;
+
     use super::{
-        Raw, Shelf, check_recording, check_steps, hidden, host, rules, shelf, shown_directives,
-        shown_event,
+        CafTool, Raw, Shelf, Tools, UNTOOLED_FILE, Untooled, check_recording, check_steps, hidden,
+        host, rules, shelf, shown_directives, shown_event,
     };
     use crate::inspector::Check;
     use crate::replay::{Base, take, to_json};
@@ -448,6 +695,10 @@ mod tests {
             directives,
             line: None,
         }
+    }
+
+    fn untooled() -> Arc<Untooled> {
+        Arc::new(Untooled::default())
     }
 
     fn base() -> Base {
@@ -577,22 +828,29 @@ mod tests {
 
     #[test]
     fn viewers_may_install_agents_and_sign_in_and_out() {
-        assert!(rules(&agents(), false).agents);
+        assert!(rules(&agents(), false, true, untooled()).agents);
     }
 
     #[test]
     fn viewers_may_read_usage_and_set_prices() {
-        assert!(rules(&agents(), false).usage);
+        assert!(rules(&agents(), false, true, untooled()).usage);
     }
 
     #[test]
-    fn viewers_may_open_the_agents_on_offer_in_absolute_folders_with_no_tools() {
-        let rules = rules(&agents(), false);
+    fn viewers_may_open_the_agents_on_offer_in_absolute_folders_with_cafs_tools_alone() {
+        let rules = rules(&agents(), false, true, untooled());
         let open = rules.open.as_ref();
         let mut request = OpenRequest::new("fake", "/home/me/project");
         let chat = open(&request).expect("allowed");
         assert_eq!(chat.agent.0, "fake");
         assert!(chat.mcp_servers.is_empty());
+        assert!(chat.tools.is_empty(), "none asked for");
+        let all = Tools::caf(CafTool::ALL);
+        let asked = request.clone().with_tools(all.clone());
+        assert_eq!(open(&asked).expect("allowed").tools, all);
+        let some = Tools::caf([CafTool::Read]);
+        let asked = request.clone().with_tools(some.clone());
+        assert_eq!(open(&asked).expect("allowed").tools, some);
         request.cwd = "project".into();
         assert!(open(&request).is_none(), "a relative folder");
         assert!(
@@ -601,18 +859,175 @@ mod tests {
         );
     }
 
+    /// A step's event, from its JSON.
+    fn event(value: serde_json::Value) -> caf_core::event::Event {
+        serde_json::from_value(value).expect("an event")
+    }
+
+    /// The host opening `chat` with these `tools`, or with none said, as
+    /// recordings from before tools were.
+    fn opened(chat: caf_core::ChatId, tools: Option<serde_json::Value>) -> caf_core::event::Event {
+        let mut open =
+            json!({"agent": "fake", "cwd": "/w", "session": {"type": "New"}, "mcp_servers": []});
+        if let Some(tools) = tools {
+            open["tools"] = tools;
+        }
+        event(
+            json!({"type": "Host", "value": {"type": "OpenChat", "value": {"chat": chat, "open": open}}}),
+        )
+    }
+
+    /// The store's listing of these chats, by their headers, with
+    /// `unreadable` apart.
+    fn listed(
+        chats: &[caf_core::ChatId],
+        unreadable: &[caf_core::ChatId],
+    ) -> caf_core::event::Event {
+        let header = |chat: &caf_core::ChatId| {
+            json!({
+                "chat": chat, "agent": "fake", "profile": null, "cwd": "/w", "made": 1, "changed": 1,
+                "label": null, "first": null, "turns": 0, "closed": false, "archived": null,
+            })
+        };
+        let unreadable: Vec<_> = (unreadable.iter())
+            .map(|chat| json!([chat, {"type": "Damaged", "value": "torn"}]))
+            .collect();
+        event(
+            json!({"type": "Storage", "value": {"ticket": 1, "event": {"type": "Listed", "value": {
+                "chats": chats.iter().map(header).collect::<Vec<_>>(), "unreadable": unreadable,
+            }}}}),
+        )
+    }
+
+    #[test]
+    fn a_chat_opened_without_cafs_tools_is_restored_without_them_by_the_next_debugger() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!("caf-untooled-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let chat = caf_core::ChatId::from_number;
+        let (bare, tooled, older, gone) = (chat(1), chat(2), chat(3), chat(4));
+        {
+            let untooled = Untooled::in_store(&dir);
+            untooled.step(&opened(bare, Some(json!({"caf": []}))));
+            untooled.step(&opened(tooled, Some(json!({"caf": [{"type": "Read"}]}))));
+            untooled.step(&opened(older, None));
+            untooled.step(&opened(gone, None));
+            // Noted at once, before the file's written.
+            assert!(untooled.has(bare) && untooled.has(older) && !untooled.has(tooled));
+            let deleted = event(
+                json!({"type": "Host", "value": {"type": "Delete", "value": {"chat": gone, "shelf": "debugger"}}}),
+            );
+            untooled.step(&deleted);
+            assert!(!untooled.has(gone));
+            // Dropped: its writes are done.
+        }
+        let file = dir.join(UNTOOLED_FILE);
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "the user's alone");
+
+        // The next debugger reads the note back, and restores so.
+        // A chat deleted while no debugger ran, still in the note.
+        let stale = chat(6);
+        let noted: Vec<caf_core::ChatId> =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        std::fs::write(
+            &file,
+            serde_json::to_vec(&[noted, vec![stale]].concat()).unwrap(),
+        )
+        .unwrap();
+        let next = Arc::new(Untooled::in_store(&dir));
+        assert!(next.has(bare) && next.has(older) && next.has(stale));
+        assert!(!next.has(tooled) && !next.has(gone));
+        let restoring = rules(&agents(), true, true, Arc::clone(&next));
+        assert!(
+            (restoring.restore)(bare, &shelf())
+                .unwrap()
+                .tools
+                .is_empty()
+        );
+        assert_eq!(
+            (restoring.restore)(tooled, &shelf()).unwrap().tools,
+            Tools::caf(CafTool::ALL)
+        );
+
+        // Another debugger, sharing the store, notes a chat after this one
+        // started: the next write reads the file again, and keeps it.
+        let other = chat(5);
+        std::fs::write(
+            &file,
+            serde_json::to_vec(&[bare, older, stale, other]).unwrap(),
+        )
+        .unwrap();
+        // The first listing prunes only what was in the note as this
+        // debugger started and the store no longer has: not an unreadable
+        // chat, nor one noted since, by this debugger or the other, which
+        // the listing doesn't have yet. A later listing changes nothing.
+        let fresh = chat(7);
+        next.step(&opened(fresh, None));
+        next.step(&listed(&[bare], &[older]));
+        assert!(next.has(fresh), "noted since it started: never pruned");
+        assert!(!next.has(stale), "in the note at start, and gone: pruned");
+        next.step(&listed(&[], &[]));
+        assert!(next.has(bare) && next.has(older));
+        drop(restoring);
+        let next = Arc::into_inner(next).expect("the only one");
+        drop(next);
+        let kept = Untooled::in_store(&dir);
+        assert!(kept.has(bare) && kept.has(older));
+        assert!(
+            kept.has(other),
+            "another debugger's fresh note: kept, though unlisted"
+        );
+        assert!(!kept.has(stale), "deleted while no debugger ran: pruned");
+        assert!(
+            kept.has(fresh),
+            "noted since it started: kept in the file too"
+        );
+
+        // No note, or one that can't be read, notes none: all tools.
+        assert!(!Untooled::in_store(&dir.join("elsewhere")).has(bare));
+        std::fs::write(&file, "not json").unwrap();
+        let unread = Arc::new(Untooled::in_store(&dir));
+        assert!(!unread.has(bare));
+        let restoring = rules(&agents(), true, true, unread);
+        assert_eq!(
+            (restoring.restore)(bare, &shelf()).unwrap().tools,
+            Tools::caf(CafTool::ALL)
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn where_cafs_tools_arent_served_no_chat_is_given_them() {
+        let rules = rules(&agents(), true, false, untooled());
+        let asked = OpenRequest::new("fake", "/home/me").with_tools(Tools::caf(CafTool::ALL));
+        assert!((rules.open)(&asked).expect("allowed").tools.is_empty());
+        let id = caf_core::ChatId::from_number(1000);
+        assert!(
+            (rules.restore)(id, &shelf())
+                .expect("allowed")
+                .tools
+                .is_empty()
+        );
+    }
+
     #[test]
     fn saved_chats_are_kept_on_the_debuggers_shelf_and_only_those_restored() {
-        let rules = rules(&agents(), true);
+        let rules = rules(&agents(), true, true, untooled());
         let chat = (rules.open)(&OpenRequest::new("fake", "/home/me/project")).expect("allowed");
         assert_eq!(chat.shelf, Some(shelf()));
         let id = caf_core::ChatId::from_number(1000);
         let restore = (rules.restore)(id, &shelf()).expect("allowed");
         assert_eq!((restore.chat, &restore.shelf), (id, &shelf()));
-        assert!(restore.mcp_servers.is_empty(), "the tools new chats have");
+        assert!(restore.mcp_servers.is_empty(), "the servers new chats have");
+        assert_eq!(
+            restore.tools,
+            Tools::caf(CafTool::ALL),
+            "the form's default"
+        );
         let elsewhere = Shelf("another app's".into());
         assert!((rules.restore)(id, &elsewhere).is_none());
-        let unsaved = super::rules(&agents(), false);
+        let unsaved = super::rules(&agents(), false, true, untooled());
         assert_eq!(
             (unsaved.open)(&OpenRequest::new("fake", "/home/me"))
                 .unwrap()

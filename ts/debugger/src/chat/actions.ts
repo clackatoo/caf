@@ -9,7 +9,9 @@ import {
   CafError,
   type AgentName,
   type Answer,
+  type CafTool,
   type ChatId,
+  type OpenRequest,
   type DeepReadonly,
   type QuestionId,
   type Refused,
@@ -78,9 +80,10 @@ export interface ListActions {
    * `settings` for it, such as its model, if any are given. Opening can't
    * carry them, so the host opens it, then chooses them: before its
    * session opens, any choice is taken, and applied as it opens, before
-   * any message goes.
+   * any message goes. `tools` are CAF's own tools to ask the host to give
+   * it, which it may grant, trim or ignore: none if not given.
    */
-  open(agent: AgentName, cwd: string, settings?: readonly SettingChoice[]): Promise<unknown> | void
+  open(agent: AgentName, cwd: string, settings?: readonly SettingChoice[], tools?: readonly CafTool[]): Promise<unknown> | void
 }
 
 /** What the user can do with the list of saved chats. */
@@ -167,6 +170,14 @@ export function oneAtATime<K>(): OneAtATime<K> {
 /** Whether `error` is CAF refusing, for this reason. */
 function refused(error: unknown, why: Refused['type']): boolean {
   return error instanceof CafError && error.why.type === 'Refused' && error.why.value.type === why
+}
+
+/**
+ * What a host asks CAF for as it opens a new chat with `agent` in `cwd`,
+ * giving it `tools` of CAF's own: none, `[]`, says so outright.
+ */
+export function newChat(agent: AgentName, cwd: string, tools: readonly CafTool[]): OpenRequest {
+  return { agent, cwd, session: { type: 'New' }, tools: { caf: [...tools] } }
 }
 
 /**

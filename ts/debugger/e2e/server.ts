@@ -2,9 +2,9 @@
 // prints, token and all.
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { test as base } from '@playwright/test'
 
 const repo = resolve(import.meta.dirname, '../../..')
@@ -42,6 +42,12 @@ export interface Setup {
    * left off, with its saved chats. A new one of its own by default.
    */
   state?: string
+  /**
+   * Files to write in the test's folder before it starts, by their paths
+   * in it, with `{state}` in their text as the folder: such as a script
+   * of the fake agent's own, for `agents` to name as `{state}/script.jsonl`.
+   */
+  files?: Record<string, string>
 }
 
 /** Starts caf-debugger with `args`; resolves once it says where it is. */
@@ -64,18 +70,29 @@ export function start(args: string[], setup: Setup = {}): Promise<Server & { pro
     writeFileSync(join(state, 'agents.toml'), fill(setup.agents))
     extra.push('--agents', join(state, 'agents.toml'))
   }
+  for (const [path, text] of Object.entries(setup.files ?? {})) {
+    mkdirSync(dirname(join(state, path)), { recursive: true })
+    writeFileSync(join(state, path), fill(text))
+  }
   const auth = join(state, 'auth.json')
   if (setup.auth !== undefined) writeFileSync(auth, fill(JSON.stringify(setup.auth)))
+  // $XDG_STATE_HOME/caf and $XDG_RUNTIME_DIR/caf are one folder here,
+  // which CAF's tools' socket needs the user's alone.
+  mkdirSync(join(state, 'caf'), { recursive: true, mode: 0o700 })
+  chmodSync(join(state, 'caf'), 0o700)
   mkdirSync(join(state, 'caf', 'debugger'), { recursive: true })
   return new Promise((done, fail) => {
     // Agents CAF installs would go under $XDG_DATA_HOME: the same folder, so
     // a test never sees, nor touches, the agents installed on this machine.
     // No proxy, so a download to nowhere fails as offline, as the fake
-    // profile's must, whatever this machine's settings.
+    // profile's must, whatever this machine's settings. CAF's tools'
+    // socket and output files go in $XDG_RUNTIME_DIR/caf: the test's own
+    // folder too, made for its user alone, and short enough for a socket.
     const env = {
       ...withoutProxies(process.env),
       XDG_STATE_HOME: state,
       XDG_DATA_HOME: state,
+      XDG_RUNTIME_DIR: state,
       CAF_FAKE_AGENT_BIN: fake,
       ...(setup.auth !== undefined ? { CAF_FAKE_AGENT_AUTH: auth } : {}),
     }

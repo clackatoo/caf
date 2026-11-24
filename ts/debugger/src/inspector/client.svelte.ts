@@ -30,7 +30,7 @@ export class Inspector {
   refused = $state(false)
   #opened = false
   /** What the server is doing, once it has said. */
-  hello = $state.raw<{ mode: Mode; file: string | null; run: string | null } | null>(null)
+  hello = $state.raw<{ mode: Mode; file: string | null; run: string | null; tools: boolean } | null>(null)
   /** Where the app is looking. Steps are numbered from 1; position `at` is just after step `at`, and 0 is before any. */
   position = $state.raw({ live: true, at: 0, end: 0 })
   /** The first step where the replay check failed, if one has. */
@@ -97,6 +97,11 @@ export class Inspector {
 
   get live(): boolean {
     return this.hello?.mode.type === 'Live'
+  }
+
+  /** Whether CAF serves its own tools, so New chat may offer them: only if the server says so. */
+  get servesTools(): boolean {
+    return this.hello?.tools === true
   }
 
   /** Look at a position: live, this stops following. */

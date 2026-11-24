@@ -37,9 +37,21 @@ function open(): { socket: FakeSocket; inspector: Inspector } {
   const socket = new FakeSocket()
   const inspector = new Inspector(socket)
   socket.emit('open')
-  socket.say({ type: 'Hello', value: { protocol: PROTOCOL, mode: { type: 'Live' }, file: '/rec.jsonl', run: 'r1' } })
+  socket.say({ type: 'Hello', value: { protocol: PROTOCOL, mode: { type: 'Live' }, file: '/rec.jsonl', run: 'r1', tools: true } })
   return { socket, inspector }
 }
+
+describe('whether CAF serves its tools', () => {
+  it("is the server's word, and no until it says, so New chat offers no checkbox it can't honour", () => {
+    const socket = new FakeSocket()
+    const inspector = new Inspector(socket)
+    socket.emit('open')
+    expect(inspector.servesTools).toBe(false)
+    socket.say({ type: 'Hello', value: { protocol: PROTOCOL, mode: { type: 'Live' }, file: null, run: 'r', tools: false } })
+    expect(inspector.servesTools).toBe(false)
+    expect(open().inspector.servesTools).toBe(true)
+  })
+})
 
 describe('steps and the position', () => {
   it('follows the end while live', () => {
@@ -84,7 +96,7 @@ describe('steps and the position', () => {
     const socket = new FakeSocket()
     const inspector = new Inspector(socket)
     socket.emit('open')
-    socket.say({ type: 'Hello', value: { protocol: PROTOCOL, mode: { type: 'Replay' }, file: 'x.jsonl', run: null } })
+    socket.say({ type: 'Hello', value: { protocol: PROTOCOL, mode: { type: 'Replay' }, file: 'x.jsonl', run: null, tools: false } })
     socket.say({ type: 'Steps', value: { from: 1, steps: [step(1), step(2)] } })
     inspector.look(2)
     expect(socket.sent).toEqual([{ type: 'Seek', value: { step: 2 } }])
@@ -197,7 +209,7 @@ describe('states', () => {
     const socket = new FakeSocket()
     const inspector = new Inspector(socket)
     socket.emit('open')
-    socket.say({ type: 'Hello', value: { protocol: PROTOCOL, mode: { type: 'Replay' }, file: 'f', run: null } })
+    socket.say({ type: 'Hello', value: { protocol: PROTOCOL, mode: { type: 'Replay' }, file: 'f', run: null, tools: false } })
     socket.say({ type: 'Steps', value: { from: 1, steps: [step(1), step(2), step(3)] } })
     // Past the end: asked for at the end, which the server would answer anyway.
     inspector.stateAt(9)

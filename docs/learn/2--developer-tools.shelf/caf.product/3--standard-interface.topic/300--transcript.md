@@ -137,7 +137,10 @@ stopped turn reached the agent, so the app doesn't either.
 **The agent, on its own.** An agent can start a turn by itself, such as when
 a command it left running finishes. It has no message: in its place is the
 agent's mark and *Claude, on its own*, muted. The rest is drawn as any turn.
-CAF doesn't say why the agent started it, so neither does the app. Such a
+CAF doesn't say why the agent started it, so neither does the app. (A
+command left running by CAF's own Bash is different: CAF tells the agent
+when it ends, in a turn of CAF's own, as
+[Background jobs](#background-jobs) says.) Such a
 turn never fails, so it never has a remedy: it ends finished, stopped, or
 cut off.
 
@@ -149,14 +152,33 @@ and the chat was restored.
 
 A message waiting to be sent (CAF queues it while a turn runs or the chat
 opens) isn't drawn in the transcript: it sits on the composer's tray until it
-goes. **Later:** a turn sent by another chat's agent, or by the app.
+goes. A turn CAF starts with a notice, such as of a background job's end,
+is drawn as the [Background jobs](#background-jobs) section says; one the
+app starts with its own notice (`Core::notify`) is headed *A notice from
+the app*, muted, with its words. **Later:** a turn sent by another chat's
+agent.
 
 ## Tool calls
 
 A tool call is a step on the timeline (see
 [Tool calls](~caf/concepts/tool-calls) for what CAF records of one). Its
 line is its kind's icon, its title, and on the right how long it ran or
-where it is. Where it is, by its status:
+where it is.
+
+**Its title** is drawn as given, never made up by the app. For CAF's own
+tools (see [CAF's own tools](~caf/concepts/cafs-own-tools)) CAF writes it,
+the same for every agent, with a path inside the chat's folder relative to
+it, and any other in full:
+
+| Tool | Its title |
+| --- | --- |
+| Read | *Read src/config.rs* |
+| Edit | *Edit src/config.rs* |
+| Write | *Write docs/notes.md* |
+| Bash | The command's first line, as the agent wrote it: *cargo test -p caf-core*, with *…* after it if it has more |
+| TaskStop | *Stop task 2*, its icon a square |
+
+Where it is, by its status:
 
 | Status | Its dot | On the right | Role |
 | --- | --- | --- | --- |
@@ -241,6 +263,54 @@ Everything an agent sends is drawn as text: never as markup, never run.
 *src/main.rs:42*, each opening the file where the app can; and what the
 call was given (its input), folded away. When CAF kept only the start of
 the input, it says *Kept 64 KB of 200 KB* under it.
+
+### Background jobs
+
+![Two commands running in the background](transcript-background.webp "A finished turn whose two commands still run: each a chip of its own, and opened, each step marked Background, its output coming in")
+
+A call to one of CAF's tools can go on after the agent was answered: a
+command the agent ran in the background, or one that ran past its
+timeout. CAF calls it a **job**, and numbers it in the chat: task 1,
+task 2. The agent got its answer, so the turn goes on, and may finish,
+while the job runs.
+
+- **Running, it's marked *Background*:** a small chip in the accent after
+  its title, as it's happening now. Its dot is a spinner and its output
+  comes in, as any running step's. Its turn can be finished, stopped or
+  far up the transcript: the step stays running there until the job ends,
+  so the app never draws it as done because its turn is.
+- **Folded,** its turn's summary line gives each job still running a chip
+  of its own, in the accent: a spinner, its title and *Background*. A job
+  that has ended is counted with the turn's other steps, as any is.
+- **Stop doesn't stop it.** The user's Stop stops the turn, not the work
+  it left in the background, as in Claude Code. A job ends by itself, or
+  when the agent stops it with TaskStop, or when the chat is closed or
+  deleted (*Cancelled*), or put away, or the app shuts down (*Failed*: a
+  restored chat has no jobs).
+- **When it ends,** it's drawn as any step that ended: *Done*, *Failed*
+  or *Cancelled*, its output ended with its exit. The chip goes. Opened,
+  the step may say, muted, that it ran in the background as task 2.
+
+![A job's end, told by CAF, then one stopped](transcript-job-ended.webp "CAF's notice of the tests' end starts a turn of CAF's own; Claude reads the output and answers; later its TaskStop is a step, Stop task 1")
+
+**CAF tells the agent when a job ends,** in a turn of its own, sent as a
+message is: at once if nothing runs, or else once the running turn ends.
+After the user's Stop, CAF holds them: none comes right after a Stop, and
+each held one appears, as a turn of its own, just before the user's next
+message (see [Serving tools](~caf/concepts/serving-tools#background-jobs)).
+In place of a message, the turn starts with the CAF badge and what CAF
+told the agent, in words: the notice's own summary, *Told Claude:
+Background command "cargo test --test integration" completed (exit code
+0)* (or *failed*), with `&amp;`, `&lt;` and `&gt;`
+read back as `&`, `<` and `>`. It's CAF's voice, not the agent's nor the user's, so it never
+looks like something the user sent. The rest of the turn is the agent's
+answer, drawn as any. The agent was given the path of a file holding the
+job's whole output too; the app needn't show it.
+
+**TaskStop is a step.** When the agent stops one of its jobs, its call is a
+step like any other, titled *Stop task 1*, and the job's own step, wherever
+it is, ends *Cancelled*. TaskStop never asks: it can only stop a job its own
+chat started. Folded, it's counted as *Stopped 1 task*.
 
 ## Asking
 
@@ -501,15 +571,17 @@ app's.
 ## Colour
 
 - **Accent:** what's happening now (the *Working* spinner, the running
-  step's dot, the caret of a command's output as it runs), the edge of a
+  step's dot, the caret of a command's output as it runs, a job's
+  *Background* chip), the edge of a
   question waiting on the user and the dot of the step it's about, and the
   remedy button.
 - **Warning:** a failure's box, a failed or refused step's dot and chip,
   *Failed* on the turn's line, and a command that exited with an error or
   was killed.
 - **Caution:** a lost chat, and a note that the agent remembers nothing.
-- **CAF's voice:** the CAF badge, on notes, failures and CAF's own
-  questions, permission questions about its own tools included.
+- **CAF's voice:** the CAF badge, on notes, failures, CAF's own
+  questions, permission questions about its own tools included, and its
+  notice of a job's end.
 - **Link:** a web link a call gave back.
 - **Muted:** times, counts, thinking, what the agent said along the way,
   steps done or cancelled, who allowed a step, what was cut, the turn's
@@ -526,13 +598,14 @@ Everything else is calm.
 | What the transcript shows | Where it comes from |
 | --- | --- |
 | The turns, in order | `Chat.turns`, each a `Turn`, in the order of the list. History and CAF's notes can be inserted before a waiting turn (`Change::TurnInserted`). |
-| The message | `Turn.starter`: `Starter::User` holds the `UserMessage`. `Starter::Agent` is a turn the agent started by itself, and `Starter::Caf` one of CAF's notes. |
+| The message | `Turn.starter`: `Starter::User` holds the `UserMessage`. `Starter::Agent` is a turn the agent started by itself, and `Starter::Caf` one of CAF's notes. `Starter::Notice` holds a notice's text: CAF's own of a job's end is `<task-notification>…</task-notification>`, whose `<summary>` is what's shown; the app's is anything else. |
 | How the turn ended | `Turn.life`: `TurnLife::Running`, `Stopping`, `Finished`, `Stopped`, `Failed` or `CutOff`. A `Waiting` one is on the composer's tray. |
 | When it was sent | The start of `Turn.window`. |
 | How long the agent worked | From the start of the first `Words`, `Thinking` or `Tool` item's `Item.window` to the end of `Turn.window`. |
 | The turn's model | `Turn.model`, as the agent said when it was sent. |
 | The steps | `Turn.items`: `ItemKind::Words`, `Thinking`, `Tool`, `Note`, `App` and `Unknown`. Thinking is kept only if the app asks for it (`Host.shows.thinking`). |
 | A tool's line | `ToolCall.title`, as given; its `kind` (`ToolKind`) for the icon and the chip; its `status` (`ToolStatus::Pending`, `Asking`, `Running`, `Done`, `Failed`, `Refused` or `Cancelled`); and its `Item.window`. |
+| Background | `ToolCall.job`, the job's number (`JobId`), set once the call went on after the agent was answered (`ToolEvent::Detached`). It's *Background* while `status` is `Running`. A TaskStop's `action` is `Action::Stop`, with the `job`. |
 | Who decided | `ToolCall.decision`: `Decision::Allowed` or `Refused`, each with its `DecidedBy` (`User`, or `Policy` with its `reason`). |
 | A tool, opened | `ToolCall.result`, a list of `Piece`s: `Text` (its `cut`, a `Cut`), `Diff`, `Output`, `Image`, `Link` and `Unknown` (its `cut`: if CAF kept only the start of its data, `raw` is the start of its JSON, as a string). Then `ToolCall.locations` (and `locations_cut`), and `ToolCall.input` (and `input_cut`). |
 | An edit's diff and counts | A `Piece::Diff`: its `path`, `new_file`, `added`, `removed`, its `hunks`, each a list of `DiffLine`s (`change`, `old`, `new`, `text`), and `more`, the hunks not kept. |
