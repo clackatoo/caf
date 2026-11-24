@@ -20,8 +20,8 @@ use caf_core::question::{Answer, QuestionKind};
 use caf_core::tool::{Action, CafTool, Piece, StoppedBy, Text, ToolCall, ToolStatus, Tools};
 use caf_core::{NoAppItems, OpenChat};
 use caf_driver_tokio::{
-    AlwaysAsk, Caf, Call, ChatHandle, Config, Policy, Ran, RefuseAll, Relay, Runner, Running, Step,
-    Steps,
+    AlwaysAsk, Caf, Call, ChatHandle, Config, Policy, Ran, RefuseAll, Relay, Runner, Running,
+    StartError, Step, Steps,
 };
 use common::{Dir, PATIENCE, after_handshake, end_turn, fake, host, prompt, until};
 use serde_json::{Value, json};
@@ -99,6 +99,28 @@ impl Policy for AllowAll {
         _: PermissionRequest,
     ) -> Pin<Box<dyn Future<Output = PolicyAnswer> + Send>> {
         Box::pin(std::future::ready(PolicyAnswer::Allow))
+    }
+}
+
+/// Asks the user about the first call, and allows the rest.
+#[derive(Default)]
+struct AskFirst {
+    asked: bool,
+}
+
+impl Policy for AskFirst {
+    fn decide(
+        &mut self,
+        _: ChatId,
+        _: PermissionRequest,
+    ) -> Pin<Box<dyn Future<Output = PolicyAnswer> + Send>> {
+        let answer = if self.asked {
+            PolicyAnswer::Allow
+        } else {
+            PolicyAnswer::AskUser
+        };
+        self.asked = true;
+        Box::pin(std::future::ready(answer))
     }
 }
 
@@ -584,4 +606,102 @@ async fn a_recording_never_holds_the_key() {
     );
     // The socket is gone once CAF is.
     assert!(!read.socket.exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn try_start_says_why_it_cant_serve_and_starts_nothing() {
+    let dir = Dir::new();
+    let mut config = common::config_for(host(), Vec::new());
+    config.tools.relay = Relay::Command(SpawnCommand::new("/bin/true"));
+    config.tools.folder = Some(dir.path("s"));
+    config.record = Some(dir.path("run.jsonl"));
+    let Err(error) = Caf::<NoAppItems>::try_start(config) else {
+        panic!("it started");
+    };
+    assert!(
+        matches!(&error, StartError::NoRelayHook { relay, .. } if relay == std::path::Path::new("/bin/true")),
+        "{error:?}"
+    );
+    assert!(
+        error.to_string().contains("caf_relay::relay_if_asked()"),
+        "{error}"
+    );
+    assert!(!dir.path("run.jsonl").exists(), "no recording was made");
+    assert!(!dir.path("s").exists(), "no socket folder was made");
+
+    let mut config = common::config_for(host(), Vec::new());
+    serve_with(&mut config, &dir);
+    let long = dir.path(&"x".repeat(120));
+    config.tools.folder = Some(long.clone());
+    let Err(error) = Caf::<NoAppItems>::try_start(config) else {
+        panic!("it started");
+    };
+    let StartError::SocketPathTooLong { path } = &error else {
+        panic!("{error:?}");
+    };
+    assert!(path.starts_with(&long));
+    assert!(
+        error.to_string().contains(&long.display().to_string()),
+        "{error}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_newest_relay_for_a_chat_wins() {
+    let dir = Dir::new();
+    let mut steps = common::handshake("s1");
+    // The session's servers, started again from here, as Claude may while
+    // it opens a session again.
+    steps[3]["wait"]["as"] = json!("new");
+    steps.extend(start_relay());
+    steps.push(prompt());
+    steps.push(call_read(&dir));
+    let path = dir.path("a.txt").display().to_string();
+    steps.extend([
+        json!({"wait_file": {"path": dir.path("asked").display().to_string(), "timeout": 30000}}),
+        json!({"mcp_start": {"from": "new", "as": "second", "timeout": 30000}}),
+        json!({"mcp_list": {"server": "second", "expect": ["Read", "Edit", "Write", "Bash"], "timeout": 30000}}),
+        json!({"mcp_call": {"server": "second", "tool": "Read", "arguments": {"file_path": path}, "tool_use_id": "toolu_2", "report": "s1"}}),
+        json!({"mcp_await": {"expect": {"result": {"isError": false}}, "timeout": 30000}}),
+        end_turn(),
+        json!({"note": "done"}),
+    ]);
+    let mut serving = serve(
+        &steps,
+        AskFirst::default(),
+        Doing::Answers("contents"),
+        None,
+    );
+    let chat = serving.chat().await;
+    let mut watch = chat.watch();
+    until(&chat, &mut watch, "the first call's question", |chat| {
+        !chat.questions.is_empty()
+    })
+    .await;
+    std::fs::write(dir.path("asked"), "").unwrap();
+    serving.started().await;
+    serving.script_done().await;
+    // The first relay was closed for the second, its call gone, and the
+    // chat never lost its tools.
+    let closed = tokio::time::timeout(PATIENCE, async {
+        while !(serving.dir.record().iter()).any(|line| line["mcp_closed"] == "caf") {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(closed.is_ok(), "{:#?}", serving.dir.record());
+    assert_eq!(serving.events.relays(), ["Connected", "Connected"]);
+    assert_eq!(
+        serving.events.tool_events(),
+        ["Called", "Gone", "Called", "Output", "Finished"]
+    );
+    let done = until(&chat, &mut watch, "the second call done", |chat| {
+        (chat.turns.iter().flat_map(|turn| &turn.items)).any(
+            |item| matches!(&item.kind, ItemKind::Tool(tool) if tool.status == ToolStatus::Done),
+        )
+    })
+    .await;
+    assert!(!has_note(&done, &Note::ToolsLost));
+    drop(dir);
+    serving.shut_down().await;
 }
