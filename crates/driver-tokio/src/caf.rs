@@ -103,6 +103,7 @@ use crate::setup::SetupDriver;
 use crate::steps::{Step, Steps};
 use crate::storage::StorageDriver;
 use crate::timer::TimerDriver;
+use crate::tools::{Report as ToolsReport, ToolsConfig, ToolsDriver};
 use crate::usage::{Report as UsageReport, UsageDriver};
 
 /// What to start CAF with.
@@ -198,6 +199,15 @@ pub struct Config {
     /// Tests set it to a folder of their own, or `None`, so they never
     /// write to the user's.
     pub usage: Option<UsageConfig>,
+    /// Whether and how CAF's own tools are served to agents, over MCP
+    /// through a relay, and what runs them. By default none are: a chat
+    /// given tools is refused
+    /// ([`Refused::ToolsNotServed`](caf_core::Refused::ToolsNotServed)).
+    ///
+    /// With [`Relay::ThisProgram`](crate::Relay::ThisProgram), the app's
+    /// `main` must call [`caf_relay::relay_if_asked`] before anything
+    /// else: [`Caf::start`] checks it does, and panics if it doesn't.
+    pub tools: ToolsConfig,
 }
 
 /// Where the usage ledger is, and whether prices are fetched.
@@ -246,6 +256,7 @@ impl Config {
             installs: None,
             store: None,
             usage: UsageConfig::for_user(),
+            tools: ToolsConfig::default(),
         }
     }
 }
@@ -623,6 +634,10 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
                 root
             });
         let usage = UsageDriver::new(config.usage, config.host.name.clone());
+        let (tools, serving) = match ToolsDriver::start(config.tools, &config.host.name) {
+            Ok(started) => started,
+            Err(why) => panic!("CAF can't serve its tools: {why}"),
+        };
         let core = Core::new(config.host, config.agents);
         let (told, statuses) = watch::channel(core.agents());
         let (listed, saved) = watch::channel(None);
@@ -633,6 +648,7 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
             setup: SetupDriver::new(root),
             storage: StorageDriver::new(config.store),
             usage,
+            tools,
             priced: false,
             unpriced: Vec::new(),
             policy: config.policy,
@@ -660,6 +676,10 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
             waiting: Vec::new(),
             out: Vec::new(),
         };
+        // Before any host's command, so every chat given tools is served.
+        if let Some(serving) = serving {
+            task.give(Event::Serving(serving));
+        }
         task.check_agents();
         let task = tokio::spawn(task.run());
         let caf = Self {
@@ -1716,6 +1736,7 @@ struct Task<A: AppItem, D: AppData> {
     setup: SetupDriver,
     storage: StorageDriver<A, D>,
     usage: UsageDriver,
+    tools: ToolsDriver,
     /// The core has been given the usage driver's first prices.
     priced: bool,
     /// Those waiting for the first prices.
@@ -1801,6 +1822,10 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 (ticket, event) = self.setup.next() => self.give(Event::Setup { ticket, event }),
                 (ticket, event) = self.storage.next() => self.stored(ticket, event),
                 report = self.usage.next() => self.usage_report(report),
+                report = self.tools.next() => self.give(match report {
+                    ToolsReport::Tool { call, event } => Event::Tool { call, event },
+                    ToolsReport::Relay { chat, change } => Event::Relay { chat, change },
+                }),
                 () = self.timers.woken() => self.give(Event::Woken),
                 Some(decided) = self.deciding.join_next_with_id() => self.decided(decided),
             }
@@ -1851,6 +1876,8 @@ impl<A: AppItem, D: AppData> Task<A, D> {
         self.inbox.close();
         self.reads.close();
         self.feeds.clear();
+        // Every call still open is answered, and the socket removed.
+        self.tools.finish().await;
         // The store lets go of the chats the core released last before
         // its thread ends, so once shutting down returns, they're free.
         let storage = std::mem::replace(&mut self.storage, StorageDriver::new(None));
@@ -2498,8 +2525,7 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 }
                 // No other kind is given yet.
                 Directive::Usage(_) => {}
-                // The tools driver comes with serving tools (feature 11).
-                Directive::Tool(_) => {}
+                Directive::Tool(tool) => self.tools.apply(tool),
                 // No other kind is given yet. One added later needs a
                 // driver here.
                 _ => {}
@@ -2580,6 +2606,10 @@ fn new_run() -> String {
 
 /// What's written in a recording for "redacted".
 const HIDDEN: &str = "[redacted]";
+
+/// What's written in a recording for [`Serving::key`](caf_core::event::Serving::key),
+/// which reads back as all zeros.
+const HIDDEN_KEY: &str = caf_core::mcp::HIDDEN;
 
 /// `open`, with its MCP servers' variables' and headers' values hidden.
 fn hide_mcp_secrets(open: &OpenChat) -> OpenChat {
@@ -2845,6 +2875,12 @@ fn line<A: AppItem, D: AppData>(now: Now, event: &Event<A, D>) -> serde_json::Re
                 "value": { "type": "Paste", "value": { "agent": agent, "text": null } },
             });
             return serde_json::to_string(&serde_json::json!({ "now": now, "event": event }));
+        }
+        // The key makes every chat's token: a replay reads it as zeros.
+        Event::Serving(_) => {
+            let mut line = serde_json::to_value(Line { now, event })?;
+            line["event"]["value"]["key"] = HIDDEN_KEY.into();
+            return serde_json::to_string(&line);
         }
         _ => return serde_json::to_string(&Line { now, event }),
     };
