@@ -1,0 +1,31 @@
+# caf-tools does no I/O: it never reads a clock, starts a process, touches
+# a file or the network, or sleeps. The backends (Files, Commands) do
+# that, in the drivers. This makes the rule something clippy checks
+# rather than a comment.
+disallowed-types = [
+    { path = "std::time::Instant", reason = "caf-tools reads no clock" },
+    { path = "std::time::SystemTime", reason = "caf-tools reads no clock" },
+    { path = "std::fs::File", reason = "caf-tools does no I/O: the backends do" },
+    { path = "std::process::Command", reason = "caf-tools does no I/O: the backends do" },
+    { path = "std::process::Child", reason = "caf-tools does no I/O: the backends do" },
+    { path = "std::net::TcpStream", reason = "caf-tools does no I/O" },
+    { path = "std::net::TcpListener", reason = "caf-tools does no I/O" },
+    { path = "std::net::UdpSocket", reason = "caf-tools does no I/O" },
+    { path = "std::thread::JoinHandle", reason = "caf-tools starts no threads" },
+]
+disallowed-methods = [
+    { path = "std::time::Instant::now", reason = "caf-tools reads no clock" },
+    { path = "std::time::SystemTime::now", reason = "caf-tools reads no clock" },
+    { path = "std::thread::sleep", reason = "caf-tools never blocks" },
+    { path = "std::thread::spawn", reason = "caf-tools starts no threads" },
+    { path = "std::fs::read", reason = "caf-tools does no I/O: the backends do" },
+    { path = "std::fs::read_to_string", reason = "caf-tools does no I/O: the backends do" },
+    { path = "std::fs::write", reason = "caf-tools does no I/O: the backends do" },
+    { path = "std::fs::read_dir", reason = "caf-tools does no I/O: the backends do" },
+    { path = "std::fs::metadata", reason = "caf-tools does no I/O: the backends do" },
+    { path = "std::fs::create_dir_all", reason = "caf-tools does no I/O: the backends do" },
+    { path = "std::fs::remove_file", reason = "caf-tools does no I/O: the backends do" },
+    { path = "std::env::var", reason = "caf-tools reads no environment" },
+    { path = "std::env::var_os", reason = "caf-tools reads no environment" },
+    { path = "std::env::current_dir", reason = "caf-tools reads no environment" },
+]

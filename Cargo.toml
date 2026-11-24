@@ -14,6 +14,7 @@ repository = "https://github.com/clackatoo/caf"
 caf-core = { path = "crates/core" }
 caf-relay = { path = "crates/relay" }
 caf-save = { path = "crates/save" }
+caf-tools = { path = "crates/tools" }
 caf-usage = { path = "crates/usage" }
 # ACP's types only: CAF frames and routes the messages itself. The same
 # pin as clackatoo, with the session notices clackatoo already declares.
@@ -70,4 +71,8 @@ uuid = { version = "1.29", default-features = false, features = ["std"] }
 # fastest levels, and old chats are squeezed at the strongest, with a long
 # window.
 zstd = { version = "0.14", default-features = false }
+# The terminal screen of CAF's Bash: a parser of escape sequences only.
+vte = "0.15"
+# Property tests of caf-tools' parsing.
+proptest = { version = "1.12", default-features = false, features = ["std"] }
 tokio = { version = "1.54", features = ["rt", "macros", "io-util", "process", "sync", "time"] }

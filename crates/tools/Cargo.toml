@@ -1,0 +1,19 @@
+[package]
+name = "caf-tools"
+description = "CAF's own tools, Read, Edit, Write and Bash: their rules, the terminal screen and the backend traits. No I/O and no async runtime."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+caf-core.workspace = true
+# Whether a file changed since it was read: its bytes' hash.
+sha2.workspace = true
+# The terminal screen's parser: escape sequences and UTF-8, nothing more.
+vte.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
