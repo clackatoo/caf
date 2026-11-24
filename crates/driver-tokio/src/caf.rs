@@ -123,7 +123,7 @@ pub struct Config {
     /// It's JSON lines, of version 3
     /// ([`RECORDING_VERSION`](caf_core::event::RECORDING_VERSION)). The
     /// first holds the host and the agents:
-    /// `{"caf_recording": 4, "host": …, "agents": […]}`; a reader
+    /// `{"caf_recording": 5, "host": …, "agents": […]}`; a reader
     /// checks the version before reading the rest: an older version's
     /// recording isn't read, as CAF isn't released yet. Each line
     /// after it is one event the core was given, with its time, in order:

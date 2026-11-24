@@ -547,7 +547,7 @@ async fn live_with_the_fake_agent_the_steps_arrive_and_never_diverge() {
     let (status, body) = get(port, &format!("/recording?token={token}")).await;
     assert_eq!(status, 200);
     let text = String::from_utf8(body).unwrap();
-    assert!(text.starts_with(r#"{"caf_recording":4,"#), "{text}");
+    assert!(text.starts_with(r#"{"caf_recording":5,"#), "{text}");
     assert!(text.ends_with('\n'));
 
     // Shutting down ends the chat, archived but still watched, and

@@ -8,12 +8,13 @@ use std::path::PathBuf;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::acp::Frame;
-use crate::agent::InstallFailure;
+use crate::agent::{InstallFailure, SpawnCommand};
 use crate::chat::{AppData, AppItem, NoAppData, NoAppItems, UserMessage};
 use crate::core::OpenChat;
 use crate::ids::{AgentName, CallId, ChatId, QuestionId, Shelf, Ticket, TurnId};
 use crate::install::{Platform, SignedInAs};
 use crate::limits::ProfileLimits;
+use crate::mcp::Key;
 use crate::question::Answer;
 use crate::save::{CannotRestore, Header, RestoreChat, Saved};
 use crate::settings::SettingChoice;
@@ -26,8 +27,9 @@ use crate::usage::PriceTable;
 /// whenever an [`Event`] of an older version no longer reads the same; as
 /// CAF isn't released yet, nothing migrates an older one, and a reader
 /// refuses it. Version 3 came with archiving and the names on notes about
-/// settings; version 4 with tool calls' new shape.
-pub const RECORDING_VERSION: u32 = 4;
+/// settings; version 4 with tool calls' new shape; version 5 with serving
+/// CAF's tools ([`Event::Serving`], [`Event::Relay`], chats' tools).
+pub const RECORDING_VERSION: u32 = 5;
 
 /// Something that happened. `A` and `D` are the app's item and data
 /// types.
@@ -99,6 +101,65 @@ pub enum Event<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     /// it has, window by window, the latest heard winning, and never saves
     /// them back.
     Limits(Vec<ProfileLimits>),
+    /// How CAF's tools are served: the tools driver's report, once as it
+    /// starts, before any host command. A driver that serves no tools
+    /// never sends it, and chats given tools are then refused
+    /// ([`Refused::ToolsNotServed`](crate::Refused::ToolsNotServed)).
+    Serving(Serving),
+    /// A chat's connection to CAF's tools changed: the tools driver's
+    /// report.
+    Relay {
+        /// The chat, as the connection's handshake named it.
+        chat: ChatId,
+        /// What happened.
+        change: RelayChange,
+    },
+}
+
+/// How CAF's tools are served, for the agent's MCP server `caf`: a relay
+/// program, which the agent starts, carries MCP between it and the tools
+/// driver's socket.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Serving {
+    /// How to start the relay. The core adds the variables that say where
+    /// to connect, and as which chat: `CAF_RELAY`, `CAF_RELAY_CHAT` and
+    /// `CAF_RELAY_TOKEN`.
+    pub relay: SpawnCommand,
+    /// The socket the relay connects to.
+    pub socket: PathBuf,
+    /// This run's key, which each chat's token is made with
+    /// ([`mcp::token`](crate::mcp::token)). Written as hex; recordings
+    /// and the debugger write `[hidden]` in its place, which reads back
+    /// as all zeros.
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
+    pub key: Key,
+}
+
+impl Serving {
+    /// Serving through `relay`, which connects to `socket`, with `key`.
+    #[must_use]
+    pub fn new(relay: SpawnCommand, socket: impl Into<PathBuf>, key: Key) -> Self {
+        Self {
+            relay,
+            socket: socket.into(),
+            key,
+        }
+    }
+}
+
+/// What happened to a chat's connection to CAF's tools.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum RelayChange {
+    /// A relay connected, and was bound to the chat: the newest wins.
+    Connected,
+    /// The chat's bound connection closed: its calls are gone, and its
+    /// tools stop working until a relay connects again.
+    Lost,
 }
 
 /// What the host asked for.

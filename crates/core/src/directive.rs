@@ -15,7 +15,7 @@ use crate::install::{Install, LinkFrom, Patch, SignedInAs};
 use crate::limits::ProfileLimits;
 use crate::save::{Entry, Header, Saved};
 use crate::time::{Mono, Wall};
-use crate::tool::{Action, Origin};
+use crate::tool::{Action, CafTool, Origin};
 use crate::usage::LedgerLine;
 
 /// Work for a driver. `A` and `D` are the app's item and data types,
@@ -250,6 +250,26 @@ pub enum ToolDirective {
     Cancel {
         /// The call.
         call: CallId,
+    },
+    /// Serve these tools to the chat's relay, with these instructions,
+    /// replacing what it was served before: sent when a chat with tools
+    /// opens or is restored. A relay that connects for a chat not served
+    /// is refused.
+    Serve {
+        /// The chat.
+        chat: ChatId,
+        /// CAF's tools it's given, in order.
+        tools: Vec<CafTool>,
+        /// What the MCP server tells the agent, in a line
+        /// (`initialize`'s `instructions`).
+        instructions: String,
+    },
+    /// Stop serving the chat: it's let go. Its connection, if it has one,
+    /// is closed. The core has cancelled its calls already
+    /// ([`ToolDirective::Cancel`]), and ignores anything reported of them.
+    Unserve {
+        /// The chat.
+        chat: ChatId,
     },
 }
 

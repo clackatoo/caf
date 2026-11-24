@@ -667,7 +667,7 @@ fn a_restore_finds_what_was_under_way_and_tidies_it() {
         serde_json::to_value(&changes).expect("JSON"),
         json!([
             { "type": "ItemEnded", "value": { "item": 5003, "end": end } },
-            { "type": "ToolChanged", "value": { "item": 5005, "tool": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Failed" }, "input": null, "origin": { "type": "NotRecorded" }, "action": null, "input_cut": null, "result": [], "locations": [], "locations_cut": 0, "decision": { "type": "NotRecorded" }, "app": null } } },
+            { "type": "ToolChanged", "value": { "item": 5005, "tool": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Failed" }, "input": null, "origin": { "type": "NotRecorded" }, "action": null, "input_cut": null, "result": [], "locations": [], "locations_cut": 0, "decision": { "type": "NotRecorded" }, "app": null, "stopped_by": null } } },
             { "type": "ItemEnded", "value": { "item": 5005, "end": end } },
             { "type": "TurnLife", "value": { "turn": 5002, "life": { "type": "CutOff" }, "end": end } },
             { "type": "TurnLife", "value": { "turn": 5006, "life": { "type": "Stopped" }, "end": end } },

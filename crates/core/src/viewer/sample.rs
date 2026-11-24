@@ -38,7 +38,7 @@ use crate::shape::{account_limits, model_price, settings, spend, turn_usage};
 use crate::time::{End, Wall, Window};
 use crate::tool::{
     Action, CafTool, Cut, DecidedBy, Decision, Diff, DiffLine, Ending, Hunk, Image, LineChange,
-    Lines, Link, Location, Origin, Output, Piece, Text,
+    Lines, Link, Location, Origin, Output, Piece, StoppedBy, Text,
 };
 use crate::usage::{BadQuery, ModelPrice, PriceLayer, PricedModel, UsageQuery};
 use crate::viewer::{
@@ -281,6 +281,7 @@ fn tool(kind: ToolKind, status: ToolStatus) -> ToolCall {
         locations_cut: u64::from(kind == ToolKind::Search),
         decision,
         app: None,
+        stopped_by: (status == ToolStatus::Cancelled).then_some(StoppedBy::User),
     }
 }
 
@@ -357,11 +358,14 @@ fn chat() -> Chat {
             choice: SettingChoice::effort("high"),
             name: Some("High".into()),
         },
+        Note::ToolsLost,
     ];
     // 24 to 34 are taken, so the newer notes follow.
-    let notes = (notes.into_iter().zip([21, 22, 23, 41, 42, 43, 44, 45, 46]))
-        .map(|(note, id)| item(id, ended(300, 300), ItemKind::Note(note)))
-        .collect();
+    let notes = (notes
+        .into_iter()
+        .zip([21, 22, 23, 41, 42, 43, 44, 45, 46, 47]))
+    .map(|(note, id)| item(id, ended(300, 300), ItemKind::Note(note)))
+    .collect();
     let mut imported = turn(
         2,
         Starter::User(UserMessage::text("Earlier")),
@@ -592,7 +596,11 @@ fn changes() -> Vec<Change> {
         },
         Change::ToolChanged {
             item: ItemId(33),
-            tool: Box::new(tool(ToolKind::Execute, ToolStatus::Done)),
+            tool: Box::new({
+                let mut gone = tool(ToolKind::Execute, ToolStatus::Cancelled);
+                gone.stopped_by = Some(StoppedBy::Agent);
+                gone
+            }),
         },
         Change::OutputChanged {
             item: ItemId(33),
@@ -852,6 +860,7 @@ fn version_1() -> Sample {
         Refused::NoSuchSetting,
         Refused::ReservedServer,
         Refused::SameServerName,
+        Refused::ToolsNotServed,
     ];
     let outcomes = [
         Outcome::Opened(ChatId::from_number(1)),
