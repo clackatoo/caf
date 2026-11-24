@@ -28,7 +28,7 @@ pub use backend::{
 };
 pub use bash::{
     DEFAULT_TIMEOUT, JobEnd, MOST_ANSWER, MOST_JOBS, MOST_TIMEOUT, PREVIEW, answer, answer_of,
-    background, exit_failed, job_stopped, no_job, notice, output_text, timed_out, timeout,
+    background, escape, exit_failed, job_stopped, no_job, notice, output_text, timed_out, timeout,
     too_large, too_many_jobs,
 };
 pub use edit::{EditError, Edited, MOST_EDIT, edit, write};

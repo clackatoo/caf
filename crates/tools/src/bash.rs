@@ -391,8 +391,10 @@ pub fn notice(
     out
 }
 
-/// `text` with `&`, `<` and `>` escaped, so it can't end the tags it's in.
-fn escape(text: &str) -> String {
+/// `text` with `&`, `<` and `>` escaped, so it can't end the tags it's in:
+/// for any part of a notice.
+#[must_use]
+pub fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

@@ -870,7 +870,8 @@ async fn bash(
             () = tokio::time::sleep_until(log.flushed + FLUSH_EVERY), if job.is_some() && log.dirty => {
                 log.flush();
             }
-            () = &mut timed_out, if job.is_none() && !stopped => {
+            // Not once it has ended: what's left of its output is taken.
+            () = &mut timed_out, if job.is_none() && !stopped && ended.is_none() => {
                 let count = JobCount::take(&shared, chat);
                 match count.as_ref().and_then(|_| log.keep_in_file()) {
                     Some(path) => {

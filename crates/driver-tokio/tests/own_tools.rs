@@ -758,3 +758,28 @@ async fn a_command_ends_when_it_does_though_its_terminal_stays_open() {
     own.script_done().await;
     own.shut_down().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_command_that_ended_isnt_moved_to_the_background_while_its_output_is_taken() {
+    // It ends at once; its timeout comes while what's left of its output
+    // is still being taken.
+    let own = serve_with(
+        |_| {
+            [
+                call(
+                    "Bash",
+                    "b1",
+                    json!({"command": "make", "timeout": 200}),
+                    says("Ran in terminal 7\ndone", false),
+                )
+                .to_vec(),
+                vec![end_turn()],
+            ]
+            .concat()
+        },
+        |config| config.tools.commands = std::sync::Arc::new(OpenTerminal),
+    );
+    let _chat = own.chat().await;
+    own.script_done().await;
+    own.shut_down().await;
+}

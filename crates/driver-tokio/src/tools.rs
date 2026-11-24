@@ -1536,9 +1536,7 @@ fn output(call: CallId, batch: Batch) -> Report {
 fn failed_notice(job: JobId, tool_use: Option<&str>) -> String {
     let mut out = format!("<task-notification>\n<task-id>{}</task-id>", job.0);
     if let Some(tool_use) = tool_use {
-        let escaped = (tool_use.replace('&', "&amp;"))
-            .replace('<', "&lt;")
-            .replace('>', "&gt;");
+        let escaped = caf_tools::escape(tool_use);
         out.push_str(&format!("\n<tool-use-id>{escaped}</tool-use-id>"));
     }
     out.push_str(&format!(
