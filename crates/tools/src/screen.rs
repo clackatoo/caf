@@ -502,12 +502,15 @@ impl Grid {
             if len < col {
                 row.cells.resize(col, BLANK);
                 row.recount();
-                if row.cost > MOST_LINE {
-                    row.cells.truncate(len);
-                    row.recount();
-                    self.line_feed();
-                    continue;
-                }
+            }
+            // A cursor moved past the line's end writes nothing: if the
+            // blanks up to it, or the character after them, don't fit, the
+            // line is left as it was, and the character goes on the next.
+            if len < col && row.cost_with(col, cell) > MOST_LINE {
+                row.cells.truncate(len);
+                row.recount();
+                self.line_feed();
+                continue;
             }
             if col < row.cells.len() && row.cost_with(col, cell) > MOST_LINE {
                 // Rewriting a line so it would cost too much drops its end.

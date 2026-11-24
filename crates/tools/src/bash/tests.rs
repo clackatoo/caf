@@ -104,6 +104,41 @@ fn git_grep_and_git_diff_that_find_nothing_havent_failed() {
 }
 
 #[test]
+fn redirects_dont_split_the_command() {
+    for command in [
+        "grep x f 2>&1",
+        "rg x &>/dev/null",
+        "grep x f >&2",
+        "grep x f 2>/dev/null",
+        "grep x f <&0",
+        "cd a && grep x f 2>&1",
+        "rg x >/dev/null 2>&1",
+    ] {
+        assert_eq!(
+            ran(command, "", Some(Exit::Code(1))),
+            "(Bash completed with no output)",
+            "{command}"
+        );
+    }
+    // Nor with its target apart.
+    assert_eq!(
+        ran("grep x f > /dev/null", "", Some(Exit::Code(1))),
+        "(Bash completed with no output)"
+    );
+    assert_eq!(ran("make >& log", "", Some(Exit::Code(1))), "Exit code 1");
+    // A redirect before the command's name doesn't name it.
+    assert_eq!(
+        ran("2>/dev/null grep x f", "", Some(Exit::Code(1))),
+        "(Bash completed with no output)"
+    );
+    // A real & still splits.
+    assert_eq!(
+        ran("grep x f & make", "o", Some(Exit::Code(1))),
+        "Exit code 1\no"
+    );
+}
+
+#[test]
 fn quoted_operators_dont_split_the_command() {
     assert_eq!(
         ran("grep 'a|b' f", "", Some(Exit::Code(1))),

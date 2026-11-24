@@ -139,9 +139,10 @@ pub fn answer(
 }
 
 /// Whether `command` exiting with `code` failed, as Claude Code reads it:
-/// by the last command in the line, and, for git, its subcommand.
+/// by the last command in the line, its redirects aside, and, for git, its
+/// subcommand.
 fn failed(command: &str, code: i32) -> bool {
-    let words: Vec<&str> = last_command(command).split_whitespace().collect();
+    let words = words(last_command(command));
     let says_no = match words.first().copied().unwrap_or("") {
         "grep" | "rg" | "egrep" | "fgrep" | "find" | "diff" | "test" | "[" => true,
         "git" => matches!(git_subcommand(&words), Some("diff" | "grep")),
@@ -151,21 +152,31 @@ fn failed(command: &str, code: i32) -> bool {
 }
 
 /// The last command in `command`'s line: after its last `|`, `&`, `;` or
-/// line end outside quotes, and not escaped.
+/// line end outside quotes, not escaped, and not part of a redirect, such
+/// as `2>&1`, `&>` or `>|`.
 fn last_command(command: &str) -> &str {
     let (mut single, mut double, mut escaped) = (false, false, false);
     let mut start = 0;
     let mut last = "";
-    for (at, c) in command.char_indices() {
+    let mut before = ' ';
+    let mut chars = command.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        let after = chars.peek().map_or(' ', |&(_, c)| c);
+        let previous = std::mem::replace(&mut before, c);
         if escaped {
             escaped = false;
             continue;
         }
+        let redirect = match c {
+            '&' => matches!(previous, '>' | '<') || after == '>',
+            '|' => previous == '>',
+            _ => false,
+        };
         match c {
             '\\' if !single => escaped = true,
             '\'' if !double => single = !single,
             '"' if !single => double = !double,
-            '|' | '&' | ';' | '\n' if !single && !double => {
+            '|' | '&' | ';' | '\n' if !single && !double && !redirect => {
                 if !command[start..at].trim().is_empty() {
                     last = &command[start..at];
                 }
@@ -179,6 +190,24 @@ fn last_command(command: &str) -> &str {
     } else {
         &command[start..]
     }
+}
+
+/// `command`'s words, its redirects, such as `2>&1`, `>/dev/null` or
+/// `> out`, left out.
+fn words(command: &str) -> Vec<&str> {
+    let mut words = Vec::new();
+    let mut all = command.split_whitespace();
+    while let Some(word) = all.next() {
+        let rest = word.trim_start_matches(|c: char| c.is_ascii_digit());
+        let redirect = rest.starts_with(['<', '>']) || rest.starts_with("&>");
+        if !redirect {
+            words.push(word);
+        } else if rest.trim_end_matches(['<', '>', '|', '&']).is_empty() {
+            // Its target is the next word.
+            all.next();
+        }
+    }
+    words
 }
 
 /// git's subcommand in `words`, a git command's: its first word that isn't

@@ -323,6 +323,18 @@ fn rewriting_a_character_of_a_full_line_drops_only_from_its_end() {
 }
 
 #[test]
+fn a_character_past_a_nearly_full_lines_end_leaves_the_line_as_it_was() {
+    // Moving the cursor past the end writes nothing: the red Z doesn't fit,
+    // so it goes on the next line, and the line isn't padded to it.
+    let plain = "x".repeat(MOST_LINE - 5);
+    let chunks: [&[u8]; 2] = [plain.as_bytes(), b"\x1b[16384G\x1b[31mZ\x1b[0m"];
+    let whole = chunks.concat();
+    assert_eq!(fed(&chunks), lines(&whole));
+    assert_eq!(lines(&whole)[0], plain);
+    assert_eq!(lines(&whole)[1], "\x1b[0;31mZ\x1b[0m");
+}
+
+#[test]
 fn reverse_index_at_the_top_scrolls_down() {
     assert_eq!(lines(b"top\x1b[H\x1bMnew\n"), ["new", "top"]);
     // The bottom line goes.
@@ -516,12 +528,17 @@ proptest! {
         ),
     ) {
         let mut screen = Screen::new();
-        screen.feed(&full_red_line());
+        let mut all = Vec::new();
+        let mut whole = full_red_line();
+        apply(&mut all, screen.feed(&whole).unwrap());
         for (col, n, action, color) in edits {
             let edit = format!("\x1b[{col}G\x1b[3{color}m\x1b[{n}{action}");
             // The action, then a character at the cursor: each on its own.
             for part in [edit.as_str(), "y\x1b[0m"] {
-                screen.feed(part.as_bytes());
+                whole.extend_from_slice(part.as_bytes());
+                if let Some(redraw) = screen.feed(part.as_bytes()) {
+                    apply(&mut all, redraw);
+                }
                 for row in &screen.grid.rows {
                     let rendered = render(&row.cells).len();
                     prop_assert_eq!(row.cost, rendered);
@@ -529,6 +546,8 @@ proptest! {
                 }
             }
         }
+        // Every change was given: piece by piece, it's what it is whole.
+        prop_assert_eq!(all, lines(&whole));
     }
 
     #[test]
