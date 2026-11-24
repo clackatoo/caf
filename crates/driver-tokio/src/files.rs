@@ -252,6 +252,17 @@ fn replace(path: &Path, bytes: &[u8], before: Option<&Metadata>) -> Result<Versi
             path,
             rustix::fs::RenameFlags::NOREPLACE,
         )
+        .or_else(|errno| match errno {
+            // A filesystem without it, such as NFS or many FUSE ones: a
+            // hard link is made only where there's nothing, too.
+            rustix::io::Errno::INVAL | rustix::io::Errno::NOSYS | rustix::io::Errno::OPNOTSUPP => {
+                std::fs::hard_link(temp_path, path)
+                    .map_err(|e| rustix::io::Errno::from_io_error(&e).unwrap_or(errno))?;
+                let _ = std::fs::remove_file(temp_path);
+                Ok(())
+            }
+            errno => Err(errno),
+        })
         .map_err(|errno| match errno {
             rustix::io::Errno::EXIST => FileError::Changed,
             errno => error(errno.into()),
