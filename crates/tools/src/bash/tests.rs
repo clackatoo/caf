@@ -140,6 +140,24 @@ fn redirects_dont_split_the_command() {
 
 #[test]
 fn quoted_operators_dont_split_the_command() {
+    // Nor do they in a comment, which runs to the line's end.
+    assert_eq!(
+        ran("grep x f # a & b", "", Some(Exit::Code(1))),
+        "(Bash completed with no output)"
+    );
+    assert_eq!(
+        ran("make\n# then; search\ngrep x f", "", Some(Exit::Code(1))),
+        "(Bash completed with no output)"
+    );
+    assert_eq!(
+        ran("grep x f\n# just a comment", "", Some(Exit::Code(1))),
+        "(Bash completed with no output)"
+    );
+    // A # inside a word isn't a comment.
+    assert_eq!(
+        ran("grep a#b f | make", "o", Some(Exit::Code(1))),
+        "Exit code 1\no"
+    );
     assert_eq!(
         ran("grep 'a|b' f", "", Some(Exit::Code(1))),
         "(Bash completed with no output)"

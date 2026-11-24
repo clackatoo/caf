@@ -153,16 +153,22 @@ fn failed(command: &str, code: i32) -> bool {
 
 /// The last command in `command`'s line: after its last `|`, `&`, `;` or
 /// line end outside quotes, not escaped, and not part of a redirect, such
-/// as `2>&1`, `&>` or `>|`.
+/// as `2>&1`, `&>` or `>|`. A `#` starting a word outside quotes starts a
+/// comment, to the line's end.
 fn last_command(command: &str) -> &str {
-    let (mut single, mut double, mut escaped) = (false, false, false);
+    let (mut single, mut double, mut escaped, mut comment) = (false, false, false, false);
     let mut start = 0;
+    // Where the command before a comment ends.
+    let mut end = None;
     let mut last = "";
     let mut before = ' ';
     let mut chars = command.char_indices().peekable();
     while let Some((at, c)) = chars.next() {
         let after = chars.peek().map_or(' ', |&(_, c)| c);
         let previous = std::mem::replace(&mut before, c);
+        if comment && c != '\n' {
+            continue;
+        }
         if escaped {
             escaped = false;
             continue;
@@ -176,20 +182,25 @@ fn last_command(command: &str) -> &str {
             '\\' if !single => escaped = true,
             '\'' if !double => single = !single,
             '"' if !single => double = !double,
+            '#' if !single
+                && !double
+                && (previous.is_whitespace() || matches!(previous, ';' | '|' | '&')) =>
+            {
+                comment = true;
+                end = Some(at);
+            }
             '|' | '&' | ';' | '\n' if !single && !double && !redirect => {
-                if !command[start..at].trim().is_empty() {
-                    last = &command[start..at];
+                let part = &command[start..end.unwrap_or(at)];
+                if !part.trim().is_empty() {
+                    last = part;
                 }
-                start = at + 1;
+                (start, end, comment) = (at + 1, None, false);
             }
             _ => {}
         }
     }
-    if command[start..].trim().is_empty() {
-        last
-    } else {
-        &command[start..]
-    }
+    let part = &command[start..end.unwrap_or(command.len())];
+    if part.trim().is_empty() { last } else { part }
 }
 
 /// `command`'s words, its redirects, such as `2>&1`, `>/dev/null` or
