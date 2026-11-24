@@ -406,7 +406,8 @@ pub enum Action {
     Run {
         /// The command, as the model wrote it.
         command: String,
-        /// The folder it runs in.
+        /// The folder it runs in: the chat's shell folder, where its last
+        /// command's shell ended, from the chat's folder at first.
         folder: String,
         /// Whether the model asked for it to run in the background: the
         /// model is answered as it starts, and the call goes on as a job

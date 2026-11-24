@@ -283,6 +283,9 @@ pub enum ToolDirective {
         chat: ChatId,
         /// CAF's tools it's given, in order.
         tools: Vec<CafTool>,
+        /// The chat's folder, as the agent's told it: what the model is
+        /// told is its working directory.
+        cwd: String,
         /// What the MCP server tells the agent, in a line
         /// (`initialize`'s `instructions`).
         instructions: String,

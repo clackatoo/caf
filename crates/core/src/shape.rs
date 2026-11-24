@@ -804,6 +804,7 @@ pub(crate) fn every_type(s: &mut Samples) {
         &ToolDirective::Serve {
             chat: ChatId::from_number(1),
             tools: vec![CafTool::Read, CafTool::Bash],
+            cwd: "/home/user/project".into(),
             instructions: "Read files and run commands.".into(),
         },
         true,
