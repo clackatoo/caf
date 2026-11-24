@@ -475,6 +475,7 @@ fn definition(tool: CafTool, tools: &[CafTool]) -> Value {
 /// which CAF doesn't read yet, and notebooks, which it reads as their
 /// JSON.
 const READ: &str = "Reads a file from the local filesystem.
+
 - `file_path` must be an absolute path.
 - Reads up to 2000 lines by default.
 - When you already know which part of the file you need, only read that part. This can be important for larger files.
@@ -484,21 +485,26 @@ const READ: &str = "Reads a file from the local filesystem.
 
 /// Edit's description: Claude Code 2.1's own, short form.
 const EDIT: &str = "Performs exact string replacement in a file.
+
 - You must Read the file in this conversation before editing, or the call will fail.
 - `old_string` must match the file exactly, including indentation, and be unique \u{2014} the edit fails otherwise. Strip the Read line prefix (line number + tab) before matching.
 - `replace_all: true` replaces every occurrence instead.";
 
 /// Write's description: Claude Code 2.1's own, short form.
 const WRITE: &str = "Writes a file to the local filesystem, overwriting if one exists.
+
 When to use: creating a new file, or fully replacing one you've already Read. Overwriting an existing file you haven't Read will fail. For partial changes, use Edit instead.";
 
 /// Bash's `description` field's description: Claude Code 2.1's own.
 const BASH_DESCRIPTION: &str = "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does.
+
 Say what the command does in plain words: do not echo the command's text, its flags, or file paths - the user reads this description, often without seeing the command.
+
 For simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):
 - ls \u{2192} \"List files in current directory\"
 - git status \u{2192} \"Show working tree status\"
 - npm install \u{2192} \"Install package dependencies\"
+
 For commands that are harder to parse at a glance (piped commands, obscure flags, etc.), add enough context to clarify what it does:
 - find . -name \"*.tmp\" -exec rm {} \\; \u{2192} \"Find and delete all .tmp files recursively\"
 - git reset --hard origin/main \u{2192} \"Discard all local changes and match remote main\"

@@ -238,8 +238,10 @@ pub struct PermissionRequest {
 ///   `Finished`, with no `notice`, then the TaskStop's. The job then ends
 ///   Cancelled, by the agent: one whose `Finished` comes with a notice,
 ///   having ended by itself first, ends as it says, and the TaskStop is
-///   answered "No task {id} in this conversation". A TaskStop cancelled
-///   doesn't stop its job.
+///   answered "No task {id} in this conversation". Once a TaskStop of a
+///   job is run, the job's end with no notice is that stop's, even if
+///   the TaskStop was cancelled since, as the driver may have stopped it
+///   first.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

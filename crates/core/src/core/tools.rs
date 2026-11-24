@@ -81,6 +81,10 @@ pub(super) struct Call {
     pub(super) printed: Printed,
     /// The job it became, once the model was answered and it went on.
     pub(super) job: Option<JobId>,
+    /// A TaskStop of its job was given the driver to run: an end it
+    /// reports with no notice after is that stop's, even if the TaskStop
+    /// was cancelled since, as the driver may have stopped it first.
+    pub(super) stop_issued: bool,
 }
 
 /// Where a call CAF serves is.
@@ -442,6 +446,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 stage: Stage::Previewing,
                 printed: Printed::default(),
                 job: None,
+                stop_issued: false,
             },
         );
         match action {
@@ -777,6 +782,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             self.unask(chat, question);
         }
         let runs_command = matches!(action, Action::Run { .. });
+        if let Action::Stop { job } = action
+            && let Some(target) = self.job_call(chat, job)
+            && let Some(each) = self.calls.get_mut(&target)
+        {
+            each.stop_issued = true;
+        }
         self.change_tool(chat, item, |tool| {
             tool.status = ToolStatus::Running;
             tool.decision = decision;
@@ -952,16 +963,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if let (Some(folder), Action::Run { .. }, None) = (folder, &each.action, each.job) {
             self.shell_ended(each.chat, call, &folder, out);
         }
-        // A job TaskStop stopped: one of it is still under way, and the
-        // driver gave no notice, as it does for a job that ended by itself.
-        let stopped = each.job.is_some_and(|job| {
-            notice.is_none()
-                && (self.calls.values()).any(|other| {
-                    other.chat == each.chat
-                        && other.stage == Stage::Running
-                        && other.action == Action::Stop { job }
-                })
-        });
+        // A job TaskStop stopped: one was issued, and the driver gave no
+        // notice, as it does for a job that ended by itself.
+        let stopped = each.job.is_some() && each.stop_issued && notice.is_none();
         self.change_tool(each.chat, each.item, |tool| {
             tool.status = if stopped {
                 ToolStatus::Cancelled

@@ -665,37 +665,46 @@ fn a_job_that_ends_by_itself_before_task_stop_acts_is_done() {
 }
 
 #[test]
-fn a_task_stop_cancelled_leaves_its_job_be() {
-    let mut script = job_running("make");
-    script.tool(
-        2,
-        called(CafTool::TaskStop, json!({ "task_id": "1" }), None),
-    );
-    // The user stops the turn: the TaskStop is cancelled, the job isn't.
-    script.stop(CHAT).0.expect("stopping");
-    let out = script.answers(PROC, PROMPT, &json!({ "stopReason": "cancelled" }));
-    assert_eq!(
-        told(&out),
-        [json!({ "type": "Cancel", "value": { "call": 2 } })]
-    );
-    let tools = tools(&script);
-    assert_eq!(tools[0]["status"], kind("Running"));
+fn a_task_stop_cancelled_after_it_was_issued_still_stopped_its_job() {
+    let job = |notice: Option<&str>| {
+        let mut script = job_running("make");
+        script.tool(
+            2,
+            called(CafTool::TaskStop, json!({ "task_id": "1" }), None),
+        );
+        // The user stops the turn: the TaskStop is cancelled, though the
+        // driver may have stopped the job already; the job isn't.
+        script.stop(CHAT).0.expect("stopping");
+        let out = script.answers(PROC, PROMPT, &json!({ "stopReason": "cancelled" }));
+        assert_eq!(
+            told(&out),
+            [json!({ "type": "Cancel", "value": { "call": 2 } })]
+        );
+        let tools = tools(&script);
+        assert_eq!(tools[0]["status"], kind("Running"));
+        assert_has(
+            &tools[1],
+            &json!({ "status": kind("Cancelled"), "stopped_by": kind("User") }),
+        );
+        script.tool(
+            1,
+            finished(
+                false,
+                vec![ended(Ending::Exited(Exit::Signal(15)))],
+                None,
+                notice,
+            ),
+        );
+        the_job(&script)
+    };
+    // Its end with no notice is the TaskStop's doing, issued before.
     assert_has(
-        &tools[1],
-        &json!({ "status": kind("Cancelled"), "stopped_by": kind("User") }),
+        &job(None),
+        &json!({ "status": kind("Cancelled"), "stopped_by": kind("Agent") }),
     );
-    // It then ends by itself, even as a stop would: it's not the agent's.
-    script.tool(
-        1,
-        finished(
-            false,
-            vec![ended(Ending::Exited(Exit::Signal(15)))],
-            None,
-            None,
-        ),
-    );
+    // With one, it ended by itself.
     assert_has(
-        &the_job(&script),
+        &job(Some(NOTICE)),
         &json!({ "status": kind("Failed"), "stopped_by": null }),
     );
 }
