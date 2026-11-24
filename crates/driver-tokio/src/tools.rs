@@ -95,6 +95,51 @@ pub enum Relay {
     Command(SpawnCommand),
 }
 
+/// Why CAF couldn't start serving its tools ([`Caf::try_start`](crate::Caf::try_start)).
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StartError {
+    /// The relay didn't answer its check as [`caf_relay::relay_if_asked`]
+    /// does: most likely the program's `main` doesn't call it first.
+    NoRelayHook {
+        /// The relay's program.
+        relay: PathBuf,
+        /// What it did instead, such as printing something else.
+        why: String,
+    },
+    /// The socket's path is longer than a unix socket's may be: give
+    /// [`ToolsConfig::folder`] a shorter folder.
+    SocketPathTooLong {
+        /// The path.
+        path: PathBuf,
+    },
+    /// Anything else that keeps CAF from serving, as the system says,
+    /// such as a socket folder others can reach.
+    Serving(String),
+}
+
+impl std::fmt::Display for StartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoRelayHook { relay, why } => write!(
+                f,
+                "CAF's relay {} {why}: call caf_relay::relay_if_asked() first thing in its main",
+                relay.display()
+            ),
+            Self::SocketPathTooLong { path } => write!(
+                f,
+                "the socket for CAF's tools, {}, is {} bytes long, and a unix socket's path \
+                 may be at most {SOCKET_PATH_MOST}: give ToolsConfig::folder a shorter folder",
+                path.display(),
+                path.as_os_str().len()
+            ),
+            Self::Serving(why) => write!(f, "CAF can't serve its tools: {why}"),
+        }
+    }
+}
+
+impl std::error::Error for StartError {}
+
 /// What runs calls to CAF's tools, for the tools driver.
 ///
 /// Cancelling a call is dropping its future, so a runner cleans up on
@@ -396,12 +441,12 @@ impl ToolsDriver {
     pub(crate) fn start(
         mut config: ToolsConfig,
         app: &str,
-    ) -> Result<(Self, Option<Serving>), String> {
+    ) -> Result<(Self, Option<Serving>), StartError> {
         let relay = match std::mem::take(&mut config.relay) {
             Relay::None => return Ok((Self::with(config, None), None)),
             Relay::ThisProgram => {
                 let program = std::env::current_exe()
-                    .map_err(|e| format!("CAF can't find this program, to serve its tools: {e}"))?;
+                    .map_err(|e| StartError::Serving(format!("it can't find this program: {e}")))?;
                 SpawnCommand::new(program)
             }
             Relay::Command(command) => command,
@@ -416,15 +461,15 @@ impl ToolsDriver {
         mut config: ToolsConfig,
         relay: SpawnCommand,
         app: &str,
-    ) -> Result<(Self, Serving), String> {
+    ) -> Result<(Self, Serving), StartError> {
         let folder = match config.folder.take() {
             Some(folder) => folder,
             None => default_folder(),
         };
-        private_folder(&folder)?;
+        private_folder(&folder).map_err(StartError::Serving)?;
         let socket = folder.join(format!("{}-{}.sock", file_name(app), std::process::id()));
         let (listener, file) = listen(&socket)?;
-        let key = random_key()?;
+        let key = random_key().map_err(StartError::Serving)?;
         let serving = Serving::new(relay, socket.clone(), Key(key));
         let (from_conns, to_driver) = mpsc::channel(64);
         let live = Live {
@@ -1128,15 +1173,18 @@ async fn read_line(
 
 /// Checks that `relay` has the hook: run with
 /// [`caf_relay::CHECK_VAR`], it must print [`caf_relay::CHECK_ANSWER`].
-fn check_relay(relay: &SpawnCommand) -> Result<(), String> {
-    let hook = "call caf_relay::relay_if_asked() first thing in its main";
+fn check_relay(relay: &SpawnCommand) -> Result<(), StartError> {
+    let no_hook = |why: String| StartError::NoRelayHook {
+        relay: relay.program.clone(),
+        why,
+    };
     // Run as the check, this program went on to start CAF: checking again
     // would start it again, without end.
     if std::env::var_os(caf_relay::CHECK_VAR).is_some() {
-        return Err(format!(
-            "this program was run as CAF's relay check ({} is set), but went on to start CAF: {hook}",
+        return Err(no_hook(format!(
+            "was run as CAF's relay check ({} is set), but went on to start CAF",
             caf_relay::CHECK_VAR
-        ));
+        )));
     }
     let program = relay.program.display();
     let mut command = std::process::Command::new(&relay.program);
@@ -1164,7 +1212,7 @@ fn check_relay(relay: &SpawnCommand) -> Result<(), String> {
         .stderr(Stdio::null());
     let mut child = command
         .spawn()
-        .map_err(|e| format!("CAF's relay {program} couldn't be run: {e}"))?;
+        .map_err(|e| StartError::Serving(format!("its relay {program} couldn't be run: {e}")))?;
     let mut stdout = child.stdout.take().expect("it's piped");
     let (said, heard) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -1182,12 +1230,16 @@ fn check_relay(relay: &SpawnCommand) -> Result<(), String> {
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!(
-                    "CAF's relay {program} didn't answer its check in {} s: {hook}",
+                return Err(no_hook(format!(
+                    "didn't answer its check in {} s",
                     CHECK_TIME.as_secs()
-                ));
+                )));
             }
-            Err(e) => return Err(format!("CAF's relay {program} couldn't be checked: {e}")),
+            Err(e) => {
+                return Err(StartError::Serving(format!(
+                    "its relay {program} couldn't be checked: {e}"
+                )));
+            }
         }
     };
     let out = heard
@@ -1197,10 +1249,10 @@ fn check_relay(relay: &SpawnCommand) -> Result<(), String> {
     if status.success() && out == expected.as_bytes() {
         return Ok(());
     }
-    Err(format!(
-        "CAF's relay {program} didn't answer its check ({status}, printing {:?}): {hook}",
+    Err(no_hook(format!(
+        "didn't answer its check ({status}, printing {:?})",
         String::from_utf8_lossy(&out)
-    ))
+    )))
 }
 
 /// `$XDG_RUNTIME_DIR/caf`, or `caf-<uid>` in the temporary folder.
@@ -1260,31 +1312,29 @@ fn file_name(app: &str) -> String {
 
 /// Listens on `socket`, replacing a socket left there by an earlier
 /// process with the same id.
-fn listen(socket: &Path) -> Result<(UnixListener, SocketFile), String> {
+fn listen(socket: &Path) -> Result<(UnixListener, SocketFile), StartError> {
     let shown = socket.display();
-    let length = socket.as_os_str().len();
-    if length > SOCKET_PATH_MOST {
-        return Err(format!(
-            "the socket for CAF's tools, {shown}, is {length} bytes long, and a unix socket's \
-             path may be at most {SOCKET_PATH_MOST}: give ToolsConfig::folder a shorter folder"
-        ));
+    if socket.as_os_str().len() > SOCKET_PATH_MOST {
+        return Err(StartError::SocketPathTooLong {
+            path: socket.to_owned(),
+        });
     }
     if let Ok(meta) = std::fs::symlink_metadata(socket) {
         if !meta.file_type().is_socket() {
-            return Err(format!(
-                "CAF's tools' socket {shown} is taken by something else"
-            ));
+            return Err(StartError::Serving(format!(
+                "its socket {shown} is taken by something else"
+            )));
         }
         let _ = std::fs::remove_file(socket);
     }
     let listener = std::os::unix::net::UnixListener::bind(socket)
-        .map_err(|e| format!("CAF couldn't listen on its tools' socket, {shown}: {e}"))?;
+        .map_err(|e| StartError::Serving(format!("it can't listen on {shown}: {e}")))?;
     // Removed if anything after fails.
     let file = SocketFile(socket.to_owned());
     let listener = listener
         .set_nonblocking(true)
         .and_then(|()| UnixListener::from_std(listener))
-        .map_err(|e| format!("CAF couldn't listen on its tools' socket, {shown}: {e}"))?;
+        .map_err(|e| StartError::Serving(format!("it can't listen on {shown}: {e}")))?;
     Ok((listener, file))
 }
 
@@ -1293,7 +1343,7 @@ fn random_key() -> Result<[u8; 32], String> {
     let mut key = [0; 32];
     std::fs::File::open("/dev/urandom")
         .and_then(|mut random| random.read_exact(&mut key))
-        .map_err(|e| format!("CAF couldn't make its tools' key: {e}"))?;
+        .map_err(|e| format!("it can't make its key: {e}"))?;
     Ok(key)
 }
 
@@ -2088,8 +2138,14 @@ mod tests {
     #[test]
     fn a_relay_without_the_hook_fails_the_check_naming_it() {
         let why = check_relay(&SpawnCommand::new("/bin/true")).unwrap_err();
+        assert!(
+            matches!(&why, StartError::NoRelayHook { relay, .. } if relay == Path::new("/bin/true"))
+        );
+        let why = why.to_string();
         assert!(why.contains("caf_relay::relay_if_asked()"), "{why}");
-        let why = check_relay(&SpawnCommand::new("/no/such/program")).unwrap_err();
+        let why = check_relay(&SpawnCommand::new("/no/such/program"))
+            .unwrap_err()
+            .to_string();
         assert!(why.contains("/no/such/program"), "{why}");
     }
 
@@ -2119,6 +2175,10 @@ mod tests {
         let Err(why) = ToolsDriver::listen(config, SpawnCommand::new("/bin/false"), "test") else {
             panic!("it listened");
         };
+        assert!(
+            matches!(&why, StartError::SocketPathTooLong { path } if path.starts_with(&folder))
+        );
+        let why = why.to_string();
         assert!(why.contains(&folder.display().to_string()), "{why}");
         assert!(why.contains("ToolsConfig::folder"), "{why}");
     }
@@ -2136,6 +2196,7 @@ mod tests {
         let Err(why) = ToolsDriver::listen(config, SpawnCommand::new("/bin/false"), "test") else {
             panic!("it listened");
         };
+        let why = why.to_string();
         assert!(why.contains("mode 700"), "{why}");
     }
 

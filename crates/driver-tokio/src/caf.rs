@@ -107,7 +107,7 @@ use crate::setup::SetupDriver;
 use crate::steps::{Step, Steps};
 use crate::storage::StorageDriver;
 use crate::timer::TimerDriver;
-use crate::tools::{Report as ToolsReport, ToolsConfig, ToolsDriver};
+use crate::tools::{Report as ToolsReport, StartError, ToolsConfig, ToolsDriver};
 use crate::usage::{Report as UsageReport, UsageDriver};
 
 /// What to start CAF with.
@@ -210,7 +210,8 @@ pub struct Config {
     ///
     /// With [`Relay::ThisProgram`](crate::Relay::ThisProgram), the app's
     /// `main` must call [`caf_relay::relay_if_asked`] before anything
-    /// else: [`Caf::start`] checks it does, and panics if it doesn't.
+    /// else: [`Caf::try_start`] checks it does, and says if it doesn't;
+    /// [`Caf::start`] panics.
     pub tools: ToolsConfig,
 }
 
@@ -588,8 +589,34 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     /// `limits.biggest_message`: the driver and the core must agree on what
     /// a too-big line is. Also if called outside a tokio runtime, which
     /// must have its I/O and time drivers enabled.
+    ///
+    /// Also if CAF can't serve its tools as [`Config::tools`] says, with
+    /// the [`StartError`] [`Caf::try_start`] would give: a relay that
+    /// doesn't call [`caf_relay::relay_if_asked`], say.
     #[must_use]
     pub fn start(config: Config) -> (Self, Running) {
+        Self::try_start(config).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// Starts CAF as [`Caf::start`] does, or says why it can't serve its
+    /// tools as [`Config::tools`] says. With [`Relay::None`](crate::Relay::None),
+    /// the default, it always starts.
+    ///
+    /// The relay's check runs the relay once, on this thread: it takes as
+    /// long as the program takes to start, and at most 10 s.
+    ///
+    /// # Errors
+    ///
+    /// [`StartError::NoRelayHook`] if the relay doesn't answer its check as
+    /// [`caf_relay::relay_if_asked`] does, [`StartError::SocketPathTooLong`]
+    /// if the socket's path is too long, and [`StartError::Serving`] for
+    /// anything else, such as a socket folder others can reach. Nothing is
+    /// started then, and no recording is made.
+    ///
+    /// # Panics
+    ///
+    /// As [`Caf::start`], but for serving tools.
+    pub fn try_start(config: Config) -> Result<(Self, Running), StartError> {
         Self::start_with(config, None)
     }
 
@@ -606,15 +633,21 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     /// As [`Caf::start`].
     #[must_use]
     pub fn start_watching(config: Config, steps: impl Steps<A, D>) -> (Self, Running) {
-        Self::start_with(config, Some(Box::new(steps)))
+        Self::start_with(config, Some(Box::new(steps))).unwrap_or_else(|error| panic!("{error}"))
     }
 
     /// Starts CAF, with `steps` seeing every step if there are any.
-    fn start_with(config: Config, steps: Option<Box<dyn Steps<A, D>>>) -> (Self, Running) {
+    fn start_with(
+        mut config: Config,
+        steps: Option<Box<dyn Steps<A, D>>>,
+    ) -> Result<(Self, Running), StartError> {
         assert_eq!(
             config.agent_limits.biggest_line, config.host.limits.biggest_message,
             "the agent driver's biggest line must be the host's biggest message"
         );
+        // First, so nothing is started if it fails.
+        let (tools, serving) =
+            ToolsDriver::start(std::mem::take(&mut config.tools), &config.host.name)?;
         let recorder = (config.record.as_ref())
             .and_then(|path| Recorder::start(path, &config.host, &config.agents));
         let (commands, inbox) = mpsc::channel(COMMANDS);
@@ -638,10 +671,6 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
                 root
             });
         let usage = UsageDriver::new(config.usage, config.host.name.clone());
-        let (tools, serving) = match ToolsDriver::start(config.tools, &config.host.name) {
-            Ok(started) => started,
-            Err(why) => panic!("CAF can't serve its tools: {why}"),
-        };
         let core = Core::new(config.host, config.agents);
         let (told, statuses) = watch::channel(core.agents());
         let (listed, saved) = watch::channel(None);
@@ -699,7 +728,7 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
                 run: new_run().into(),
             },
         };
-        (caf, Running { task })
+        Ok((caf, Running { task }))
     }
 
     /// The names of the agents CAF was started with, in order.

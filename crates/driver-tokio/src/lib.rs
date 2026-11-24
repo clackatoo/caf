@@ -135,9 +135,10 @@
 //! ```
 //!
 //! - [`ToolsConfig::relay`] is [`Relay::None`] by default: nothing is
-//!   served, and a chat given tools is refused. With a relay, [`Caf::start`]
-//!   checks it answers as `relay_if_asked` does, and panics, naming it,
-//!   if it doesn't.
+//!   served, and a chat given tools is refused. With a relay,
+//!   [`Caf::try_start`] checks it answers as `relay_if_asked` does, and
+//!   says if it doesn't ([`StartError`]); [`Caf::start`] panics with
+//!   that.
 //! - The socket is in a folder only the user can reach
 //!   ([`ToolsConfig::folder`]), and each chat's relay proves which chat
 //!   it's for with a token made from a key drawn as CAF starts. The key is
@@ -226,4 +227,4 @@ pub use policy::{AlwaysAsk, Policy, RefuseAll};
 pub use setup::SetupDriver;
 pub use steps::{Step, Steps};
 pub use timer::TimerDriver;
-pub use tools::{Call, NotBuilt, Ran, Relay, Runner, ToolsConfig};
+pub use tools::{Call, NotBuilt, Ran, Relay, Runner, StartError, ToolsConfig};
