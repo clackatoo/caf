@@ -93,7 +93,9 @@ pub trait AppTool<A: AppItem = NoAppItems>: Send + Sync + 'static {
 
     /// Does it. It may print a running command's output
     /// ([`Call::print`]) and answer the model early, going on as a job
-    /// ([`Call::answer_now`]). Dropping the future cancels it: it must
+    /// ([`Call::answer_now`]). A job's end is told the agent in a
+    /// notice, with what it ended with as its result, as the model never
+    /// heard `Done`'s answer. Dropping the future cancels it: it must
     /// stop its work then.
     fn run(&self, call: Call, input: Self::Input) -> BoxFuture<Done<A>>;
 }

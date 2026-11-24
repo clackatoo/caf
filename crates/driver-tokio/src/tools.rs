@@ -34,7 +34,7 @@ use caf_core::chat::{AppItem, NoAppItems};
 use caf_core::directive::{RefusedCall, ToolDirective};
 use caf_core::event::{RelayChange, Serving, ToolEvent};
 use caf_core::ids::{CallId, ChatId, JobId};
-use caf_core::mcp::{self, Answer, AppListing, Connection, Key, Out, Request};
+use caf_core::mcp::{self, Answer, AnswerPart, AppListing, Connection, Key, Out, Request};
 use caf_core::tool::{Action, CafTool, Piece, ServedTool, Text};
 use caf_tools::{Commands, Files};
 use serde::Deserialize;
@@ -542,8 +542,9 @@ struct Each<A: AppItem> {
     request: Request,
     /// The agent's own id for it.
     agent_call: Option<String>,
-    /// The app's tool it calls, if it's one of the app's.
-    app: Option<Arc<dyn Erased<A>>>,
+    /// The app's tool it calls, if it's one of the app's, and the call's
+    /// title.
+    app: Option<(Arc<dyn Erased<A>>, String)>,
     /// Whether the core has said to run it.
     running: bool,
     /// The job it became, once the model was answered and it went on:
@@ -799,7 +800,7 @@ impl<A: AppItem> ToolsDriver<A> {
                 let runner = &mut self.runner;
                 let input = given.input.clone();
                 let preview = std::panic::catch_unwind(AssertUnwindSafe(|| match &each.app {
-                    Some(tool) => match tool.preview(&given, &input) {
+                    Some((tool, _)) => match tool.preview(&given, &input) {
                         Some(preview) => Box::pin(async move { preview.await.map_err(ended) })
                             as Running<Result<Vec<Piece>, Ended<A>>>,
                         None => Box::pin(std::future::ready(Ok(Vec::new()))),
@@ -833,7 +834,7 @@ impl<A: AppItem> ToolsDriver<A> {
                 };
                 let runner = &mut self.runner;
                 let run = std::panic::catch_unwind(AssertUnwindSafe(|| match &each.app {
-                    Some(tool) => {
+                    Some((tool, _)) => {
                         let input = given.input.clone();
                         let run = tool.run(given, &input);
                         Box::pin(async move { ended(run.await) }) as Running<Ended<A>>
@@ -1257,7 +1258,7 @@ impl<A: AppItem> ToolsDriver<A> {
                 conn: no,
                 request,
                 agent_call: agent_call.clone(),
-                app: Some(tool),
+                app: Some((tool, title.clone())),
                 running: false,
                 job: None,
                 preview: None,
@@ -1480,6 +1481,7 @@ impl<A: AppItem> ToolsDriver<A> {
             batch,
             job,
             agent_call,
+            app,
             ..
         } = each;
         if let Some(batch) = batch {
@@ -1495,7 +1497,12 @@ impl<A: AppItem> ToolsDriver<A> {
                 // ([`ToolsDriver::stop_job`]): that's how the core tells
                 // them apart.
                 notice: job.map(|job| {
-                    (ran.notice).unwrap_or_else(|| failed_notice(job, agent_call.as_deref()))
+                    (ran.notice.clone()).unwrap_or_else(|| match &app {
+                        Some((_, title)) => {
+                            app_notice(job, agent_call.as_deref(), title, ran.done, &ran.answer)
+                        }
+                        None => failed_notice(job, agent_call.as_deref()),
+                    })
                 }),
                 item,
             },
@@ -1693,6 +1700,44 @@ fn failed_notice(job: JobId, tool_use: Option<&str>) -> String {
         "\n<status>failed</status>\n<summary>Background task {} failed</summary>\n</task-notification>",
         job.0
     ));
+    out
+}
+
+/// The notice of the end of job `job`, a call to one of the app's tools
+/// titled `title`: as `caf_tools::notice` lays one out, with what it
+/// ended with, `done` or not, as its result, which the model wasn't told
+/// when it became a job.
+fn app_notice(
+    job: JobId,
+    tool_use: Option<&str>,
+    title: &str,
+    done: bool,
+    answer: &Answer,
+) -> String {
+    let (status, how) = match done {
+        true => ("completed", "completed"),
+        false => ("failed", "failed"),
+    };
+    let mut out = format!("<task-notification>\n<task-id>{}</task-id>", job.0);
+    if let Some(tool_use) = tool_use {
+        let escaped = caf_tools::escape(tool_use);
+        out.push_str(&format!("\n<tool-use-id>{escaped}</tool-use-id>"));
+    }
+    let result: Vec<&str> = (answer.content.iter())
+        .filter_map(|part| match part {
+            AnswerPart::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    out.push_str(&format!(
+        "\n<status>{status}</status>\n<summary>Background task \"{}\" {how}</summary>",
+        caf_tools::escape(title)
+    ));
+    if !result.is_empty() {
+        let result = caf_tools::escape(&result.join("\n"));
+        out.push_str(&format!("\n<result>{result}</result>"));
+    }
+    out.push_str("\n</task-notification>");
     out
 }
 
@@ -2170,11 +2215,17 @@ mod tests {
     /// A harness whose driver is told the core took a report only when
     /// the test says ([`Harness::taken`]), if not `auto_taken`.
     fn harness_of(panics: bool, auto_taken: bool) -> Harness {
+        harness_serving(panics, auto_taken, AppTools::new())
+    }
+
+    /// A harness whose driver serves the app's tools `app` too.
+    fn harness_serving(panics: bool, auto_taken: bool, app: AppTools) -> Harness {
         let dir = Dir::new();
         let (runs, run) = mpsc::unbounded_channel();
         let (dropped, drop_seen) = mpsc::unbounded_channel();
         let (forgot, forgotten) = mpsc::unbounded_channel();
         let config: ToolsConfig = ToolsConfig {
+            app,
             runner: Some(Box::new(Scripted {
                 runs,
                 dropped,
@@ -2250,6 +2301,17 @@ mod tests {
                 chat,
                 tools: CafTool::ALL.to_vec(),
                 app: Vec::new(),
+                cwd: "/work".into(),
+                instructions: "Use them.".into(),
+            });
+        }
+
+        /// Serves `chat` Read and the app's tools `app`.
+        fn serve_app(&self, chat: ChatId, app: &[&str]) {
+            self.apply(ToolDirective::Serve {
+                chat,
+                tools: vec![CafTool::Read],
+                app: app.iter().map(|&name| name.to_owned()).collect(),
                 cwd: "/work".into(),
                 instructions: "Use them.".into(),
             });
@@ -2401,6 +2463,15 @@ mod tests {
             assert_eq!(answer["id"], 0, "{answer}");
             self.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
                 .await;
+        }
+
+        /// Calls `tool` with `arguments`, as `id`.
+        async fn call_tool(&mut self, id: u64, tool: &str, arguments: Value) {
+            self.send(&json!({
+                "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                "params": {"name": tool, "arguments": arguments, "_meta": {"claudecode/toolUseId": format!("toolu_{id}")}},
+            }))
+            .await;
         }
 
         async fn call(&mut self, id: u64, progress: bool) {
@@ -3543,5 +3614,327 @@ mod tests {
                 .unwrap();
             assert_eq!(forgot, Some(expected));
         }
+    }
+
+    /// A clip to trim.
+    #[derive(Deserialize, schemars::JsonSchema)]
+    struct Trim {
+        /// The clip.
+        clip: u64,
+    }
+
+    /// The app's tool trim_clip, which previews, and its run waits for
+    /// `go` and says when it's dropped on `dropped`.
+    struct Trimmer {
+        go: Arc<tokio::sync::Notify>,
+        dropped: mpsc::UnboundedSender<u64>,
+    }
+
+    impl crate::AppTool for Trimmer {
+        type Input = Trim;
+
+        fn spec(&self) -> crate::ToolSpec {
+            let mut spec = crate::ToolSpec::new("trim_clip");
+            spec.title = "Trim a clip".into();
+            spec.description = "Trims a clip.".into();
+            spec.hints.destructive = true;
+            spec.previews = true;
+            spec
+        }
+
+        fn title(&self, input: &Trim) -> String {
+            format!("Trim clip {}", input.clip)
+        }
+
+        fn preview(
+            &self,
+            _call: &Call,
+            input: &Trim,
+        ) -> Option<crate::app_tools::BoxFuture<Result<Vec<Piece>, Done>>> {
+            let clip = input.clip;
+            Some(Box::pin(async move {
+                match clip {
+                    0 => Err(Done::failed("There's no clip 0")),
+                    clip => Ok(vec![Piece::Text(Text::new(format!(
+                        "Would trim clip {clip}"
+                    )))]),
+                }
+            }))
+        }
+
+        fn run(&self, mut call: Call, input: Trim) -> crate::app_tools::BoxFuture<Done> {
+            let go = Arc::clone(&self.go);
+            let dropped = DroppedClip(input.clip, self.dropped.clone());
+            Box::pin(async move {
+                let _dropped = dropped;
+                call.print(0, vec![format!("trimming {}", input.clip)]);
+                if input.clip == 9 {
+                    call.answer_now(|job| Answer::text(format!("Trimming as job {}", job.0)));
+                }
+                go.notified().await;
+                Done::answer(format!("Trimmed clip {}", input.clip))
+                    .with_record(vec![Piece::Text(Text::new("trimmed"))])
+            })
+        }
+    }
+
+    /// Says its clip's run was dropped.
+    struct DroppedClip(u64, mpsc::UnboundedSender<u64>);
+
+    impl Drop for DroppedClip {
+        fn drop(&mut self) {
+            let _ = self.1.send(self.0);
+        }
+    }
+
+    /// A harness serving trim_clip, whose runs end as `go` is notified.
+    fn trimming() -> (
+        Harness,
+        Arc<tokio::sync::Notify>,
+        mpsc::UnboundedReceiver<u64>,
+    ) {
+        let go = Arc::new(tokio::sync::Notify::new());
+        let (dropped, drops) = mpsc::unbounded_channel();
+        let trimmer = Trimmer {
+            go: Arc::clone(&go),
+            dropped,
+        };
+        let app = AppTools::new().with(trimmer).unwrap();
+        (harness_serving(false, true, app), go, drops)
+    }
+
+    /// Calls trim_clip as `id` and gives back its report's call and event.
+    async fn trim(
+        h: &mut Harness,
+        client: &mut Client,
+        id: u64,
+        input: Value,
+    ) -> (CallId, ToolEvent) {
+        client.call_tool(id, "trim_clip", input).await;
+        match h.report().await {
+            Report::Tool { call, event } => (call, event),
+            other => panic!("expected Called, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_apps_tools_are_listed_after_cafs_and_the_core_knows_them() {
+        let (mut h, _go, _drops) = trimming();
+        let mut hints = caf_core::tool::Hints::default();
+        hints.destructive = true;
+        assert_eq!(
+            h.serving.app_tools,
+            [caf_core::tool::AppToolSpec::new(
+                "trim_clip",
+                "Trim a clip",
+                hints,
+                true
+            )]
+        );
+        h.serve_app(CHAT, &["trim_clip"]);
+        let mut client = h.bound(CHAT).await;
+        client
+            .send(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+            .await;
+        let listed = client.recv().await;
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Read", "trim_clip"]);
+        let trim = &tools[1];
+        assert_eq!(trim["title"], "Trim a clip");
+        assert_eq!(trim["description"], "Trims a clip.");
+        assert_eq!(
+            trim["inputSchema"]["properties"]["clip"]["description"],
+            "The clip."
+        );
+        assert_eq!(trim["annotations"]["destructiveHint"], true);
+        assert_eq!(trim["annotations"]["readOnlyHint"], false);
+    }
+
+    #[tokio::test]
+    async fn an_app_tools_call_is_read_titled_previewed_run_and_answered() {
+        let (mut h, go, _drops) = trimming();
+        h.serve_app(CHAT, &["trim_clip"]);
+        let mut client = h.bound(CHAT).await;
+        let (call, event) = trim(&mut h, &mut client, 3, json!({"clip": 3})).await;
+        match event {
+            ToolEvent::Called {
+                chat,
+                tool,
+                input,
+                agent_call,
+                title,
+                bad_input,
+            } => {
+                assert_eq!((chat, tool), (CHAT, ServedTool::App("trim_clip".into())));
+                assert_eq!(input, json!({"clip": 3}));
+                assert_eq!(agent_call.as_deref(), Some("toolu_3"));
+                assert_eq!(title.as_deref(), Some("Trim clip 3"));
+                assert_eq!(bad_input, None);
+            }
+            other => panic!("expected Called, got {other:?}"),
+        }
+        let action = Action::Tool {
+            name: "trim_clip".into(),
+        };
+        h.apply(ToolDirective::Preview {
+            call,
+            action: action.clone(),
+            input: json!({"clip": 3}),
+        });
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Previewed { pieces } if *pieces == [Piece::Text(Text::new("Would trim clip 3"))]),
+        );
+        h.apply(ToolDirective::Run {
+            call,
+            action,
+            input: json!({"clip": 3}),
+        });
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Output { from: 0, lines } if *lines == ["trimming 3"]),
+        );
+        go.notify_one();
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Finished { done: true, pieces, notice: None, .. } if pieces.len() == 1),
+        );
+        let answer = client.recv().await;
+        assert_eq!(answer["id"], 3);
+        assert_eq!(text_of(&answer), "Trimmed clip 3");
+        client.nothing_waiting().await;
+        h.quiet().await;
+    }
+
+    #[tokio::test]
+    async fn an_app_tools_call_whose_input_doesnt_fit_says_why_titled_as_the_tool() {
+        let (mut h, _go, _drops) = trimming();
+        h.serve_app(CHAT, &["trim_clip"]);
+        let mut client = h.bound(CHAT).await;
+        let (call, event) = trim(&mut h, &mut client, 4, json!({"clip": "four"})).await;
+        let why = match event {
+            ToolEvent::Called {
+                title,
+                bad_input: Some(why),
+                ..
+            } => {
+                assert_eq!(title.as_deref(), Some("Trim a clip"));
+                why
+            }
+            other => panic!("expected Called with bad input, got {other:?}"),
+        };
+        assert!(why.starts_with("invalid type"), "{why}");
+        h.apply(ToolDirective::Refuse {
+            call,
+            why: RefusedCall::BadInput(why.clone()),
+        });
+        let answer = client.recv().await;
+        assert_eq!(answer["result"]["isError"], true);
+        assert_eq!(text_of(&answer), crate::app_tools::bad_input(&why));
+    }
+
+    #[tokio::test]
+    async fn an_app_tools_preview_that_fails_ends_its_call() {
+        let (mut h, _go, _drops) = trimming();
+        h.serve_app(CHAT, &["trim_clip"]);
+        let mut client = h.bound(CHAT).await;
+        let (call, _) = trim(&mut h, &mut client, 5, json!({"clip": 0})).await;
+        h.apply(ToolDirective::Preview {
+            call,
+            action: Action::Tool {
+                name: "trim_clip".into(),
+            },
+            input: json!({"clip": 0}),
+        });
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Finished { done: false, .. })
+        });
+        let answer = client.recv().await;
+        assert_eq!(text_of(&answer), "There's no clip 0");
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_app_tools_call_has_its_future_dropped() {
+        let (mut h, _go, mut drops) = trimming();
+        h.serve_app(CHAT, &["trim_clip"]);
+        let mut client = h.bound(CHAT).await;
+        let (call, _) = trim(&mut h, &mut client, 6, json!({"clip": 6})).await;
+        h.apply(ToolDirective::Run {
+            call,
+            action: Action::Tool {
+                name: "trim_clip".into(),
+            },
+            input: json!({"clip": 6}),
+        });
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Output { .. })
+        });
+        h.apply(ToolDirective::Cancel { call });
+        let dropped = tokio::time::timeout(Duration::from_secs(10), drops.recv()).await;
+        assert_eq!(dropped.unwrap(), Some(6));
+        let answer = client.recv().await;
+        assert_eq!(text_of(&answer), CANCELLED);
+    }
+
+    #[tokio::test]
+    async fn an_app_tool_answering_early_goes_on_as_a_job_ending_with_its_answer_as_notice() {
+        let (mut h, go, _drops) = trimming();
+        h.serve_app(CHAT, &["trim_clip"]);
+        let mut client = h.bound(CHAT).await;
+        let (call, _) = trim(&mut h, &mut client, 9, json!({"clip": 9})).await;
+        h.apply(ToolDirective::Run {
+            call,
+            action: Action::Tool {
+                name: "trim_clip".into(),
+            },
+            input: json!({"clip": 9}),
+        });
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Output { .. })
+        });
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Detached { job: JobId(1) })
+        });
+        let answer = client.recv().await;
+        assert_eq!(text_of(&answer), "Trimming as job 1");
+        go.notify_one();
+        let notice = match h.report().await {
+            Report::Tool {
+                event:
+                    ToolEvent::Finished {
+                        done: true,
+                        notice: Some(notice),
+                        ..
+                    },
+                ..
+            } => notice,
+            other => panic!("expected Finished, got {other:?}"),
+        };
+        assert_eq!(
+            notice,
+            "<task-notification>\n<task-id>1</task-id>\n<tool-use-id>toolu_9</tool-use-id>\n\
+             <status>completed</status>\n<summary>Background task \"Trim clip 9\" completed</summary>\n\
+             <result>Trimmed clip 9</result>\n</task-notification>"
+        );
+        client.nothing_waiting().await;
+    }
+
+    #[tokio::test]
+    async fn an_app_tool_not_given_the_chat_isnt_listed_or_called() {
+        let (mut h, _go, _drops) = trimming();
+        h.serve_app(CHAT, &[]);
+        let mut client = h.bound(CHAT).await;
+        client.call_tool(1, "trim_clip", json!({"clip": 1})).await;
+        let answer = client.recv().await;
+        assert_eq!(answer["result"]["isError"], true);
+        assert_eq!(text_of(&answer), "There's no tool named `trim_clip` here.");
+        h.quiet().await;
     }
 }
