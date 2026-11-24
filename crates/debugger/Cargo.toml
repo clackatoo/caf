@@ -19,6 +19,8 @@ doc = false
 axum = { version = "0.8.9", default-features = false, features = ["http1", "query", "tokio", "ws"] }
 caf-core = { workspace = true, features = ["inspect", "fake"] }
 caf-driver-tokio = { path = "../driver-tokio" }
+# Its main is CAF's relay when CAF runs it as one.
+caf-relay.workspace = true
 # The file store live chats are kept in.
 caf-save.workspace = true
 # The fake agent, offered as `fake` so the debugger works with no real

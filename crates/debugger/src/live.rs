@@ -14,7 +14,7 @@ use caf_core::save::RestoreChat;
 use caf_core::time::Now;
 use caf_core::{Core, Host, NoAppItems, OpenChat, Shelf};
 use caf_driver_tokio::viewer::ViewerRules;
-use caf_driver_tokio::{Caf, Config, Running, Step as CafStep, Steps, UsageConfig};
+use caf_driver_tokio::{Caf, Config, Relay, Running, Step as CafStep, Steps, UsageConfig};
 use caf_save::{FileStore, Store};
 use serde_json::value::RawValue;
 use tokio::sync::mpsc;
@@ -95,14 +95,15 @@ pub fn rules(agents: &[AgentSpec], saved: bool) -> ViewerRules {
 
 /// Starts CAF with `agents`, recording to `record` if given, keeping chats
 /// in a file store in `store` if given, and usage in the ledger `usage`
-/// says if given, and checking every step against replays of it. With a
-/// store, [`SHELF`] is listed at once. Must be called on a tokio runtime.
+/// says if given, serving CAF's tools through `relay`, and checking every
+/// step against replays of it. With a store, [`SHELF`] is listed at once. Must be called on a tokio runtime.
 #[must_use]
 pub fn start(
     agents: Vec<AgentSpec>,
     record: Option<PathBuf>,
     store: Option<PathBuf>,
     usage: Option<UsageConfig>,
+    relay: Relay,
 ) -> Live {
     let base = Base {
         host: host(),
@@ -114,6 +115,7 @@ pub fn start(
     config.store = (store.as_ref()).map(|root| Box::new(FileStore::new(root)) as Box<dyn Store>);
     let ledger = (usage.as_ref()).map(|usage| usage.folder.clone());
     config.usage = usage;
+    config.tools.relay = relay;
     let (tap, steps) = mpsc::unbounded_channel();
     let (caf, running) = Caf::start_watching(config, Tap(tap));
     if store.is_some() {
@@ -222,8 +224,8 @@ fn check(book: &Book, mut steps: mpsc::UnboundedReceiver<Raw>) {
         book.add([Step {
             no,
             now: raw.now,
-            event: raw.event,
-            directives: raw.directives,
+            event: shown_event(raw.event),
+            directives: shown_directives(raw.directives),
         }]);
         if let Some(diverged) = diverged.filter(|_| checking) {
             book.diverged_at(diverged);
@@ -284,6 +286,71 @@ fn check_recording(core: &mut Core, no: u64, raw: &Raw, line: &str) -> Option<Di
     })
 }
 
+/// A step's event as the book shows it: [`Serving`]'s key, which makes
+/// every chat's relay token, is `[hidden]`, as in a recording.
+///
+/// [`Serving`]: caf_core::event::Serving
+fn shown_event(event: Box<RawValue>) -> Box<RawValue> {
+    let Some(mut value) = json(&event).filter(|value| value["type"] == "Serving") else {
+        return event;
+    };
+    value["value"]["key"] = HIDDEN_KEY.into();
+    serde_json::value::to_raw_value(&value).unwrap_or(event)
+}
+
+/// A step's directives as the book shows them: each relay's token, in the
+/// `mcpServers` of a message that opens, loads or resumes a session, is
+/// `[hidden]`. Its `bytes` stay bytes.
+fn shown_directives(directives: Box<RawValue>) -> Box<RawValue> {
+    if !directives.get().contains("mcpServers") {
+        return directives;
+    }
+    let Some(mut all) = json(&directives) else {
+        return directives;
+    };
+    let mut changed = false;
+    for directive in all.as_array_mut().into_iter().flatten() {
+        if directive["type"] != "Agent" || directive["value"]["type"] != "Write" {
+            continue;
+        }
+        let bytes = &mut directive["value"]["value"]["bytes"];
+        let Some(raw) = serde_json::from_value::<Vec<u8>>(bytes.clone()).ok() else {
+            continue;
+        };
+        let Ok(mut message) = serde_json::from_slice::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let mut hid = false;
+        for server in message["params"]["mcpServers"]
+            .as_array_mut()
+            .into_iter()
+            .flatten()
+        {
+            for pair in server["env"].as_array_mut().into_iter().flatten() {
+                if pair["name"] == caf_relay::TOKEN_VAR {
+                    pair["value"] = HIDDEN_KEY.into();
+                    hid = true;
+                }
+            }
+        }
+        if hid {
+            let mut written = serde_json::to_vec(&message).unwrap_or_default();
+            if raw.ends_with(b"\n") {
+                written.push(b'\n');
+            }
+            *bytes = written.into();
+            changed = true;
+        }
+    }
+    if !changed {
+        return directives;
+    }
+    serde_json::value::to_raw_value(&all).unwrap_or(directives)
+}
+
+/// What the book shows for a secret, as a recording does.
+const HIDDEN_KEY: &str = caf_core::mcp::HIDDEN;
+
 /// Raw JSON, read.
 fn json(raw: &RawValue) -> Option<serde_json::Value> {
     serde_json::from_str(raw.get()).ok()
@@ -303,11 +370,17 @@ fn json(raw: &RawValue) -> Option<serde_json::Value> {
 ///   code, which a replay reads as empty: so each `Setup` `Paste`'s
 ///   `text` becomes `null`.
 ///
+/// - A recording hides [`Serving`]'s key, which a replay reads as zeros,
+///   so each relay's token differs: it's in an MCP server's `env`, which
+///   the first rule already takes out.
+///
 /// Nothing else a recording hides changes a directive:
 /// - of an agent's sign-in status, it keeps only the kind, which is all
 ///   the core reads;
 /// - agents' arguments and variables, left out of the header, reach
 ///   only `Start`, and the check's core is made with them as given.
+///
+/// [`Serving`]: caf_core::event::Serving
 fn hidden(directives: &mut serde_json::Value) {
     let Some(all) = directives.as_array_mut() else {
         return;
