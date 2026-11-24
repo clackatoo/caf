@@ -10,7 +10,7 @@ use super::{Core, report};
 use crate::chat::AppData;
 use crate::chat::AppItem;
 use crate::directive::{Directive, Level};
-use crate::ids::{ChatId, Ticket};
+use crate::ids::{CallId, ChatId, Ticket};
 use crate::time::{Mono, Now};
 
 /// The most rounds of due deadlines one wake-up does: each round may make
@@ -46,6 +46,8 @@ enum Due {
     Away(ChatId),
     /// An account's limits have a window to forget, as it reset.
     Limits,
+    /// A call being stopped hasn't been said to have ended in time.
+    Stopping(CallId),
 }
 
 impl<A: AppItem, D: AppData> Core<A, D> {
@@ -94,6 +96,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let away = (self.saving.away.keys())
             .filter_map(|&chat| Some((self.away_at(chat)?, Due::Away(chat))));
         let limits = self.limits.wake.map(|at| (at, Due::Limits));
+        let stopping = (self.stopping_deadlines()).map(|(at, call)| (at, Due::Stopping(call)));
         procs
             .chain(requests)
             .chain(stops)
@@ -103,6 +106,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .chain(saves)
             .chain(away)
             .chain(limits)
+            .chain(stopping)
     }
 
     /// The timer driver woke the core: whatever is due is done.
@@ -140,6 +144,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Due::Save(chat) => self.write(now, chat, out),
             Due::Away(chat) => self.write_away(chat, out),
             Due::Limits => self.limits_woken(now),
+            Due::Stopping(call) => self.stopping_overdue(now, call, out),
             Due::Held(chat) => {
                 if let Some(run) = self.runs.get_mut(&chat) {
                     run.held_by = None;

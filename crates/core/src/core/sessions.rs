@@ -881,7 +881,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// Ends what `chat` has going: its questions, its running turn (as
     /// `life`, telling the agent to stop), its waiting turns (as stopped),
-    /// its background jobs (cancelled by the user if `life` is Stopped)
+    /// its background jobs (cancelled by the user if `life` is Stopped),
+    /// its calls being stopped (ending now, as their turns' ends said)
     /// and any session it's opening.
     pub(super) fn wind_down(
         &mut self,
@@ -940,9 +941,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         for conn in learning {
             self.learn_failed(conn, crate::settings::LearnFailure::ShutDown);
         }
-        // An idle chat's jobs stop too: it stays idle.
+        // An idle chat's jobs stop too, and its calls being stopped end:
+        // it stays idle.
         let jobs: Vec<ChatId> = (self.chats.keys().copied())
-            .filter(|&chat| self.has_jobs(chat))
+            .filter(|&chat| self.has_calls_going(chat))
             .collect();
         for chat in jobs {
             self.stop_jobs(now, chat, false, out);

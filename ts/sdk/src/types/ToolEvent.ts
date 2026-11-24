@@ -94,4 +94,4 @@ notice: string | null,
  * with a warning. Recordings made before it was added read as
  * none.
  */
-item: NoAppItems | null, } } | { "type": "Gone" };
+item: NoAppItems | null, } } | { "type": "Gone" } | { "type": "Stopped" };

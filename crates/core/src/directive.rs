@@ -224,6 +224,11 @@ pub struct PermissionRequest {
 ///   the model's, whole.
 /// - **Output is reported in batches,** at most every 100 ms or 16 KiB,
 ///   and in order.
+/// - **A running call that's cancelled ends as the driver says:**
+///   [`Stopped`](crate::event::ToolEvent::Stopped) if its work stopped
+///   before it finished, [`Finished`](crate::event::ToolEvent::Finished)
+///   if it had finished. The core waits 10 seconds for either, then ends
+///   the call itself, warning that the driver never said.
 /// - **A preview changes nothing.** One that fails is answered at once,
 ///   saying why, and reported as [`ToolEvent::Finished`](crate::event::ToolEvent::Finished)
 ///   with `done` false: the core asks no one, and sends nothing more.
@@ -281,9 +286,15 @@ pub enum ToolDirective {
         /// Why, for the agent.
         why: RefusedCall,
     },
-    /// Stop it if it's running, and answer the agent that it was
-    /// cancelled. Nothing more is reported of it; anything that comes is
-    /// ignored.
+    /// Stop it, and answer the agent: that it was cancelled, if it's
+    /// stopped before it finished, then report
+    /// [`ToolEvent::Stopped`](crate::event::ToolEvent::Stopped); or with
+    /// what it gave, if it had already finished, then report
+    /// [`ToolEvent::Finished`](crate::event::ToolEvent::Finished). The
+    /// driver reports one or the other for every call it's cancelled that
+    /// it still has, running or not: only it knows whether the work
+    /// stopped or had finished, so a running call ends as it says. The
+    /// core ignores either for a call it has already ended.
     Cancel {
         /// The call.
         call: CallId,

@@ -123,9 +123,10 @@ pub trait AppTool<A: AppItem = NoAppItems>: Send + Sync + 'static {
     /// threads; but `run` itself is called on CAF's own task: it must
     /// give its future at once, never blocking. A future should await,
     /// not block: one that blocks a thread ties it up, and can't be
-    /// aborted, and when its call is stopped, the model is told it was
-    /// once the future has been dropped, or after five seconds,
-    /// whichever comes first.
+    /// aborted. When its call is stopped, the model is told how it ended
+    /// once the future has been dropped, or after five seconds, whichever
+    /// comes first: if the future ran to its end first, as one blocking
+    /// its thread may, with what it gave, and else that it was stopped.
     fn run(&self, call: Call, input: Self::Input) -> BoxFuture<Done<A>>;
 }
 

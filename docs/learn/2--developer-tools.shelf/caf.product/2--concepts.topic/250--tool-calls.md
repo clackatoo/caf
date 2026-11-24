@@ -155,7 +155,7 @@ A call's `status`:
 | --- | --- |
 | `Pending` | Not started yet: reported, or waiting for the policy. |
 | `Asking` | Waiting for the user: its permission question is open. |
-| `Running` | Running. |
+| `Running` | Running: or, with `stopped_by` set, being stopped (see below). |
 | `Done` | Finished. |
 | `Failed` | Went wrong: why is a `Text` piece, or its turn failed under it. |
 | `Refused` | Not allowed, by the policy or the user. It never ran. |
@@ -164,6 +164,30 @@ A call's `status`:
 Every call ends Done, Failed, Refused or Cancelled. When its turn ends, a
 call still Pending, Asking or Running is Cancelled if the user stopped the
 turn, and Failed otherwise, and so is one a restored chat was cut off in.
+
+But a call to a tool CAF serves that's running as its turn ends is
+**stopped**, and ends as the tools driver says, as only it knows whether
+the work stopped or had already finished. Until then it stays `Running`,
+with `stopped_by` set if the user stopped the turn: a viewer shows it as
+*Stopping…*. Then:
+
+- **it stopped:** it ends Cancelled, stopped by the user (or Failed, if
+  the turn ended any other way), and the model was told it was cancelled;
+- **it had finished:** it ends Done or Failed as it went, with what it
+  gave back and the app's item, and `stopped_by` cleared, and the model
+  was told what it gave.
+
+So the model and the record agree, unless the chat is let go, CAF shuts
+down, or the driver misses the 10 second bound. It's shortly after the
+turn ends, in the same turn: if the driver says nothing within 10
+seconds, the call ends as stopped all the same, and CAF logs a warning,
+whatever the model is told after. A chat closed, put away or deleted, or
+CAF shutting down, ends it as stopped at once, though its work may still
+have finished, and the model been told so. Its end is saved at once, as
+a turn's is. A
+chat saved while a call was being stopped restores it Cancelled, stopped
+by whoever stopped it. A background job isn't stopped with its turn at
+all (see [Serving tools](~caf/concepts/serving-tools#background-jobs)).
 
 ## Who allowed it
 

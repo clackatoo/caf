@@ -33,8 +33,9 @@ use crate::usage::PriceTable;
 /// [`HostCommand::Notify`], TaskStop, and what [`ToolEvent::Finished`]
 /// says of a shell's folder and a job's notice); version 7 with the app's
 /// own tools ([`ServedTool`], [`Serving::app_tools`], and a call's title,
-/// bad input and app item).
-pub const RECORDING_VERSION: u32 = 7;
+/// bad input and app item); version 8 with a stopped call's end
+/// ([`ToolEvent::Stopped`]).
+pub const RECORDING_VERSION: u32 = 8;
 
 /// Something that happened. `A` and `D` are the app's item and data
 /// types.
@@ -425,7 +426,11 @@ pub enum ToolEvent<A: AppItem = NoAppItems> {
         job: JobId,
     },
     /// It finished, and the agent was answered: or, for a preview, it
-    /// failed (`done` false), and the agent was answered why.
+    /// failed (`done` false), and the agent was answered why; or, after
+    /// the agent gave up on it, not answered, as there's no one to
+    /// answer. A call being stopped
+    /// ([`ToolDirective::Cancel`](crate::directive::ToolDirective::Cancel))
+    /// that had already finished ends so, as it did.
     Finished {
         /// Whether it did what it was asked.
         done: bool,
@@ -460,6 +465,10 @@ pub enum ToolEvent<A: AppItem = NoAppItems> {
     /// will come of it. Never for a job, which outlives its connection: one
     /// said to be gone fails, with no notice.
     Gone,
+    /// Stopped, as [`ToolDirective::Cancel`](crate::directive::ToolDirective::Cancel)
+    /// asked, before it finished: the agent was answered that it was
+    /// cancelled.
+    Stopped,
 }
 
 /// The policy's answer to "is this allowed?".

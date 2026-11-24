@@ -14,6 +14,14 @@ export function ended(status: DeepReadonly<ToolStatus>): boolean {
 }
 
 /**
+ * Whether a call is being stopped: still Running, saying who stopped it,
+ * until the tools driver says whether it stopped or had finished.
+ */
+export function stopping(tool: DeepReadonly<Pick<ToolCall, 'status' | 'stopped_by'>>): boolean {
+  return tool.status.type === 'Running' && tool.stopped_by !== null
+}
+
+/**
  * What a job is, as TaskStop names it, from how its call stands: running
  * in the background, the agent answered as it went there; or how it
  * ended. CAF tells the agent only of a job that ended by itself, so only

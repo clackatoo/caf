@@ -256,6 +256,19 @@ that doesn't stop within five seconds, such as one blocking its thread,
 has its call answered all the same, and CAF logs that the app's tool
 didn't stop.
 
+A call stopped with its turn ends only once its task has: CAF waits, for
+the same five seconds, for what the task gives. Aborted before it
+finished, the call ends Cancelled, and the model is told it was
+cancelled. If its future finished first, as one does that had finished
+already, or that blocks its thread until its end and so can't be stopped,
+it ends as it went instead, with its record and your item, and the model
+is told what it gave, so the record doesn't say Cancelled for work your
+tool did, nor lose your item: unless the chat is let go or CAF shuts
+down as it stops, which ends the call Cancelled at once, or the tools
+driver doesn't report its end within the core's 10 seconds. A panic,
+even as the future is dropped, fails the call, as any panic does. And if
+five seconds pass first, the call ends Cancelled all the same.
+
 **A panic** in `title` titles the call as the tool is; one in `preview`
 or `run`, in their futures, or as a future is dropped, ends the call
 Failed: the model is told *The app's tool failed unexpectedly*, and the

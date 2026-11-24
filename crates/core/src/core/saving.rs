@@ -1718,7 +1718,8 @@ fn saved_session<A: AppItem>(run: &Run<A>) -> Option<AgentSessionId> {
 /// The changes that tidy `chat`, last saved at `at`, as a restore at
 /// `now` finds it: turns running or stopping are cut off, their
 /// unfinished tool calls failed and their items ended, at `at`, as is a
-/// background job still running in a turn that ended; messages waiting
+/// background job still running in a turn that ended, and a call being
+/// stopped is cancelled, by whoever stopped it; messages waiting
 /// are stopped; questions go; and it's idle, unless it was
 /// archived, which it stays: as of `now` if it was saved closed before
 /// CAF kept when.
@@ -1742,7 +1743,12 @@ pub(super) fn tidy<A: AppItem>(chat: &Chat<A>, at: Wall, now: Wall) -> Vec<Chang
                 && !tool.status.ended()
             {
                 let mut tool = tool.clone();
-                tool.status = ToolStatus::Failed;
+                // One saved as it was being stopped was stopped.
+                tool.status = if tool.job.is_none() && tool.stopped_by.is_some() {
+                    ToolStatus::Cancelled
+                } else {
+                    ToolStatus::Failed
+                };
                 // A command cut off ended, not saying how.
                 tool.settle_output();
                 changes.push(Change::ToolChanged {

@@ -98,7 +98,7 @@ pub(super) fn kind(name: &str) -> Value {
 }
 
 /// Bash running `command`, asked about and allowed: returns the script.
-fn bash_running(command: &str) -> Script {
+pub(super) fn bash_running(command: &str) -> Script {
     let mut script = running();
     let out = script.tool(
         1,
@@ -549,12 +549,15 @@ fn a_stopped_turn_cancels_its_calls_and_a_finished_one_fails_them() {
         one_told(&out)["value"]["why"],
         json!({ "type": "NotRunning" })
     );
-    // The one running is stopped as the turn ends.
+    // The one running is stopped as the turn ends, and ends once the
+    // driver says it stopped.
     let out = script.answers(PROC, PROMPT, &json!({ "stopReason": "cancelled" }));
     assert_eq!(
         told(&out),
         [json!({ "type": "Cancel", "value": { "call": 1 } })]
     );
+    assert_eq!(tools(&script)[0]["status"], kind("Running"));
+    script.tool(1, ToolEvent::Stopped);
     for tool in tools(&script) {
         assert_eq!(tool["status"], kind("Cancelled"));
         assert_eq!(tool["stopped_by"], kind("User"));
@@ -594,6 +597,7 @@ fn a_stopped_turn_cancels_its_calls_and_a_finished_one_fails_them() {
         one_told(&out),
         json!({ "type": "Cancel", "value": { "call": 1 } })
     );
+    script.tool(1, ToolEvent::Stopped);
     assert_eq!(the_tool(&script)["status"], kind("Failed"));
     assert_eq!(
         the_tool(&script)["stopped_by"],
