@@ -108,7 +108,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 conn,
                 cwd,
                 mcp: open.mcp_servers,
-                mcp_sent,
+                mcp_sent: super::state::SentServers(mcp_sent),
                 instructions: open.instructions,
                 session: match open.session {
                     SessionChoice::New => None,
@@ -277,7 +277,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         let mut params = json!({
             "cwd": run.cwd,
-            "mcpServers": run.mcp_sent,
+            "mcpServers": run.mcp_sent.0,
         });
         if let Some(session) = &run.session {
             params["sessionId"] = json!(session.0);

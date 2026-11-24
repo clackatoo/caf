@@ -213,3 +213,51 @@ fn a_second_word_on_serving_is_ignored() {
         "the first stands"
     );
 }
+
+#[test]
+fn neither_the_key_nor_a_token_is_ever_shown() {
+    let script = Script::with_claude_serving();
+    let key = "07".repeat(32);
+    let token = crate::mcp::token(&KEY, CHAT);
+    let state = script.core.inspect().to_string();
+    assert!(!state.contains(&key), "the key is hidden in the state");
+    assert!(!state.contains(&token), "the token is hidden in the state");
+    assert_eq!(script.core.inspect()["serving"]["key"], crate::mcp::HIDDEN);
+    let run = format!("{:?}", script.core.runs);
+    assert!(
+        !run.contains(&token),
+        "the token is hidden in a run's Debug"
+    );
+    // Though the agent is sent it.
+    assert_eq!(
+        script.core.runs[&CHAT].mcp_sent.0,
+        [caf_server(CHAT)],
+        "the agent is sent the real token"
+    );
+}
+
+#[test]
+fn a_lost_relay_is_said_again_once_the_session_opens_again() {
+    let mut script = Script::with_claude_serving();
+    let lost = |script: &mut Script| {
+        script.event(Event::Relay {
+            chat: CHAT,
+            change: RelayChange::Lost,
+        })
+    };
+    lost(&mut script);
+    assert_eq!(lost_notes(&script), 1);
+    // The adapter dropped the session: it's resumed, with the same server.
+    let out = script.send(CHAT, "go").1;
+    let prompt = sent(&out, "session/prompt")["id"].as_u64().expect("an id");
+    let error = json!({ "code": -32002, "message": "Resource not found" });
+    let out = script.fails(PROC, prompt, &error);
+    let resume = sent(&out, "session/resume");
+    assert_eq!(resume["params"]["mcpServers"], json!([caf_server(CHAT)]));
+    let id = resume["id"].as_u64().expect("an id");
+    script.answers(PROC, id, &json!({ "modes": default_modes() }));
+    lost(&mut script);
+    assert_eq!(lost_notes(&script), 2, "a new session is told afresh");
+    lost(&mut script);
+    assert_eq!(lost_notes(&script), 2);
+}

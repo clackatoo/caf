@@ -20,7 +20,7 @@
 //! - **`tools/list`** gives the chat's tools, on one page ([`tool_list`]).
 //! - **`tools/call`** is a call ([`Out::Call`]). One to a tool CAF doesn't
 //!   have, or didn't give this chat, is answered at once as an error, and
-//!   never reaches the driver.
+//!   never reaches the driver; one naming no tool is answered -32602.
 //! - **`notifications/cancelled`** for an open call ends it
 //!   ([`Out::Cancelled`]): it's never answered after.
 //! - **Any other request**, `server/discover` included, is answered at
@@ -59,6 +59,7 @@ const VERSIONS: [&str; 4] = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
 const NO_METHOD: i64 = -32601;
+const INVALID_PARAMS: i64 = -32602;
 
 /// One relay's MCP connection, from its handshake on: a state machine.
 #[derive(Debug)]
@@ -212,10 +213,13 @@ impl Connection {
                 crate::core::agent_text(&id.0, 256)
             ))];
         }
-        let name = params
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let Some(name) = params.get("name").and_then(Value::as_str) else {
+            return vec![error_line(
+                Some(&id),
+                INVALID_PARAMS,
+                "Invalid params: `name` must be a string",
+            )];
+        };
         let Some(tool) = CafTool::named(name).filter(|tool| self.tools.contains(tool)) else {
             let name = crate::core::agent_text(name, 256);
             let answer = Answer::error(format!("There's no tool named `{name}` here."));
@@ -365,7 +369,8 @@ pub enum AnswerPart {
 /// The tool definitions `tools/list` gives, for `tools`, in their order:
 /// each one's name, title, description (at most 4096 characters), input
 /// schema, which is Claude Code's own for its tool of that name, as the
-/// model is trained on it, its annotations (`readOnlyHint`,
+/// model is trained on it, but for the fields CAF doesn't read, which a
+/// call may still send, as nothing refuses them, its annotations (`readOnlyHint`,
 /// `destructiveHint`, `openWorldHint`), and `_meta`
 /// `{"anthropic/alwaysLoad": true}`, so Claude Code loads it at once
 /// rather than searching for it.
@@ -378,7 +383,7 @@ pub fn tool_list(tools: &[CafTool]) -> Value {
 /// placeholders, until the tools are built.
 fn definition(tool: CafTool) -> Value {
     let text = |description: &str| json!({ "type": "string", "description": description });
-    let number = |description: &str| json!({ "type": "number", "description": description });
+    let whole = |description: &str, minimum: u64| json!({ "type": "integer", "minimum": minimum, "description": description });
     let flag = |description: &str| json!({ "type": "boolean", "description": description });
     let (title, description, properties, required, read_only, open_world) = match tool {
         CafTool::Read => (
@@ -388,8 +393,8 @@ fn definition(tool: CafTool) -> Value {
              lines) read part of a long one. Lines come back numbered from 1.",
             json!({
                 "file_path": text("The absolute path of the file to read"),
-                "offset": number("The line number to start reading from"),
-                "limit": number("The number of lines to read"),
+                "offset": whole("The line number to start reading from", 0),
+                "limit": whole("The number of lines to read", 1),
             }),
             vec!["file_path"],
             true,
@@ -429,7 +434,7 @@ fn definition(tool: CafTool) -> Value {
              once. Give a short `description` of what it does.",
             json!({
                 "command": text("The command to run"),
-                "timeout": number("How long it may run, in milliseconds"),
+                "timeout": whole("How long it may run, in milliseconds", 0),
                 "description": text("What the command does, in a few words"),
                 "run_in_background": flag("Run it in the background, returning at once"),
             }),
@@ -446,7 +451,6 @@ fn definition(tool: CafTool) -> Value {
             "type": "object",
             "properties": properties,
             "required": required,
-            "additionalProperties": false,
         },
         "annotations": {
             "title": title,
@@ -785,6 +789,16 @@ mod tests {
             );
         }
         assert!(connection.open().is_empty());
+        // One naming no tool has bad params.
+        for params in [json!({}), json!({ "name": 3 }), Value::Null] {
+            let answer = answer_to(
+                &mut connection,
+                &json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": params }),
+            );
+            assert_eq!(answer["id"], 4);
+            assert_eq!(answer["error"]["code"], -32602, "{params}");
+        }
+        assert!(connection.open().is_empty());
         // Nothing is left to answer.
         assert_eq!(
             connection.answer(&Request("3".into()), &Answer::text("x")),
@@ -967,16 +981,13 @@ mod tests {
         assert!(!token_is(&key, one, ""));
         assert!(!token_is(&key, one, &format!("+{}", &token[1..])));
         assert!(!token_is(&key, one, &"zz".repeat(32)));
-        // HMAC-SHA256 of the id's text, as RFC 4231 computes it.
+        // HMAC-SHA256 of the id's text, as OpenSSL computes it:
+        // `printf %s 00000000-0000-0000-0000-000000001234 |
+        // openssl dgst -sha256 -hmac 0123456789abcdef0123456789abcdef`.
         let known = Key(*b"0123456789abcdef0123456789abcdef");
-        let chat = ChatId::from_number(0x1234);
         assert_eq!(
-            super::token(&known, chat),
-            hex(&{
-                let mut mac = Hmac::<Sha256>::new_from_slice(&known.0).expect("a key");
-                mac.update(b"00000000-0000-0000-0000-000000001234");
-                mac.finalize().into_bytes()
-            })
+            super::token(&known, ChatId::from_number(0x1234)),
+            "53bee8321fd1504dffb431dc24021f24a5101d258b6e0a7e0b6a3dd11ada916c"
         );
     }
 

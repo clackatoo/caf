@@ -1226,3 +1226,16 @@ fn a_call_naming_a_report_held_only_for_now_takes_it() {
     script.policy(ticket(&first), PolicyAnswer::Refuse);
     script.policy(second, PolicyAnswer::Refuse);
 }
+
+#[test]
+fn a_call_the_agent_gives_up_on_as_the_user_stops_its_turn_was_stopped_by_the_user() {
+    let mut script = bash_running("sleep 100");
+    script.stop(CHAT).0.expect("stopping");
+    // Claude Code ends its MCP calls as its turn is cancelled.
+    let out = script.tool(1, ToolEvent::Gone);
+    assert!(told(&out).is_empty(), "nothing to answer");
+    script.answers(PROC, PROMPT, &json!({ "stopReason": "cancelled" }));
+    let tool = the_tool(&script);
+    assert_eq!(tool["status"], kind("Cancelled"));
+    assert_eq!(tool["stopped_by"], kind("User"));
+}

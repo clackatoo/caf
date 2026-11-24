@@ -474,8 +474,10 @@ pub struct McpStart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<String>,
     /// The name later steps call this connection by. The server's name, if
-    /// left out. Starting the same server again under another name keeps
-    /// both, as Claude may for a while when it opens a session again.
+    /// left out. Starting a server again under another name keeps both,
+    /// as Claude may for a while when it opens a session again; under the
+    /// same name, the new one replaces the old, whose stdin is closed and
+    /// whose messages are ignored from then on.
     #[serde(default, rename = "as", skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Environment variables to set, or change, beyond the server's own,
@@ -570,7 +572,7 @@ pub struct McpAwait {
     #[serde(default, skip_serializing_if = "is_false")]
     pub none: bool,
     /// How many milliseconds to wait before the check fails, or with
-    /// `none`, passes. Forever, if left out, which `none` needs.
+    /// `none`, passes. Forever, if left out; `none` needs one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
 }
