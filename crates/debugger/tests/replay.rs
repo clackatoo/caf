@@ -316,11 +316,11 @@ fn a_recording_that_isnt_one_is_refused() {
     assert!(error(write("empty.jsonl", "")).contains("empty"));
     assert!(error(write("v1.jsonl", r#"{"caf_recording":1}"#)).contains("version 1"));
     // One by an older CAF, which isn't read as CAF isn't released.
-    let older = error(write("v5.jsonl", r#"{"caf_recording":5}"#));
-    assert!(older.contains("version 5, by an older CAF"), "{older}");
-    assert!(older.contains("reads only version 6"), "{older}");
-    let newer = error(write("v7.jsonl", r#"{"caf_recording":7}"#));
-    assert!(newer.contains("version 7, by a newer CAF"), "{newer}");
+    let older = error(write("v6.jsonl", r#"{"caf_recording":6}"#));
+    assert!(older.contains("version 6, by an older CAF"), "{older}");
+    assert!(older.contains("reads only version 7"), "{older}");
+    let newer = error(write("v8.jsonl", r#"{"caf_recording":8}"#));
+    assert!(newer.contains("version 8, by a newer CAF"), "{newer}");
     assert!(error(write("junk.jsonl", "junk")).contains("first line"));
     let header = std::fs::read_to_string(claude_live()).unwrap();
     let header = header.lines().next().unwrap();

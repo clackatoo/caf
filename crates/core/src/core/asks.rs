@@ -66,15 +66,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         let options = options(params.get("options"));
         let call = params.get("toolCall").cloned().unwrap_or(Value::Null);
-        // CAF asks about its own tools itself, with what it knows of each
-        // call: the agent asking too is answered at once. Known by the
-        // adapter's metadata, or the call CAF has, never its title.
-        let caf = matches!(
-            self.profile_of_chat(chat).origin_of(&call),
-            Some(Origin::Caf(_))
-        ) || (call.get("toolCallId").and_then(Value::as_str))
-            .and_then(|id| self.runs.get(&chat)?.tools.get(id).copied())
-            .is_some_and(|item| self.is_served(chat, item));
+        // CAF asks about the tools it serves itself, its own and the
+        // app's, with what it knows of each call: the agent asking too is
+        // answered at once. Known by the adapter's metadata, or the call
+        // CAF has, never its title.
+        let said = (self.profile_of_chat(chat).origin_of(&call))
+            .map(|origin| self.served_origin_in(chat, origin));
+        let caf = matches!(said, Some(Origin::Caf(_) | Origin::App(_)))
+            || (call.get("toolCallId").and_then(Value::as_str))
+                .and_then(|id| self.runs.get(&chat)?.tools.get(id).copied())
+                .is_some_and(|item| self.is_served(chat, item));
         let tool = self.tool_named(now, chat, &call, out);
         if caf {
             let allow = (options.iter())
@@ -89,8 +90,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             report(
                 out,
                 Level::Debug,
-                "allowed the agent's asking about one of CAF's own tools: CAF asks itself"
-                    .to_owned(),
+                "allowed the agent's asking about a tool CAF serves: CAF asks itself".to_owned(),
             );
             self.reply_or_report(proc, id, Ok(outcome), out);
             return;
@@ -154,6 +154,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             ticket,
             chat,
             request: PermissionRequest {
+                hints: None,
                 item: tool,
                 title,
                 origin,

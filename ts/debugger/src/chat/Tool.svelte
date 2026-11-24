@@ -11,7 +11,7 @@
   import PieceView from './PieceView.svelte'
   import { took } from './time.ts'
   import { count } from './figures.ts'
-  import { cutText, decisionText, ended as hasEnded, jobText, locationText } from './tools.ts'
+  import { cutText, decisionText, ended as hasEnded, jobText, locationText, originText } from './tools.ts'
   import { rawJson, unhidden } from './unhidden.ts'
   import { toolKind, toolStatus } from './words.ts'
 
@@ -23,6 +23,7 @@
   const ended = $derived(hasEnded(tool.status))
   const job = $derived(jobText(tool))
   const decision = $derived(decisionText(tool.decision))
+  const origin = $derived(originText(tool.origin))
   // Cut, the input is the start of its JSON, as a string: shown as it is.
   const input = $derived(
     tool.input === null ? null : tool.input_cut !== null && typeof tool.input === 'string' ? unhidden(tool.input) : rawJson(tool.input),
@@ -53,6 +54,9 @@
     {#if time !== null}<span class="time">{time}</span>{/if}
   </summary>
   <div class="body">
+    {#if origin !== null}
+      <div class="origin">{origin}</div>
+    {/if}
     {#if decision !== null}
       <div class="decision" data-decision={tool.decision.type}>{decision}</div>
     {/if}
@@ -169,6 +173,11 @@
     padding: 0.4em 0.6em 0.6em;
   }
   .decision {
+    color: var(--caf-muted);
+    font-size: 0.9em;
+    overflow-wrap: anywhere;
+  }
+  .origin {
     color: var(--caf-muted);
     font-size: 0.9em;
     overflow-wrap: anywhere;

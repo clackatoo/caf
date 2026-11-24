@@ -15,7 +15,7 @@ use crate::install::{Install, LinkFrom, Patch, SignedInAs};
 use crate::limits::ProfileLimits;
 use crate::save::{Entry, Header, Saved};
 use crate::time::{Mono, Wall};
-use crate::tool::{Action, CafTool, Origin};
+use crate::tool::{Action, CafTool, Hints, Origin};
 use crate::usage::LedgerLine;
 
 /// Work for a driver. `A` and `D` are the app's item and data types,
@@ -197,6 +197,11 @@ pub struct PermissionRequest {
     pub action: Option<Action>,
     /// What the tool was given, as the agent sent it, at most 64 KiB.
     pub input: Option<String>,
+    /// What the tool says of itself, for a tool CAF serves (its own, or
+    /// the app's): `None` for the agent's own tools and other servers'.
+    /// Recordings made before it was added read as none.
+    #[serde(default)]
+    pub hints: Option<Hints>,
 }
 
 /// Work for the tools driver: running the tools CAF serves, its own and
@@ -292,6 +297,11 @@ pub enum ToolDirective {
         chat: ChatId,
         /// CAF's tools it's given, in order.
         tools: Vec<CafTool>,
+        /// The app's own tools it's given, by name, in order: served after
+        /// CAF's. Recordings made before it was added read as none.
+        #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(as = "Option<Vec<String>>", optional))]
+        app: Vec<String>,
         /// The chat's folder, as the agent's told it: what the model is
         /// told is its working directory.
         cwd: String,

@@ -99,6 +99,11 @@ chat: ChatId,
  */
 tools: Array<CafTool>, 
 /**
+ * The app's own tools it's given, by name, in order: served after
+ * CAF's. Recordings made before it was added read as none.
+ */
+app?: Array<string>, 
+/**
  * The chat's folder, as the agent's told it: what the model is
  * told is its working directory.
  */

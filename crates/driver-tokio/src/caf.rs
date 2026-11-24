@@ -110,9 +110,10 @@ use crate::timer::TimerDriver;
 use crate::tools::{Report as ToolsReport, StartError, ToolsConfig, ToolsDriver};
 use crate::usage::{Report as UsageReport, UsageDriver};
 
-/// What to start CAF with.
+/// What to start CAF with. `A` is the app's item type, which its own
+/// tools' calls may carry ([`ToolsConfig::app`]).
 #[non_exhaustive]
-pub struct Config {
+pub struct Config<A: AppItem = NoAppItems> {
     /// The host's description of itself.
     pub host: Host,
     /// The agents it offers.
@@ -212,7 +213,7 @@ pub struct Config {
     /// `main` must call [`caf_relay::relay_if_asked`] before anything
     /// else: [`Caf::try_start`] checks it does, and says if it doesn't;
     /// [`Caf::start`] panics.
-    pub tools: ToolsConfig,
+    pub tools: ToolsConfig<A>,
 }
 
 /// Where the usage ledger is, and whether prices are fetched.
@@ -247,7 +248,7 @@ impl UsageConfig {
     }
 }
 
-impl Config {
+impl<A: AppItem> Config<A> {
     /// The defaults for `host`, offering these agents. Set any field to
     /// change it.
     #[must_use]
@@ -594,7 +595,7 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     /// the [`StartError`] [`Caf::try_start`] would give: a relay that
     /// doesn't call [`caf_relay::relay_if_asked`], say.
     #[must_use]
-    pub fn start(config: Config) -> (Self, Running) {
+    pub fn start(config: Config<A>) -> (Self, Running) {
         Self::try_start(config).unwrap_or_else(|error| panic!("{error}"))
     }
 
@@ -619,7 +620,7 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     /// # Panics
     ///
     /// As [`Caf::start`], but for serving tools.
-    pub fn try_start(config: Config) -> Result<(Self, Running), StartError> {
+    pub fn try_start(config: Config<A>) -> Result<(Self, Running), StartError> {
         Self::start_with(config, None)
     }
 
@@ -635,13 +636,13 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     ///
     /// As [`Caf::start`].
     #[must_use]
-    pub fn start_watching(config: Config, steps: impl Steps<A, D>) -> (Self, Running) {
+    pub fn start_watching(config: Config<A>, steps: impl Steps<A, D>) -> (Self, Running) {
         Self::start_with(config, Some(Box::new(steps))).unwrap_or_else(|error| panic!("{error}"))
     }
 
     /// Starts CAF, with `steps` seeing every step if there are any.
     fn start_with(
-        mut config: Config,
+        mut config: Config<A>,
         steps: Option<Box<dyn Steps<A, D>>>,
     ) -> Result<(Self, Running), StartError> {
         assert_eq!(
@@ -1772,7 +1773,7 @@ struct Task<A: AppItem, D: AppData> {
     setup: SetupDriver,
     storage: StorageDriver<A, D>,
     usage: UsageDriver,
-    tools: ToolsDriver,
+    tools: ToolsDriver<A>,
     /// The core has been given the usage driver's first prices.
     priced: bool,
     /// Those waiting for the first prices.

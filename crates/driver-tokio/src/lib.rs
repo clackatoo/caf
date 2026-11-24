@@ -215,6 +215,7 @@
 //! runs it on a thread of its own.
 
 mod agent;
+mod app_tools;
 mod caf;
 mod files;
 mod policy;
@@ -229,6 +230,9 @@ mod usage;
 pub mod viewer;
 
 pub use agent::{AgentDriver, AgentLimits};
+pub use app_tools::{
+    AppTool, AppTools, BoxFuture, Built, Done, ToolError, ToolSpec, Tried, tool, try_tool,
+};
 pub use caf::{
     AgentsWatch, Caf, ChatHandle, ChatsWatch, Config, Error, Running, SavedWatch, Update,
     UsageConfig, Watch,

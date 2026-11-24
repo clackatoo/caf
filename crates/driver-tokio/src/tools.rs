@@ -30,27 +30,32 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use caf_core::agent::{EnvChange, SpawnCommand};
+use caf_core::chat::{AppItem, NoAppItems};
 use caf_core::directive::{RefusedCall, ToolDirective};
 use caf_core::event::{RelayChange, Serving, ToolEvent};
 use caf_core::ids::{CallId, ChatId, JobId};
-use caf_core::mcp::{self, Answer, Connection, Key, Out, Request};
-use caf_core::tool::{Action, CafTool, Piece, Text};
+use caf_core::mcp::{self, Answer, AnswerPart, AppListing, Connection, Key, Out, Request};
+use caf_core::tool::{Action, CafTool, Piece, ServedTool, Text};
 use caf_tools::{Commands, Files};
 use serde::Deserialize;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixListener;
 use tokio::net::unix::OwnedWriteHalf;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::{Instant, Sleep};
 
+use crate::app_tools::{AppTools, BoxFuture, Done, Erased};
 use crate::files::DiskFiles;
 use crate::pty::PtyCommands;
 use crate::runner::CafRunner;
 
-/// How the app serves CAF's tools: [`Config::tools`](crate::Config::tools).
+/// How the app serves CAF's tools, and its own: [`Config::tools`](crate::Config::tools).
 #[non_exhaustive]
-pub struct ToolsConfig {
+pub struct ToolsConfig<A: AppItem = NoAppItems> {
+    /// The app's own tools ([`AppTools`]): none by default. A chat is
+    /// given them by name ([`Tools::app`](caf_core::tool::Tools::app)).
+    pub app: AppTools<A>,
     /// The program an agent starts to reach CAF's tools. [`Relay::None`]
     /// by default: no tools are served.
     pub relay: Relay,
@@ -74,9 +79,10 @@ pub struct ToolsConfig {
     pub progress_every: Duration,
 }
 
-impl Default for ToolsConfig {
+impl<A: AppItem> Default for ToolsConfig<A> {
     fn default() -> Self {
         Self {
+            app: AppTools::new(),
             relay: Relay::None,
             runner: None,
             files: Arc::new(DiskFiles),
@@ -87,9 +93,10 @@ impl Default for ToolsConfig {
     }
 }
 
-impl std::fmt::Debug for ToolsConfig {
+impl<A: AppItem> std::fmt::Debug for ToolsConfig<A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolsConfig")
+            .field("app", &self.app)
             .field("relay", &self.relay)
             .field("folder", &self.folder)
             .finish_non_exhaustive()
@@ -269,6 +276,28 @@ pub struct Call {
 type Jobs = Arc<Mutex<HashMap<ChatId, u64>>>;
 
 impl Call {
+    /// Call `id` in `chat`, telling `prints` what it prints, with job
+    /// numbers of its own: for [`try_tool`](crate::try_tool).
+    pub(crate) fn new(
+        chat: ChatId,
+        id: CallId,
+        cwd: PathBuf,
+        input: serde_json::Value,
+        agent_call: Option<String>,
+        prints: mpsc::UnboundedSender<Print>,
+    ) -> Self {
+        Self {
+            chat,
+            id,
+            cwd,
+            input,
+            agent_call,
+            prints,
+            jobs: Jobs::default(),
+            job: None,
+        }
+    }
+
     /// The chat it's for.
     #[must_use]
     pub fn chat(&self) -> ChatId {
@@ -396,12 +425,15 @@ const WRITE_TIME: Duration = Duration::from_secs(10);
 const ACCEPT_AGAIN: Duration = Duration::from_millis(100);
 /// How long shutting down waits for answers to be written.
 const FINISH_TIME: Duration = Duration::from_secs(1);
+/// How long one of the app's tools has to stop once its call is stopped,
+/// before the model is told it was all the same.
+const STOP_TIME: Duration = Duration::from_secs(5);
 
 /// What the driver reports, for the core.
 #[derive(Debug)]
-pub(crate) enum Report {
+pub(crate) enum Report<A: AppItem = NoAppItems> {
     /// [`Event::Tool`](caf_core::Event::Tool).
-    Tool { call: CallId, event: ToolEvent },
+    Tool { call: CallId, event: ToolEvent<A> },
     /// [`Event::Relay`](caf_core::Event::Relay).
     Relay { chat: ChatId, change: RelayChange },
 }
@@ -409,9 +441,15 @@ pub(crate) enum Report {
 /// A future the runner gave.
 type Running<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
+/// What a call ended with: what it did, and the app's item, which only
+/// the app's own tools give.
+type Ended<A> = (Ran, Option<A>);
+
 /// The tools driver.
-pub(crate) struct ToolsDriver {
+pub(crate) struct ToolsDriver<A: AppItem = NoAppItems> {
     runner: Box<dyn Runner>,
+    /// The app's own tools.
+    app: AppTools<A>,
     /// Where relays connect, if tools are served.
     live: Option<Live>,
     /// What each chat is served.
@@ -421,7 +459,7 @@ pub(crate) struct ToolsDriver {
     /// Each chat's bound connection.
     bound: HashMap<ChatId, u64>,
     /// Each open call.
-    calls: BTreeMap<CallId, Each>,
+    calls: BTreeMap<CallId, Each<A>>,
     /// The last call's number.
     last_call: u64,
     prints: mpsc::UnboundedSender<Print>,
@@ -429,7 +467,7 @@ pub(crate) struct ToolsDriver {
     /// Each chat's last job number.
     jobs: Jobs,
     /// Reports waiting to be handed out.
-    reports: VecDeque<Report>,
+    reports: VecDeque<Report<A>>,
     /// The answer to each call that finished, or became a job, held until
     /// the core has taken its [`ToolEvent::Finished`] or
     /// [`ToolEvent::Detached`]: so the agent can't end its turn, or stop
@@ -444,6 +482,12 @@ pub(crate) struct ToolsDriver {
     /// gives its connection's number if it gave up, as the socket broke or
     /// a line took too long.
     writers: JoinSet<Option<u64>>,
+    /// The waits for the app's tools to stop, each giving what to send
+    /// once its tool has stopped, or [`STOP_TIME`] has passed.
+    stops: JoinSet<AfterStop>,
+    /// The runtime the app's tools run on, if there are any: threads of
+    /// their own, so one that blocks holds up nothing of CAF's.
+    app_runtime: Option<tokio::runtime::Runtime>,
     /// [`ToolsConfig::progress_every`].
     progress_every: Duration,
 }
@@ -475,6 +519,8 @@ impl Drop for SocketFile {
 
 struct Served {
     tools: Vec<CafTool>,
+    /// The app's own tools, by name.
+    app: Vec<String>,
     instructions: String,
     /// The chat's folder.
     cwd: PathBuf,
@@ -499,23 +545,66 @@ struct Conn {
 }
 
 /// An open call.
-struct Each {
+struct Each<A: AppItem> {
     chat: ChatId,
     conn: u64,
     request: Request,
     /// The agent's own id for it.
     agent_call: Option<String>,
+    /// The app's tool it calls, if it's one of the app's.
+    app: Option<AppCall<A>>,
+    /// Its preview or run, if it's one of the app's tools': a task of its
+    /// own, stopped when this is dropped.
+    task: Option<AppTask>,
     /// Whether the core has said to run it.
     running: bool,
     /// The job it became, once the model was answered and it went on:
     /// its request is answered, and it's no longer its connection's.
     job: Option<JobId>,
-    preview: Option<Running<Result<Vec<Piece>, Ran>>>,
-    run: Option<Running<Ran>>,
+    preview: Option<Running<Result<Vec<Piece>, Ended<A>>>>,
+    run: Option<Running<Ended<A>>>,
     /// When its progress is next sent.
     progress_at: Instant,
     /// Output printed and not yet reported.
     batch: Option<Batch>,
+}
+
+/// A call to one of the app's tools.
+struct AppCall<A: AppItem> {
+    tool: Arc<dyn Erased<A>>,
+    /// The tool's name.
+    name: String,
+    /// The call's title.
+    title: String,
+}
+
+/// One of the app's tools' preview or run, as a task of its own, so a
+/// tool that blocks holds up nothing else. Aborted when dropped.
+struct AppTask {
+    /// The tool's name.
+    name: String,
+    abort: AbortHandle,
+    /// Closed once the tool's future has been dropped, whether it ended
+    /// or was aborted.
+    ended: Option<oneshot::Receiver<()>>,
+}
+
+/// What to send once one of the app's tools has stopped: its call's
+/// answer, made as it was stopped, so it's sent even if its connection
+/// closes, as when CAF shuts down, while the tool stops.
+struct AfterStop {
+    /// The call's connection's writer.
+    write: mpsc::Sender<Vec<u8>>,
+    /// The answer, as a line.
+    bytes: Vec<u8>,
+}
+
+/// A tool's future, run as a task: the future is dropped as soon as it
+/// ends, in the task, so a panic dropping it fails the task, and then
+/// `ended` closes.
+struct Guarded<T> {
+    work: BoxFuture<T>,
+    _ended: oneshot::Sender<()>,
 }
 
 struct Batch {
@@ -535,7 +624,7 @@ struct Printed {
 
 /// What a call tells the driver as it runs.
 #[derive(Debug)]
-enum Print {
+pub(crate) enum Print {
     /// [`Call::print`].
     Lines {
         call: CallId,
@@ -583,13 +672,17 @@ struct Hello {
     token: String,
 }
 
-impl ToolsDriver {
+impl<A: AppItem> ToolsDriver<A> {
     /// A driver as `config` says, serving relays at `live`, if any, from
     /// the tools' `folder`.
     /// `folder` is the tools' folder, and the name of this driver's own in
     /// its `out/`.
-    fn with(config: ToolsConfig, live: Option<Live>, folder: Option<(&Path, &str)>) -> Self {
+    fn with(config: ToolsConfig<A>, live: Option<Live>, folder: Option<(&Path, &str)>) -> Self {
         let (prints, printed) = mpsc::unbounded_channel();
+        let app_runtime = match config.app.is_empty() {
+            true => None,
+            false => app_runtime(),
+        };
         let runner = match (config.runner, folder) {
             (Some(runner), _) => runner,
             (None, Some((folder, out))) => Box::new(CafRunner::new(
@@ -603,6 +696,7 @@ impl ToolsDriver {
         };
         Self {
             runner,
+            app: config.app,
             progress_every: config.progress_every.max(Duration::from_millis(1)),
             live,
             served: HashMap::new(),
@@ -618,6 +712,8 @@ impl ToolsDriver {
             finished: None,
             sleep: Box::pin(tokio::time::sleep_until(far_off())),
             writers: JoinSet::new(),
+            stops: JoinSet::new(),
+            app_runtime,
         }
     }
 
@@ -630,7 +726,7 @@ impl ToolsDriver {
     ///
     /// Why it can't serve, for the app's developer.
     pub(crate) fn start(
-        mut config: ToolsConfig,
+        mut config: ToolsConfig<A>,
         app: &str,
     ) -> Result<(Self, Option<Serving>), StartError> {
         let relay = match std::mem::take(&mut config.relay) {
@@ -655,7 +751,7 @@ impl ToolsDriver {
 
     /// Serves through `relay`, unchecked.
     fn listen(
-        mut config: ToolsConfig,
+        mut config: ToolsConfig<A>,
         relay: SpawnCommand,
         app: &str,
     ) -> Result<(Self, Serving), StartError> {
@@ -691,7 +787,8 @@ impl ToolsDriver {
         private_folder(&folder).map_err(StartError::Serving)?;
         let (listener, file) = listen(&socket)?;
         let key = random_key().map_err(StartError::Serving)?;
-        let serving = Serving::new(relay, socket.clone(), Key(key));
+        let mut serving = Serving::new(relay, socket.clone(), Key(key));
+        serving.app_tools = config.app.specs();
         let (from_conns, to_driver) = mpsc::channel(64);
         let live = Live {
             listener,
@@ -715,13 +812,16 @@ impl ToolsDriver {
             ToolDirective::Serve {
                 chat,
                 tools,
+                app,
                 instructions,
                 cwd,
+                ..
             } => {
                 self.served.insert(
                     chat,
                     Served {
                         tools,
+                        app,
                         instructions,
                         cwd: PathBuf::from(cwd),
                     },
@@ -753,13 +853,56 @@ impl ToolsDriver {
                     return;
                 };
                 let runner = &mut self.runner;
-                let preview =
-                    std::panic::catch_unwind(AssertUnwindSafe(|| runner.preview(&given, action)))
-                        .unwrap_or_else(|_| {
+                let runtime = self
+                    .app_runtime
+                    .as_ref()
+                    .map(|runtime| runtime.handle().clone());
+                let input = given.input.clone();
+                let mut task = None;
+                let preview = std::panic::catch_unwind(AssertUnwindSafe(|| match &each.app {
+                    Some(app) => match app.tool.preview(&given, &input) {
+                        Some(preview) => {
+                            let (spawned, preview) = spawn_app(
+                                runtime.as_ref(),
+                                &app.name,
+                                call,
+                                "previewing",
+                                // A preview's `Err` ends the call Failed, done
+                                // or not: it never ran.
+                                Box::pin(async move {
+                                    preview.await.map_err(|done| {
+                                        let (mut ran, item) = ended(done);
+                                        ran.done = false;
+                                        (ran, item)
+                                    })
+                                }),
+                                || Err((failed(APP_PANICKED), None)),
+                            );
+                            task = Some(spawned);
+                            preview
+                        }
+                        None => Box::pin(std::future::ready(Ok(Vec::new()))),
+                    },
+                    None => {
+                        let preview = runner.preview(&given, action);
+                        Box::pin(async move { preview.await.map_err(|ran| (ran, None)) })
+                    }
+                }))
+                .unwrap_or_else(|_| {
+                    let why = match &each.app {
+                        Some(app) => {
+                            log::warn!(target: "caf", "the app's tool {} panicked previewing call {}", app.name, call.0);
+                            APP_PANICKED
+                        }
+                        None => {
                             log::warn!(target: "caf", "the tool runner panicked previewing call {}", call.0);
-                            Box::pin(std::future::ready(Err(failed(PANICKED))))
-                        });
+                            PANICKED
+                        }
+                    };
+                    Box::pin(std::future::ready(Err((failed(why), None))))
+                });
                 each.preview = Some(preview);
+                each.task = task;
             }
             ToolDirective::Run {
                 call,
@@ -778,30 +921,76 @@ impl ToolsDriver {
                     return;
                 };
                 let runner = &mut self.runner;
-                let run = std::panic::catch_unwind(AssertUnwindSafe(|| runner.run(given, action)))
-                    .unwrap_or_else(|_| {
-                        log::warn!(target: "caf", "the tool runner panicked running call {}", call.0);
-                        Box::pin(std::future::ready(failed(PANICKED)))
-                    });
+                let runtime = self
+                    .app_runtime
+                    .as_ref()
+                    .map(|runtime| runtime.handle().clone());
+                let mut task = None;
+                let run = std::panic::catch_unwind(AssertUnwindSafe(|| match &each.app {
+                    Some(app) => {
+                        let input = given.input.clone();
+                        let run = app.tool.run(given, &input);
+                        let (spawned, run) = spawn_app(
+                            runtime.as_ref(),
+                            &app.name,
+                            call,
+                            "running",
+                            Box::pin(async move { ended(run.await) }),
+                            || (failed(APP_PANICKED), None),
+                        );
+                        task = Some(spawned);
+                        run
+                    }
+                    None => {
+                        let run = runner.run(given, action);
+                        Box::pin(async move { (run.await, None) })
+                    }
+                }))
+                .unwrap_or_else(|_| {
+                    let why = match &each.app {
+                        Some(app) => {
+                            log::warn!(target: "caf", "the app's tool {} panicked running call {}", app.name, call.0);
+                            APP_PANICKED
+                        }
+                        None => {
+                            log::warn!(target: "caf", "the tool runner panicked running call {}", call.0);
+                            PANICKED
+                        }
+                    };
+                    Box::pin(std::future::ready((failed(why), None)))
+                });
                 each.preview = None;
                 each.running = true;
                 each.run = Some(run);
+                each.task = task;
             }
             ToolDirective::Refuse { call, why } => {
                 self.forget(call);
                 if let Some(each) = self.calls.remove(&call) {
-                    self.answer(each.conn, &each.request, &Answer::error(refused(&why)));
+                    let (conn, request, task) = each.stop();
+                    self.answer_after(task, conn, request, Answer::error(refused(&why)));
                 }
             }
             ToolDirective::Cancel { call } => {
                 self.forget(call);
-                if let Some(each) = self.calls.remove(&call) {
+                if let Some(mut each) = self.calls.remove(&call) {
+                    // One of the app's tools may have finished just now,
+                    // its end not yet taken: it ended as the core stopped
+                    // it, so the model hears what it gave.
+                    if let Some(ended) = each.finished_now() {
+                        self.finish_call(call, each, ended);
+                        if let Some(held) = self.held.remove(&call) {
+                            self.answer(held.conn, &held.request, &held.answer);
+                        }
+                        self.wake_at_next();
+                        return;
+                    }
                     // Its work stops before the model hears it did. A job's
                     // model was answered, unless that answer still waits.
                     let job = each.job.is_some();
-                    let (conn, request) = each.stop();
+                    let (conn, request, task) = each.stop();
                     if !job || self.held.remove(&call).is_some() {
-                        self.answer(conn, &request, &Answer::error(CANCELLED));
+                        self.answer_after(task, conn, request, Answer::error(CANCELLED));
                     }
                 } else if let Some(held) = self.held.remove(&call) {
                     // It finished as the core stopped it: the work was
@@ -813,6 +1002,28 @@ impl ToolsDriver {
             _ => {}
         }
         self.wake_at_next();
+    }
+
+    /// Answers `request` on connection `conn` with `answer`: at once, or,
+    /// for one of the app's tools, once its `task` has stopped, so its
+    /// work stops before the model hears it did.
+    fn answer_after(&mut self, task: Option<AppTask>, conn: u64, request: Request, answer: Answer) {
+        let Some(task) = task else {
+            self.answer(conn, &request, &answer);
+            return;
+        };
+        let Some(open) = self.conns.get_mut(&conn) else {
+            return;
+        };
+        let Some(bytes) = open.mcp.answer(&request, &answer) else {
+            return;
+        };
+        let write = open.write.clone();
+        let stopped = task.stopped();
+        self.stops.spawn(async move {
+            stopped.await;
+            AfterStop { write, bytes }
+        });
     }
 
     /// Tells the runner `call` won't run, or has gone.
@@ -850,49 +1061,71 @@ impl ToolsDriver {
         let found = (self.calls.iter())
             .find(|(_, each)| each.chat == chat && each.job == Some(job))
             .map(|(&target, _)| target);
+        let mut stopping = None;
         let ran =
             match found.and_then(|target| self.calls.remove(&target).map(|each| (target, each))) {
-                Some((target, mut each)) => {
-                    if let Some(batch) = each.batch.take() {
-                        self.reports.push_back(output(target, batch));
+                Some((target, mut each)) => match each.finished_now() {
+                    // It ended just as it was stopped, its end not yet
+                    // taken: it ends as it did, with its notice, and
+                    // there's no job left to stop.
+                    Some(ended) => {
+                        self.finish_call(target, each, ended);
+                        Ran::failed(caf_tools::no_job(job.0))
                     }
-                    // Dropped, its command stops.
-                    let _ = each.stop();
-                    // Any answer it still had waiting is the model's.
-                    if let Some(held) = self.held.remove(&target) {
-                        self.answer(held.conn, &held.request, &held.answer);
+                    None => {
+                        if let Some(batch) = each.batch.take() {
+                            self.reports.push_back(output(target, batch));
+                        }
+                        // Dropped, its command stops; the app's tool is waited
+                        // for, before the TaskStop is answered.
+                        let (_, _, task) = each.stop();
+                        stopping = task;
+                        // Any answer it still had waiting is the model's.
+                        if let Some(held) = self.held.remove(&target) {
+                            self.answer(held.conn, &held.request, &held.answer);
+                        }
+                        self.reports.push_back(Report::Tool {
+                            call: target,
+                            event: ToolEvent::Finished {
+                                done: false,
+                                pieces: Vec::new(),
+                                folder: None,
+                                notice: None,
+                                item: None,
+                            },
+                        });
+                        Ran::new(
+                            true,
+                            vec![Piece::Text(Text::new(caf_tools::job_stopped(job.0)))],
+                            Answer::text(caf_tools::job_stopped(job.0)),
+                        )
                     }
-                    self.reports.push_back(Report::Tool {
-                        call: target,
-                        event: ToolEvent::Finished {
-                            done: false,
-                            pieces: Vec::new(),
-                            folder: None,
-                            notice: None,
-                        },
-                    });
-                    Ran::new(
-                        true,
-                        vec![Piece::Text(Text::new(caf_tools::job_stopped(job.0)))],
-                        Answer::text(caf_tools::job_stopped(job.0)),
-                    )
-                }
+                },
                 None => Ran::failed(caf_tools::no_job(job.0)),
             };
         if let Some(each) = self.calls.get_mut(&call) {
             each.running = true;
             each.preview = None;
-            each.run = Some(Box::pin(std::future::ready(ran)));
+            each.run = Some(match stopping {
+                None => Box::pin(std::future::ready((ran, None))),
+                Some(task) => {
+                    let stopped = task.stopped();
+                    Box::pin(async move {
+                        stopped.await;
+                        (ran, None)
+                    })
+                }
+            });
         }
     }
 
     /// The next report, for the core. Cancel-safe: everything is kept in
     /// the driver between polls.
-    pub(crate) async fn next(&mut self) -> Report {
+    pub(crate) async fn next(&mut self) -> Report<A> {
         std::future::poll_fn(|cx| self.poll_next(cx)).await
     }
 
-    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Report> {
+    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Report<A>> {
         if let Some(report) = self.pop() {
             return Poll::Ready(report);
         }
@@ -906,6 +1139,7 @@ impl ToolsDriver {
                 self.close(no, Closing::Lost);
             }
         }
+        self.poll_stops(cx);
         if let Some(report) = self.pop() {
             return Poll::Ready(report);
         }
@@ -913,6 +1147,10 @@ impl ToolsDriver {
         self.poll_conns(cx);
         self.poll_prints(cx);
         self.poll_calls(cx);
+        // Again, after what may have stopped one of the app's tools: an
+        // empty set keeps no waker, so one spawned since the first poll
+        // must be polled now to be woken when it's done.
+        self.poll_stops(cx);
         self.poll_due(cx);
         match self.pop() {
             Some(report) => Poll::Ready(report),
@@ -922,7 +1160,7 @@ impl ToolsDriver {
 
     /// The next report, noting a call's `Finished`, whose answer waits for
     /// it.
-    fn pop(&mut self) -> Option<Report> {
+    fn pop(&mut self) -> Option<Report<A>> {
         let report = self.reports.pop_front()?;
         if let Report::Tool {
             call,
@@ -942,6 +1180,15 @@ impl ToolsDriver {
         };
         if let Some(held) = self.held.remove(&call) {
             self.answer(held.conn, &held.request, &held.answer);
+        }
+    }
+
+    /// Answers the calls whose app's tools have stopped.
+    fn poll_stops(&mut self, cx: &mut Context<'_>) {
+        while let Poll::Ready(Some(after)) = self.stops.poll_join_next(cx) {
+            if let Ok(AfterStop { write, bytes }) = after {
+                let _ = write.try_send(bytes);
+            }
         }
     }
 
@@ -1022,7 +1269,22 @@ impl ToolsDriver {
             }
             return;
         };
-        let mcp = Connection::new(&served.tools, &served.instructions);
+        let mut listed = std::collections::HashSet::new();
+        let listings = (served.app.iter())
+            .filter(|name| listed.insert(name.as_str()))
+            .filter_map(|name| self.app.spec(name))
+            .map(|spec| {
+                let schema = spec.schema.clone().unwrap_or_default();
+                AppListing::new(
+                    &spec.name,
+                    &spec.title,
+                    &spec.description,
+                    schema,
+                    spec.hints,
+                )
+            })
+            .collect();
+        let mcp = Connection::new(&served.tools, &served.instructions).with_app_tools(listings);
         if let Some(old) = self.bound.get(&chat).copied() {
             self.close(old, Closing::Replaced);
         }
@@ -1083,6 +1345,8 @@ impl ToolsDriver {
                             conn: no,
                             request,
                             agent_call: agent_call.clone(),
+                            app: None,
+                            task: None,
                             running: false,
                             job: None,
                             preview: None,
@@ -1095,12 +1359,20 @@ impl ToolsDriver {
                         call,
                         event: ToolEvent::Called {
                             chat,
-                            tool,
+                            tool: ServedTool::Caf(tool),
                             input,
                             agent_call,
+                            title: None,
+                            bad_input: None,
                         },
                     });
                 }
+                Out::AppCall {
+                    request,
+                    name,
+                    input,
+                    agent_call,
+                } => self.app_called(no, chat, request, name, input, agent_call),
                 // A job's request was answered: it's no longer the agent's
                 // to cancel, and goes on.
                 Out::Cancelled(request) => {
@@ -1128,6 +1400,73 @@ impl ToolsDriver {
             }
         }
         self.wake_at_next();
+    }
+
+    /// The agent called the app's tool `name` on connection `no`, of
+    /// `chat`: its input is read, and the call's title worked out, before
+    /// the core hears of it.
+    fn app_called(
+        &mut self,
+        no: u64,
+        chat: ChatId,
+        request: Request,
+        name: String,
+        input: serde_json::Value,
+        agent_call: Option<String>,
+    ) {
+        let (Some(tool), Some(spec)) = (self.app.named(&name).cloned(), self.app.spec(&name))
+        else {
+            // A connection lists only tools the app has, so it never is.
+            self.answer(
+                no,
+                &request,
+                &Answer::error(format!("There's no tool named `{name}` here.")),
+            );
+            return;
+        };
+        let (title, bad_input) =
+            match std::panic::catch_unwind(AssertUnwindSafe(|| tool.title(&input))) {
+                Ok(Ok(title)) => (title, None),
+                Ok(Err(why)) => (spec.title.clone(), Some(why)),
+                Err(_) => {
+                    log::warn!(target: "caf", "the app's tool {name} panicked titling a call");
+                    (spec.title.clone(), None)
+                }
+            };
+        self.last_call += 1;
+        let call = CallId(self.last_call);
+        self.calls.insert(
+            call,
+            Each {
+                chat,
+                conn: no,
+                request,
+                agent_call: agent_call.clone(),
+                app: Some(AppCall {
+                    tool,
+                    name: name.clone(),
+                    title: title.clone(),
+                }),
+                task: None,
+                running: false,
+                job: None,
+                preview: None,
+                run: None,
+                progress_at: Instant::now() + self.progress_every,
+                batch: None,
+            },
+        );
+        self.reports.push_back(Report::Tool {
+            call,
+            event: ToolEvent::Called {
+                chat,
+                tool: ServedTool::App(name),
+                input,
+                agent_call,
+                title: Some(title),
+                bad_input,
+            },
+        });
     }
 
     /// Closes a connection, ending its calls.
@@ -1158,9 +1497,21 @@ impl ToolsDriver {
                 drop(each);
             } else if closing == Closing::Ended {
                 // Its work stops before the model hears it did.
-                let (_, request) = each.stop();
+                let (_, request, task) = each.stop();
                 if let Some(bytes) = conn.mcp.answer(&request, &Answer::error(CANCELLED)) {
-                    let _ = conn.write.try_send(bytes);
+                    match task {
+                        None => {
+                            let _ = conn.write.try_send(bytes);
+                        }
+                        Some(task) => {
+                            let stopped = task.stopped();
+                            let write = conn.write.clone();
+                            self.stops.spawn(async move {
+                                stopped.await;
+                                AfterStop { write, bytes }
+                            });
+                        }
+                    }
                 }
             } else {
                 drop(each);
@@ -1277,7 +1628,7 @@ impl ToolsDriver {
                     Ok(Poll::Ready(pieces)) => previewed.push((*call, pieces)),
                     Err(_) => {
                         log::warn!(target: "caf", "the tool runner panicked previewing call {}", call.0);
-                        previewed.push((*call, Err(failed(PANICKED))));
+                        previewed.push((*call, Err((failed(PANICKED), None))));
                     }
                 }
             }
@@ -1287,7 +1638,7 @@ impl ToolsDriver {
                     Ok(Poll::Ready(done)) => ran.push((*call, done)),
                     Err(_) => {
                         log::warn!(target: "caf", "the tool runner panicked running call {}", call.0);
-                        ran.push((*call, failed(PANICKED)));
+                        ran.push((*call, (failed(PANICKED), None)));
                     }
                 }
             }
@@ -1324,13 +1675,14 @@ impl ToolsDriver {
 
     /// Reports `call`'s end, as `ran` says, and holds its answer until the
     /// core has it: unless it's a job, whose model was answered already.
-    fn finish_call(&mut self, call: CallId, each: Each, ran: Ran) {
+    fn finish_call(&mut self, call: CallId, each: Each<A>, (ran, item): Ended<A>) {
         let Each {
             conn,
             request,
             batch,
             job,
             agent_call,
+            app,
             ..
         } = each;
         if let Some(batch) = batch {
@@ -1346,8 +1698,18 @@ impl ToolsDriver {
                 // ([`ToolsDriver::stop_job`]): that's how the core tells
                 // them apart.
                 notice: job.map(|job| {
-                    (ran.notice).unwrap_or_else(|| failed_notice(job, agent_call.as_deref()))
+                    (ran.notice.clone()).unwrap_or_else(|| match &app {
+                        Some(app) => app_notice(
+                            job,
+                            agent_call.as_deref(),
+                            &app.title,
+                            ran.done,
+                            &ran.answer,
+                        ),
+                        None => failed_notice(job, agent_call.as_deref()),
+                    })
                 }),
+                item,
             },
         });
         if job.is_none() {
@@ -1459,6 +1821,17 @@ impl ToolsDriver {
             }
             drop(live.socket);
         }
+        // The app's tools still stopping are waited for, each for at most
+        // its own STOP_TIME, so their calls are answered once they have.
+        let mut stops = std::mem::take(&mut self.stops);
+        while let Some(after) = stops.join_next().await {
+            if let Ok(AfterStop { write, bytes }) = after {
+                let _ = write.try_send(bytes);
+            }
+        }
+        if let Some(runtime) = self.app_runtime.take() {
+            runtime.shutdown_background();
+        }
         // Some were stopped, as their relays were lost: that's no matter.
         let mut writers = std::mem::take(&mut self.writers);
         let _ = tokio::time::timeout(FINISH_TIME, async {
@@ -1468,20 +1841,150 @@ impl ToolsDriver {
     }
 }
 
-impl Each {
-    /// Drops its work, giving back where to answer it.
-    fn stop(self) -> (u64, Request) {
+impl<A: AppItem> Each<A> {
+    /// What one of the app's tools' run ended with, if it has just now,
+    /// its end not yet taken: polled once, as the call is being stopped.
+    fn finished_now(&mut self) -> Option<Ended<A>> {
+        self.app.as_ref()?;
+        let run = self.run.as_mut()?;
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        match run.as_mut().poll(&mut cx) {
+            Poll::Ready(ended) => {
+                self.run = None;
+                Some(ended)
+            }
+            Poll::Pending => None,
+        }
+    }
+
+    /// Drops its work, giving back where to answer it, and the app's
+    /// tool's task, aborted, if it's one of the app's, to wait for.
+    fn stop(self) -> (u64, Request, Option<AppTask>) {
         let Self {
             conn,
             request,
             preview,
             run,
+            task,
             ..
         } = self;
         drop(preview);
         drop(run);
-        (conn, request)
+        if let Some(task) = &task {
+            task.abort.abort();
+        }
+        (conn, request, task)
     }
+}
+
+impl AppTask {
+    /// Aborts it, and waits for its tool's future to be dropped, for at
+    /// most [`STOP_TIME`]: a tool that doesn't stop is logged, and waited
+    /// for no longer.
+    fn stopped(mut self) -> impl Future<Output = ()> + Send + 'static {
+        self.abort.abort();
+        let ended = self.ended.take();
+        let name = std::mem::take(&mut self.name);
+        async move {
+            let Some(ended) = ended else {
+                return;
+            };
+            if tokio::time::timeout(STOP_TIME, ended).await.is_err() {
+                log::warn!(
+                    target: "caf",
+                    "the app's tool {name} didn't stop within {}s of its call being stopped",
+                    STOP_TIME.as_secs()
+                );
+            }
+        }
+    }
+}
+
+impl Drop for AppTask {
+    fn drop(&mut self) {
+        self.abort.abort();
+    }
+}
+
+impl<T: Send + 'static> Future for Guarded<T> {
+    type Output = T;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
+        let Poll::Ready(out) = self.work.as_mut().poll(cx) else {
+            return Poll::Pending;
+        };
+        // Dropped here, in the task, so a panic as it's dropped fails it.
+        self.work = Box::pin(std::future::pending());
+        Poll::Ready(out)
+    }
+}
+
+/// The runtime the app's tools run on: two threads of their own, named
+/// `caf-app-tool-N`. `None` if it can't be made, logged: they run on the
+/// driver's then.
+fn app_runtime() -> Option<tokio::runtime::Runtime> {
+    static THREADS: AtomicU64 = AtomicU64::new(0);
+    let made = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_name_fn(|| format!("caf-app-tool-{}", THREADS.fetch_add(1, Ordering::Relaxed)))
+        .enable_all()
+        .build();
+    match made {
+        Ok(runtime) => Some(runtime),
+        Err(error) => {
+            log::warn!(target: "caf", "the app's tools' threads couldn't be started, so they share CAF's: {error}");
+            None
+        }
+    }
+}
+
+impl<A: AppItem> Drop for ToolsDriver<A> {
+    fn drop(&mut self) {
+        // Never dropped as it is, which waits for its tasks, and panics
+        // in an async context.
+        if let Some(runtime) = self.app_runtime.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
+/// Runs `work`, one of the app's tool `name`'s, for `call`, as a task of
+/// its own, on `runtime` if given: the task, and a future of what it
+/// gives, or of `panicked()` if it panicked, as `doing` it, which is
+/// logged.
+fn spawn_app<T: Send + 'static>(
+    runtime: Option<&tokio::runtime::Handle>,
+    name: &str,
+    call: CallId,
+    doing: &'static str,
+    work: BoxFuture<T>,
+    panicked: impl FnOnce() -> T + Send + 'static,
+) -> (AppTask, Running<T>) {
+    let (ended, ended_seen) = oneshot::channel();
+    let guarded = Guarded {
+        work,
+        _ended: ended,
+    };
+    let handle = match runtime {
+        Some(runtime) => runtime.spawn(guarded),
+        None => tokio::spawn(guarded),
+    };
+    let task = AppTask {
+        name: name.to_owned(),
+        abort: handle.abort_handle(),
+        ended: Some(ended_seen),
+    };
+    let name = name.to_owned();
+    let running = Box::pin(async move {
+        match handle.await {
+            Ok(out) => out,
+            Err(_) => {
+                log::warn!(target: "caf", "the app's tool {name} panicked {doing} call {}", call.0);
+                panicked()
+            }
+        }
+    });
+    (task, running)
 }
 
 impl Batch {
@@ -1518,7 +2021,7 @@ impl Batch {
 }
 
 /// A batch, as reported.
-fn output(call: CallId, batch: Batch) -> Report {
+fn output<A: AppItem>(call: CallId, batch: Batch) -> Report<A> {
     Report::Tool {
         call,
         event: ToolEvent::Output {
@@ -1546,10 +2049,66 @@ fn failed_notice(job: JobId, tool_use: Option<&str>) -> String {
     out
 }
 
+/// The notice of the end of job `job`, a call to one of the app's tools
+/// titled `title`: as `caf_tools::notice` lays one out, with what it
+/// ended with, `done` or not, as its result, which the model wasn't told
+/// when it became a job. A result longer than an answer may be
+/// (`caf_tools::MOST_ANSWER` characters) is cut, saying where.
+fn app_notice(
+    job: JobId,
+    tool_use: Option<&str>,
+    title: &str,
+    done: bool,
+    answer: &Answer,
+) -> String {
+    let (status, how) = match done {
+        true => ("completed", "completed"),
+        false => ("failed", "failed"),
+    };
+    let mut out = format!("<task-notification>\n<task-id>{}</task-id>", job.0);
+    if let Some(tool_use) = tool_use {
+        let escaped = caf_tools::escape(tool_use);
+        out.push_str(&format!("\n<tool-use-id>{escaped}</tool-use-id>"));
+    }
+    let result: Vec<&str> = (answer.content.iter())
+        .filter_map(|part| match part {
+            AnswerPart::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    out.push_str(&format!(
+        "\n<status>{status}</status>\n<summary>Background task \"{}\" {how}</summary>",
+        caf_tools::escape(title)
+    ));
+    if !result.is_empty() {
+        let result = result.join("\n");
+        let total = result.chars().count();
+        let result = match total > caf_tools::MOST_ANSWER {
+            false => result,
+            true => {
+                let kept: String = result.chars().take(caf_tools::MOST_ANSWER).collect();
+                format!(
+                    "{kept}\n[Cut here: the first {} of its {total} characters were kept]",
+                    caf_tools::MOST_ANSWER
+                )
+            }
+        };
+        out.push_str(&format!(
+            "\n<result>{}</result>",
+            caf_tools::escape(&result)
+        ));
+    }
+    out.push_str("\n</task-notification>");
+    out
+}
+
 /// What the model is told of a call stopped with its turn.
 const CANCELLED: &str = "Cancelled: the user stopped this turn";
 /// What the model and the record are told of a call whose runner panicked.
 const PANICKED: &str = "CAF's tool failed unexpectedly";
+/// What the model and the record are told of a call whose app's tool
+/// panicked.
+const APP_PANICKED: &str = "The app's tool failed unexpectedly";
 
 /// What the model is told of a call the core refused.
 fn refused(why: &RefusedCall) -> String {
@@ -1564,6 +2123,19 @@ fn refused(why: &RefusedCall) -> String {
         RefusedCall::BadInput(why) => format!("Refused: {why}"),
         _ => "Refused".into(),
     }
+}
+
+/// What a call to one of the app's tools ended with, as the driver keeps
+/// it.
+fn ended<A: AppItem>(done: Done<A>) -> Ended<A> {
+    let Done {
+        done,
+        answer,
+        record,
+        item,
+        ..
+    } = done;
+    (Ran::new(done, record, answer), item)
 }
 
 /// A time that never comes.
@@ -2007,11 +2579,17 @@ mod tests {
     /// A harness whose driver is told the core took a report only when
     /// the test says ([`Harness::taken`]), if not `auto_taken`.
     fn harness_of(panics: bool, auto_taken: bool) -> Harness {
+        harness_serving(panics, auto_taken, AppTools::new())
+    }
+
+    /// A harness whose driver serves the app's tools `app` too.
+    fn harness_serving(panics: bool, auto_taken: bool, app: AppTools) -> Harness {
         let dir = Dir::new();
         let (runs, run) = mpsc::unbounded_channel();
         let (dropped, drop_seen) = mpsc::unbounded_channel();
         let (forgot, forgotten) = mpsc::unbounded_channel();
-        let config = ToolsConfig {
+        let config: ToolsConfig = ToolsConfig {
+            app,
             runner: Some(Box::new(Scripted {
                 runs,
                 dropped,
@@ -2086,6 +2664,18 @@ mod tests {
             self.apply(ToolDirective::Serve {
                 chat,
                 tools: CafTool::ALL.to_vec(),
+                app: Vec::new(),
+                cwd: "/work".into(),
+                instructions: "Use them.".into(),
+            });
+        }
+
+        /// Serves `chat` Read and the app's tools `app`.
+        fn serve_app(&self, chat: ChatId, app: &[&str]) {
+            self.apply(ToolDirective::Serve {
+                chat,
+                tools: vec![CafTool::Read],
+                app: app.iter().map(|&name| name.to_owned()).collect(),
                 cwd: "/work".into(),
                 instructions: "Use them.".into(),
             });
@@ -2166,7 +2756,7 @@ mod tests {
                     call,
                     event: ToolEvent::Called { chat, tool, .. },
                 } => {
-                    assert_eq!((chat, tool), (CHAT, CafTool::Read));
+                    assert_eq!((chat, tool), (CHAT, ServedTool::Caf(CafTool::Read)));
                     call
                 }
                 other => panic!("expected Called, got {other:?}"),
@@ -2239,6 +2829,15 @@ mod tests {
                 .await;
         }
 
+        /// Calls `tool` with `arguments`, as `id`.
+        async fn call_tool(&mut self, id: u64, tool: &str, arguments: Value) {
+            self.send(&json!({
+                "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                "params": {"name": tool, "arguments": arguments, "_meta": {"claudecode/toolUseId": format!("toolu_{id}")}},
+            }))
+            .await;
+        }
+
         async fn call(&mut self, id: u64, progress: bool) {
             let mut meta = json!({"claudecode/toolUseId": format!("toolu_{id}")});
             if progress {
@@ -2282,9 +2881,11 @@ mod tests {
                 event:
                     ToolEvent::Called {
                         chat,
-                        tool,
+                        tool: ServedTool::Caf(tool),
                         input,
                         agent_call,
+                        title: None,
+                        bad_input: None,
                     },
             } => {
                 assert_eq!((chat, tool), (CHAT, CafTool::Read));
@@ -2769,7 +3370,7 @@ mod tests {
     async fn a_socket_path_too_long_fails_naming_it() {
         let dir = Dir::new();
         let folder = dir.0.join("x".repeat(100));
-        let config = ToolsConfig {
+        let config: ToolsConfig = ToolsConfig {
             folder: Some(folder.clone()),
             ..ToolsConfig::default()
         };
@@ -2791,7 +3392,7 @@ mod tests {
         let dir = Dir::new();
         std::fs::create_dir_all(&dir.0).unwrap();
         std::fs::set_permissions(&dir.0, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let config = ToolsConfig {
+        let config: ToolsConfig = ToolsConfig {
             folder: Some(dir.0.clone()),
             ..ToolsConfig::default()
         };
@@ -2807,7 +3408,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
         let dir = Dir::new();
         let folder = dir.0.join("tools");
-        let config = ToolsConfig {
+        let config: ToolsConfig = ToolsConfig {
             folder: Some(folder.clone()),
             ..ToolsConfig::default()
         };
@@ -3069,7 +3670,7 @@ mod tests {
         ];
         for command in unsendable {
             let dir = Dir::new();
-            let config = ToolsConfig {
+            let config: ToolsConfig = ToolsConfig {
                 relay: Relay::Command(command.clone()),
                 folder: Some(dir.0.clone()),
                 ..ToolsConfig::default()
@@ -3082,7 +3683,7 @@ mod tests {
         }
         // Nor a socket whose path isn't UTF-8.
         let dir = Dir::new();
-        let config = ToolsConfig {
+        let config: ToolsConfig = ToolsConfig {
             folder: Some(dir.0.join(std::ffi::OsStr::from_bytes(b"\xff"))),
             ..ToolsConfig::default()
         };
@@ -3095,7 +3696,7 @@ mod tests {
     #[tokio::test]
     async fn two_cafs_in_one_process_have_sockets_of_their_own() {
         let dir = Dir::new();
-        let config = || ToolsConfig {
+        let config = || ToolsConfig::<NoAppItems> {
             folder: Some(dir.0.clone()),
             ..ToolsConfig::default()
         };
@@ -3377,5 +3978,897 @@ mod tests {
                 .unwrap();
             assert_eq!(forgot, Some(expected));
         }
+    }
+
+    /// A clip to trim.
+    #[derive(Deserialize, schemars::JsonSchema)]
+    struct Trim {
+        /// The clip.
+        clip: u64,
+    }
+
+    /// The app's tool trim_clip, which previews, and its run waits for
+    /// `go` and says when it's dropped on `dropped`.
+    struct Trimmer {
+        go: Arc<tokio::sync::Notify>,
+        dropped: mpsc::UnboundedSender<u64>,
+    }
+
+    impl crate::AppTool for Trimmer {
+        type Input = Trim;
+
+        fn spec(&self) -> crate::ToolSpec {
+            let mut spec = crate::ToolSpec::new("trim_clip");
+            spec.title = "Trim a clip".into();
+            spec.description = "Trims a clip.".into();
+            spec.hints.destructive = true;
+            spec.previews = true;
+            spec
+        }
+
+        fn title(&self, input: &Trim) -> String {
+            format!("Trim clip {}", input.clip)
+        }
+
+        fn preview(
+            &self,
+            _call: &Call,
+            input: &Trim,
+        ) -> Option<crate::app_tools::BoxFuture<Result<Vec<Piece>, Done>>> {
+            let clip = input.clip;
+            Some(Box::pin(async move {
+                match clip {
+                    0 => Err(Done::failed("There's no clip 0")),
+                    clip => Ok(vec![Piece::Text(Text::new(format!(
+                        "Would trim clip {clip}"
+                    )))]),
+                }
+            }))
+        }
+
+        fn run(&self, mut call: Call, input: Trim) -> crate::app_tools::BoxFuture<Done> {
+            let go = Arc::clone(&self.go);
+            let dropped = DroppedClip(input.clip, self.dropped.clone());
+            Box::pin(async move {
+                let _dropped = dropped;
+                call.print(0, vec![format!("trimming {}", input.clip)]);
+                if input.clip == 9 {
+                    call.answer_now(|job| Answer::text(format!("Trimming as job {}", job.0)));
+                }
+                go.notified().await;
+                Done::answer(format!("Trimmed clip {}", input.clip))
+                    .with_record(vec![Piece::Text(Text::new("trimmed"))])
+            })
+        }
+    }
+
+    /// Says its clip's run was dropped.
+    struct DroppedClip(u64, mpsc::UnboundedSender<u64>);
+
+    impl Drop for DroppedClip {
+        fn drop(&mut self) {
+            let _ = self.1.send(self.0);
+        }
+    }
+
+    /// A harness serving trim_clip, whose runs end as `go` is notified.
+    fn trimming() -> (
+        Harness,
+        Arc<tokio::sync::Notify>,
+        mpsc::UnboundedReceiver<u64>,
+    ) {
+        let go = Arc::new(tokio::sync::Notify::new());
+        let (dropped, drops) = mpsc::unbounded_channel();
+        let trimmer = Trimmer {
+            go: Arc::clone(&go),
+            dropped,
+        };
+        let app = AppTools::new().with(trimmer).unwrap();
+        (harness_serving(false, true, app), go, drops)
+    }
+
+    /// Calls trim_clip as `id` and gives back its report's call and event.
+    async fn trim(
+        h: &mut Harness,
+        client: &mut Client,
+        id: u64,
+        input: Value,
+    ) -> (CallId, ToolEvent) {
+        client.call_tool(id, "trim_clip", input).await;
+        match h.report().await {
+            Report::Tool { call, event } => (call, event),
+            other => panic!("expected Called, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_apps_tools_are_listed_after_cafs_and_the_core_knows_them() {
+        let (mut h, _go, _drops) = trimming();
+        let mut hints = caf_core::tool::Hints::default();
+        hints.destructive = true;
+        assert_eq!(
+            h.serving.app_tools,
+            [caf_core::tool::AppToolSpec::new(
+                "trim_clip",
+                "Trim a clip",
+                hints,
+                true
+            )]
+        );
+        h.serve_app(CHAT, &["trim_clip"]);
+        let mut client = h.bound(CHAT).await;
+        client
+            .send(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+            .await;
+        let listed = client.recv().await;
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Read", "trim_clip"]);
+        let trim = &tools[1];
+        assert_eq!(trim["title"], "Trim a clip");
+        assert_eq!(trim["description"], "Trims a clip.");
+        assert_eq!(
+            trim["inputSchema"]["properties"]["clip"]["description"],
+            "The clip."
+        );
+        assert_eq!(trim["annotations"]["destructiveHint"], true);
+        assert_eq!(trim["annotations"]["readOnlyHint"], false);
+    }
+
+    #[tokio::test]
+    async fn an_app_tools_call_is_read_titled_previewed_run_and_answered() {
+        let (mut h, go, _drops) = trimming();
+        h.serve_app(CHAT, &["trim_clip"]);
+        let mut client = h.bound(CHAT).await;
+        let (call, event) = trim(&mut h, &mut client, 3, json!({"clip": 3})).await;
+        match event {
+            ToolEvent::Called {
+                chat,
+                tool,
+                input,
+                agent_call,
+                title,
+                bad_input,
+            } => {
+                assert_eq!((chat, tool), (CHAT, ServedTool::App("trim_clip".into())));
+                assert_eq!(input, json!({"clip": 3}));
+                assert_eq!(agent_call.as_deref(), Some("toolu_3"));
+                assert_eq!(title.as_deref(), Some("Trim clip 3"));
+                assert_eq!(bad_input, None);
+            }
+            other => panic!("expected Called, got {other:?}"),
+        }
+        let action = Action::Tool {
+            name: "trim_clip".into(),
+        };
+        h.apply(ToolDirective::Preview {
+            call,
+            action: action.clone(),
+            input: json!({"clip": 3}),
+        });
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Previewed { pieces } if *pieces == [Piece::Text(Text::new("Would trim clip 3"))]),
+        );
+        h.apply(ToolDirective::Run {
+            call,
+            action,
+            input: json!({"clip": 3}),
+        });
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Output { from: 0, lines } if *lines == ["trimming 3"]),
+        );
+        go.notify_one();
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Finished { done: true, pieces, notice: None, .. } if pieces.len() == 1),
+        );
+        let answer = client.recv().await;
+        assert_eq!(answer["id"], 3);
+        assert_eq!(text_of(&answer), "Trimmed clip 3");
+        client.nothing_waiting().await;
+        h.quiet().await;
+    }
+
+    #[tokio::test]
+    async fn an_app_tools_call_whose_input_doesnt_fit_says_why_titled_as_the_tool() {
+        let (mut h, _go, _drops) = trimming();
+        h.serve_app(CHAT, &["trim_clip"]);
+        let mut client = h.bound(CHAT).await;
+        let (call, event) = trim(&mut h, &mut client, 4, json!({"clip": "four"})).await;
+        let why = match event {
+            ToolEvent::Called {
+                title,
+                bad_input: Some(why),
+                ..
+            } => {
+                assert_eq!(title.as_deref(), Some("Trim a clip"));
+                why
+            }
+            other => panic!("expected Called with bad input, got {other:?}"),
+        };
+        assert!(why.starts_with("invalid type"), "{why}");
+        h.apply(ToolDirective::Refuse {
+            call,
+            why: RefusedCall::BadInput(why.clone()),
+        });
+        let answer = client.recv().await;
+        assert_eq!(answer["result"]["isError"], true);
+        assert_eq!(text_of(&answer), crate::app_tools::bad_input(&why));
+    }
+
+    #[tokio::test]
+    async fn an_app_tools_preview_that_fails_ends_its_call() {
+        let (mut h, _go, _drops) = trimming();
+        h.serve_app(CHAT, &["trim_clip"]);
+        let mut client = h.bound(CHAT).await;
+        let (call, _) = trim(&mut h, &mut client, 5, json!({"clip": 0})).await;
+        h.apply(ToolDirective::Preview {
+            call,
+            action: Action::Tool {
+                name: "trim_clip".into(),
+            },
+            input: json!({"clip": 0}),
+        });
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Finished { done: false, .. })
+        });
+        let answer = client.recv().await;
+        assert_eq!(text_of(&answer), "There's no clip 0");
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_app_tools_call_has_its_future_dropped() {
+        let (mut h, _go, mut drops) = trimming();
+        h.serve_app(CHAT, &["trim_clip"]);
+        let mut client = h.bound(CHAT).await;
+        let (call, _) = trim(&mut h, &mut client, 6, json!({"clip": 6})).await;
+        h.apply(ToolDirective::Run {
+            call,
+            action: Action::Tool {
+                name: "trim_clip".into(),
+            },
+            input: json!({"clip": 6}),
+        });
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Output { .. })
+        });
+        h.apply(ToolDirective::Cancel { call });
+        let dropped = tokio::time::timeout(Duration::from_secs(10), drops.recv()).await;
+        assert_eq!(dropped.unwrap(), Some(6));
+        let answer = client.recv().await;
+        assert_eq!(text_of(&answer), CANCELLED);
+    }
+
+    #[tokio::test]
+    async fn an_app_tool_answering_early_goes_on_as_a_job_ending_with_its_answer_as_notice() {
+        let (mut h, go, _drops) = trimming();
+        h.serve_app(CHAT, &["trim_clip"]);
+        let mut client = h.bound(CHAT).await;
+        let (call, _) = trim(&mut h, &mut client, 9, json!({"clip": 9})).await;
+        h.apply(ToolDirective::Run {
+            call,
+            action: Action::Tool {
+                name: "trim_clip".into(),
+            },
+            input: json!({"clip": 9}),
+        });
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Output { .. })
+        });
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Detached { job: JobId(1) })
+        });
+        let answer = client.recv().await;
+        assert_eq!(text_of(&answer), "Trimming as job 1");
+        go.notify_one();
+        let notice = match h.report().await {
+            Report::Tool {
+                event:
+                    ToolEvent::Finished {
+                        done: true,
+                        notice: Some(notice),
+                        ..
+                    },
+                ..
+            } => notice,
+            other => panic!("expected Finished, got {other:?}"),
+        };
+        assert_eq!(
+            notice,
+            "<task-notification>\n<task-id>1</task-id>\n<tool-use-id>toolu_9</tool-use-id>\n\
+             <status>completed</status>\n<summary>Background task \"Trim clip 9\" completed</summary>\n\
+             <result>Trimmed clip 9</result>\n</task-notification>"
+        );
+        client.nothing_waiting().await;
+    }
+
+    #[tokio::test]
+    async fn an_app_tool_not_given_the_chat_isnt_listed_or_called() {
+        let (mut h, _go, _drops) = trimming();
+        h.serve_app(CHAT, &[]);
+        let mut client = h.bound(CHAT).await;
+        client.call_tool(1, "trim_clip", json!({"clip": 1})).await;
+        let answer = client.recv().await;
+        assert_eq!(answer["result"]["isError"], true);
+        assert_eq!(text_of(&answer), "There's no tool named `trim_clip` here.");
+        h.quiet().await;
+    }
+
+    /// How a [`Misbehaving`] call goes wrong.
+    #[derive(Deserialize, schemars::JsonSchema)]
+    struct How {
+        /// `title`, `preview`, `preview_poll`, `run`, `run_poll`, `drop`,
+        /// `drop_cancel`, `block` (its thread, for `ms`), or `stuck` (its
+        /// thread, for `ms`, once started).
+        how: String,
+        #[serde(default)]
+        ms: u64,
+    }
+
+    /// Takes a while to drop: blocks its thread.
+    struct SlowDropped;
+
+    impl Drop for SlowDropped {
+        fn drop(&mut self) {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
+
+    /// Panics as it's dropped.
+    struct PanicsDropped;
+
+    impl Drop for PanicsDropped {
+        fn drop(&mut self) {
+            if !std::thread::panicking() {
+                panic!("dropped");
+            }
+        }
+    }
+
+    /// The app's tool `misbehave`, which previews: it panics, or blocks,
+    /// where its input says. It tells `started` when it starts blocking,
+    /// and `blocked` when it stops.
+    struct Misbehaving {
+        started: Arc<std::sync::atomic::AtomicBool>,
+        blocked: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl crate::AppTool for Misbehaving {
+        type Input = How;
+
+        fn spec(&self) -> crate::ToolSpec {
+            let mut spec = crate::ToolSpec::new("misbehave");
+            spec.title = "Misbehave".into();
+            spec.previews = true;
+            spec
+        }
+
+        fn title(&self, input: &How) -> String {
+            assert!(input.how != "title", "titling");
+            format!("Misbehave: {}", input.how)
+        }
+
+        fn preview(
+            &self,
+            _call: &Call,
+            input: &How,
+        ) -> Option<crate::app_tools::BoxFuture<Result<Vec<Piece>, Done>>> {
+            assert!(input.how != "preview", "previewing");
+            let poll = input.how == "preview_poll";
+            let done = input.how == "preview_done";
+            Some(Box::pin(async move {
+                assert!(!poll, "polling a preview");
+                match done {
+                    true => Err(Done::answer("Nothing to trim")),
+                    false => Ok(Vec::new()),
+                }
+            }))
+        }
+
+        fn run(&self, mut call: Call, input: How) -> crate::app_tools::BoxFuture<Done> {
+            assert!(input.how != "run", "running");
+            let (started, blocked) = (Arc::clone(&self.started), Arc::clone(&self.blocked));
+            Box::pin(async move {
+                match input.how.as_str() {
+                    "run_poll" => panic!("polling a run"),
+                    "drop" => {
+                        let _dropped = PanicsDropped;
+                        Done::answer("ran")
+                    }
+                    "drop_cancel" => {
+                        let _dropped = PanicsDropped;
+                        std::future::pending().await
+                    }
+                    "job_sleep" => {
+                        call.answer_now(|job| Answer::text(format!("As job {}", job.0)));
+                        tokio::time::sleep(Duration::from_millis(input.ms)).await;
+                        blocked.store(true, Ordering::SeqCst);
+                        Done::answer("rendered")
+                    }
+                    "drop_slow" => {
+                        let _dropped = SlowDropped;
+                        std::future::pending().await
+                    }
+                    "block" | "stuck" | "print_block" => {
+                        if input.how == "print_block" {
+                            call.print(0, vec!["printed".into()]);
+                        }
+                        started.store(true, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(input.ms));
+                        blocked.store(true, Ordering::SeqCst);
+                        Done::answer("unblocked")
+                    }
+                    _ => Done::answer("ran"),
+                }
+            })
+        }
+    }
+
+    /// A harness serving trim_clip and misbehave, and the flags misbehave
+    /// sets.
+    fn misbehaving() -> (
+        Harness,
+        Arc<tokio::sync::Notify>,
+        Arc<std::sync::atomic::AtomicBool>,
+        Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        let go = Arc::new(tokio::sync::Notify::new());
+        let (dropped, _drops) = mpsc::unbounded_channel();
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let blocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let app = AppTools::new()
+            .with(Trimmer {
+                go: Arc::clone(&go),
+                dropped,
+            })
+            .unwrap()
+            .with(Misbehaving {
+                started: Arc::clone(&started),
+                blocked: Arc::clone(&blocked),
+            })
+            .unwrap();
+        (harness_serving(false, true, app), go, started, blocked)
+    }
+
+    /// Calls the app's `tool` with `input` as `id`, and gives back its
+    /// report's call and event.
+    async fn call_app(
+        h: &mut Harness,
+        client: &mut Client,
+        id: u64,
+        tool: &str,
+        input: Value,
+    ) -> (CallId, ToolEvent) {
+        client.call_tool(id, tool, input).await;
+        match h.report().await {
+            Report::Tool { call, event } => (call, event),
+            other => panic!("expected Called, got {other:?}"),
+        }
+    }
+
+    fn app_directive(call: CallId, input: Value, run: bool) -> ToolDirective {
+        let action = Action::Tool {
+            name: "misbehave".into(),
+        };
+        match run {
+            true => ToolDirective::Run {
+                call,
+                action,
+                input,
+            },
+            false => ToolDirective::Preview {
+                call,
+                action,
+                input,
+            },
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_app_tool_that_blocks_its_thread_holds_up_no_other_call() {
+        let (mut h, _go, started, _blocked) = misbehaving();
+        h.serve_app(CHAT, &["trim_clip", "misbehave"]);
+        let mut client = h.bound(CHAT).await;
+        let input = json!({"how": "block", "ms": 3000});
+        let (call, _) = call_app(&mut h, &mut client, 1, "misbehave", input.clone()).await;
+        h.apply(app_directive(call, input, true));
+        while !started.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        client.call_tool(2, "trim_clip", json!({"clip": 2})).await;
+        let report = h.report_within(Duration::from_secs(1)).await;
+        assert!(
+            matches!(&report, Report::Tool { event: ToolEvent::Called { title: Some(title), .. }, .. } if title == "Trim clip 2"),
+            "{report:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stopped_app_tool_that_wont_stop_is_answered_after_five_seconds() {
+        let (mut h, _go, started, blocked) = misbehaving();
+        h.serve_app(CHAT, &["misbehave"]);
+        let mut client = h.bound(CHAT).await;
+        let input = json!({"how": "stuck", "ms": 7000});
+        let (call, _) = call_app(&mut h, &mut client, 1, "misbehave", input.clone()).await;
+        h.apply(app_directive(call, input, true));
+        while !started.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let stopped = Instant::now();
+        h.apply(ToolDirective::Cancel { call });
+        let answer = client.recv().await;
+        assert_eq!(text_of(&answer), CANCELLED);
+        assert!(
+            !blocked.load(Ordering::SeqCst),
+            "answered before it stopped"
+        );
+        let waited = stopped.elapsed();
+        assert!(
+            waited >= STOP_TIME - Duration::from_millis(100),
+            "{waited:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stopped_app_tool_is_answered_once_its_future_is_dropped_even_if_dropping_panics() {
+        let (mut h, _go, _started, _blocked) = misbehaving();
+        h.serve_app(CHAT, &["misbehave"]);
+        let mut client = h.bound(CHAT).await;
+        let input = json!({"how": "drop_cancel"});
+        let (call, _) = call_app(&mut h, &mut client, 1, "misbehave", input.clone()).await;
+        h.apply(app_directive(call, input, true));
+        h.quiet().await;
+        h.apply(ToolDirective::Cancel { call });
+        let answer = client.recv().await;
+        assert_eq!(text_of(&answer), CANCELLED);
+        // The driver goes on.
+        let (_, event) = call_app(&mut h, &mut client, 2, "misbehave", json!({"how": "ok"})).await;
+        assert!(matches!(event, ToolEvent::Called { .. }));
+    }
+
+    #[tokio::test]
+    async fn an_app_tool_that_panics_titling_a_call_has_it_titled_as_the_tool() {
+        let (mut h, _go, _started, _blocked) = misbehaving();
+        h.serve_app(CHAT, &["misbehave"]);
+        let mut client = h.bound(CHAT).await;
+        let (_, event) =
+            call_app(&mut h, &mut client, 1, "misbehave", json!({"how": "title"})).await;
+        assert!(
+            matches!(&event, ToolEvent::Called { title: Some(title), bad_input: None, .. } if title == "Misbehave"),
+            "{event:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_app_tool_that_panics_fails_its_call_whenever_it_panics() {
+        for (how, run) in [
+            ("preview", false),
+            ("preview_poll", false),
+            ("run", true),
+            ("run_poll", true),
+            ("drop", true),
+        ] {
+            let (mut h, _go, _started, _blocked) = misbehaving();
+            h.serve_app(CHAT, &["misbehave"]);
+            let mut client = h.bound(CHAT).await;
+            let input = json!({"how": how});
+            let (call, _) = call_app(&mut h, &mut client, 1, "misbehave", input.clone()).await;
+            h.apply(app_directive(call, input, run));
+            assert_event(h.report().await, call, |event| {
+                matches!(event, ToolEvent::Finished { done: false, pieces, .. }
+                    if *pieces == [Piece::Text(Text::new(APP_PANICKED))])
+            });
+            let answer = client.recv().await;
+            assert_eq!(text_of(&answer), APP_PANICKED, "{how}");
+            assert_eq!(answer["result"]["isError"], true, "{how}");
+            h.shut_down().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn an_app_tool_given_twice_is_listed_once() {
+        let (mut h, _go, _drops) = trimming();
+        h.serve_app(CHAT, &["trim_clip", "trim_clip"]);
+        let mut client = h.bound(CHAT).await;
+        client
+            .send(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+            .await;
+        let listed = client.recv().await;
+        let names: Vec<&str> = (listed["result"]["tools"].as_array().unwrap().iter())
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Read", "trim_clip"]);
+    }
+
+    #[test]
+    fn an_app_jobs_result_is_cut_as_an_answer_would_be() {
+        let long = "é".repeat(caf_tools::MOST_ANSWER + 10);
+        let notice = app_notice(JobId(1), None, "Render", true, &Answer::text(long));
+        let result = notice
+            .split_once("<result>")
+            .and_then(|(_, rest)| rest.split_once("</result>"))
+            .unwrap()
+            .0;
+        let (kept, cut) = result.split_once('\n').unwrap();
+        assert_eq!(kept.chars().count(), caf_tools::MOST_ANSWER);
+        assert_eq!(
+            cut,
+            format!(
+                "[Cut here: the first {} of its {} characters were kept]",
+                caf_tools::MOST_ANSWER,
+                caf_tools::MOST_ANSWER + 10
+            )
+        );
+        let short = app_notice(JobId(1), None, "Render", true, &Answer::text("Rendered"));
+        assert!(short.contains("<result>Rendered</result>"), "{short}");
+    }
+
+    #[tokio::test]
+    async fn an_app_tools_preview_that_ends_its_call_fails_it_even_if_done() {
+        let (mut h, _go, _started, _blocked) = misbehaving();
+        h.serve_app(CHAT, &["misbehave"]);
+        let mut client = h.bound(CHAT).await;
+        let input = json!({"how": "preview_done"});
+        let (call, _) = call_app(&mut h, &mut client, 1, "misbehave", input.clone()).await;
+        h.apply(app_directive(call, input, false));
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Finished { done: false, .. })
+        });
+        let answer = client.recv().await;
+        assert_eq!(answer["id"], 1);
+        assert_eq!(text_of(&answer), "Nothing to trim");
+        client.nothing_waiting().await;
+        h.quiet().await;
+    }
+
+    /// Runs misbehave, which prints and then blocks its thread for three
+    /// seconds, then calls trim_clip: which must be reported promptly.
+    /// Once misbehave has started blocking, if `started`.
+    async fn another_call_while_one_prints_then_blocks(started: bool) {
+        let (mut h, _go, blocking, _blocked) = misbehaving();
+        h.serve_app(CHAT, &["trim_clip", "misbehave"]);
+        let mut client = h.bound(CHAT).await;
+        let input = json!({"how": "print_block", "ms": 3000});
+        let (call, _) = call_app(&mut h, &mut client, 1, "misbehave", input.clone()).await;
+        h.apply(app_directive(call, input, true));
+        while started && !blocking.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let asked = std::time::Instant::now();
+        client.call_tool(2, "trim_clip", json!({"clip": 2})).await;
+        loop {
+            let report = h.report_within(Duration::from_secs(10)).await;
+            if matches!(&report, Report::Tool { event: ToolEvent::Called { title: Some(title), .. }, .. } if title == "Trim clip 2")
+            {
+                break;
+            }
+        }
+        let waited = asked.elapsed();
+        assert!(waited < Duration::from_secs(1), "reported after {waited:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_app_tool_that_prints_then_blocks_holds_up_no_other_call() {
+        another_call_while_one_prints_then_blocks(true).await;
+    }
+
+    // On one thread too: the app's tools have threads of their own, so
+    // CAF's is never theirs.
+    #[tokio::test]
+    async fn an_app_tool_that_prints_then_blocks_holds_up_no_other_call_on_one_thread() {
+        another_call_while_one_prints_then_blocks(false).await;
+    }
+
+    /// The driver's next report, within ten seconds.
+    async fn next_within<A: AppItem>(driver: &mut ToolsDriver<A>) -> Report<A> {
+        tokio::time::timeout(Duration::from_secs(10), driver.next())
+            .await
+            .expect("a report in time")
+    }
+
+    #[tokio::test]
+    async fn an_app_call_that_finished_as_it_was_cancelled_is_answered_with_what_it_gave() {
+        let dir = Dir::new();
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let blocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let app = AppTools::new()
+            .with(Misbehaving {
+                started,
+                blocked: Arc::clone(&blocked),
+            })
+            .unwrap();
+        let config: ToolsConfig = ToolsConfig {
+            app,
+            folder: Some(dir.0.clone()),
+            ..ToolsConfig::default()
+        };
+        let (mut driver, serving) =
+            ToolsDriver::listen(config, SpawnCommand::new("/bin/false"), "test").unwrap();
+        driver.apply(ToolDirective::Serve {
+            chat: CHAT,
+            tools: Vec::new(),
+            app: vec!["misbehave".into()],
+            cwd: "/work".into(),
+            instructions: "Use them.".into(),
+        });
+        let stream = UnixStream::connect(&serving.socket).await.unwrap();
+        let (read, write) = stream.into_split();
+        let mut client = Client {
+            read: BufReader::new(read),
+            write,
+        };
+        let token = mcp::token(&serving.key, CHAT);
+        client
+            .send(&json!({"caf_relay": 1, "chat": CHAT, "token": token}))
+            .await;
+        assert_connected(next_within(&mut driver).await, CHAT);
+        let input = json!({"how": "block", "ms": 0});
+        client.call_tool(1, "misbehave", input.clone()).await;
+        let call = match next_within(&mut driver).await {
+            Report::Tool { call, .. } => call,
+            other => panic!("expected Called, got {other:?}"),
+        };
+        driver.apply(app_directive(call, input, true));
+        // It finishes, and the driver hasn't seen it yet when it's
+        // cancelled.
+        while !blocked.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        driver.apply(ToolDirective::Cancel { call });
+        match next_within(&mut driver).await {
+            Report::Tool {
+                event: ToolEvent::Finished { done: true, .. },
+                ..
+            } => {}
+            other => panic!("expected Finished, got {other:?}"),
+        }
+        driver.taken();
+        let answer = tokio::select! {
+            answer = client.recv() => answer,
+            report = next_within(&mut driver) => panic!("unexpected report: {report:?}"),
+        };
+        assert_eq!(text_of(&answer), "unblocked");
+        driver.finish().await;
+    }
+
+    #[tokio::test]
+    async fn a_call_stopped_as_caf_shuts_down_is_answered_once_its_tool_has_stopped() {
+        let (mut h, _go, _started, _blocked) = misbehaving();
+        h.serve_app(CHAT, &["misbehave"]);
+        let mut client = h.bound(CHAT).await;
+        let input = json!({"how": "drop_slow"});
+        let (call, _) = call_app(&mut h, &mut client, 1, "misbehave", input.clone()).await;
+        h.apply(app_directive(call, input, true));
+        h.quiet().await;
+        h.apply(ToolDirective::Cancel { call });
+        h.shut_down().await;
+        let answer = client.recv().await;
+        assert_eq!(text_of(&answer), CANCELLED);
+    }
+
+    #[tokio::test]
+    async fn an_app_job_that_finished_as_task_stop_came_ends_as_it_did() {
+        let dir = Dir::new();
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let blocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let app = AppTools::new()
+            .with(Misbehaving {
+                started,
+                blocked: Arc::clone(&blocked),
+            })
+            .unwrap();
+        let config: ToolsConfig = ToolsConfig {
+            app,
+            folder: Some(dir.0.clone()),
+            ..ToolsConfig::default()
+        };
+        let (mut driver, serving) =
+            ToolsDriver::listen(config, SpawnCommand::new("/bin/false"), "test").unwrap();
+        driver.apply(ToolDirective::Serve {
+            chat: CHAT,
+            tools: vec![CafTool::TaskStop],
+            app: vec!["misbehave".into()],
+            cwd: "/work".into(),
+            instructions: "Use them.".into(),
+        });
+        let stream = UnixStream::connect(&serving.socket).await.unwrap();
+        let (read, write) = stream.into_split();
+        let mut client = Client {
+            read: BufReader::new(read),
+            write,
+        };
+        let token = mcp::token(&serving.key, CHAT);
+        client
+            .send(&json!({"caf_relay": 1, "chat": CHAT, "token": token}))
+            .await;
+        assert_connected(next_within(&mut driver).await, CHAT);
+        let input = json!({"how": "job_sleep", "ms": 500});
+        client.call_tool(1, "misbehave", input.clone()).await;
+        let job_call = match next_within(&mut driver).await {
+            Report::Tool { call, .. } => call,
+            other => panic!("expected Called, got {other:?}"),
+        };
+        driver.apply(app_directive(job_call, input, true));
+        match next_within(&mut driver).await {
+            Report::Tool {
+                event: ToolEvent::Detached { job: JobId(1) },
+                ..
+            } => {}
+            other => panic!("expected Detached, got {other:?}"),
+        }
+        driver.taken();
+        let early = tokio::select! {
+            answer = client.recv() => answer,
+            report = next_within(&mut driver) => panic!("unexpected report: {report:?}"),
+        };
+        assert_eq!(text_of(&early), "As job 1");
+        client
+            .call_tool(2, "TaskStop", json!({"task_id": "1"}))
+            .await;
+        let stop_call = loop {
+            match next_within(&mut driver).await {
+                Report::Tool {
+                    call,
+                    event: ToolEvent::Called { .. },
+                } => break call,
+                Report::Tool {
+                    event: ToolEvent::Output { .. },
+                    ..
+                } => {}
+                other => panic!("expected TaskStop's Called, got {other:?}"),
+            }
+        };
+        // The job ends, and the driver hasn't seen it yet when TaskStop
+        // is run.
+        while !blocked.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        driver.apply(ToolDirective::Run {
+            call: stop_call,
+            action: Action::Stop { job: JobId(1) },
+            input: json!({"task_id": "1"}),
+        });
+        match next_within(&mut driver).await {
+            Report::Tool {
+                call,
+                event:
+                    ToolEvent::Finished {
+                        done: true,
+                        notice: Some(notice),
+                        ..
+                    },
+            } => {
+                assert_eq!(call, job_call);
+                assert!(notice.contains("<result>rendered</result>"), "{notice}");
+            }
+            other => panic!("expected the job's Finished, with its notice, got {other:?}"),
+        }
+        driver.taken();
+        match next_within(&mut driver).await {
+            Report::Tool {
+                call,
+                event: ToolEvent::Finished { done: false, .. },
+            } => assert_eq!(call, stop_call),
+            other => panic!("expected TaskStop's Finished, got {other:?}"),
+        }
+        driver.taken();
+        // Its job had ended: TaskStop finds none.
+        let answer = tokio::select! {
+            answer = client.recv() => answer,
+            report = next_within(&mut driver) => panic!("unexpected report: {report:?}"),
+        };
+        assert_eq!(answer["id"], 2);
+        assert_eq!(text_of(&answer), caf_tools::no_job(1));
+        driver.finish().await;
     }
 }

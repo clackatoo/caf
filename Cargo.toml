@@ -11,6 +11,8 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/clackatoo/caf"
 
 [workspace.dependencies]
+# The JSON schemas of the app's own tools' inputs.
+schemars = "1"
 caf-core = { path = "crates/core" }
 caf-relay = { path = "crates/relay" }
 caf-save = { path = "crates/save" }

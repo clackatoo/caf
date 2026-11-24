@@ -49,8 +49,8 @@ A call's `origin` says whose tool it is:
 
 | `Origin` | The tool |
 | --- | --- |
-| `Caf` | One of CAF's own: Read, Edit, Write or Bash. |
-| `App` | One of the app's own tools, which CAF serves for it. *Later.* |
+| `Caf` | One of CAF's own: Read, Edit, Write, Bash or TaskStop. |
+| `App` | One of the app's own tools, which CAF serves for it, by its name (see [Your own tools](~caf/concepts/your-own-tools)). |
 | `Server` | A tool of an MCP server the app gave the chat, by the server's name and the tool's. |
 | `Agent` | The agent's own, by the agent's name for it, such as `WebSearch`. |
 | `NotRecorded` | Saved before CAF kept where calls came from. |

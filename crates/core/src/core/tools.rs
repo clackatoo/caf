@@ -48,8 +48,8 @@ use crate::profiles::{CAF_SERVER, served_instructions};
 use crate::question::{OptionId, OptionKind, Permission, PermissionOption, QuestionKind};
 use crate::time::{Now, Window};
 use crate::tool::{
-    Action, CafTool, DecidedBy, Decision, Ending, Lines, MOST_LINE, MOST_OUTPUT, Origin, Output,
-    Piece, StoppedBy, output_size,
+    Action, AppToolSpec, CafTool, DecidedBy, Decision, Ending, Lines, MOST_LINE, MOST_OUTPUT,
+    MOST_TOOL_NAME, Origin, Output, Piece, ServedTool, StoppedBy, output_size,
 };
 
 /// The longest title CAF writes for a call, in bytes.
@@ -71,6 +71,8 @@ pub(super) struct Call {
     pub(super) chat: ChatId,
     /// Its item.
     pub(super) item: ItemId,
+    /// Its tool.
+    pub(super) tool: ServedTool,
     /// What it does.
     pub(super) action: Action,
     /// What the model gave it, whole, for the driver.
@@ -159,12 +161,41 @@ pub(super) enum Joined {
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct Served {
     /// The tool.
-    pub(super) tool: CafTool,
+    pub(super) tool: ServedTool,
     /// Whether the agent's report of it has joined it.
     pub(super) report: Joined,
     /// The agent gave its id for the call with it, so its report joins
     /// by that id, never by input.
     pub(super) keyed: bool,
+}
+
+/// A call to a tool CAF serves, as the driver reported it
+/// ([`ToolEvent::Called`]), but for its chat.
+struct Given {
+    /// The tool.
+    tool: ServedTool,
+    /// What it was given, as the model wrote it.
+    input: Value,
+    /// The agent's id for the call, if it sent one.
+    agent_call: Option<String>,
+    /// The app's tool's title for it.
+    title: Option<String>,
+    /// Why the app's tool doesn't take its input, if it doesn't.
+    bad_input: Option<String>,
+}
+
+/// How a call ended, as the driver reported it ([`ToolEvent::Finished`]).
+struct Ended<A> {
+    /// Whether it did what it was asked.
+    done: bool,
+    /// What it gave back, at the end.
+    pieces: Vec<Piece>,
+    /// Where a command's shell ended.
+    folder: Option<String>,
+    /// What a job's end tells the agent.
+    notice: Option<String>,
+    /// The app's own item for it.
+    item: Option<A>,
 }
 
 impl<A: AppItem, D: AppData> Core<A, D> {
@@ -183,6 +214,22 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             );
             return;
         }
+        let mut serving = serving;
+        let mut kept: Vec<AppToolSpec> = Vec::new();
+        for spec in std::mem::take(&mut serving.app_tools) {
+            match app_tool_refused(&spec.name, &kept) {
+                Some(why) => report(
+                    out,
+                    Level::Warn,
+                    format!(
+                        "ignored the app's tool {:?}: {why}",
+                        agent_text(&spec.name, MOST_TITLE)
+                    ),
+                ),
+                None => kept.push(spec),
+            }
+        }
+        serving.app_tools = kept;
         self.serving = Some(serving);
     }
 
@@ -211,27 +258,64 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(run) = self.runs.get_mut(&chat) else {
             return;
         };
-        if !open
-            || !matches!(run.open, Open::Live { .. })
-            || run.tools_lost
-            || run.caf_tools.is_empty()
-        {
+        if !open || !matches!(run.open, Open::Live { .. }) || run.tools_lost || !run.has_tools() {
             return;
         }
         run.tools_lost = true;
         self.say(now, chat, Note::ToolsLost);
     }
 
-    /// The MCP server `caf`, as it's sent, serving `tools` to `chat`:
-    /// `None` if there are none. [`Refused::ToolsNotServed`] if nothing
-    /// serves them, and [`Refused::Unsendable`] if the relay's command
-    /// can't be sent exactly as it is.
+    /// The app's own tools named `names`, each once, in the order given,
+    /// as a chat given them is served them. [`Refused::ToolsNotServed`] if
+    /// there are any and nothing serves tools, and
+    /// [`Refused::UnknownTool`] for the first the app didn't register.
+    pub(super) fn app_tools_given(&self, names: Vec<String>) -> Result<Vec<String>, Refused> {
+        let names = crate::tool::Tools::none().and_app(names).app;
+        if names.is_empty() {
+            return Ok(names);
+        }
+        let serving = self.serving.as_ref().ok_or(Refused::ToolsNotServed)?;
+        if let Some(name) =
+            (names.iter()).find(|name| !serving.app_tools.iter().any(|tool| tool.name == **name))
+        {
+            return Err(Refused::UnknownTool(name.clone()));
+        }
+        Ok(names)
+    }
+
+    /// Whose tool a call in `chat` is, its adapter saying `origin`: a
+    /// tool of CAF's server that isn't CAF's own is one of the app's own,
+    /// if the chat was given it, as the adapter can't know which.
+    pub(super) fn served_origin_in(&self, chat: ChatId, origin: Origin) -> Origin {
+        match origin {
+            Origin::Server { server, tool }
+                if server == CAF_SERVER
+                    && (self.runs.get(&chat)).is_some_and(|run| run.app_tools.contains(&tool)) =>
+            {
+                Origin::App(tool)
+            }
+            origin => origin,
+        }
+    }
+
+    /// The app's own tool `name`, as the tools driver said it registered
+    /// it.
+    pub(super) fn app_spec(&self, name: &str) -> Option<&AppToolSpec> {
+        (self.serving.as_ref()?.app_tools.iter()).find(|tool| tool.name == name)
+    }
+
+    /// The MCP server `caf`, as it's sent, serving CAF's `tools` and the
+    /// app's `app` to `chat`: `None` if there are none.
+    /// [`Refused::ToolsNotServed`] if nothing serves them, and
+    /// [`Refused::Unsendable`] if the relay's command can't be sent
+    /// exactly as it is.
     pub(super) fn caf_server(
         &self,
         chat: ChatId,
         tools: &[CafTool],
+        app: &[String],
     ) -> Result<Option<Value>, Refused> {
-        if tools.is_empty() {
+        if tools.is_empty() && app.is_empty() {
             return Ok(None);
         }
         let serving = self.serving.as_ref().ok_or(Refused::ToolsNotServed)?;
@@ -254,25 +338,22 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// Tells the tools driver what to serve `chat`, if it has tools.
     pub(super) fn serve(&self, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
-        let Some(run) = self.runs.get(&chat).filter(|run| !run.caf_tools.is_empty()) else {
+        let Some(run) = self.runs.get(&chat).filter(|run| run.has_tools()) else {
             return;
         };
         out.push(Directive::Tool(ToolDirective::Serve {
             chat,
             tools: run.caf_tools.clone(),
+            app: run.app_tools.clone(),
             cwd: run.cwd.clone(),
-            instructions: served_instructions(&self.host.name, &run.caf_tools),
+            instructions: served_instructions(&self.host.name, &run.caf_tools, &run.app_tools),
         }));
     }
 
     /// Tells the tools driver, as this call into the core finishes, to stop
     /// serving `chat`, if it has tools: it's let go.
     pub(super) fn unserve(&mut self, chat: ChatId) {
-        if self
-            .runs
-            .get(&chat)
-            .is_some_and(|run| !run.caf_tools.is_empty())
-        {
+        if self.runs.get(&chat).is_some_and(|run| run.has_tools()) {
             self.owed.push(Owed::Unserve(chat));
         }
     }
@@ -282,7 +363,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         &mut self,
         now: Now,
         call: CallId,
-        event: ToolEvent,
+        event: ToolEvent<A>,
         out: &mut Vec<Directive<A, D>>,
     ) {
         match event {
@@ -291,7 +372,18 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 tool,
                 input,
                 agent_call,
-            } => self.called(now, call, chat, tool, input, agent_call, out),
+                title,
+                bad_input,
+            } => {
+                let given = Given {
+                    tool,
+                    input,
+                    agent_call,
+                    title,
+                    bad_input,
+                };
+                self.called(now, call, chat, given, out);
+            }
             ToolEvent::Previewed { pieces } => self.previewed(call, pieces, out),
             ToolEvent::Output { from, lines } => self.printed(call, from, lines, out),
             ToolEvent::Detached { job } => self.detached(call, job, out),
@@ -300,24 +392,39 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 pieces,
                 folder,
                 notice,
-            } => self.finished(now, call, done, pieces, folder, notice, out),
+                item,
+            } => {
+                let ended = Ended {
+                    done,
+                    pieces,
+                    folder,
+                    notice,
+                    item,
+                };
+                self.finished(now, call, ended, out);
+            }
             ToolEvent::Gone => self.gone(now, call, out),
         }
     }
 
-    /// The agent called one of CAF's tools: refused, or joined to its
-    /// report, or made an item, and then previewed or asked about.
-    #[allow(clippy::too_many_arguments)] // the call, as the driver gives it
+    /// The agent called a tool CAF serves, CAF's own or the app's:
+    /// refused, or joined to its report, or made an item, and then
+    /// previewed or asked about.
     fn called(
         &mut self,
         now: Now,
         call: CallId,
         chat: ChatId,
-        tool: CafTool,
-        input: Value,
-        agent_call: Option<String>,
+        given: Given,
         out: &mut Vec<Directive<A, D>>,
     ) {
+        let Given {
+            tool,
+            input,
+            agent_call,
+            title,
+            bad_input,
+        } = given;
         if self.calls.contains_key(&call) {
             return report(
                 out,
@@ -339,9 +446,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(run) = self.runs.get(&chat) else {
             return refuse(out, RefusedCall::NotRunning);
         };
-        if !run.caf_tools.contains(&tool) {
-            return refuse(out, RefusedCall::NotGiven);
-        }
+        // An app's tool is given only if the app registered it, too.
+        let spec = match &tool {
+            ServedTool::Caf(caf) if run.caf_tools.contains(caf) => None,
+            ServedTool::App(name) if run.app_tools.contains(name) => match self.app_spec(name) {
+                Some(spec) => Some(spec.clone()),
+                None => return refuse(out, RefusedCall::NotGiven),
+            },
+            _ => return refuse(out, RefusedCall::NotGiven),
+        };
         let (cwd, shell) = (run.cwd.clone(), run.shell.clone());
         // A report held only for now by a call that came without the
         // agent's id is this call's, as it names it: let go.
@@ -374,12 +487,24 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         });
         let (joins, joined) = match &agent_call {
             Some(id) => (self.reported_item(chat, id), Joined::Yes),
-            None => match self.unjoined_report(chat, tool, &input) {
+            None => match self.unjoined_report(chat, &tool, &input) {
                 Some((item, joined)) => (Some(item), joined),
                 None => (None, Joined::No),
             },
         };
-        let action = match action_of(tool, &input, &cwd, &shell) {
+        // What the app's tool was given isn't what it takes. Held only
+        // for now by a report that may be another call's, it's refused
+        // with no item of its own, as one of CAF's own tools is: the
+        // report says how it went.
+        let bad_input = bad_input.filter(|_| spec.is_some());
+        if let (Some(why), Joined::Maybe(_)) = (&bad_input, &joined) {
+            return refuse(out, RefusedCall::BadInput(why.clone()));
+        }
+        let action = match &tool {
+            ServedTool::Caf(caf) => action_of(*caf, &input, &cwd, &shell),
+            ServedTool::App(name) => Ok(Action::Tool { name: name.clone() }),
+        };
+        let action = match action {
             Ok(action) => action,
             Err(why) => {
                 // The agent's report of it is all there is: it failed.
@@ -400,11 +525,24 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return refuse(out, RefusedCall::BadInput(why));
         }
         let (kept, input_cut) = crate::tool::capped_input(input.clone());
-        let record = Box::new(ToolCall {
-            title: title_of(&action, &cwd),
-            kind: action.kind(),
+        let (title, kind) = match &spec {
+            // The app's code worked it out, from what the model wrote: the
+            // tool's own, if it gave none.
+            Some(spec) => {
+                let title = title.as_deref().filter(|title| !title.is_empty());
+                (
+                    agent_text(title.unwrap_or(&spec.title), MOST_TITLE),
+                    spec.hints.kind,
+                )
+            }
+            None => (title_of(&action, &cwd), action.kind()),
+        };
+        let origin = served_origin(&tool);
+        let mut record = Box::new(ToolCall {
+            title,
+            kind,
             status: ToolStatus::Pending,
-            origin: Origin::Caf(tool),
+            origin,
             action: Some(action.clone()),
             input: Some(kept),
             input_cut,
@@ -416,6 +554,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             stopped_by: None,
             job: None,
         });
+        // What the app's tool was given isn't what it takes: it fails, and
+        // the model is told why, with no one asked.
+        if let Some(why) = &bad_input {
+            record.status = ToolStatus::Failed;
+            record.decision = Decision::NotAsked;
+            record
+                .result
+                .push(Piece::Text(crate::tool::Text::new(why.clone())));
+        }
         let item = match joins {
             Some(item) => {
                 self.set_tool(chat, item, record);
@@ -430,17 +577,22 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             run.served.insert(
                 item,
                 Served {
-                    tool,
+                    tool: tool.clone(),
                     report: joined,
                     keyed: agent_call.is_some(),
                 },
             );
+        }
+        if let Some(why) = bad_input {
+            self.end_item(now, chat, item);
+            return refuse(out, RefusedCall::BadInput(why));
         }
         self.calls.insert(
             call,
             Call {
                 chat,
                 item,
+                tool,
                 action: action.clone(),
                 input: input.clone(),
                 stage: Stage::Previewing,
@@ -449,8 +601,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 stop_issued: false,
             },
         );
+        let previews = match (&action, &spec) {
+            (_, Some(spec)) => spec.previews,
+            (Action::Edit { .. } | Action::Write { .. }, None) => true,
+            _ => false,
+        };
         match action {
-            Action::Edit { .. } | Action::Write { .. } => {
+            _ if previews => {
                 out.push(Directive::Tool(ToolDirective::Preview {
                     call,
                     action,
@@ -490,7 +647,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     fn unjoined_report(
         &self,
         chat: ChatId,
-        tool: CafTool,
+        tool: &ServedTool,
         input: &Value,
     ) -> Option<(ItemId, Joined)> {
         let run = self.runs.get(&chat)?;
@@ -502,7 +659,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .collect();
         reports.sort_unstable();
         let mine = |item: ItemId| {
-            (self.unended_tool(chat, item)).filter(|call| call.origin == Origin::Caf(tool))
+            (self.unended_tool(chat, item)).filter(|call| call.origin == served_origin(tool))
         };
         let sure = (reports.iter())
             .find(|(item, _)| mine(*item).is_some_and(|call| call.input.as_ref() == Some(input)));
@@ -529,7 +686,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// The agent's report of a call that CAF refused for what it was
     /// given: it failed, saying why.
-    fn fail_report(&mut self, now: Now, chat: ChatId, item: ItemId, tool: CafTool, why: &str) {
+    fn fail_report(&mut self, now: Now, chat: ChatId, item: ItemId, tool: ServedTool, why: &str) {
         let Some(mut call) = self.unended_tool(chat, item).cloned() else {
             return;
         };
@@ -566,7 +723,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         &mut self,
         chat: ChatId,
         id: &str,
-        tool: Option<CafTool>,
+        tool: Option<ServedTool>,
         input: Option<&Value>,
     ) -> Option<ItemId> {
         // An adapter may report a call before its input, as `{}`.
@@ -667,10 +824,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return;
         };
         let (chat, item, action) = (each.chat, each.item, each.action.clone());
+        let hints = match &each.tool {
+            ServedTool::Caf(tool) => Some(tool.hints()),
+            ServedTool::App(name) => self.app_spec(name).map(|spec| spec.hints),
+        };
         let Some(ItemKind::Tool(tool)) = self.item(chat, item).map(|each| &each.kind) else {
             return;
         };
         let request = PermissionRequest {
+            hints,
             item: Some(item),
             title: tool.title.clone(),
             origin: tool.origin.clone(),
@@ -925,30 +1087,50 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.change_tool(chat, item, |tool| tool.job = Some(job));
     }
 
-    /// A call finished, and the agent was answered.
-    #[allow(clippy::too_many_arguments)] // the event, as the driver gives it
+    /// A call finished, and the agent was answered. The app's item for
+    /// it goes on it if it's a call to one of the app's own tools, and is
+    /// ignored, with a warning, otherwise.
     fn finished(
         &mut self,
         now: Now,
         call: CallId,
-        done: bool,
-        pieces: Vec<Piece>,
-        folder: Option<String>,
-        notice: Option<String>,
+        ended: Ended<A>,
         out: &mut Vec<Directive<A, D>>,
     ) {
+        let Ended {
+            done,
+            pieces,
+            folder,
+            notice,
+            mut item,
+        } = ended;
+        if item.is_some()
+            && let Some(each) = self.calls.get(&call)
+            && !matches!(each.tool, ServedTool::App(_))
+        {
+            item = None;
+            report(
+                out,
+                Level::Warn,
+                format!(
+                    "ignored the app's item on call {}, which isn't to one of the app's tools",
+                    call.0
+                ),
+            );
+        }
         match self.calls.get(&call) {
             None => return stale(out, call, "its finish"),
             // Its preview failed: the driver answered the agent why, and
             // no one's asked.
             Some(each) if each.stage == Stage::Previewing && !done => {
-                let (chat, item) = (each.chat, each.item);
+                let (chat, at) = (each.chat, each.item);
                 self.calls.remove(&call);
-                self.change_tool(chat, item, |tool| {
+                self.change_tool(chat, at, |tool| {
                     tool.status = ToolStatus::Failed;
                     tool.result.extend(pieces);
+                    tool.app = item;
                 });
-                return self.end_item(now, chat, item);
+                return self.end_item(now, chat, at);
             }
             Some(each) if each.stage != Stage::Running => {
                 return stale(out, call, "a finish before it ran");
@@ -975,6 +1157,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 ToolStatus::Failed
             };
             tool.stopped_by = stopped.then_some(StoppedBy::Agent);
+            tool.app = item;
             // A diff it gives is the change as made, in place of the
             // preview's.
             if pieces.iter().any(|piece| matches!(piece, Piece::Diff(_))) {
@@ -1200,6 +1383,34 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 self.owed.push(Owed::Cancel(call));
             }
         }
+    }
+}
+
+/// Why the app's tool `name` can't be served beside those `kept`, if it
+/// can't: as the tokio kit's `AppTools::with` checks it. A name is of
+/// `[A-Za-z0-9_-]`, 1 to [`MOST_TOOL_NAME`] bytes, and neither one of
+/// CAF's own, every one of them served or not, nor another of the app's,
+/// in any case.
+fn app_tool_refused(name: &str, kept: &[AppToolSpec]) -> Option<String> {
+    let fits = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-';
+    if name.is_empty() || name.len() > MOST_TOOL_NAME || !name.bytes().all(fits) {
+        Some(format!(
+            "a name is 1 to {MOST_TOOL_NAME} of A-Z, a-z, 0-9, _ and -"
+        ))
+    } else if (CafTool::ALL.iter()).any(|tool| tool.name().eq_ignore_ascii_case(name)) {
+        Some("it's one of CAF's own".to_owned())
+    } else if (kept.iter()).any(|spec| spec.name.eq_ignore_ascii_case(name)) {
+        Some("it's named as another of the app's".to_owned())
+    } else {
+        None
+    }
+}
+
+/// The origin of a call to `tool`, which CAF serves.
+pub(super) fn served_origin(tool: &ServedTool) -> Origin {
+    match tool {
+        ServedTool::Caf(tool) => Origin::Caf(*tool),
+        ServedTool::App(name) => Origin::App(name.clone()),
     }
 }
 

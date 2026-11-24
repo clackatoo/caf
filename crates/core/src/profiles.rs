@@ -1364,38 +1364,79 @@ pub(crate) struct SettingsStyle {
 }
 
 /// CAF's own instructions to every agent, `host` being the app's name,
-/// given CAF's tools `tools`: they take the place of the agent's built-in
-/// ones, which describe tools it no longer has. The app's own come after
-/// them.
-pub(crate) fn own_instructions(host: &str, tools: &[CafTool]) -> String {
-    if tools.is_empty() {
-        return format!(
+/// given CAF's tools `tools` and the app's own tools named `app`: they
+/// take the place of the agent's built-in ones, which describe tools it
+/// no longer has. The app's own come after them. What each of the app's
+/// tools does is its description's to say.
+pub(crate) fn own_instructions(host: &str, tools: &[CafTool], app: &[String]) -> String {
+    let apps = app.join(", ");
+    match (only_task_stop(tools, app), app.is_empty()) {
+        (true, true) => format!(
             "You are working inside {host}, the app the user is talking to you in. You have no \
              tools of your own: you can't read or change files, run commands or browse the web, \
              except through tools {host} gives you. Answer in Markdown."
-        );
+        ),
+        (true, false) => format!(
+            "You are working inside {host}, the app the user is talking to you in. {host} gives \
+             you tools of its own ({apps}){}, asking the user's leave where they must. You have \
+             no other tools of your own: you can't read or change files, run commands or browse \
+             the web, except through tools {host} gives you. Answer in Markdown.",
+            task_stop(tools)
+        ),
+        (false, true) => format!(
+            "You are working inside {host}, the app the user is talking to you in. {host} gives \
+             you tools to {}, in the folder you're working in, asking the user's leave where it \
+             must. You have no other tools of your own: you can't do anything else, such as \
+             browse the web, except through other tools {host} gives you. Answer in Markdown.",
+            tool_uses(tools, !app.is_empty())
+        ),
+        (false, false) => format!(
+            "You are working inside {host}, the app the user is talking to you in. {host} gives \
+             you tools to {}, in the folder you're working in, and tools of its own ({apps}), \
+             asking the user's leave where they must. You have no other tools of your own: you \
+             can't do anything else, such as browse the web, except through other tools {host} \
+             gives you. Answer in Markdown.",
+            tool_uses(tools, !app.is_empty())
+        ),
     }
-    format!(
-        "You are working inside {host}, the app the user is talking to you in. {host} gives you \
-         tools to {}, in the folder you're working in, asking the user's leave where it must. \
-         You have no other tools of your own: you can't do anything else, such as browse the \
-         web, except through other tools {host} gives you. Answer in Markdown.",
-        tool_uses(tools)
-    )
 }
 
-/// What CAF's MCP server tells the agent of `tools`, in a line, `host`
-/// being the app's name.
-pub(crate) fn served_instructions(host: &str, tools: &[CafTool]) -> String {
-    format!(
-        "{host}'s tools to {}, in the folder you're working in.",
-        tool_uses(tools)
-    )
+/// What CAF's MCP server tells the agent of CAF's tools `tools` and the
+/// app's own tools named `app`, in a line, `host` being the app's name.
+pub(crate) fn served_instructions(host: &str, tools: &[CafTool], app: &[String]) -> String {
+    let apps = app.join(", ");
+    match (only_task_stop(tools, app), app.is_empty()) {
+        (true, _) => format!("{host}'s own tools ({apps}){}.", task_stop(tools)),
+        (false, true) => format!(
+            "{host}'s tools to {}, in the folder you're working in.",
+            tool_uses(tools, !app.is_empty())
+        ),
+        (false, false) => format!(
+            "{host}'s tools to {}, in the folder you're working in, and its own ({apps}).",
+            tool_uses(tools, !app.is_empty())
+        ),
+    }
+}
+
+/// Whether CAF's tools `tools` are none, or only TaskStop, served for the
+/// jobs of the app's tools `app`: the app's are then all the chat has.
+fn only_task_stop(tools: &[CafTool], app: &[String]) -> bool {
+    tools.is_empty() || (!app.is_empty() && tools == [CafTool::TaskStop])
+}
+
+/// What's said of TaskStop beside the app's tools alone, if `tools` has it.
+fn task_stop(tools: &[CafTool]) -> &'static str {
+    if tools.contains(&CafTool::TaskStop) {
+        ", and TaskStop to stop their background tasks"
+    } else {
+        ""
+    }
 }
 
 /// What `tools` do, with each one's name, as a list: "read files (Read)
-/// and run commands (Bash)".
-fn tool_uses(tools: &[CafTool]) -> String {
+/// and run commands (Bash)". TaskStop stops background commands, in a
+/// chat with Bash and none of the app's tools (`app`), else tasks.
+fn tool_uses(tools: &[CafTool], app: bool) -> String {
     let uses: Vec<String> = (tools.iter())
         .map(|tool| {
             let does = match tool {
@@ -1403,7 +1444,12 @@ fn tool_uses(tools: &[CafTool]) -> String {
                 CafTool::Edit => "change part of a file",
                 CafTool::Write => "write whole files",
                 CafTool::Bash => "run commands",
-                CafTool::TaskStop => "stop background commands",
+                // Its jobs are all commands only if Bash's are the only
+                // ones: the app's tools may make jobs too.
+                CafTool::TaskStop if tools.contains(&CafTool::Bash) && !app => {
+                    "stop background commands"
+                }
+                CafTool::TaskStop => "stop background tasks",
             };
             format!("{does} ({})", tool.name())
         })

@@ -1,10 +1,11 @@
 ---
 title: Serving Tools
 type: concept
-description: How CAF gives an agent its own tools, Read, Edit, Write and Bash, over MCP. The one line every app adds to its main, choosing a chat's tools, how a connection is bound to its chat and what that does and doesn't guarantee, keeping long calls alive, cancelling, losing the tools mid-session, and what isn't built yet.
+description: How CAF gives an agent its own tools, Read, Edit, Write and Bash, and the app's, over MCP. The one line every app adds to its main, choosing a chat's tools, how a connection is bound to its chat and what that does and doesn't guarantee, keeping long calls alive, cancelling, background jobs, and losing the tools mid-session.
 related:
   - caf/concepts/tool-calls
   - caf/concepts/cafs-own-tools
+  - caf/concepts/your-own-tools
   - caf/concepts/agents-and-profiles
   - caf/getting-started/a-chat-on-tokio
   - caf/getting-started/saving-and-restoring-chats
@@ -18,6 +19,9 @@ your program, so it knows exactly what each call does and can ask your
 policy, and the user, before anything runs.
 
 What the tools themselves do is [CAF's own tools](~caf/concepts/cafs-own-tools).
+The app can add tools of its own, written in Rust, which CAF serves beside
+its own, on the same connection, and treats as it treats its own: see
+[Your own tools](~caf/concepts/your-own-tools).
 
 > [!NOTE]
 > Windows isn't supported yet: serving needs Unix sockets.
@@ -88,6 +92,11 @@ let chat = caf
     .await?;
 ```
 
+Give it the app's own tools by name, after CAF's, with
+`Tools::caf(..).and_app(["trim_clip"])`. A chat may have the app's and
+none of CAF's. A name the app didn't register refuses the chat, as it
+opens and as it's restored (`Refused::UnknownTool`).
+
 A chat's tools aren't saved: give them again when you restore it
 (`RestoreChat::tools`), and in what `ViewerRules::restore` returns, for
 chats a viewer restores. A chat restored without them has none.
@@ -97,8 +106,10 @@ Giving a chat tools while serving is off (`Relay::None`) is refused
 
 For a chat with tools, CAF adds its `caf` server to the MCP servers it gives
 the agent, and tells the agent about them in its instructions, in place of
-saying it has none. The agent may call only the tools the chat was given: a
-call to any other is answered as an error, and never runs.
+saying it has none. The server lists CAF's tools first, then the app's, in
+the order given, each with its hints, all but the kind, as MCP's
+annotations. The agent may call only the tools the chat was given: a call
+to any other is answered as an error, and never runs.
 
 ## How a connection finds its chat
 
@@ -150,10 +161,23 @@ as the chat is put away or CAF shuts down: its calls end Failed, stopped
 by no one.
 
 Stopping a call's work drops it, so a tool still running is stopped too.
+For one of the app's tools, whose work runs as a task of its own, CAF
+aborts the task, and answers the model only once its future has been
+dropped, or five seconds have passed (see
+[Your own tools](~caf/concepts/your-own-tools#a-call-step-by-step)).
 
 **A preview that fails** (an edit to a file not read first, say) ends its
 call Failed with the reason, and no one is asked: the tool's driver has
-already given the model the reason.
+already given the model the reason. So does a call to one of the app's
+tools whose input doesn't fit its type: the model is told what was wrong
+with it.
+
+**The policy** is given the hints of every call CAF asks the policy
+about, to a tool it serves (`PermissionRequest::hints`): whether the tool
+only reads, may change or delete what was there, or reaches beyond the
+app and the chat's folder, and its kind. Every tool CAF serves has them: CAF's own
+from `CafTool::hints`, the app's from its spec.
+A call the agent reports itself, to a tool CAF doesn't serve, has none.
 
 ## Background jobs
 
@@ -173,13 +197,14 @@ It ends in one of these ways:
 
 | How | Ends |
 | --- | --- |
-| By itself | Done or Failed, and the agent hears of it in a **notice turn**, worded by the driver: at once, or after the turn running |
+| By itself | Done or Failed, and the agent hears of it in a **notice turn**, worded by the driver: at once, or after the turn running. A job of one of the app's tools is told with its answer as the notice's result (see [Your own tools](~caf/concepts/your-own-tools#jobs)) |
 | TaskStop, from the model | Cancelled, `stopped_by` `Agent`. TaskStop needs no permission, and stops only jobs of its own chat: for any other number, the model is told "No task {id} in this conversation" |
 | The chat closed or deleted | Cancelled, `stopped_by` `User` |
 | The chat put away, or CAF shutting down | Failed, stopped by no one |
 
 A restored chat has no jobs: one saved while running ends Failed. TaskStop
-is served with Bash automatically. A notice turn is `Starter::Notice`: the
+is served with Bash automatically, and with any of the app's tools, which
+can go on as jobs too. A notice turn is `Starter::Notice`: the
 app can send its own with `Core::notify`, and it's queued like a message,
 but never counts against the host's limit on messages waiting
 (`queued_messages`): only the user's messages do.

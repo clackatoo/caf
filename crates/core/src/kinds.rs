@@ -174,6 +174,7 @@ kinds!(Refused {
     "ReservedServer" => Refused::ReservedServer,
     "SameServerName" => Refused::SameServerName,
     "ToolsNotServed" => Refused::ToolsNotServed,
+    "UnknownTool" => Refused::UnknownTool(_),
 });
 
 kinds!(SessionChoice {

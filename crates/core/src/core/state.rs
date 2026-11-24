@@ -398,6 +398,8 @@ pub(super) struct Run<A: AppItem> {
     pub(super) cost: Option<Cost>,
     /// CAF's own tools it was given, served to it as the MCP server `caf`.
     pub(super) caf_tools: Vec<crate::tool::CafTool>,
+    /// The app's own tools it was given, by name, served after CAF's.
+    pub(super) app_tools: Vec<String>,
     /// Its session was told its connection to CAF's tools was lost: it's
     /// told at most once a session.
     pub(super) tools_lost: bool,
@@ -433,6 +435,14 @@ pub(super) enum Open {
         /// The process.
         proc: Ticket,
     },
+}
+
+impl<A: AppItem> Run<A> {
+    /// Whether it was given any tools CAF serves: CAF's own, or the
+    /// app's.
+    pub(super) fn has_tools(&self) -> bool {
+        !self.caf_tools.is_empty() || !self.app_tools.is_empty()
+    }
 }
 
 /// The turn the agent is working on.

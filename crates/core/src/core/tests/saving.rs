@@ -964,7 +964,7 @@ fn a_restored_chat_is_given_its_instructions_again_as_its_session_opens() {
     let options = &sent(&out, "session/resume")["params"]["_meta"]["claudeCode"]["options"];
     assert_eq!(
         options["systemPrompt"],
-        crate::profiles::own_instructions("caf-test", &[]) + "\n\nGiven again."
+        crate::profiles::own_instructions("caf-test", &[], &[]) + "\n\nGiven again."
     );
     assert_eq!(options["tools"], json!([]));
 }
@@ -989,6 +989,7 @@ fn a_restored_chat_is_given_its_tools_again_as_a_new_one_is() {
         [json!({ "tool": { "type": "Serve", "value": {
             "chat": CHAT,
             "tools": [{ "type": "Write" }],
+            "app": [],
             "cwd": "/work",
             "instructions": "caf-test's tools to write whole files (Write), in the folder you're working in.",
         } } })]
@@ -1005,7 +1006,7 @@ fn a_restored_chat_is_given_its_tools_again_as_a_new_one_is() {
     );
     assert_eq!(
         resume["params"]["_meta"]["claudeCode"]["options"]["systemPrompt"],
-        crate::profiles::own_instructions("caf-test", &[CafTool::Write])
+        crate::profiles::own_instructions("caf-test", &[CafTool::Write], &[])
     );
     // Put away, it's no longer served.
     let id = resume["id"].as_u64().expect("an id");
@@ -3402,7 +3403,7 @@ fn a_chat_let_go_behind_a_move_and_called_back_is_let_go_then_written_whole_afte
 #[test]
 fn a_served_command_is_journaled_squashed_and_comes_back_cut_off() {
     use crate::event::{PolicyAnswer, ToolEvent};
-    use crate::tool::CafTool;
+    use crate::tool::{CafTool, ServedTool};
 
     let mut script = Script::new(host());
     let mut store = Store::default();
@@ -3417,9 +3418,11 @@ fn a_served_command_is_journaled_squashed_and_comes_back_cut_off() {
         1,
         ToolEvent::Called {
             chat: CHAT,
-            tool: CafTool::Bash,
+            tool: ServedTool::Caf(CafTool::Bash),
             input: json!({ "command": "cargo build" }),
             agent_call: None,
+            title: None,
+            bad_input: None,
         },
     );
     let decide = with(&out, "decide")[0]["decide"]
@@ -3506,7 +3509,7 @@ fn a_served_command_is_journaled_squashed_and_comes_back_cut_off() {
 #[test]
 fn a_chatty_commands_journal_entry_stays_as_small_as_its_output() {
     use crate::event::{PolicyAnswer, ToolEvent};
-    use crate::tool::{CafTool, MOST_OUTPUT};
+    use crate::tool::{CafTool, MOST_OUTPUT, ServedTool};
 
     let mut script = Script::new(host());
     let mut store = Store::default();
@@ -3521,9 +3524,11 @@ fn a_chatty_commands_journal_entry_stays_as_small_as_its_output() {
         1,
         ToolEvent::Called {
             chat: CHAT,
-            tool: CafTool::Bash,
+            tool: ServedTool::Caf(CafTool::Bash),
             input: json!({ "command": "yes" }),
             agent_call: None,
+            title: None,
+            bad_input: None,
         },
     );
     let decide = with(&out, "decide")[0]["decide"]
@@ -3565,6 +3570,100 @@ fn a_chatty_commands_journal_entry_stays_as_small_as_its_output() {
             pieces: Vec::new(),
             folder: None,
             notice: None,
+            item: None,
         },
+    );
+}
+
+/// A chat given the app's own tools, saved with a call to one, comes back
+/// with the call as it was, and is served the app's tools again only if
+/// the host gives them, and the app registered them.
+#[test]
+fn a_chat_with_an_app_tools_call_is_saved_and_restored_given_them_again() {
+    use crate::event::{PolicyAnswer, ToolEvent};
+    use crate::tool::{CafTool, Piece, ServedTool, Text, Tools};
+
+    let mut script = Script::new(host());
+    let mut store = Store::default();
+    script.serving();
+    let open = saved_open("claude").with_tools(Tools::caf([CafTool::Read]).and_app(["word_count"]));
+    script.open_saved_as(open, "claude");
+    store.take(&script.list_saved(SHELF).1);
+    script.serve(&mut store, false);
+    script.at(1000);
+    store.take(&script.woken());
+    script.serve(&mut store, false);
+    script.send(CHAT, "Count them").0.expect("sent");
+    let out = script.tool(
+        1,
+        ToolEvent::Called {
+            chat: CHAT,
+            tool: ServedTool::App("word_count".to_owned()),
+            input: json!({ "text": "a b" }),
+            agent_call: Some("toolu_1".to_owned()),
+            title: Some("Count 2 words".to_owned()),
+            bad_input: None,
+        },
+    );
+    let decide = with(&out, "decide")[0]["decide"]
+        .as_u64()
+        .expect("a ticket");
+    script.policy(decide, PolicyAnswer::Allow);
+    script.tool(
+        1,
+        ToolEvent::Finished {
+            done: true,
+            pieces: vec![Piece::Text(Text::new("2"))],
+            folder: None,
+            notice: None,
+            item: None,
+        },
+    );
+    let call = script.chat(CHAT)["turns"][0]["items"][0].clone();
+    assert_eq!(
+        call["kind"]["value"]["origin"],
+        json!({ "type": "App", "value": "word_count" })
+    );
+
+    script.at(2000);
+    let out = script.put_away(CHAT).1;
+    assert!(
+        with(&out, "tool")
+            .contains(&json!({ "tool": { "type": "Unserve", "value": { "chat": CHAT } } })),
+        "{out:#?}"
+    );
+    store.take(&out);
+    script.serve(&mut store, false);
+    script.at(3000);
+    let restore = RestoreChat::new(CHAT, Shelf(SHELF.to_owned()));
+    // One the app didn't register is refused, as at open.
+    assert_eq!(
+        script
+            .restore(restore.clone().with_tools(Tools::none().and_app(["nope"])))
+            .0,
+        Err(Refused::UnknownTool("nope".to_owned()))
+    );
+    let (restored, out) = script.restore(restore.with_tools(Tools::none().and_app(["word_count"])));
+    restored.expect("restoring");
+    store.take(&out);
+    let out = script.serve(&mut store, false);
+    assert_eq!(
+        with(&out, "tool"),
+        [json!({ "tool": { "type": "Serve", "value": {
+            "chat": CHAT,
+            "tools": [{ "type": "TaskStop" }],
+            "app": ["word_count"],
+            "cwd": "/work",
+            "instructions": "caf-test's own tools (word_count), and TaskStop to stop their background tasks.",
+        } } })]
+    );
+    let back = &script.chat(CHAT)["turns"][0]["items"][0];
+    assert_eq!(back["kind"], call["kind"], "the call as it was");
+    assert_has(
+        back,
+        &json!({ "kind": { "type": "Tool", "value": {
+            "title": "Count 2 words", "status": { "type": "Done" },
+            "action": { "type": "Tool", "value": { "name": "word_count" } },
+        } } }),
     );
 }

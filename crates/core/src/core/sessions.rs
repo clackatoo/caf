@@ -62,8 +62,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
             .ok_or(Refused::Unsendable)?;
-        let caf_tools = crate::tool::Tools::served(open.tools.caf);
-        mcp_sent.extend(self.caf_server(chat, &caf_tools)?);
+        let app_tools = self.app_tools_given(open.tools.app)?;
+        let caf_tools = crate::tool::Tools::served(open.tools.caf, !app_tools.is_empty());
+        mcp_sent.extend(self.caf_server(chat, &caf_tools, &app_tools)?);
         check_instructions(open.instructions.as_deref())?;
         if !open.settings.iter().all(sendable) {
             return Err(Refused::Unsendable);
@@ -135,6 +136,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 choosing: Choosing::default(),
                 cost: None,
                 caf_tools,
+                app_tools,
                 tools_lost: false,
             },
         );
@@ -285,7 +287,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if let Some(session) = &run.session {
             params["sessionId"] = json!(session.0);
         }
-        let own = own_instructions(&self.host.name, &run.caf_tools);
+        let own = own_instructions(&self.host.name, &run.caf_tools, &run.app_tools);
         if let Some(meta) = profile.stripped(&own, run.instructions.as_deref()) {
             params["_meta"] = meta;
         }

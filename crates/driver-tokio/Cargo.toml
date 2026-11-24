@@ -21,6 +21,8 @@ libc.workspace = true
 memchr.workspace = true
 log.workspace = true
 rustix.workspace = true
+# The JSON schemas of the app's own tools' inputs.
+schemars.workspace = true
 # Recording a run as JSON lines.
 serde.workspace = true
 serde_json.workspace = true
@@ -29,7 +31,8 @@ tar.workspace = true
 ureq.workspace = true
 zip.workspace = true
 # net: AsyncFd for pidfds, and pipes for adapters' standard streams.
-tokio = { workspace = true, features = ["net"] }
+# rt-multi-thread: the threads the app's own tools run on.
+tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
 
 [dev-dependencies]
 # Chat ids of the tests' own.

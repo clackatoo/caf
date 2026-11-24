@@ -869,6 +869,7 @@ fn version_1() -> Sample {
         Refused::ReservedServer,
         Refused::SameServerName,
         Refused::ToolsNotServed,
+        Refused::UnknownTool("trim_clip".into()),
     ];
     let outcomes = [
         Outcome::Opened(ChatId::from_number(1)),

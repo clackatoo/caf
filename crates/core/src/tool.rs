@@ -146,7 +146,8 @@ pub struct ToolCall<A: AppItem = NoAppItems> {
     /// Whether it was allowed, and by whom.
     pub decision: Decision,
     /// The app's own item for this call, such as the map move one of its
-    /// tools made. *Later*, with the app's tools.
+    /// tools made: set once, as a call to one of the app's own tools ends,
+    /// and only on such a call. The model never sees it.
     pub app: Option<A>,
     /// Who stopped it, for a call to a tool CAF serves that ended
     /// [`Cancelled`](ToolStatus::Cancelled): `None` for any other, and for
@@ -182,18 +183,103 @@ pub enum StoppedBy {
     Agent,
 }
 
+/// What a tool says of itself: what the policy decides on, and what kind
+/// of tool its calls are. Every tool CAF serves has hints: CAF's own (see
+/// [`CafTool::hints`]) and the app's, which give theirs as they're
+/// registered.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Hints {
+    /// It only reads: it changes nothing anywhere.
+    pub read_only: bool,
+    /// It may change or delete what was there, not only add to it.
+    pub destructive: bool,
+    /// It reaches beyond the app and the chat's folder, such as the web
+    /// or any command.
+    pub open_world: bool,
+    /// The kind of tool its calls are, for icons and counting.
+    pub kind: ToolKind,
+}
+
+/// One of the app's own tools, as the core knows it: everything about it
+/// but its input's type, which only the app's code knows. The tools
+/// driver gives the core these as it starts
+/// ([`Serving::app_tools`](crate::event::Serving::app_tools)).
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AppToolSpec {
+    /// Its name, as the model calls it: `[A-Za-z0-9_-]`, at most
+    /// [`MOST_TOOL_NAME`] bytes, never one of CAF's own (in any case).
+    pub name: String,
+    /// What it's called in general, such as "Trim a clip". Each call's own
+    /// title comes with it ([`ToolEvent::Called`](crate::event::ToolEvent::Called)).
+    pub title: String,
+    /// What it says of itself.
+    pub hints: Hints,
+    /// Whether it shows what it would do before it's asked about
+    /// ([`ToolDirective::Preview`](crate::directive::ToolDirective::Preview)).
+    pub previews: bool,
+}
+
+impl AppToolSpec {
+    /// The app's tool `name`, called `title` in general, saying `hints` of
+    /// itself, and showing what it would do before it's asked about if it
+    /// `previews`.
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        title: impl Into<String>,
+        hints: Hints,
+        previews: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            title: title.into(),
+            hints,
+            previews,
+        }
+    }
+}
+
+/// The longest name of an app's tool, in bytes: Claude names a tool
+/// `mcp__caf__` and its name, and a tool's whole name may be at most 64.
+pub const MOST_TOOL_NAME: usize = 54;
+
+/// A tool CAF serves: one of its own, or one of the app's, by name.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum ServedTool {
+    /// One of CAF's own.
+    Caf(CafTool),
+    /// One of the app's own.
+    App(String),
+}
+
 /// The tools CAF serves a chat ([`OpenChat::tools`](crate::OpenChat::tools)):
 /// none by default. They aren't saved: the host gives them again when it
 /// restores the chat ([`RestoreChat::tools`](crate::RestoreChat::tools)).
 ///
 /// A chat given Bash is served TaskStop too, just after it, as Bash's
-/// background jobs need it.
+/// background jobs need it; and so is one given any of the app's tools,
+/// which may answer early and go on as jobs, after CAF's others.
 #[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Tools {
     /// CAF's own tools to serve, in the order given, each once.
     pub caf: Vec<CafTool>,
+    /// The app's own tools to serve, by name, in the order given, each
+    /// once: served after CAF's. Each must be one the app registered
+    /// ([`Serving::app_tools`](crate::event::Serving::app_tools)), or the
+    /// chat is refused ([`Refused::UnknownTool`](crate::Refused::UnknownTool)).
+    /// Recordings made before it was added read as none.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(as = "Option<Vec<String>>", optional))]
+    pub app: Vec<String>,
 }
 
 impl Tools {
@@ -212,24 +298,43 @@ impl Tools {
                 caf.push(tool);
             }
         }
-        Self { caf }
+        Self {
+            caf,
+            app: Vec::new(),
+        }
+    }
+
+    /// These and the app's own tools named `names`, each once, in the
+    /// order given.
+    #[must_use]
+    pub fn and_app<S: Into<String>>(mut self, names: impl IntoIterator<Item = S>) -> Self {
+        for name in names {
+            let name = name.into();
+            if !self.app.contains(&name) {
+                self.app.push(name);
+            }
+        }
+        self
     }
 
     /// Whether there are none.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.caf.is_empty()
+        self.caf.is_empty() && self.app.is_empty()
     }
 
-    /// CAF's own tools as a chat given these is served them: each once,
-    /// in order, with TaskStop just after Bash if Bash is given and it
-    /// isn't.
-    pub(crate) fn served(tools: impl IntoIterator<Item = CafTool>) -> Vec<CafTool> {
+    /// CAF's own tools as a chat given these, and the app's if `app`, is
+    /// served them: each once, in order, with TaskStop just after Bash if
+    /// Bash is given and it isn't, or else last if the chat has the app's
+    /// tools.
+    pub(crate) fn served(tools: impl IntoIterator<Item = CafTool>, app: bool) -> Vec<CafTool> {
         let mut caf = Self::caf(tools).caf;
-        if !caf.contains(&CafTool::TaskStop)
-            && let Some(at) = caf.iter().position(|&tool| tool == CafTool::Bash)
-        {
-            caf.insert(at + 1, CafTool::TaskStop);
+        if !caf.contains(&CafTool::TaskStop) {
+            match caf.iter().position(|&tool| tool == CafTool::Bash) {
+                Some(at) => caf.insert(at + 1, CafTool::TaskStop),
+                None if app => caf.push(CafTool::TaskStop),
+                None => {}
+            }
         }
         caf
     }
@@ -238,7 +343,7 @@ impl Tools {
 /// What kind of tool a call is, for an icon and for counting ("Read 3
 /// files").
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum ToolKind {
@@ -259,6 +364,7 @@ pub enum ToolKind {
     /// Fetching from the web.
     Fetch,
     /// Anything else.
+    #[default]
     Other,
 }
 
@@ -313,7 +419,6 @@ pub enum Origin {
     /// One of CAF's own tools.
     Caf(CafTool),
     /// One of the app's tools, which CAF serves for it, by its name.
-    /// *Later*, with the app's tools.
     App(String),
     /// A tool of an MCP server the app gave the chat.
     Server {
@@ -348,6 +453,29 @@ pub enum CafTool {
 }
 
 impl CafTool {
+    /// What it says of itself: Read and TaskStop are read-only, Edit and
+    /// Write destructive, Bash destructive and open-world; and their kinds.
+    #[must_use]
+    pub fn hints(self) -> Hints {
+        let (read_only, destructive, open_world) = match self {
+            CafTool::Read | CafTool::TaskStop => (true, false, false),
+            CafTool::Edit | CafTool::Write => (false, true, false),
+            CafTool::Bash => (false, true, true),
+        };
+        let kind = match self {
+            CafTool::Read => ToolKind::Read,
+            CafTool::Edit | CafTool::Write => ToolKind::Edit,
+            CafTool::Bash => ToolKind::Execute,
+            CafTool::TaskStop => ToolKind::Other,
+        };
+        Hints {
+            read_only,
+            destructive,
+            open_world,
+            kind,
+        }
+    }
+
     /// Every one of CAF's own tools.
     pub const ALL: [Self; 5] = [
         Self::Read,

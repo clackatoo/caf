@@ -7,10 +7,19 @@ import type { CafTool } from "./CafTool.ts";
  * restores the chat ([`RestoreChat::tools`](crate::RestoreChat::tools)).
  *
  * A chat given Bash is served TaskStop too, just after it, as Bash's
- * background jobs need it.
+ * background jobs need it; and so is one given any of the app's tools,
+ * which may answer early and go on as jobs, after CAF's others.
  */
 export type Tools = { 
 /**
  * CAF's own tools to serve, in the order given, each once.
  */
-caf: Array<CafTool>, };
+caf: Array<CafTool>, 
+/**
+ * The app's own tools to serve, by name, in the order given, each
+ * once: served after CAF's. Each must be one the app registered
+ * ([`Serving::app_tools`](crate::event::Serving::app_tools)), or the
+ * chat is refused ([`Refused::UnknownTool`](crate::Refused::UnknownTool)).
+ * Recordings made before it was added read as none.
+ */
+app?: Array<string>, };

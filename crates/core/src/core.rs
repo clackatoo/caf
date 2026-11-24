@@ -185,9 +185,11 @@ pub struct OpenChat {
     /// was added read as empty.
     #[serde(default)]
     pub settings: Vec<SettingChoice>,
-    /// CAF's own tools to give it, which CAF serves itself, as the MCP
+    /// The tools CAF serves to give it, its own and the app's, as the MCP
     /// server `caf`. None (the default) gives none. A chat given some is
-    /// refused while nothing serves them ([`Refused::ToolsNotServed`]).
+    /// refused while nothing serves them ([`Refused::ToolsNotServed`]),
+    /// and one given an app's tool the app didn't register is refused
+    /// ([`Refused::UnknownTool`]).
     /// Not saved: the host gives them again when it restores the chat
     /// ([`RestoreChat::tools`](crate::save::RestoreChat::tools)).
     /// Recordings made before it was added read as none.
@@ -319,6 +321,9 @@ pub enum Refused {
     /// ([`Event::Serving`](crate::Event::Serving)), as one that serves
     /// none never does.
     ToolsNotServed,
+    /// It's given an app's tool, by this name, that the app didn't
+    /// register ([`Serving::app_tools`](crate::event::Serving::app_tools)).
+    UnknownTool(String),
 }
 
 /// What the host can see of a connection: one adapter process.
@@ -598,9 +603,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     ///
     /// [`Refused::NoSuchAgent`], [`Refused::OwnTools`] if CAF can't turn
     /// off the agent's own tools, [`Refused::RelativeFolder`],
-    /// [`Refused::Unsendable`], [`Refused::BadShelf`] for its shelf, or
-    /// [`Refused::ToolsNotServed`] if it's given CAF's tools and nothing
-    /// serves them.
+    /// [`Refused::Unsendable`], [`Refused::BadShelf`] for its shelf,
+    /// [`Refused::ToolsNotServed`] if it's given tools CAF serves and
+    /// nothing serves them, or [`Refused::UnknownTool`] if it's given an
+    /// app's tool the app didn't register.
     pub fn open_chat(
         &mut self,
         now: Now,
@@ -831,9 +837,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// # Errors
     ///
     /// [`Refused::Loaded`], [`Refused::BadShelf`],
-    /// [`Refused::Unsendable`] for its MCP servers or instructions, or
-    /// [`Refused::ToolsNotServed`] if it's given CAF's tools and nothing
-    /// serves them. Which
+    /// [`Refused::Unsendable`] for its MCP servers or instructions,
+    /// [`Refused::ToolsNotServed`] if it's given tools CAF serves and
+    /// nothing serves them, or [`Refused::UnknownTool`] if it's given an
+    /// app's tool the app didn't register. Which
     /// agent the chat is with is known only once it's read, so a chat
     /// whose agent the host no longer offers, or whose own tools CAF can't
     /// turn off, is still restored, and sending to it is refused
