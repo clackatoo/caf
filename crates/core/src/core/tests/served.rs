@@ -325,11 +325,14 @@ fn a_call_with_no_turn_running_or_input_that_makes_no_action_is_refused() {
 fn an_edit_is_previewed_before_its_asked_about() {
     let mut script = running();
     let input = json!({ "file_path": "/work/lib.rs", "old_string": "a", "new_string": "b" });
-    let out = script.tool(1, called(CafTool::Edit, input, Some("toolu_1")));
+    let out = script.tool(1, called(CafTool::Edit, input.clone(), Some("toolu_1")));
     assert!(with(&out, "decide").is_empty(), "not yet");
+    // The driver is given the model's input whole, for the strings.
     assert_eq!(
         one_told(&out),
-        json!({ "type": "Preview", "value": { "call": 1, "action": { "type": "Edit", "value": { "path": "/work/lib.rs" } } } })
+        json!({ "type": "Preview", "value": {
+            "call": 1, "action": { "type": "Edit", "value": { "path": "/work/lib.rs" } }, "input": input,
+        } })
     );
     let diff = Diff::new("/work/lib.rs", Some("a\n"), "b\n");
     let out = script.tool(
@@ -352,7 +355,9 @@ fn an_edit_is_previewed_before_its_asked_about() {
     let out = script.policy_saying(decided, PolicyAnswer::Allow, "edits\u{202e} are fine");
     assert_eq!(
         one_told(&out),
-        json!({ "type": "Run", "value": { "call": 1, "action": { "type": "Edit", "value": { "path": "/work/lib.rs" } } } })
+        json!({ "type": "Run", "value": {
+            "call": 1, "action": { "type": "Edit", "value": { "path": "/work/lib.rs" } }, "input": input,
+        } })
     );
     assert_has(
         &the_tool(&script),

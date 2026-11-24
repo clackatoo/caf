@@ -795,6 +795,7 @@ pub(crate) fn every_type(s: &mut Samples) {
                 folder: "/home/user/project".into(),
                 background: false,
             },
+            input: json!({ "command": "ls", "timeout": 5000 }),
         },
         true,
     );

@@ -245,7 +245,11 @@ fn task_stop_stops_the_chats_own_job_unasked() {
     assert!(with(&out, "decide").is_empty());
     assert_eq!(
         one_told(&out),
-        json!({ "type": "Run", "value": { "call": 3, "action": { "type": "Stop", "value": { "job": 1 } } } })
+        json!({ "type": "Run", "value": {
+            "call": 3,
+            "action": { "type": "Stop", "value": { "job": 1 } },
+            "input": { "task_id": "1" },
+        } })
     );
     let stop = tools(&script)[1].clone();
     assert_has(

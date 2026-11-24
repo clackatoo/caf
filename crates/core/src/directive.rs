@@ -211,8 +211,12 @@ pub struct PermissionRequest {
 ///   answers isn't left hanging: the driver ends it as cancelled when its
 ///   chat's turn ends, as [`ToolDirective::Cancel`] would.
 /// - **It never runs anything the core didn't say to run,** and runs what
-///   the core says exactly: the [`Action`] given, with its paths as they
-///   are, never the model's input read again.
+///   the core says exactly: the [`Action`] given, with its paths, folder
+///   and command as they are, never read again from the model's input.
+///   What else the tool takes, which the action doesn't say (an edit's
+///   strings, a write's content, a read's `allow_large`, a command's
+///   `timeout` and `description`), comes from the `input` given with it,
+///   the model's, whole.
 /// - **Output is reported in batches,** at most every 100 ms or 16 KiB,
 ///   and in order.
 /// - **A preview changes nothing.** One that fails is answered at once,
@@ -241,6 +245,9 @@ pub enum ToolDirective {
         call: CallId,
         /// What it does.
         action: Action,
+        /// What the model gave it, whole: for what the action doesn't
+        /// say.
+        input: serde_json::Value,
     },
     /// Run it: report its output as it comes, then
     /// [`ToolEvent::Finished`](crate::event::ToolEvent::Finished), and answer the agent with its result.
@@ -249,6 +256,9 @@ pub enum ToolDirective {
         call: CallId,
         /// What it does.
         action: Action,
+        /// What the model gave it, whole: for what the action doesn't
+        /// say.
+        input: serde_json::Value,
     },
     /// Don't run it: answer the agent that it was refused.
     Refuse {

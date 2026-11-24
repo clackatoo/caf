@@ -70,6 +70,8 @@ pub(super) struct Call {
     pub(super) item: ItemId,
     /// What it does.
     pub(super) action: Action,
+    /// What the model gave it, whole, for the driver.
+    pub(super) input: Value,
     /// Where it is.
     pub(super) stage: Stage,
     /// What of its output is kept, if it's running a command.
@@ -391,7 +393,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
             return refuse(out, RefusedCall::BadInput(why));
         }
-        let (kept, input_cut) = crate::tool::capped_input(input);
+        let (kept, input_cut) = crate::tool::capped_input(input.clone());
         let record = Box::new(ToolCall {
             title: title_of(&action, &cwd),
             kind: action.kind(),
@@ -434,6 +436,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 chat,
                 item,
                 action: action.clone(),
+                input: input.clone(),
                 stage: Stage::Previewing,
                 printed: Printed::default(),
                 job: None,
@@ -442,7 +445,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         );
         match action {
             Action::Edit { .. } | Action::Write { .. } => {
-                out.push(Directive::Tool(ToolDirective::Preview { call, action }));
+                out.push(Directive::Tool(ToolDirective::Preview {
+                    call,
+                    action,
+                    input,
+                }));
             }
             // It stops only what its own chat started: no one's asked.
             Action::Stop { .. } => self.run_call(call, Decision::NotAsked, out),
@@ -764,6 +771,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let before = each.stage;
         each.stage = Stage::Running;
         let (chat, item, action) = (each.chat, each.item, each.action.clone());
+        let input = each.input.clone();
         if let Stage::Asking(question) = before {
             self.unask(chat, question);
         }
@@ -786,7 +794,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 }));
             }
         });
-        out.push(Directive::Tool(ToolDirective::Run { call, action }));
+        out.push(Directive::Tool(ToolDirective::Run {
+            call,
+            action,
+            input,
+        }));
     }
 
     /// Refuses `call`, as `by` decided.
