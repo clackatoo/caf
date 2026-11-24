@@ -15,10 +15,8 @@
 //! or reading its arguments:
 //!
 //! ```no_run
-//! fn main() {
-//!     caf_relay::relay_if_asked();
-//!     // the app as usual
-//! }
+//! caf_relay::relay_if_asked();
+//! // the app as usual
 //! ```
 //!
 //! The `caf-relay` program is that and nothing else, for apps that name it
