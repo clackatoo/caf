@@ -304,6 +304,8 @@ struct Server {
 /// progress token, if it gave one.
 struct Call {
     server: String,
+    /// The generation of the server it was made to.
+    generation: u64,
     id: Value,
     token: Option<Value>,
 }
@@ -1077,6 +1079,7 @@ impl Fake<'_> {
         let Some(found) = self.servers.get(server) else {
             return self.fail(&format!("no MCP server started called {server}"));
         };
+        let generation = found.generation;
         let qualified = format!("mcp__{}__{}", found.name, call.tool);
         // The id the request will have, as the MCP SDK makes its token.
         let token = (!call.no_progress).then(|| json!(found.next_id));
@@ -1110,6 +1113,7 @@ impl Fake<'_> {
             label.clone(),
             Call {
                 server: server.to_owned(),
+                generation,
                 id,
                 token,
             },
@@ -1188,13 +1192,23 @@ impl Fake<'_> {
     /// A call the fake made: the one named, or the last.
     fn call(&mut self, label: Option<&String>) -> Result<&Call, End> {
         let label = label.or(self.last_call.as_ref()).cloned();
-        match label {
-            Some(label) if self.calls.contains_key(&label) => Ok(&self.calls[&label]),
-            label => self.fail(&format!(
-                "no MCP call made called {}",
-                label.as_deref().unwrap_or("anything")
-            )),
+        let label = match label {
+            Some(label) if self.calls.contains_key(&label) => label,
+            label => {
+                return self.fail(&format!(
+                    "no MCP call made called {}",
+                    label.as_deref().unwrap_or("anything")
+                ));
+            }
+        };
+        // Its server started again under its name since: the new one
+        // never heard of it.
+        let call = &self.calls[&label];
+        let current = (self.servers.get(&call.server)).map(|server| server.generation);
+        if current != Some(call.generation) {
+            return self.fail(&format!("the call {label} was to a server since replaced"));
         }
+        Ok(&self.calls[&label])
     }
 
     /// A server the fake started, by its connection's name.
