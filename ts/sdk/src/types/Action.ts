@@ -31,7 +31,8 @@ path: string, } } | { "type": "Run", "value": {
  */
 command: string, 
 /**
- * The folder it runs in.
+ * The folder it runs in: the chat's shell folder, where its last
+ * command's shell ended, from the chat's folder at first.
  */
 folder: string, 
 /**
