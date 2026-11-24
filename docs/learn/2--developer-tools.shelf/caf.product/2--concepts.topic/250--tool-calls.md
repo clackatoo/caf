@@ -177,10 +177,14 @@ with `stopped_by` set if the user stopped the turn: a viewer shows it as
   gave back and the app's item, and `stopped_by` cleared, and the model
   was told what it gave.
 
-So the model and the record always agree. It's shortly after the turn
-ends, in the same turn: if the driver says nothing within 10 seconds, the
-call ends as stopped all the same, and CAF logs a warning. A chat closed,
-put away or deleted, or CAF shutting down, ends it as stopped at once. A
+So the model and the record agree, unless the chat is let go, CAF shuts
+down, or the driver misses the 10 second bound. It's shortly after the
+turn ends, in the same turn: if the driver says nothing within 10
+seconds, the call ends as stopped all the same, and CAF logs a warning,
+whatever the model is told after. A chat closed, put away or deleted, or
+CAF shutting down, ends it as stopped at once, though its work may still
+have finished, and the model been told so. Its end is saved at once, as
+a turn's is. A
 chat saved while a call was being stopped restores it Cancelled, stopped
 by whoever stopped it. A background job isn't stopped with its turn at
 all (see [Serving tools](~caf/concepts/serving-tools#background-jobs)).
