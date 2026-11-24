@@ -296,9 +296,10 @@ while the job runs.
 **CAF tells the agent when a job ends,** in a turn of its own, sent as a
 message is: at once if nothing runs, or else once the running turn ends.
 In place of a message, the turn starts with the CAF badge and what CAF
-told the agent, in words: *Told Claude: task 2, `cargo test --test
-integration`, completed with exit code 0.* (or *failed*, or *was
-stopped*). It's CAF's voice, not the agent's nor the user's, so it never
+told the agent, in words: the notice's own summary, *Told Claude:
+Background command "cargo test --test integration" completed (exit code
+0)* (or *failed*, or *was stopped*), with `&amp;`, `&lt;` and `&gt;`
+read back as `&`, `<` and `>`. It's CAF's voice, not the agent's nor the user's, so it never
 looks like something the user sent. The rest of the turn is the agent's
 answer, drawn as any. The agent was given the path of a file holding the
 job's whole output too; the app needn't show it.
@@ -594,7 +595,7 @@ Everything else is calm.
 | What the transcript shows | Where it comes from |
 | --- | --- |
 | The turns, in order | `Chat.turns`, each a `Turn`, in the order of the list. History and CAF's notes can be inserted before a waiting turn (`Change::TurnInserted`). |
-| The message | `Turn.starter`: `Starter::User` holds the `UserMessage`. `Starter::Agent` is a turn the agent started by itself, and `Starter::Caf` one of CAF's notes. `Starter::Notice` holds a notice's text: CAF's own of a job's end is `<task-notification>…</task-notification>`, the app's anything else. |
+| The message | `Turn.starter`: `Starter::User` holds the `UserMessage`. `Starter::Agent` is a turn the agent started by itself, and `Starter::Caf` one of CAF's notes. `Starter::Notice` holds a notice's text: CAF's own of a job's end is `<task-notification>…</task-notification>`, whose `<summary>` is what's shown; the app's is anything else. |
 | How the turn ended | `Turn.life`: `TurnLife::Running`, `Stopping`, `Finished`, `Stopped`, `Failed` or `CutOff`. A `Waiting` one is on the composer's tray. |
 | When it was sent | The start of `Turn.window`. |
 | How long the agent worked | From the start of the first `Words`, `Thinking` or `Tool` item's `Item.window` to the end of `Turn.window`. |

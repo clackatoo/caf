@@ -691,7 +691,7 @@
       openFirst: true, entries: [{ t: 'time', text: 'Today 10:04' }, bgTurn('running', 'running')] },
     { id: 'job-ended', label: 'A job ends, and one is stopped', what: "<b>The tests ended, so CAF told Claude, in a turn of CAF's own;</b> Claude read their output and answered. Then the user asked for the dev server to be stopped: Claude's TaskStop is a step, <i>Stop task 1</i>, and the server's step is cancelled.",
       entries: [bgTurn('cancelled', 'done'),
-        { t: 'turn', starter: 'notice', notice: 'Told Claude: task 2, <code>cargo test --test integration</code>, completed with exit code 0.', life: 'finished', took: '5s', at: '10:06', model: 'Opus 5.5',
+        { t: 'turn', starter: 'notice', notice: 'Told Claude: Background command "cargo test --test integration" completed (exit code 0)', life: 'finished', took: '5s', at: '10:06', model: 'Opus 5.5',
           items: [T.tool('read', 'Read /run/user/1000/caf/out/7/2.txt', 'done'), T.words('<p>The integration tests passed in the background: all 42, in 1m 52s.</p>')] },
         { t: 'turn', ask: 'Great. Stop the dev server.', life: 'finished', took: '2s', at: '10:07', model: 'Opus 5.5',
           items: [T.tool('stop', 'Stop task 1', 'done'), T.words('<p>Stopped the dev server.</p>')] }] },
