@@ -334,7 +334,7 @@
             {selected}
             actions={listActions}
             readOnly={!actable}
-            offersTools={inspector.hello?.tools ?? false}
+            offersTools={inspector.servesTools}
           />
         </div>
         {#if saved.length > 0}

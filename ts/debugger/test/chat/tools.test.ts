@@ -839,6 +839,13 @@ describe("CAF's notice of a job's end", () => {
     expect(jobNotice(notice('Background command "npm test" failed', null))).toBe('Background command "npm test" failed')
   })
 
+  it("is told for the tools driver's notice of a job whose run failed, which has no output file", () => {
+    // caf-driver-tokio's failed_notice, exactly.
+    expect(
+      jobNotice('<task-notification>\n<task-id>3</task-id>\n<status>failed</status>\n<summary>Background task 3 failed</summary>\n</task-notification>'),
+    ).toBe('Background task 3 failed')
+  })
+
   it('is read back unescaped, as the command was written, &amp; last', () => {
     expect(jobNotice(notice('Background command "cargo build &amp;&amp; cargo test &gt; out.txt 2&gt;&amp;1 &lt; in" completed (exit code 0)'))).toBe(
       'Background command "cargo build && cargo test > out.txt 2>&1 < in" completed (exit code 0)',

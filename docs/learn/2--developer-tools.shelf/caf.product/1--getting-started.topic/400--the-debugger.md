@@ -221,7 +221,7 @@ one back, with its record, idle until you send to it; its session then
 carries on, as the fake agent resumes sessions. It has CAF's tools again,
 unless it was opened without them: the debugger notes those in
 `caf-debugger-untooled.json` in the store's folder, as a chat's save
-doesn't say what tools it had. Closing a chat puts it
+doesn't say what tools it had, and forget a chat once it's deleted. Closing a chat puts it
 away, closed, and it stays under Saved, to restore again. A chat another
 program has open, or the debugger can't read, says so, and is left as it
 was.

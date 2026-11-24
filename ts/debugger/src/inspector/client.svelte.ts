@@ -99,6 +99,11 @@ export class Inspector {
     return this.hello?.mode.type === 'Live'
   }
 
+  /** Whether CAF serves its own tools, so New chat may offer them: only if the server says so. */
+  get servesTools(): boolean {
+    return this.hello?.tools === true
+  }
+
   /** Look at a position: live, this stops following. */
   seek(step: number): void {
     this.#send({ type: 'Seek', value: { step: Math.max(0, Math.min(step, this.position.end)) } })

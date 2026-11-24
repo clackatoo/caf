@@ -41,6 +41,18 @@ function open(): { socket: FakeSocket; inspector: Inspector } {
   return { socket, inspector }
 }
 
+describe('whether CAF serves its tools', () => {
+  it("is the server's word, and no until it says, so New chat offers no checkbox it can't honour", () => {
+    const socket = new FakeSocket()
+    const inspector = new Inspector(socket)
+    socket.emit('open')
+    expect(inspector.servesTools).toBe(false)
+    socket.say({ type: 'Hello', value: { protocol: PROTOCOL, mode: { type: 'Live' }, file: null, run: 'r', tools: false } })
+    expect(inspector.servesTools).toBe(false)
+    expect(open().inspector.servesTools).toBe(true)
+  })
+})
+
 describe('steps and the position', () => {
   it('follows the end while live', () => {
     const { socket, inspector } = open()

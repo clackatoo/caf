@@ -39,9 +39,11 @@ export function jobText(tool: DeepReadonly<Pick<ToolCall, 'job' | 'status' | 'st
 }
 
 // CAF's notice of a job's end, as caf_tools::notice writes it: its parts,
-// in its order, each with &, < and > escaped, so none holds a tag.
+// in its order, each with &, < and > escaped, so none holds a tag. One
+// with no output file is the tools driver's, for a job whose run failed
+// before it had one.
 const NOTIFICATION =
-  /^<task-notification>\n<task-id>[^<]*<\/task-id>\n(?:<tool-use-id>[^<]*<\/tool-use-id>\n)?<output-file>[^<]*<\/output-file>\n<status>[^<]*<\/status>\n<summary>([^<]*)<\/summary>\n<\/task-notification>$/
+  /^<task-notification>\n<task-id>[^<]*<\/task-id>\n(?:<tool-use-id>[^<]*<\/tool-use-id>\n)?(?:<output-file>[^<]*<\/output-file>\n)?<status>[^<]*<\/status>\n<summary>([^<]*)<\/summary>\n<\/task-notification>$/
 
 /**
  * What CAF told the agent of a background job's end, from a notice turn's
