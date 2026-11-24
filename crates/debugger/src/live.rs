@@ -321,7 +321,11 @@ fn shown_directives(directives: Box<RawValue>) -> Box<RawValue> {
             continue;
         };
         let mut hid = false;
-        for server in message["params"]["mcpServers"].as_array_mut().into_iter().flatten() {
+        for server in message["params"]["mcpServers"]
+            .as_array_mut()
+            .into_iter()
+            .flatten()
+        {
             for pair in server["env"].as_array_mut().into_iter().flatten() {
                 if pair["name"] == caf_relay::TOKEN_VAR {
                     pair["value"] = HIDDEN_KEY.into();

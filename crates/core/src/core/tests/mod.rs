@@ -79,7 +79,34 @@ fn default_modes() -> Value {
     ] })
 }
 
+/// The key the tests' tools driver serves with.
+const KEY: crate::mcp::Key = crate::mcp::Key([7; 32]);
+
+/// How the tests' tools driver serves CAF's tools.
+fn serving() -> crate::event::Serving {
+    let mut relay = crate::agent::SpawnCommand::new("/opt/app/bin/app");
+    relay.args = vec!["--relay".into()];
+    crate::event::Serving::new(relay, "/run/user/1000/caf/app-1.sock", KEY)
+}
+
 impl Script {
+    /// The tools driver says how it serves CAF's tools.
+    fn serving(&mut self) -> Vec<Value> {
+        self.event(crate::event::Event::Serving(serving()))
+    }
+
+    /// A script serving CAF's tools, with a Claude chat in `/work` given
+    /// all of them, its session open as [`SESSION`] on [`PROC`].
+    fn with_claude_serving() -> Self {
+        let mut script = Self::new(host());
+        script.serving();
+        script.open_claude_as(
+            OpenChat::new("claude", "/work")
+                .with_tools(crate::tool::Tools::caf(crate::tool::CafTool::ALL)),
+        );
+        script
+    }
+
     /// A script with a Claude chat in `/work`, its session open as
     /// [`SESSION`] on [`PROC`].
     fn with_claude() -> Self {

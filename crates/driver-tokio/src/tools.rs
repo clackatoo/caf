@@ -102,8 +102,11 @@ pub enum Relay {
 pub trait Runner: Send + 'static {
     /// What `action` would do, without doing anything, such as an edit's
     /// diff.
-    fn preview(&mut self, call: &Call, action: Action)
-    -> Pin<Box<dyn Future<Output = Vec<Piece>> + Send>>;
+    fn preview(
+        &mut self,
+        call: &Call,
+        action: Action,
+    ) -> Pin<Box<dyn Future<Output = Vec<Piece>> + Send>>;
     /// Does `action`, printing a command's output with
     /// [`Call::print`] as it comes.
     fn run(&mut self, call: Call, action: Action) -> Pin<Box<dyn Future<Output = Ran> + Send>>;
@@ -192,11 +195,7 @@ impl Runner for NotBuilt {
 
 /// A call that failed, saying `why` to the record and the model.
 fn failed(why: &str) -> Ran {
-    Ran::new(
-        false,
-        vec![Piece::Text(Text::new(why))],
-        Answer::error(why),
-    )
+    Ran::new(false, vec![Piece::Text(Text::new(why))], Answer::error(why))
 }
 
 /// How long a relay has to say which chat it serves.
@@ -327,10 +326,7 @@ struct Print {
 /// What a connection's reading task tells the driver.
 enum FromConn {
     /// It said which chat it serves, with the right token.
-    Hello {
-        chat: ChatId,
-        write: OwnedWriteHalf,
-    },
+    Hello { chat: ChatId, write: OwnedWriteHalf },
     /// It didn't: why, for the log.
     Refused(String),
     /// A line, without its newline.
@@ -361,11 +357,6 @@ struct Hello {
 }
 
 impl ToolsDriver {
-    /// A driver serving nothing.
-    pub(crate) fn none() -> Self {
-        Self::with(ToolsConfig::default(), None)
-    }
-
     fn with(config: ToolsConfig, live: Option<Live>) -> Self {
         let (prints, printed) = mpsc::unbounded_channel();
         Self {
@@ -393,7 +384,10 @@ impl ToolsDriver {
     /// # Errors
     ///
     /// Why it can't serve, for the app's developer.
-    pub(crate) fn start(mut config: ToolsConfig, app: &str) -> Result<(Self, Option<Serving>), String> {
+    pub(crate) fn start(
+        mut config: ToolsConfig,
+        app: &str,
+    ) -> Result<(Self, Option<Serving>), String> {
         let relay = match std::mem::take(&mut config.relay) {
             Relay::None => return Ok((Self::with(config, None), None)),
             Relay::ThisProgram => {
@@ -409,20 +403,24 @@ impl ToolsDriver {
     }
 
     /// Serves through `relay`, unchecked.
-    fn listen(mut config: ToolsConfig, relay: SpawnCommand, app: &str) -> Result<(Self, Serving), String> {
+    fn listen(
+        mut config: ToolsConfig,
+        relay: SpawnCommand,
+        app: &str,
+    ) -> Result<(Self, Serving), String> {
         let folder = match config.folder.take() {
             Some(folder) => folder,
             None => default_folder(),
         };
         private_folder(&folder)?;
         let socket = folder.join(format!("{}-{}.sock", file_name(app), std::process::id()));
-        let listener = listen(&socket)?;
+        let (listener, file) = listen(&socket)?;
         let key = random_key()?;
         let serving = Serving::new(relay, socket.clone(), Key(key));
         let (from_conns, to_driver) = mpsc::channel(64);
         let live = Live {
             listener,
-            socket: SocketFile(socket),
+            socket: file,
             key,
             from_conns,
             to_driver,
@@ -493,13 +491,13 @@ impl ToolsDriver {
             }
             ToolDirective::Refuse { call, why } => {
                 if let Some(each) = self.calls.remove(&call) {
-                    self.answer(each.conn, &each.request, &Answer::error(&refused(&why)));
+                    self.answer(each.conn, &each.request, &Answer::error(refused(&why)));
                 }
             }
             ToolDirective::Cancel { call } => {
                 if let Some(each) = self.calls.remove(&call) {
                     // Its work stops before the model hears it did.
-                    let Each { conn, request, .. } = each;
+                    let (conn, request) = each.stop();
                     self.answer(conn, &request, &Answer::error(CANCELLED));
                 }
             }
@@ -540,12 +538,8 @@ impl ToolsDriver {
                 Ok((stream, _)) => {
                     live.last_conn += 1;
                     let no = live.last_conn;
-                    let reader = tokio::spawn(read_conn(
-                        no,
-                        stream,
-                        live.key,
-                        live.from_conns.clone(),
-                    ));
+                    let reader =
+                        tokio::spawn(read_conn(no, stream, live.key, live.from_conns.clone()));
                     live.readers.insert(no, reader.abort_handle());
                 }
                 Err(error) => {
@@ -720,7 +714,7 @@ impl ToolsDriver {
             };
             if closing == Closing::Ended {
                 // Its work stops before the model hears it did.
-                let Each { request, .. } = each;
+                let (_, request) = each.stop();
                 if let Some(bytes) = conn.mcp.answer(&request, &Answer::error(CANCELLED)) {
                     let _ = conn.write.send(bytes);
                 }
@@ -769,7 +763,10 @@ impl ToolsDriver {
                 }
                 None => each.batch = Some(Batch::new(print)),
             }
-            if each.batch.as_ref().is_some_and(|batch| batch.bytes >= BATCH_BYTES)
+            if each
+                .batch
+                .as_ref()
+                .is_some_and(|batch| batch.bytes >= BATCH_BYTES)
                 && let Some(batch) = each.batch.take()
             {
                 self.reports.push_back(output(call, batch));
@@ -909,6 +906,22 @@ impl ToolsDriver {
     }
 }
 
+impl Each {
+    /// Drops its work, giving back where to answer it.
+    fn stop(self) -> (u64, Request) {
+        let Self {
+            conn,
+            request,
+            preview,
+            run,
+            ..
+        } = self;
+        drop(preview);
+        drop(run);
+        (conn, request)
+    }
+}
+
 impl Batch {
     /// A batch of one print, due [`BATCH_TIME`] from now.
     fn new(print: Print) -> Self {
@@ -961,7 +974,9 @@ const PANICKED: &str = "CAF's tool failed unexpectedly";
 /// What the model is told of a call the core refused.
 fn refused(why: &RefusedCall) -> String {
     match why {
-        RefusedCall::NotAllowed => "Not allowed: the user, or their rules, refused this call".into(),
+        RefusedCall::NotAllowed => {
+            "Not allowed: the user, or their rules, refused this call".into()
+        }
         RefusedCall::NotRunning => {
             "Refused: this conversation isn't running a turn, so nothing may be called now".into()
         }
@@ -985,14 +1000,13 @@ async fn read_conn(
 ) {
     let (read, write) = stream.into_split();
     let mut read = BufReader::new(read);
-    let hello = match tokio::time::timeout(HANDSHAKE_TIME, read_line(&mut read, HANDSHAKE_MOST))
-        .await
-    {
-        Err(_) => Err("it said nothing for 10 s".to_owned()),
-        Ok(Err(why)) => Err(why),
-        Ok(Ok(None)) => Err("it closed before saying which chat it serves".to_owned()),
-        Ok(Ok(Some(line))) => check_hello(&line, &key),
-    };
+    let hello =
+        match tokio::time::timeout(HANDSHAKE_TIME, read_line(&mut read, HANDSHAKE_MOST)).await {
+            Err(_) => Err("it said nothing for 10 s".to_owned()),
+            Ok(Err(why)) => Err(why),
+            Ok(Ok(None)) => Err("it closed before saying which chat it serves".to_owned()),
+            Ok(Ok(Some(line))) => check_hello(&line, &key),
+        };
     let chat = match hello {
         Ok(chat) => chat,
         Err(why) => {
@@ -1000,7 +1014,11 @@ async fn read_conn(
             return;
         }
     };
-    if to.send((no, FromConn::Hello { chat, write })).await.is_err() {
+    if to
+        .send((no, FromConn::Hello { chat, write }))
+        .await
+        .is_err()
+    {
         return;
     }
     loop {
@@ -1018,8 +1036,8 @@ async fn read_conn(
 
 /// The chat a handshake names, if its token is right.
 fn check_hello(line: &[u8], key: &[u8; 32]) -> Result<ChatId, String> {
-    let hello: Hello = serde_json::from_slice(line)
-        .map_err(|e| format!("its handshake didn't read: {e}"))?;
+    let hello: Hello =
+        serde_json::from_slice(line).map_err(|e| format!("its handshake didn't read: {e}"))?;
     if hello.caf_relay != 1 {
         return Err(format!(
             "it speaks version {} of the relay's handshake, not 1",
@@ -1086,6 +1104,8 @@ fn check_relay(relay: &SpawnCommand) -> Result<(), String> {
             EnvChange::Remove(name) => {
                 command.env_remove(name);
             }
+            // No other kind is given yet.
+            _ => {}
         }
     }
     if let Some(cwd) = &relay.cwd {
@@ -1125,7 +1145,9 @@ fn check_relay(relay: &SpawnCommand) -> Result<(), String> {
             Err(e) => return Err(format!("CAF's relay {program} couldn't be checked: {e}")),
         }
     };
-    let out = heard.recv_timeout(Duration::from_secs(1)).unwrap_or_default();
+    let out = heard
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap_or_default();
     let expected = format!("{}\n", caf_relay::CHECK_ANSWER);
     if status.success() && out == expected.as_bytes() {
         return Ok(());
@@ -1153,12 +1175,16 @@ fn private_folder(folder: &Path) -> Result<(), String> {
         .mode(0o700)
         .create(folder)
     {
-        return Err(format!("the folder for CAF's tools' socket, {shown}, couldn't be made: {error}"));
+        return Err(format!(
+            "the folder for CAF's tools' socket, {shown}, couldn't be made: {error}"
+        ));
     }
     let meta = std::fs::symlink_metadata(folder)
         .map_err(|e| format!("the folder for CAF's tools' socket, {shown}, can't be read: {e}"))?;
     if !meta.is_dir() {
-        return Err(format!("the folder for CAF's tools' socket, {shown}, isn't a folder"));
+        return Err(format!(
+            "the folder for CAF's tools' socket, {shown}, isn't a folder"
+        ));
     }
     if meta.uid() != rustix::process::geteuid().as_raw() || meta.mode() & 0o077 != 0 {
         return Err(format!(
@@ -1189,7 +1215,7 @@ fn file_name(app: &str) -> String {
 
 /// Listens on `socket`, replacing a socket left there by an earlier
 /// process with the same id.
-fn listen(socket: &Path) -> Result<UnixListener, String> {
+fn listen(socket: &Path) -> Result<(UnixListener, SocketFile), String> {
     let shown = socket.display();
     let length = socket.as_os_str().len();
     if length > SOCKET_PATH_MOST {
@@ -1200,20 +1226,21 @@ fn listen(socket: &Path) -> Result<UnixListener, String> {
     }
     if let Ok(meta) = std::fs::symlink_metadata(socket) {
         if !meta.file_type().is_socket() {
-            return Err(format!("CAF's tools' socket {shown} is taken by something else"));
+            return Err(format!(
+                "CAF's tools' socket {shown} is taken by something else"
+            ));
         }
         let _ = std::fs::remove_file(socket);
     }
     let listener = std::os::unix::net::UnixListener::bind(socket)
         .map_err(|e| format!("CAF couldn't listen on its tools' socket, {shown}: {e}"))?;
+    // Removed if anything after fails.
+    let file = SocketFile(socket.to_owned());
     let listener = listener
         .set_nonblocking(true)
         .and_then(|()| UnixListener::from_std(listener))
-        .map_err(|e| format!("CAF couldn't listen on its tools' socket, {shown}: {e}"));
-    if listener.is_err() {
-        let _ = std::fs::remove_file(socket);
-    }
-    listener
+        .map_err(|e| format!("CAF couldn't listen on its tools' socket, {shown}: {e}"))?;
+    Ok((listener, file))
 }
 
 /// 32 bytes from the system's randomness.
@@ -1246,8 +1273,7 @@ mod tests {
         fn new() -> Self {
             static NO: AtomicU64 = AtomicU64::new(0);
             let no = NO.fetch_add(1, Ordering::Relaxed);
-            let path =
-                std::env::temp_dir().join(format!("ct{}-{no}", std::process::id()));
+            let path = std::env::temp_dir().join(format!("ct{}-{no}", std::process::id()));
             let _ = std::fs::remove_dir_all(&path);
             Self(path)
         }
@@ -1304,7 +1330,9 @@ mod tests {
             });
             Box::pin(async move {
                 let _dropped = dropped;
-                finished.await.unwrap_or_else(|_| failed("the test let it go"))
+                finished
+                    .await
+                    .unwrap_or_else(|_| failed("the test let it go"))
             })
         }
     }
@@ -1321,7 +1349,9 @@ mod tests {
         _dir: Dir,
     }
 
-    const CHAT: ChatId = ChatId(uuid::Uuid::from_u128(0x0193_0000_0000_7000_8000_0000_0000_1000));
+    const CHAT: ChatId = ChatId(uuid::Uuid::from_u128(
+        0x0193_0000_0000_7000_8000_0000_0000_1000,
+    ));
 
     fn harness() -> Harness {
         harness_with(false)
@@ -1331,13 +1361,15 @@ mod tests {
         let dir = Dir::new();
         let (runs, run) = mpsc::unbounded_channel();
         let (dropped, drop_seen) = mpsc::unbounded_channel();
-        let mut config = ToolsConfig::default();
-        config.runner = Box::new(Scripted {
-            runs,
-            dropped,
-            panics,
-        });
-        config.folder = Some(dir.0.clone());
+        let config = ToolsConfig {
+            runner: Box::new(Scripted {
+                runs,
+                dropped,
+                panics,
+            }),
+            folder: Some(dir.0.clone()),
+            ..ToolsConfig::default()
+        };
         let (mut driver, serving) =
             ToolsDriver::listen(config, SpawnCommand::new("/bin/false"), "test").unwrap();
         let (directives, mut given) = mpsc::unbounded_channel();
@@ -1539,12 +1571,17 @@ mod tests {
             self.send(&json!({"jsonrpc": "2.0", "id": 999, "method": "ping"}))
                 .await;
             let answer = self.recv().await;
-            assert_eq!(answer["id"], 999, "nothing came before the ping's answer: {answer}");
+            assert_eq!(
+                answer["id"], 999,
+                "nothing came before the ping's answer: {answer}"
+            );
         }
     }
 
     fn text_of(answer: &Value) -> &str {
-        answer["result"]["content"][0]["text"].as_str().unwrap_or_default()
+        answer["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
     }
 
     #[tokio::test]
@@ -1579,26 +1616,39 @@ mod tests {
             call,
             action: action.clone(),
         });
-        assert_event(h.report().await, call, |event| {
-            matches!(event, ToolEvent::Previewed { pieces } if pieces.len() == 1)
-        });
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Previewed { pieces } if pieces.len() == 1),
+        );
         h.apply(ToolDirective::Run {
             call,
             action: action.clone(),
         });
         let run = h.run().await;
-        assert_eq!((run.call.chat(), run.call.id(), &run.action), (CHAT, call, &action));
+        assert_eq!(
+            (run.call.chat(), run.call.id(), &run.action),
+            (CHAT, call, &action)
+        );
         run.call.print(0, vec!["a".into(), "b".into()]);
         run.call.print(1, vec!["B".into(), "c".into()]);
         run.finish
-            .send(Ran::new(true, vec![Piece::Text(Text::new("read"))], Answer::text("ok")))
+            .send(Ran::new(
+                true,
+                vec![Piece::Text(Text::new("read"))],
+                Answer::text("ok"),
+            ))
             .unwrap();
-        assert_event(h.report().await, call, |event| {
-            matches!(event, ToolEvent::Output { from: 0, lines } if *lines == ["a", "B", "c"])
-        });
-        assert_event(h.report().await, call, |event| {
-            matches!(event, ToolEvent::Finished { done: true, pieces } if pieces.len() == 1)
-        });
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Output { from: 0, lines } if *lines == ["a", "B", "c"]),
+        );
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Finished { done: true, pieces } if pieces.len() == 1),
+        );
         let answer = client.recv().await;
         assert_eq!(answer["id"], 7);
         assert_eq!(text_of(&answer), "ok");
@@ -1623,19 +1673,25 @@ mod tests {
         let run = h.run().await;
         run.call.print(0, vec!["one".into()]);
         // Reported without the run finishing.
-        assert_event(h.report().await, call, |event| {
-            matches!(event, ToolEvent::Output { from: 0, lines } if *lines == ["one"])
-        });
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Output { from: 0, lines } if *lines == ["one"]),
+        );
         // 16 KiB is reported at once, and what follows starts a batch of
         // its own.
         run.call.print(1, vec!["x".repeat(BATCH_BYTES)]);
         run.call.print(2, vec!["two".into()]);
-        assert_event(h.report().await, call, |event| {
-            matches!(event, ToolEvent::Output { from: 1, lines } if lines.len() == 1)
-        });
-        assert_event(h.report().await, call, |event| {
-            matches!(event, ToolEvent::Output { from: 2, lines } if *lines == ["two"])
-        });
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Output { from: 1, lines } if lines.len() == 1),
+        );
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Output { from: 2, lines } if *lines == ["two"]),
+        );
         drop(run);
     }
 
@@ -1648,15 +1704,30 @@ mod tests {
         };
         let mut batch = Batch::new(print(3, &["a", "b"]));
         assert!(batch.add(print(5, &["c"])).is_none());
-        assert_eq!((batch.from, &batch.lines[..]), (3, &["a", "b", "c"][..]));
+        assert_eq!(
+            (batch.from, &batch.lines),
+            (3, &["a", "b", "c"].map(String::from).to_vec())
+        );
         assert!(batch.add(print(4, &["B"])).is_none());
-        assert_eq!((batch.from, &batch.lines[..]), (3, &["a", "B"][..]));
+        assert_eq!(
+            (batch.from, &batch.lines),
+            (3, &["a", "B"].map(String::from).to_vec())
+        );
         assert!(batch.add(print(1, &["z"])).is_none());
-        assert_eq!((batch.from, &batch.lines[..]), (1, &["z"][..]));
+        assert_eq!(
+            (batch.from, &batch.lines),
+            (1, &["z"].map(String::from).to_vec())
+        );
         assert_eq!(batch.bytes, 1);
         let earlier = batch.add(print(9, &["far"])).expect("a gap ends the batch");
-        assert_eq!((earlier.from, &earlier.lines[..]), (1, &["z"][..]));
-        assert_eq!((batch.from, &batch.lines[..]), (9, &["far"][..]));
+        assert_eq!(
+            (earlier.from, &earlier.lines),
+            (1, &["z"].map(String::from).to_vec())
+        );
+        assert_eq!(
+            (batch.from, &batch.lines),
+            (9, &["far"].map(String::from).to_vec())
+        );
     }
 
     #[tokio::test]
@@ -1671,7 +1742,10 @@ mod tests {
         });
         let answer = client.recv().await;
         assert_eq!(answer["result"]["isError"], true);
-        assert!(text_of(&answer).contains("file_path is missing"), "{answer}");
+        assert!(
+            text_of(&answer).contains("file_path is missing"),
+            "{answer}"
+        );
         // Told again, nothing more is sent.
         h.apply(ToolDirective::Cancel { call });
         client.nothing_waiting().await;
@@ -1700,7 +1774,9 @@ mod tests {
         assert_eq!(text_of(&answer), CANCELLED);
         // What the runner does after is nobody's.
         run.call.print(0, vec!["late".into()]);
-        let _ = run.finish.send(Ran::new(true, Vec::new(), Answer::text("late")));
+        let _ = run
+            .finish
+            .send(Ran::new(true, Vec::new(), Answer::text("late")));
         h.apply(ToolDirective::Cancel { call });
         client.nothing_waiting().await;
         h.quiet().await;
@@ -1722,7 +1798,9 @@ mod tests {
         let run = h.run().await;
         // Both at once: whichever the driver takes first, the agent hears
         // one answer.
-        run.finish.send(Ran::new(true, Vec::new(), Answer::text("ok"))).unwrap();
+        run.finish
+            .send(Ran::new(true, Vec::new(), Answer::text("ok")))
+            .unwrap();
         h.apply(ToolDirective::Cancel { call });
         let answer = client.recv().await;
         assert_eq!(answer["id"], 1);
@@ -1746,7 +1824,9 @@ mod tests {
         client
             .send(&json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 1}}))
             .await;
-        assert_event(h.report().await, call, |event| matches!(event, ToolEvent::Gone));
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Gone)
+        });
         assert_eq!(h.dropped().await, call);
         // The core's Cancel, crossing the agent's, is answered by nobody.
         h.apply(ToolDirective::Cancel { call });
@@ -1799,7 +1879,9 @@ mod tests {
         let mut old = h.bound(CHAT).await;
         let call = h.called(&mut old, 1, false).await;
         let mut new = h.connect(CHAT).await;
-        assert_event(h.report().await, call, |event| matches!(event, ToolEvent::Gone));
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Gone)
+        });
         assert_connected(h.report().await, CHAT);
         assert!(old.closed().await);
         new.init().await;
@@ -1864,7 +1946,10 @@ mod tests {
         h.apply(ToolDirective::Unserve { chat: CHAT });
         assert_eq!(h.dropped().await, call);
         let answer = client.recv().await;
-        assert_eq!((answer["id"].clone(), answer["result"]["isError"].clone()), (json!(1), json!(true)));
+        assert_eq!(
+            (answer["id"].clone(), answer["result"]["isError"].clone()),
+            (json!(1), json!(true))
+        );
         assert!(client.closed().await);
         h.quiet().await;
     }
@@ -1879,7 +1964,10 @@ mod tests {
         assert!(socket.exists());
         h.shut_down().await;
         let answer = client.recv().await;
-        assert_eq!((answer["id"].clone(), answer["result"]["isError"].clone()), (json!(1), json!(true)));
+        assert_eq!(
+            (answer["id"].clone(), answer["result"]["isError"].clone()),
+            (json!(1), json!(true))
+        );
         assert!(client.closed().await);
         assert!(!socket.exists());
     }
@@ -1919,8 +2007,10 @@ mod tests {
         assert_eq!(progress["method"], "notifications/progress", "{progress}");
         assert_eq!(progress["params"]["progressToken"], "p2");
         assert_eq!(progress["params"]["message"], "Waiting for permission");
+        // Not before its minute is up. While the test waits for the line,
+        // the paused clock may move on to later timers, so there's no
+        // upper bound.
         assert!(started.elapsed() >= PROGRESS_EVERY - Duration::from_secs(1));
-        assert!(started.elapsed() <= PROGRESS_EVERY);
         tokio::time::resume();
         h.apply(ToolDirective::Run {
             call,
@@ -1931,13 +2021,13 @@ mod tests {
         });
         let run = h.run().await;
         tokio::time::pause();
-        let started = Instant::now();
         let progress = client.recv_untimed().await;
         assert_eq!(progress["params"]["message"], "Running", "{progress}");
-        assert!(started.elapsed() <= PROGRESS_EVERY);
         tokio::time::resume();
         // Once it's answered, no more.
-        run.finish.send(Ran::new(true, Vec::new(), Answer::text("ok"))).unwrap();
+        run.finish
+            .send(Ran::new(true, Vec::new(), Answer::text("ok")))
+            .unwrap();
         let answer = client.recv().await;
         assert_eq!(answer["id"], 2);
         h.apply(ToolDirective::Refuse {
@@ -1962,7 +2052,12 @@ mod tests {
         let mut command = SpawnCommand::new("/bin/sh");
         command.args = vec![
             "-c".into(),
-            format!("[ \"${}\" = 1 ] && echo '{}'", caf_relay::CHECK_VAR, caf_relay::CHECK_ANSWER).into(),
+            format!(
+                "[ \"${}\" = 1 ] && echo '{}'",
+                caf_relay::CHECK_VAR,
+                caf_relay::CHECK_ANSWER
+            )
+            .into(),
         ];
         check_relay(&command).unwrap();
     }
@@ -1971,8 +2066,10 @@ mod tests {
     async fn a_socket_path_too_long_fails_naming_it() {
         let dir = Dir::new();
         let folder = dir.0.join("x".repeat(100));
-        let mut config = ToolsConfig::default();
-        config.folder = Some(folder.clone());
+        let config = ToolsConfig {
+            folder: Some(folder.clone()),
+            ..ToolsConfig::default()
+        };
         let Err(why) = ToolsDriver::listen(config, SpawnCommand::new("/bin/false"), "test") else {
             panic!("it listened");
         };
@@ -1986,8 +2083,10 @@ mod tests {
         let dir = Dir::new();
         std::fs::create_dir_all(&dir.0).unwrap();
         std::fs::set_permissions(&dir.0, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let mut config = ToolsConfig::default();
-        config.folder = Some(dir.0.clone());
+        let config = ToolsConfig {
+            folder: Some(dir.0.clone()),
+            ..ToolsConfig::default()
+        };
         let Err(why) = ToolsDriver::listen(config, SpawnCommand::new("/bin/false"), "test") else {
             panic!("it listened");
         };
@@ -1999,8 +2098,10 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
         let dir = Dir::new();
         let folder = dir.0.join("tools");
-        let mut config = ToolsConfig::default();
-        config.folder = Some(folder.clone());
+        let config = ToolsConfig {
+            folder: Some(folder.clone()),
+            ..ToolsConfig::default()
+        };
         let (_driver, serving) =
             ToolsDriver::listen(config, SpawnCommand::new("/bin/false"), "my app").unwrap();
         let mode = std::fs::metadata(&folder).unwrap().permissions().mode();
@@ -2014,7 +2115,9 @@ mod tests {
 
     #[test]
     fn a_long_line_is_refused_and_a_cut_one_is_an_error() {
-        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let mut read = BufReader::with_capacity(4, &b"abc\ndefghij\nkl"[..]);
             assert_eq!(read_line(&mut read, 8).await, Ok(Some(b"abc".to_vec())));

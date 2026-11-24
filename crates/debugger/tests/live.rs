@@ -223,7 +223,13 @@ impl Debugger {
             ProfileChoice::Builtin(Builtin::Fake),
         )];
         let recording = dir.0.join("run.jsonl");
-        let live = live::start(agents, Some(recording.clone()), store, ledger(&dir), Relay::None);
+        let live = live::start(
+            agents,
+            Some(recording.clone()),
+            store,
+            ledger(&dir),
+            Relay::None,
+        );
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let token = server::new_token();
@@ -848,7 +854,13 @@ async fn the_recording_check_passes_with_secrets_the_recording_hides() {
         ProfileChoice::Builtin(Builtin::Fake),
     )];
     let recording = dir.0.join("run.jsonl");
-    let live = live::start(agents, Some(recording.clone()), None, ledger(&dir), Relay::None);
+    let live = live::start(
+        agents,
+        Some(recording.clone()),
+        None,
+        ledger(&dir),
+        Relay::None,
+    );
     assert_eq!(live.recording.as_ref(), Some(&recording));
 
     let mut open = caf_core::OpenChat::new("fake", &dir.0);

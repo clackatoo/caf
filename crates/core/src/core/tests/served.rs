@@ -18,9 +18,14 @@ const PROMPT: u64 = 1002;
 
 /// A Claude chat with a turn running.
 fn running() -> Script {
-    let mut script = Script::with_claude();
+    let mut script = Script::with_claude_serving();
     script.send(CHAT, "go").0.expect("sent");
     script
+}
+
+/// `open`, given all of CAF's tools.
+fn given(open: crate::core::OpenChat) -> crate::core::OpenChat {
+    open.with_tools(crate::tool::Tools::caf(CafTool::ALL))
 }
 
 /// The agent calls `tool` with `input`, giving its id for the call if
@@ -187,8 +192,9 @@ fn a_report_comes_first_makes_the_item_and_the_call_joins_it() {
 #[test]
 fn without_the_agents_id_a_call_joins_the_oldest_report_with_the_same_input() {
     let mut script = Script::new(host());
+    script.serving();
     script
-        .open(crate::core::OpenChat::new("claude", "/work"))
+        .open(given(crate::core::OpenChat::new("claude", "/work")))
         .0
         .expect("opened");
     script.answers(PROC, 1000, &super::claude_init());
@@ -242,7 +248,7 @@ fn without_the_agents_id_a_call_joins_the_oldest_report_with_the_same_input() {
 
 #[test]
 fn a_call_with_no_turn_running_or_input_that_makes_no_action_is_refused() {
-    let mut script = Script::with_claude();
+    let mut script = Script::with_claude_serving();
     let out = script.tool(1, called(CafTool::Read, json!({ "file_path": "/a" }), None));
     assert_eq!(
         one_told(&out),
@@ -488,7 +494,8 @@ fn a_host_that_cant_ask_the_user_has_the_call_refused() {
     let mut host = host();
     host.shows.permission_questions = false;
     let mut script = Script::new(host);
-    script.open_claude();
+    script.serving();
+    script.open_claude_as(given(crate::core::OpenChat::new("claude", "/work")));
     script.send(CHAT, "go").0.expect("sent");
     let out = script.tool(1, called(CafTool::Bash, json!({ "command": "ls" }), None));
     let out = script.policy(ticket(&out), PolicyAnswer::AskUser);
@@ -822,8 +829,9 @@ fn a_report_whose_input_comes_later_joins_the_call_it_turns_out_to_be() {
 /// tool is, with a turn running.
 fn plain_running() -> Script {
     let mut script = Script::new(host());
+    script.serving();
     script
-        .open(crate::core::OpenChat::new("plain", "/work"))
+        .open(given(crate::core::OpenChat::new("plain", "/work")))
         .0
         .expect("opened");
     script.answers(PROC, 1000, &super::plain_init(false));
@@ -1023,7 +1031,7 @@ fn a_call_reported_twice_or_naming_an_earlier_calls_id_is_its_own() {
 fn two_chats_may_use_the_same_agent_id() {
     const OTHER: crate::ids::ChatId = crate::ids::ChatId::from_number(1004);
     let mut script = running();
-    let (other, out) = script.open(crate::core::OpenChat::new("claude", "/elsewhere"));
+    let (other, out) = script.open(given(crate::core::OpenChat::new("claude", "/elsewhere")));
     assert_eq!(other, Ok(OTHER));
     let new = super::harness::sent(&out, "session/new")["id"]
         .as_u64()
@@ -1099,7 +1107,7 @@ fn a_call_the_agent_gives_up_on_while_previewed_asked_or_running_is_cancelled() 
 
 #[test]
 fn a_call_in_a_turn_the_agent_started_is_served_in_it() {
-    let mut script = Script::with_claude();
+    let mut script = Script::with_claude_serving();
     script.update(PROC, SESSION, &json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Checking" } }));
     let out = script.tool(1, called(CafTool::Read, json!({ "file_path": "/a" }), None));
     let turn = &script.chat(CHAT)["turns"][0];

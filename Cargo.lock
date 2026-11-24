@@ -173,6 +173,7 @@ dependencies = [
  "caf-core",
  "caf-driver-tokio",
  "caf-fake-agent",
+ "caf-relay",
  "caf-save",
  "futures-util",
  "getrandom 0.3.4",
@@ -194,6 +195,7 @@ version = "0.0.0"
 dependencies = [
  "caf-core",
  "caf-fake-agent",
+ "caf-relay",
  "caf-save",
  "caf-usage",
  "flate2",
@@ -207,6 +209,7 @@ dependencies = [
  "tar",
  "tokio",
  "ureq",
+ "uuid",
  "zip",
 ]
 

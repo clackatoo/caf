@@ -202,7 +202,7 @@ fn a_newer_claude_keeps_its_profile() {
     assert_eq!(
         sent(&out, "session/new")["params"]["_meta"],
         crate::profiles::ProfileChoice::Builtin(crate::profiles::Builtin::ClaudeAgentAcp)
-            .stripped(&crate::profiles::own_instructions("caf-test"), None)
+            .stripped(&crate::profiles::own_instructions("caf-test", &[]), None)
             .expect("stripped")
     );
 }
