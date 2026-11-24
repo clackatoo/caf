@@ -72,6 +72,12 @@ pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 /// blocks anyway ties up one of those threads: it can hold up the app's
 /// other tools, but never CAF, its own tools or its other drivers (if
 /// those threads can't be started, which is logged, they share CAF's).
+///
+/// A task the tool starts with `tokio::spawn` runs on those threads too,
+/// and is dropped when CAF shuts down, wherever it's got to. Work that
+/// must outlive CAF, or the call, belongs on the app's own runtime,
+/// through a handle the tool holds, such as a
+/// [`Handle`](tokio::runtime::Handle).
 pub trait AppTool<A: AppItem = NoAppItems>: Send + Sync + 'static {
     /// What it's given: serde reads it from the model's JSON, and
     /// schemars describes it to the model, its doc comments as the
