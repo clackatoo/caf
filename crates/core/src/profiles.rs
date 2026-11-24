@@ -1356,15 +1356,54 @@ pub(crate) struct SettingsStyle {
     pub(crate) fast: Option<&'static str>,
 }
 
-/// CAF's own instructions to every agent, `host` being the app's name:
-/// they take the place of the agent's built-in ones, which describe tools
-/// it no longer has. The app's own come after them.
-pub(crate) fn own_instructions(host: &str) -> String {
+/// CAF's own instructions to every agent, `host` being the app's name,
+/// given CAF's tools `tools`: they take the place of the agent's built-in
+/// ones, which describe tools it no longer has. The app's own come after
+/// them.
+pub(crate) fn own_instructions(host: &str, tools: &[CafTool]) -> String {
+    if tools.is_empty() {
+        return format!(
+            "You are working inside {host}, the app the user is talking to you in. You have no \
+             tools of your own: you can't read or change files, run commands or browse the web, \
+             except through tools {host} gives you. Answer in Markdown."
+        );
+    }
     format!(
-        "You are working inside {host}, the app the user is talking to you in. You have no \
-         tools of your own: you can't read or change files, run commands or browse the web, \
-         except through tools {host} gives you. Answer in Markdown."
+        "You are working inside {host}, the app the user is talking to you in. {host} gives you \
+         tools to {}, in the folder you're working in, asking the user's leave where it must. \
+         You have no other tools of your own: you can't do anything else, such as browse the \
+         web, except through other tools {host} gives you. Answer in Markdown.",
+        tool_uses(tools)
     )
+}
+
+/// What CAF's MCP server tells the agent of `tools`, in a line, `host`
+/// being the app's name.
+pub(crate) fn served_instructions(host: &str, tools: &[CafTool]) -> String {
+    format!(
+        "{host}'s tools to {}, in the folder you're working in.",
+        tool_uses(tools)
+    )
+}
+
+/// What `tools` do, with each one's name, as a list: "read files (Read)
+/// and run commands (Bash)".
+fn tool_uses(tools: &[CafTool]) -> String {
+    let uses: Vec<String> = (tools.iter())
+        .map(|tool| {
+            let does = match tool {
+                CafTool::Read => "read files",
+                CafTool::Edit => "change part of a file",
+                CafTool::Write => "write whole files",
+                CafTool::Bash => "run commands",
+            };
+            format!("{does} ({})", tool.name())
+        })
+        .collect();
+    match uses.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => uses.concat(),
+    }
 }
 
 /// The `_meta` that runs Claude Code with none of its own tools, with

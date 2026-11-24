@@ -318,7 +318,20 @@ impl Script {
     /// Opens a saved chat with `agent` and its session, on a core with no
     /// chats yet: Claude's resumes, a plain agent's loads.
     fn open_saved(&mut self, agent: &str) {
-        let (chat, out) = self.open(saved_open(agent));
+        self.open_saved_as(saved_open(agent), agent);
+    }
+
+    /// Opens a chat as [`Script::open_saved`] does, CAF's tools served,
+    /// given all of them.
+    fn open_saved_serving(&mut self, agent: &str) {
+        self.serving();
+        let open = saved_open(agent).with_tools(crate::tool::Tools::caf(crate::tool::CafTool::ALL));
+        self.open_saved_as(open, agent);
+    }
+
+    /// Opens `open`, a chat with `agent`, as [`Script::open_saved`] does.
+    fn open_saved_as(&mut self, open: OpenChat, agent: &str) {
+        let (chat, out) = self.open(open);
         assert_eq!(chat, Ok(CHAT));
         let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
         let answer = if agent == "claude" {
@@ -951,7 +964,7 @@ fn a_restored_chat_is_given_its_instructions_again_as_its_session_opens() {
     let options = &sent(&out, "session/resume")["params"]["_meta"]["claudeCode"]["options"];
     assert_eq!(
         options["systemPrompt"],
-        crate::profiles::own_instructions("caf-test") + "\n\nGiven again."
+        crate::profiles::own_instructions("caf-test", &[]) + "\n\nGiven again."
     );
     assert_eq!(options["tools"], json!([]));
 }
@@ -3295,7 +3308,7 @@ fn a_served_command_is_journaled_squashed_and_comes_back_cut_off() {
 
     let mut script = Script::new(host());
     let mut store = Store::default();
-    script.open_saved("claude");
+    script.open_saved_serving("claude");
     store.take(&script.list_saved(SHELF).1);
     script.serve(&mut store, false);
     script.at(1000);
@@ -3359,9 +3372,13 @@ fn a_served_command_is_journaled_squashed_and_comes_back_cut_off() {
 
     script.at(2500);
     let out = script.put_away(CHAT).1;
+    // Its call is cancelled, and it's no longer served, as it's let go.
     assert_eq!(
         with(&out, "tool"),
-        [json!({ "tool": { "type": "Cancel", "value": { "call": 1 } } })]
+        [
+            json!({ "tool": { "type": "Cancel", "value": { "call": 1 } } }),
+            json!({ "tool": { "type": "Unserve", "value": { "chat": CHAT } } }),
+        ]
     );
     store.take(&out);
     script.serve(&mut store, false);
@@ -3393,7 +3410,7 @@ fn a_chatty_commands_journal_entry_stays_as_small_as_its_output() {
 
     let mut script = Script::new(host());
     let mut store = Store::default();
-    script.open_saved("claude");
+    script.open_saved_serving("claude");
     store.take(&script.list_saved(SHELF).1);
     script.serve(&mut store, false);
     script.at(1000);

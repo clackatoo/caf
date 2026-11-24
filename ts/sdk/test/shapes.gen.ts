@@ -548,7 +548,10 @@ export const sample531: T.Event = {
             "mcp_servers": [],
             "shelf": null,
             "instructions": null,
-            "settings": []
+            "settings": [],
+            "tools": {
+              "caf": []
+            }
           }
         }
       }
