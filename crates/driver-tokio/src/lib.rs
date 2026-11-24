@@ -116,6 +116,38 @@
 //!
 //! [`Chat::spend`]: caf_core::Chat::spend
 //!
+//! # Serving CAF's tools
+//!
+//! CAF can give agents tools of its own (Read, Edit, Write and Bash), which
+//! it runs itself, asking the user as the [`Policy`] says. The agent
+//! starts them as an MCP server: a relay, which connects back to CAF over
+//! a unix socket. The relay is usually the app's own program, so the app
+//! calls [`caf_relay::relay_if_asked`] first thing in its `main`, and
+//! starts CAF serving through it:
+//!
+//! ```ignore
+//! fn main() {
+//!     caf_relay::relay_if_asked();
+//!     // ...
+//! }
+//! config.tools.relay = Relay::ThisProgram;
+//! let chat = caf.open_chat(OpenChat::new("claude", folder).with_tools(Tools::caf(CafTool::ALL))).await?;
+//! ```
+//!
+//! - [`ToolsConfig::relay`] is [`Relay::None`] by default: nothing is
+//!   served, and a chat given tools is refused. With a relay, [`Caf::start`]
+//!   checks it answers as `relay_if_asked` does, and panics, naming it,
+//!   if it doesn't.
+//! - The socket is in a folder only the user can reach
+//!   ([`ToolsConfig::folder`]), and each chat's relay proves which chat
+//!   it's for with a token made from a key drawn as CAF starts. The key is
+//!   never in a recording.
+//! - [`ToolsConfig::runner`] runs the calls. Until CAF's tools are built,
+//!   it's [`NotBuilt`], which fails every call saying so.
+//! - Unix only, for now.
+//!
+//! [`OpenChat`]: caf_core::OpenChat
+//!
 //! # Serving viewers
 //!
 //! A viewer is anything that shows chats from outside the host's own

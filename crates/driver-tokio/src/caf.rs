@@ -5,10 +5,11 @@
 //!
 //! [`Caf::start`] spawns one task that owns the [`Core`], the
 //! [`AgentDriver`], the [`TimerDriver`], the [`SetupDriver`], the store
-//! ([`Config::store`]), the usage driver ([`Config::usage`]) and the
-//! [`Policy`]. Handles talk to it through a queue, and it waits on seven
-//! things at once: a handle's command, an adapter's event, the timer, the
-//! setup driver's report, the store's answer, the usage driver's prices,
+//! ([`Config::store`]), the usage driver ([`Config::usage`]), the tools
+//! driver ([`Config::tools`]) and the [`Policy`]. Handles talk to it
+//! through a queue, and it waits on eight things at once: a handle's
+//! command, an adapter's event, the timer, the setup driver's report, the
+//! store's answer, the usage driver's prices, the tools driver's report,
 //! and a policy's answer. Each
 //! goes into the core with the time from [`TimerDriver::now`], and every
 //! directive that comes out goes to its driver:
@@ -23,12 +24,15 @@
 //! | `Setup` | [`SetupDriver::apply`]; its reports come back as [`Event::Setup`] |
 //! | `Storage` | [`caf_save::carry_out`] with [`Config::store`], on a thread of its own, in order; its reports come back as [`Event::Storage`] |
 //! | `Usage` | [`caf_usage::Ledger::record`] and [`caf_usage::limits::save`] with [`Config::usage`], on a thread of its own, in order. The prices, read on the same thread as it starts and whenever they change, come back as [`Event::Prices`]; the limits kept, read after them, and those a save found news in, as [`Event::Limits`] |
+//! | `Tool` | The tools driver, which serves CAF's tools to relays over MCP on a socket of its own, and runs calls with [`Config::tools`]' runner; its reports come back as [`Event::Tool`] and [`Event::Relay`]. A call's answer to the agent is written once the core has its `Finished` |
 //! | `Report` | The [`log`] facade, target `caf` |
 //!
 //! A [`Steps`] given to [`Caf::start_watching`] sees each event once the
 //! core has it, with its directives, before they go to their drivers.
 //!
-//! As it starts, before the task runs, CAF calls [`Core::check_agents`],
+//! As it starts, before the task runs, CAF gives the core
+//! [`Event::Serving`] if it serves tools, so every chat given tools is
+//! served, then calls [`Core::check_agents`],
 //! recorded as [`HostCommand::CheckAgents`], so the setup driver's survey
 //! is under way by the time anything else happens. After each event, the
 //! [`AgentsWatch`]es are told if any agent's status changed: they read

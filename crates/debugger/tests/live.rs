@@ -15,7 +15,7 @@ use caf_debugger::live::Live;
 use caf_debugger::replay::{self, BUDGET, Player};
 use caf_debugger::server::{self, App};
 use caf_debugger::{fake, live};
-use caf_driver_tokio::{Relay, UsageConfig};
+use caf_driver_tokio::{Relay, ToolsConfig, UsageConfig};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -228,7 +228,7 @@ impl Debugger {
             Some(recording.clone()),
             store,
             ledger(&dir),
-            Relay::None,
+            ToolsConfig::default(),
         );
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -859,7 +859,7 @@ async fn the_recording_check_passes_with_secrets_the_recording_hides() {
         Some(recording.clone()),
         None,
         ledger(&dir),
-        Relay::None,
+        ToolsConfig::default(),
     );
     assert_eq!(live.recording.as_ref(), Some(&recording));
 
@@ -942,7 +942,7 @@ async fn a_recording_that_couldnt_be_made_is_none() {
         Some(dir.0.join("no/such/folder/run.jsonl")),
         None,
         ledger(&dir),
-        Relay::None,
+        ToolsConfig::default(),
     );
     assert!(live.recording.is_none());
     assert!(live.book.file.is_none(), "Hello says there's none");
@@ -1034,4 +1034,98 @@ async fn a_chat_saved_live_is_restored_by_the_next_debugger_and_carries_on() {
         .count();
     assert_eq!(notes, 0, "{:#?}", viewer.copy.chat());
     second.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_book_never_shows_the_tools_key_or_a_relays_token() {
+    let dir = Dir::new("tools-key");
+    let steps = [
+        json!({"on": {"fallback": true, "do": [{"respond": {"error": {"code": -32601, "message": "Method not found"}}}]}}),
+        json!({"wait": {"method": "initialize"}}),
+        json!({"respond": {"result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true}, "agentInfo": {"name": "caf-fake-agent", "version": "1.0.0"}}}}),
+        json!({"wait": {"method": "session/new"}}),
+        json!({"respond": {"result": {"sessionId": "s1"}}}),
+        json!({"wait": {"method": "session/prompt"}}),
+        json!({"respond": {"result": {"stopReason": "end_turn"}}}),
+    ];
+    let script = dir.0.join("script.jsonl");
+    let text: Vec<String> = steps.iter().map(Value::to_string).collect();
+    std::fs::write(&script, text.join("\n") + "\n").unwrap();
+    let mut command = SpawnCommand::new(caf_fake_agent::binary());
+    command.args = vec![script.into_os_string()];
+    let agents = vec![AgentSpec::command(
+        "fake",
+        command,
+        ProfileChoice::Builtin(Builtin::Fake),
+    )];
+    // Served through the debugger's own program, as it is run.
+    let mut tools = ToolsConfig::default();
+    tools.relay = Relay::Command(SpawnCommand::new(env!("CARGO_BIN_EXE_caf-debugger")));
+    tools.folder = Some(dir.0.join("s"));
+    let recording = dir.0.join("run.jsonl");
+    let live = live::start(agents, Some(recording.clone()), None, ledger(&dir), tools);
+    let open = caf_core::OpenChat::new("fake", &dir.0)
+        .with_tools(caf_core::tool::Tools::caf(caf_core::tool::CafTool::ALL));
+    let chat = live.caf.open_chat(open).await.unwrap();
+    chat.send(caf_core::chat::UserMessage::text("Hello"))
+        .await
+        .unwrap();
+    let finished = tokio::time::timeout(PATIENCE, async {
+        loop {
+            // A new watch starts with a picture.
+            if let Some(caf_driver_tokio::Update::Picture(whole)) = chat.watch().next().await
+                && lives(&whole) == ["Finished"]
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
+    if finished.await.is_err() {
+        let whole = chat.watch().next().await;
+        panic!("the turn didn't finish: {whole:#?}");
+    }
+    live.caf.shutdown().await;
+    let Live { book, running, .. } = live;
+    running.await;
+    tokio::time::timeout(PATIENCE, book.all_in())
+        .await
+        .expect("every step is in");
+
+    let steps = book.after(0);
+    let serving: Value = (steps.iter())
+        .map(|step| serde_json::from_str::<Value>(step.event.get()).unwrap())
+        .find(|event| event["type"] == "Serving")
+        .expect("CAF served its tools");
+    assert_eq!(serving["value"]["key"], "[hidden]");
+    // The relay's token is in the session's servers, hidden.
+    let mut tokens = Vec::new();
+    for step in &steps {
+        let directives: Value = serde_json::from_str(step.directives.get()).unwrap();
+        for directive in directives.as_array().unwrap() {
+            if directive["type"] != "Agent" || directive["value"]["type"] != "Write" {
+                continue;
+            }
+            let bytes: Vec<u8> =
+                serde_json::from_value(directive["value"]["value"]["bytes"].clone()).unwrap();
+            let message: Value = serde_json::from_slice(&bytes).unwrap();
+            for server in message["params"]["mcpServers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                for pair in server["env"].as_array().into_iter().flatten() {
+                    if pair["name"] == "CAF_RELAY_TOKEN" {
+                        tokens.push(pair["value"].clone());
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(tokens, [json!("[hidden]")]);
+    let recorded = std::fs::read_to_string(&recording).unwrap();
+    assert!(recorded.contains(r#""key":"[hidden]""#), "{recorded}");
+    // And both replays still agree with CAF, every step checked.
+    assert!(book.diverged().is_empty(), "{:?}", book.diverged());
+    assert_eq!(book.recording_checked(), book.end());
 }

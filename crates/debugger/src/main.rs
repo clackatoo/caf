@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use caf_debugger::server::{self, App};
 use caf_debugger::{agents, fake, files, live, replay};
-use caf_driver_tokio::{Relay, UsageConfig};
+use caf_driver_tokio::{Relay, ToolsConfig, UsageConfig};
 use caf_save::FileStore;
 
 /// Prints a line, as `println!` does, but one that can't be printed, as
@@ -219,7 +219,11 @@ async fn run(args: Args) -> Result<(), String> {
                 usage.fetch_prices = args.fetch_prices;
                 usage
             });
-            let live = live::start(agents, Some(recording), store, usage, Relay::ThisProgram);
+            // Served through the debugger itself, run again: its `main`
+            // is the relay. Its chats are given no tools yet.
+            let mut tools = ToolsConfig::default();
+            tools.relay = Relay::ThisProgram;
+            let live = live::start(agents, Some(recording), store, usage, tools);
             let names: Vec<_> = live
                 .caf
                 .agents()

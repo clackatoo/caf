@@ -50,7 +50,8 @@ pub type Restorer = dyn Fn(ChatId, &Shelf) -> Option<RestoreChat> + Send + Sync;
 pub struct ViewerRules {
     /// Turns a viewer's request to open a chat into one, or `None` to
     /// refuse it with [`Outcome::NotAllowed`]. It's the host's to decide:
-    /// it chooses the agent's tools, and may limit the folders. The
+    /// it chooses the agent's tools, CAF's own included
+    /// ([`OpenChat::tools`]), and may limit the folders. The
     /// default refuses every request, so viewers can only watch chats the
     /// host opened.
     ///
@@ -64,6 +65,10 @@ pub struct ViewerRules {
     /// its tools, or `None` to refuse it with [`Outcome::NotAllowed`], as
     /// [`ViewerRules::open`] does for opening. The default refuses every
     /// request.
+    ///
+    /// Tools aren't saved with a chat: the restore it gives says which of
+    /// CAF's own the chat has ([`RestoreChat::tools`]), as well as its MCP
+    /// servers and instructions. A chat restored with none has none.
     ///
     /// [`Outcome::NotAllowed`]: caf_core::viewer::Outcome::NotAllowed
     pub restore: Box<Restorer>,
