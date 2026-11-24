@@ -37,10 +37,17 @@ import type { JsonValue } from "./serde_json/JsonValue.ts";
  *   ends with its own `Finished`, whose `notice` the core sends the agent.
  *   A `Cancel` of it after stops it, and answers no one. One the core
  *   cancelled before its `Detached` came is cancelled all the same.
+ * - **A job outlives its relay's connection**: it's never reported
+ *   [`Gone`](crate::event::ToolEvent::Gone), as the agent was answered
+ *   and hears of its end in a notice. (One reported so anyway fails,
+ *   with no notice.) A job that ends by itself always gives a `notice`.
  * - **A TaskStop ([`Action::Stop`]) is run only for a job of its own
  *   chat's still running**: the driver stops it, reports the job's
- *   `Finished`, then the TaskStop's. The job then ends Cancelled, by the
- *   agent.
+ *   `Finished`, with no `notice`, then the TaskStop's. The job then ends
+ *   Cancelled, by the agent: one whose `Finished` comes with a notice,
+ *   having ended by itself first, ends as it says, and the TaskStop is
+ *   answered "No task {id} in this conversation". A TaskStop cancelled
+ *   doesn't stop its job.
  */
 export type ToolDirective = { "type": "Preview", "value": { 
 /**

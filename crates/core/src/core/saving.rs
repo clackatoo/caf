@@ -1149,6 +1149,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 conn,
                 shell: cwd.clone(),
                 notices_held: false,
+                shell_warned: false,
                 cwd,
                 mcp: restore.mcp_servers,
                 mcp_sent: super::state::SentServers(mcp_sent),
@@ -1702,6 +1703,7 @@ fn saved_session<A: AppItem>(run: &Run<A>) -> Option<AgentSessionId> {
         shell: _,
         // A restored chat's notices waiting are stopped, held or not.
         notices_held: _,
+        shell_warned: _,
     } = run;
     session.clone()
 }

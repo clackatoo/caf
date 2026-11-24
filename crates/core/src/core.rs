@@ -656,13 +656,17 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// It's sent as a prompt, as a message is, and waits as one does: in
     /// order, while another turn runs or the session opens. It's the
     /// app's, or CAF's, never the user's words. Notifying an archived chat
-    /// unarchives it first, as sending to it does. The user's Stop holds
-    /// notices waiting rather than dropping them ([`Core::stop`]): this
-    /// one, as a message does, lets them go first.
+    /// unarchives it first, as sending to it does. A notice never counts
+    /// against the host's limit on messages waiting
+    /// ([`Limits::queued_messages`](crate::host::Limits::queued_messages)),
+    /// nor does a background job's: only the user's messages do. The
+    /// user's Stop holds notices rather than dropping them
+    /// ([`Core::stop`]): this one, as a message does, lets them go first.
     ///
     /// # Errors
     ///
-    /// As [`Core::send`]'s: [`Refused::Unsupported`] for empty text.
+    /// As [`Core::send`]'s, but never [`Refused::QueueFull`]:
+    /// [`Refused::Unsupported`] for empty text.
     pub fn notify(
         &mut self,
         now: Now,
@@ -678,11 +682,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Stops the chat's running turn, and drops its waiting messages, which
-    /// end as stopped. Its waiting notices aren't dropped, as the agent
-    /// would never hear what they say, nor sent, as it would start again
-    /// at once: they're held, and a background job's notice that comes
-    /// after joins them, until the next message or the app's next notice
-    /// ([`Core::notify`]), which they're sent just before, in order.
+    /// end as stopped. Its notices aren't dropped, as the agent would
+    /// never hear what they say, nor sent, as it would start again at
+    /// once: from the Stop on, every notice, waiting then or coming after
+    /// (a background job's), is held, its session not opened for it,
+    /// until the next message or the app's next notice ([`Core::notify`]),
+    /// which they're sent just before, in order.
     ///
     /// The agent's waiting permission questions are answered "cancelled",
     /// as ACP requires, and the agent is told to stop. The turn is

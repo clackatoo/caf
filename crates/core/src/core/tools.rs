@@ -55,6 +55,9 @@ use crate::tool::{
 /// The longest title CAF writes for a call, in bytes.
 const MOST_TITLE: usize = 1024;
 
+/// The longest shell folder CAF takes from the driver, in bytes.
+const MOST_FOLDER: usize = 4096;
+
 /// The id and label of CAF's own options when it asks the user about a
 /// call: allow it once, or refuse it.
 const ALLOW: (&str, &str) = ("allow", "Allow");
@@ -78,8 +81,6 @@ pub(super) struct Call {
     pub(super) printed: Printed,
     /// The job it became, once the model was answered and it went on.
     pub(super) job: Option<JobId>,
-    /// A TaskStop of its job ran: it ends Cancelled, by the agent.
-    pub(super) stopped: bool,
 }
 
 /// Where a call CAF serves is.
@@ -441,7 +442,6 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 stage: Stage::Previewing,
                 printed: Printed::default(),
                 job: None,
-                stopped: false,
             },
         );
         match action {
@@ -777,13 +777,6 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             self.unask(chat, question);
         }
         let runs_command = matches!(action, Action::Run { .. });
-        // The job a TaskStop stops ends as the agent's doing.
-        if let Action::Stop { job } = action
-            && let Some(target) = self.job_call(chat, job)
-            && let Some(each) = self.calls.get_mut(&target)
-        {
-            each.stopped = true;
-        }
         self.change_tool(chat, item, |tool| {
             tool.status = ToolStatus::Running;
             tool.decision = decision;
@@ -957,19 +950,18 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         // A command's shell ended here, so the next starts here: but not a
         // job's, which ran beside the others.
         if let (Some(folder), Action::Run { .. }, None) = (folder, &each.action, each.job) {
-            if folder.starts_with('/') {
-                if let Some(run) = self.runs.get_mut(&each.chat) {
-                    run.shell = folder;
-                }
-            } else {
-                report(
-                    out,
-                    Level::Warn,
-                    format!("ignored call {}'s folder, which isn't absolute", call.0),
-                );
-            }
+            self.shell_ended(each.chat, call, &folder, out);
         }
-        let stopped = each.job.is_some() && each.stopped;
+        // A job TaskStop stopped: one of it is still under way, and the
+        // driver gave no notice, as it does for a job that ended by itself.
+        let stopped = each.job.is_some_and(|job| {
+            notice.is_none()
+                && (self.calls.values()).any(|other| {
+                    other.chat == each.chat
+                        && other.stage == Stage::Running
+                        && other.action == Action::Stop { job }
+                })
+        });
         self.change_tool(each.chat, each.item, |tool| {
             tool.status = if stopped {
                 ToolStatus::Cancelled
@@ -1008,18 +1000,26 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
     }
 
-    /// The agent cancelled a call, or its connection closed. A job goes
-    /// on: the agent was answered, and hears of its end in a notice, not
-    /// over that connection.
+    /// The agent cancelled a call, or its connection closed. A job, which
+    /// outlives its connection, is never gone, as the driver's contract
+    /// says: one the driver says is anyway fails, with no notice, as
+    /// nothing more will come of it.
     fn gone(&mut self, now: Now, call: CallId, out: &mut Vec<Directive<A, D>>) {
-        match self.calls.get(&call) {
-            None => return stale(out, call, "its going"),
-            Some(each) if each.job.is_some() => return stale(out, call, "a job's going"),
-            Some(_) => {}
-        }
         let Some(each) = self.calls.remove(&call) else {
-            return;
+            return stale(out, call, "its going");
         };
+        if each.job.is_some() {
+            report(
+                out,
+                Level::Warn,
+                format!(
+                    "the tools driver said job call {} is gone: it fails",
+                    call.0
+                ),
+            );
+            self.drop_call(now, &each, ToolStatus::Failed, None);
+            return;
+        }
         // The agent gives up on a call as its turn is stopped, too: then
         // it was the user who stopped it.
         let stopping = (self.runs.get(&each.chat))
@@ -1142,6 +1142,36 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 out.push(Directive::Tool(ToolDirective::Cancel { call }));
                 self.drop_call(now, &each, status, Some(StoppedBy::User));
             }
+        }
+    }
+
+    /// `chat`'s foreground command ended with its shell in `folder`, as
+    /// call `call`'s driver says: the folder its next command runs in, if
+    /// it's absolute and at most [`MOST_FOLDER`] bytes, worked out as a
+    /// model's path is. Else it's ignored, with a warning once a chat.
+    fn shell_ended(
+        &mut self,
+        chat: ChatId,
+        call: CallId,
+        folder: &str,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
+        let Some(run) = self.runs.get_mut(&chat) else {
+            return;
+        };
+        if folder.starts_with('/') && folder.len() <= MOST_FOLDER && !folder.contains('\0') {
+            run.shell = resolve("/", folder);
+        } else if !run.shell_warned {
+            run.shell_warned = true;
+            report(
+                out,
+                Level::Warn,
+                format!(
+                    "ignored call {}'s folder, which isn't an absolute path of at most \
+                     {MOST_FOLDER} bytes, and any more of chat {}'s",
+                    call.0, chat.0
+                ),
+            );
         }
     }
 

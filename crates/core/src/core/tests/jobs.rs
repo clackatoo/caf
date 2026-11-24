@@ -183,14 +183,28 @@ fn the_users_stop_and_the_agent_letting_go_leave_a_job_running() {
     let out = script.answers(PROC, PROMPT, &json!({ "stopReason": "cancelled" }));
     assert!(told(&out).is_empty(), "{out:#?}");
     assert_eq!(the_tool(&script)["status"], kind("Running"));
-    // Its connection dropping doesn't end it either.
-    let out = script.tool(1, ToolEvent::Gone);
-    assert!(told(&out).is_empty());
-    assert_eq!(the_tool(&script)["status"], kind("Running"));
-    assert_eq!(script.core.calls.len(), 1);
-    // A second Detached, or one before it ran, changes nothing.
+    // A second Detached changes nothing.
     script.tool(1, ToolEvent::Detached { job: JobId(2) });
     assert_eq!(the_tool(&script)["job"], 1);
+}
+
+#[test]
+fn a_job_the_driver_says_is_gone_fails_with_no_notice() {
+    // The driver mustn't, as a job outlives its relay: but if it does,
+    // nothing more will come of it.
+    let mut script = job_running("sleep 100");
+    script.answers(PROC, PROMPT, &json!({ "stopReason": "end_turn" }));
+    let out = script.tool(1, ToolEvent::Gone);
+    assert!(told(&out).is_empty());
+    assert!(writes(&out).is_empty(), "no notice: {out:#?}");
+    let tool = the_tool(&script);
+    assert_has(
+        &tool,
+        &json!({ "status": kind("Failed"), "stopped_by": null }),
+    );
+    assert_ne!(tool["end"]["type"], "Open");
+    assert!(script.core.calls.is_empty());
+    assert_eq!(turns(&script).len(), 1);
 }
 
 #[test]
@@ -521,4 +535,231 @@ fn the_apps_notice_lets_held_notices_go_before_it() {
     let (text, second) = prompted(&out);
     assert_eq!(text, "The deploy finished");
     script.answers(PROC, second, &json!({ "stopReason": "end_turn" }));
+}
+
+/// `script`'s turn running Bash jobs `2..=last`, as calls of those
+/// numbers, beside job 1.
+fn more_jobs(script: &mut Script, last: u64) {
+    for n in 2..=last {
+        let out = script.tool(
+            n,
+            called(
+                CafTool::Bash,
+                json!({ "command": format!("job {n}"), "run_in_background": true }),
+                None,
+            ),
+        );
+        script.policy(ticket(&out), PolicyAnswer::Allow);
+        script.tool(n, ToolEvent::Detached { job: JobId(n) });
+    }
+}
+
+#[test]
+fn notices_never_count_against_the_queue_of_messages() {
+    // Nine jobs end while their turn runs: nine notices wait.
+    let mut script = job_running("job 1");
+    more_jobs(&mut script, 9);
+    for n in 1..=9 {
+        script.tool(n, finished(true, Vec::new(), None, Some(&format!("n{n}"))));
+    }
+    // The user's messages are queued all the same, up to the limit.
+    for n in 0..8 {
+        let sent = script.send(CHAT, &format!("m{n}")).0;
+        assert!(sent.is_ok(), "message {n}: {sent:?}");
+    }
+    assert_eq!(script.send(CHAT, "one more").0, Err(Refused::QueueFull));
+    // And the app's notices, beyond it.
+    assert!(script.notify(CHAT, "app").0.is_ok());
+}
+
+#[test]
+fn notices_held_never_fill_the_queue() {
+    let mut script = job_running("job 1");
+    more_jobs(&mut script, 9);
+    script.stop(CHAT).0.expect("stopping");
+    script.answers(PROC, PROMPT, &json!({ "stopReason": "cancelled" }));
+    for n in 1..=9 {
+        let out = script.tool(n, finished(true, Vec::new(), None, Some(&format!("n{n}"))));
+        assert!(writes(&out).is_empty(), "held: {out:#?}");
+    }
+    // A message still goes, after them all.
+    let (sent, out) = script.send(CHAT, "next");
+    sent.expect("queued");
+    let (mut text, mut id) = prompted(&out);
+    for n in 1..=9 {
+        assert_eq!(text, format!("n{n}"));
+        let out = script.answers(PROC, id, &json!({ "stopReason": "end_turn" }));
+        (text, id) = prompted(&out);
+    }
+    assert_eq!(text, "next");
+    script.answers(PROC, id, &json!({ "stopReason": "end_turn" }));
+}
+
+#[test]
+fn after_the_users_stop_a_notice_that_comes_later_is_held_too() {
+    let mut script = job_running("sleep 100");
+    script.stop(CHAT).0.expect("stopping");
+    script.answers(PROC, PROMPT, &json!({ "stopReason": "cancelled" }));
+    // No notice was waiting: the job ends after.
+    let out = script.tool(1, finished(true, Vec::new(), None, Some(NOTICE)));
+    assert!(writes(&out).is_empty(), "held: {out:#?}");
+    assert_eq!(turns(&script)[1].1, kind("Waiting"));
+    let (_, out) = script.send(CHAT, "next");
+    assert_eq!(prompted(&out).0, NOTICE);
+}
+
+#[test]
+fn a_notice_held_doesnt_start_the_agent() {
+    let mut script = job_running("sleep 100");
+    script.stop(CHAT).0.expect("stopping");
+    script.answers(PROC, PROMPT, &json!({ "stopReason": "cancelled" }));
+    // The agent goes: the chat has no session open.
+    script.agent(PROC, crate::event::AgentEvent::Exited(Exit::Code(1)));
+    script.agent(PROC, crate::event::AgentEvent::OutputClosed);
+    let before = script.chat(CHAT)["state"].clone();
+    assert_ne!(before["type"], "Open");
+    let out = script.tool(1, finished(true, Vec::new(), None, Some(NOTICE)));
+    assert!(with(&out, "start").is_empty(), "{out:#?}");
+    assert_eq!(script.chat(CHAT)["state"], before, "no session is wanted");
+    // The next message wants one, the notice going first.
+    script.send(CHAT, "next").0.expect("queued");
+    assert_eq!(script.chat(CHAT)["state"]["type"], "Opening");
+}
+
+#[test]
+fn a_job_that_ends_by_itself_before_task_stop_acts_is_done() {
+    let mut script = job_running("make");
+    let out = script.tool(
+        2,
+        called(CafTool::TaskStop, json!({ "task_id": "1" }), None),
+    );
+    assert_eq!(one_told(&out)["type"], "Run");
+    // The job ends by itself, then the driver finds no task to stop.
+    script.tool(
+        1,
+        finished(
+            true,
+            vec![ended(Ending::Exited(Exit::Code(0)))],
+            None,
+            Some(NOTICE),
+        ),
+    );
+    script.tool(
+        2,
+        finished(
+            false,
+            vec![Piece::Text(Text::new("No task 1 in this conversation"))],
+            None,
+            None,
+        ),
+    );
+    let tools = tools(&script);
+    assert_has(
+        &tools[0],
+        &json!({ "status": kind("Done"), "stopped_by": null }),
+    );
+    assert_eq!(tools[1]["status"], kind("Failed"));
+    // Its notice is sent once the turn is done.
+    let out = script.answers(PROC, PROMPT, &json!({ "stopReason": "end_turn" }));
+    assert_eq!(prompted(&out).0, NOTICE);
+}
+
+#[test]
+fn a_task_stop_cancelled_leaves_its_job_be() {
+    let mut script = job_running("make");
+    script.tool(
+        2,
+        called(CafTool::TaskStop, json!({ "task_id": "1" }), None),
+    );
+    // The user stops the turn: the TaskStop is cancelled, the job isn't.
+    script.stop(CHAT).0.expect("stopping");
+    let out = script.answers(PROC, PROMPT, &json!({ "stopReason": "cancelled" }));
+    assert_eq!(
+        told(&out),
+        [json!({ "type": "Cancel", "value": { "call": 2 } })]
+    );
+    let tools = tools(&script);
+    assert_eq!(tools[0]["status"], kind("Running"));
+    assert_has(
+        &tools[1],
+        &json!({ "status": kind("Cancelled"), "stopped_by": kind("User") }),
+    );
+    // It then ends by itself, even as a stop would: it's not the agent's.
+    script.tool(
+        1,
+        finished(
+            false,
+            vec![ended(Ending::Exited(Exit::Signal(15)))],
+            None,
+            None,
+        ),
+    );
+    assert_has(
+        &the_job(&script),
+        &json!({ "status": kind("Failed"), "stopped_by": null }),
+    );
+}
+
+/// The chat's first tool call: job 1, in these tests.
+fn the_job(script: &Script) -> Value {
+    tools(script)[0].clone()
+}
+
+#[test]
+fn a_shell_folder_is_worked_out_and_capped() {
+    let mut script = running();
+    let bash = |script: &mut Script, call: u64| {
+        let out = script.tool(
+            call,
+            called(CafTool::Bash, json!({ "command": "pwd" }), None),
+        );
+        let folder = with(&out, "decide")[0]["action"]["value"]["folder"].clone();
+        script.policy(ticket(&out), PolicyAnswer::Allow);
+        folder
+    };
+    bash(&mut script, 1);
+    script.tool(
+        1,
+        finished(true, Vec::new(), Some("/work/./a/../b//c"), None),
+    );
+    assert_eq!(bash(&mut script, 2), "/work/b/c");
+    // Too long, or not absolute, it's ignored, with one warning a chat.
+    let long = format!("/{}", "x".repeat(4096));
+    let out = script.tool(2, finished(true, Vec::new(), Some(&long), None));
+    assert_eq!(with(&out, "report").len(), 1, "{out:#?}");
+    assert_eq!(bash(&mut script, 3), "/work/b/c");
+    let out = script.tool(3, finished(true, Vec::new(), Some("C:\\work"), None));
+    assert!(with(&out, "report").is_empty(), "warned once: {out:#?}");
+    assert_eq!(bash(&mut script, 4), "/work/b/c");
+    script.tool(4, finished(true, Vec::new(), None, None));
+}
+
+#[test]
+fn a_chat_wound_down_holds_no_notices_after() {
+    let mut script = job_running("sleep 100");
+    script.stop(CHAT).0.expect("stopping");
+    script.answers(PROC, PROMPT, &json!({ "stopReason": "cancelled" }));
+    assert!(script.core.runs[&CHAT].notices_held);
+    // Closed, its notices waiting are stopped: nothing's left to hold.
+    script.close(CHAT).0.expect("closed");
+    assert!(!script.core.runs[&CHAT].notices_held);
+}
+
+#[test]
+fn a_stop_while_a_notice_opens_the_session_holds_it() {
+    let mut script = Script::new(super::harness::host());
+    script.serving();
+    let open = crate::core::OpenChat::new("claude", "/work")
+        .with_tools(crate::tool::Tools::caf(CafTool::ALL));
+    script.open(open).0.expect("opened");
+    // A notice opens the session; the user stops that.
+    script.notify(CHAT, "The build failed").0.expect("queued");
+    assert_eq!(script.chat(CHAT)["state"]["type"], "Opening");
+    script.stop(CHAT).0.expect("stopped");
+    assert_eq!(turns(&script)[0].1, kind("Waiting"), "held, not dropped");
+    assert!(script.core.runs[&CHAT].notices_held);
+    // The next message lets it go first.
+    script.send(CHAT, "next").0.expect("queued");
+    assert!(!script.core.runs[&CHAT].notices_held);
+    assert_eq!(turns(&script)[1].1, kind("Waiting"));
 }

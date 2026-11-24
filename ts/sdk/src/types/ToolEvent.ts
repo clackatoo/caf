@@ -60,8 +60,10 @@ pieces: Array<Piece>,
 /**
  * The folder a command's shell ended in, if known: the folder
  * the chat's next command runs in
- * ([`Action::Run::folder`](crate::tool::Action::Run)). Never
- * taken from a job's end.
+ * ([`Action::Run::folder`](crate::tool::Action::Run)), so the
+ * foreground command that finishes last sets it. Absolute, at
+ * most 4096 bytes: any other is ignored. Its `.` and `..` are
+ * worked out. Never taken from a job's end.
  */
 folder: string | null, 
 /**

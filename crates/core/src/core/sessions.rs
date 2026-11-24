@@ -108,6 +108,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 conn,
                 shell: cwd.clone(),
                 notices_held: false,
+                shell_warned: false,
                 cwd,
                 mcp: open.mcp_servers,
                 mcp_sent: super::state::SentServers(mcp_sent),
@@ -737,11 +738,22 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Stops waiting for `chat`'s session: its waiting messages end as
-    /// stopped.
+    /// stopped, and its notices are held.
     pub(super) fn stop_opening(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
         self.abandon_open(now, chat);
+        // The user stopped it: messages waiting are stopped, and notices
+        // held, as the user's Stop does.
         for turn in self.waiting_turns(chat) {
-            self.set_life(now, chat, turn, TurnLife::Stopped);
+            let notice = matches!(
+                self.turn(chat, turn).map(|each| &each.starter),
+                Some(crate::chat::Starter::Notice(_))
+            );
+            if !notice {
+                self.set_life(now, chat, turn, TurnLife::Stopped);
+            }
+        }
+        if let Some(run) = self.runs.get_mut(&chat) {
+            run.notices_held = true;
         }
         self.set_state(
             chat,
@@ -892,6 +904,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         for turn in self.waiting_turns(chat) {
             self.set_life(now, chat, turn, TurnLife::Stopped);
         }
+        self.release_notices(chat);
         self.end_agent_turn(now, chat);
         self.stop_jobs(now, chat, stopped, out);
         self.abandon_open(now, chat);

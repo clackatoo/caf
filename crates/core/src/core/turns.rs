@@ -56,7 +56,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Starter::Notice(text) if !text.is_empty() => {}
             _ => return Err(Refused::Unsupported),
         }
-        if self.waiting_turns(chat).len() >= self.host.limits.queued_messages {
+        // Only the user's messages count: a notice never fills the queue.
+        if matches!(starter, Starter::User(_))
+            && self.waiting_messages(chat) >= self.host.limits.queued_messages
+        {
             return Err(Refused::QueueFull);
         }
         // Its number is taken before anything unarchiving numbers.
@@ -124,7 +127,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 spent: None,
             },
         );
-        if (self.runs.get(&chat)).is_some_and(|run| run.open == Open::Idle) {
+        // Held, it waits for the next message, which opens the session.
+        if (self.runs.get(&chat)).is_some_and(|run| run.open == Open::Idle && !run.notices_held) {
             self.want_open(now, chat, out);
         }
         self.pump(now, chat, out);
@@ -132,10 +136,22 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// Lets go the notices `chat`'s Stop held, as a message or the app's
     /// notice is queued after them: they're sent first, in order.
-    fn release_notices(&mut self, chat: ChatId) {
+    pub(super) fn release_notices(&mut self, chat: ChatId) {
         if let Some(run) = self.runs.get_mut(&chat) {
             run.notices_held = false;
         }
+    }
+
+    /// How many of the user's messages wait to be sent in `chat`.
+    fn waiting_messages(&self, chat: ChatId) -> usize {
+        (self.waiting_turns(chat).into_iter())
+            .filter(|&turn| {
+                matches!(
+                    self.turn(chat, turn).map(|each| &each.starter),
+                    Some(Starter::User(_))
+                )
+            })
+            .count()
     }
 
     /// The turns of `chat` waiting to be sent, oldest first.
@@ -477,13 +493,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let run = self.runs.get(&chat).ok_or(Refused::NoSuchChat)?;
         // Messages waiting are stopped; notices are held, so the agent
         // still hears what they say, with whatever's sent next.
-        let (notices, waiting): (Vec<TurnId>, Vec<TurnId>) = (self.waiting_turns(chat).into_iter())
-            .partition(|&turn| {
+        let waiting: Vec<TurnId> = (self.waiting_turns(chat).into_iter())
+            .filter(|&turn| {
                 matches!(
                     self.turn(chat, turn).map(|each| &each.starter),
-                    Some(Starter::Notice(_))
+                    Some(Starter::User(_))
                 )
-            });
+            })
+            .collect();
         let opening = matches!(run.open, Open::Wanted | Open::Asked { .. })
             && whole.state != ChatState::Closed;
         let running = run
@@ -534,9 +551,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         for turn in waiting {
             self.set_life(now, chat, turn, TurnLife::Stopped);
         }
-        if !notices.is_empty()
-            && let Some(run) = self.runs.get_mut(&chat)
-        {
+        // Those waiting, and any that come after, until the next message.
+        if let Some(run) = self.runs.get_mut(&chat) {
             run.notices_held = true;
         }
         if opening {

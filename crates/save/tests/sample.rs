@@ -454,7 +454,8 @@ fn stopped() -> Vec<Value> {
 }
 
 /// What version 8 added: a command run in the background, a job still
-/// running, and the TaskStop call that stopped another.
+/// running, the TaskStop call that stopped another, and that job,
+/// cancelled by the agent.
 fn jobs() -> Vec<Value> {
     let mut job = tool("Execute", "Running", Value::Null);
     job["origin"] = json!({ "type": "Caf", "value": { "type": "Bash" } });
@@ -466,9 +467,17 @@ fn jobs() -> Vec<Value> {
     stop["origin"] = json!({ "type": "Caf", "value": { "type": "TaskStop" } });
     stop["action"] = json!({ "type": "Stop", "value": { "job": 1 } });
     stop["decision"] = json!({ "type": "NotAsked" });
+    let mut stopped = tool("Execute", "Cancelled", Value::Null);
+    stopped["origin"] = json!({ "type": "Caf", "value": { "type": "Bash" } });
+    stopped["action"] = json!({ "type": "Run", "value": {
+        "command": "sleep 100", "folder": "/work", "background": true,
+    }});
+    stopped["job"] = json!(1);
+    stopped["stopped_by"] = json!({ "type": "Agent" });
     vec![
         json!({ "type": "ToolChanged", "value": { "item": 15, "tool": job } }),
         json!({ "type": "ToolChanged", "value": { "item": 16, "tool": stop } }),
+        json!({ "type": "ToolChanged", "value": { "item": 17, "tool": stopped } }),
     ]
 }
 

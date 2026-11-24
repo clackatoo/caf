@@ -11,7 +11,8 @@ export type Limits = {
  */
 biggest_message: number, 
 /**
- * How many messages may wait while a turn runs, per chat. 8.
+ * How many of the user's messages may wait while a turn runs, per
+ * chat: notices, the app's or a background job's, never count. 8.
  */
 queued_messages: number, 
 /**

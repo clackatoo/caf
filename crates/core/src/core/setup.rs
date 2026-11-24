@@ -1262,6 +1262,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             for &turn in &waiting {
                 self.set_life(now, chat, turn, TurnLife::Stopped);
             }
+            // Notices held are stopped too: there's nothing left to hold.
+            self.release_notices(chat);
             if !waiting.is_empty() {
                 self.say(now, chat, note.clone());
             }

@@ -433,7 +433,7 @@ fn definition(tool: CafTool, tools: &[CafTool]) -> Value {
             json!({
                 "command": text("The command to execute"),
                 "timeout": whole("Optional timeout in milliseconds (max 600000)", 0),
-                "description": text("Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does."),
+                "description": text(BASH_DESCRIPTION),
                 "run_in_background": flag("Set to true to run this command in the background. You'll be notified when it finishes."),
             }),
             vec!["command"],
@@ -492,6 +492,18 @@ const EDIT: &str = "Performs exact string replacement in a file.
 const WRITE: &str = "Writes a file to the local filesystem, overwriting if one exists.
 When to use: creating a new file, or fully replacing one you've already Read. Overwriting an existing file you haven't Read will fail. For partial changes, use Edit instead.";
 
+/// Bash's `description` field's description: Claude Code 2.1's own.
+const BASH_DESCRIPTION: &str = "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does.
+Say what the command does in plain words: do not echo the command's text, its flags, or file paths - the user reads this description, often without seeing the command.
+For simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):
+- ls \u{2192} \"List files in current directory\"
+- git status \u{2192} \"Show working tree status\"
+- npm install \u{2192} \"Install package dependencies\"
+For commands that are harder to parse at a glance (piped commands, obscure flags, etc.), add enough context to clarify what it does:
+- find . -name \"*.tmp\" -exec rm {} \\; \u{2192} \"Find and delete all .tmp files recursively\"
+- git reset --hard origin/main \u{2192} \"Discard all local changes and match remote main\"
+- curl -s url | jq '.data[]' \u{2192} \"Fetch JSON from URL and extract data array elements\"";
+
 /// TaskStop's description: Claude Code 2.1's own, less what it says of
 /// agent teams, which CAF hasn't.
 const TASK_STOP: &str = "
@@ -508,7 +520,8 @@ const TASK_STOP: &str = "
 /// background commands are stopped with TaskStop.
 fn bash(tools: &[CafTool]) -> String {
     let mut out = String::from(
-        "Executes a given bash command and returns its output.\n\n\
+        "Executes a given bash command (with sh where bash isn't installed) and returns its \
+         output.\n\n\
          The working directory persists between commands, but shell state does not.\n",
     );
     let dedicated: Vec<&str> = [
@@ -802,6 +815,17 @@ mod tests {
         assert!(all.contains("Read files: Use Read") && all.contains("use TaskStop"));
         assert!(!all.contains("Glob") && !all.contains("Grep"));
         assert!(all.contains("Never skip hooks"), "the git rules stay");
+        assert!(
+            all.starts_with("Executes a given bash command (with sh where bash isn't installed)")
+        );
+        let list = tool_list(&[CafTool::Bash]);
+        let field = list[0]["inputSchema"]["properties"]["description"]["description"]
+            .as_str()
+            .expect("text");
+        assert!(
+            field.contains("keep it brief (5-10 words)")
+                && field.ends_with("data array elements\"")
+        );
         let alone = bash(&[CafTool::Bash]);
         assert!(!alone.contains("IMPORTANT") && !alone.contains("TaskStop"));
         let some = bash(&[CafTool::Bash, CafTool::Edit]);

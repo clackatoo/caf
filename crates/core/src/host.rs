@@ -96,7 +96,8 @@ pub struct Limits {
     /// dropped, and refused if it was a request, so nothing waits on it.
     /// 64 MiB.
     pub biggest_message: usize,
-    /// How many messages may wait while a turn runs, per chat. 8.
+    /// How many of the user's messages may wait while a turn runs, per
+    /// chat: notices, the app's or a background job's, never count. 8.
     pub queued_messages: usize,
     /// How many lines of an agent's error output to keep for explaining a
     /// failure, and how long each may be. 4 lines of 300 bytes.
