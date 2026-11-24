@@ -859,7 +859,15 @@ impl<A: AppItem> ToolsDriver<A> {
                                 &app.name,
                                 call,
                                 "previewing",
-                                Box::pin(async move { preview.await.map_err(ended) }),
+                                // A preview's `Err` ends the call Failed, done
+                                // or not: it never ran.
+                                Box::pin(async move {
+                                    preview.await.map_err(|done| {
+                                        let (mut ran, item) = ended(done);
+                                        ran.done = false;
+                                        (ran, item)
+                                    })
+                                }),
                                 || Err((failed(APP_PANICKED), None)),
                             );
                             task = Some(spawned);
@@ -4258,9 +4266,13 @@ mod tests {
         ) -> Option<crate::app_tools::BoxFuture<Result<Vec<Piece>, Done>>> {
             assert!(input.how != "preview", "previewing");
             let poll = input.how == "preview_poll";
+            let done = input.how == "preview_done";
             Some(Box::pin(async move {
                 assert!(!poll, "polling a preview");
-                Ok(Vec::new())
+                match done {
+                    true => Err(Done::answer("Nothing to trim")),
+                    false => Ok(Vec::new()),
+                }
             }))
         }
 
@@ -4487,5 +4499,23 @@ mod tests {
         );
         let short = app_notice(JobId(1), None, "Render", true, &Answer::text("Rendered"));
         assert!(short.contains("<result>Rendered</result>"), "{short}");
+    }
+
+    #[tokio::test]
+    async fn an_app_tools_preview_that_ends_its_call_fails_it_even_if_done() {
+        let (mut h, _go, _started, _blocked) = misbehaving();
+        h.serve_app(CHAT, &["misbehave"]);
+        let mut client = h.bound(CHAT).await;
+        let input = json!({"how": "preview_done"});
+        let (call, _) = call_app(&mut h, &mut client, 1, "misbehave", input.clone()).await;
+        h.apply(app_directive(call, input, false));
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Finished { done: false, .. })
+        });
+        let answer = client.recv().await;
+        assert_eq!(answer["id"], 1);
+        assert_eq!(text_of(&answer), "Nothing to trim");
+        client.nothing_waiting().await;
+        h.quiet().await;
     }
 }
