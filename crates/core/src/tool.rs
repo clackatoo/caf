@@ -708,6 +708,20 @@ impl Image {
     }
 }
 
+impl Output {
+    /// The end of a command's output, `ending`, as a runner gives it in
+    /// [`ToolEvent::Finished`](crate::event::ToolEvent::Finished): its
+    /// lines came as it ran.
+    #[must_use]
+    pub fn ended(ending: Ending) -> Self {
+        Self {
+            lines: Vec::new(),
+            dropped: 0,
+            ending: Some(ending),
+        }
+    }
+}
+
 impl Location {
     /// The file at `path`, an absolute path, and the line, numbered from
     /// 1, if it's about one.

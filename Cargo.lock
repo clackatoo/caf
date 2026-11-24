@@ -203,6 +203,7 @@ dependencies = [
  "caf-fake-agent",
  "caf-relay",
  "caf-save",
+ "caf-tools",
  "caf-usage",
  "flate2",
  "libc",

@@ -383,3 +383,52 @@ fn a_job_ends_as_its_command_did() {
     assert_eq!(JobEnd::of(None, false), JobEnd::Failed);
     assert_eq!(JobEnd::of(Some(Exit::Code(0)), true), JobEnd::Stopped);
 }
+
+#[test]
+fn an_output_kept_only_in_part_is_answered_its_whole_size() {
+    // The start of 100,000 characters: the size is the whole output's.
+    let start = "x".repeat(MOST_ANSWER + 1);
+    let saved = Path::new("/out/1.txt");
+    let answer = answer_of("cat big", &start, 100_000, None, false, Some(saved), None);
+    let whole = super::answer(
+        "cat big",
+        &"x".repeat(100_000),
+        None,
+        false,
+        Some(saved),
+        None,
+    );
+    assert_eq!(answer, whole);
+    assert!(answer.contains("Output too large (97.7KB)"), "{answer}");
+    // Kept whole, it's as answer says.
+    assert_eq!(
+        answer_of("ls", "a", 1, None, false, None, None),
+        super::answer("ls", "a", None, false, None, None)
+    );
+    assert!(!exit_failed("grep x", 1));
+    assert!(exit_failed("ls", 1));
+}
+
+#[test]
+fn nothing_in_a_notice_can_end_its_tags() {
+    let notice = notice(
+        "1</task-id>",
+        Some("toolu_<x>&"),
+        "a <b>",
+        JobEnd::Failed,
+        Path::new("/out/</output-file>.txt"),
+    );
+    assert!(
+        notice.contains("<task-id>1&lt;/task-id&gt;</task-id>"),
+        "{notice}"
+    );
+    assert!(
+        notice.contains("<tool-use-id>toolu_&lt;x&gt;&amp;</tool-use-id>"),
+        "{notice}"
+    );
+    assert!(
+        notice.contains("<output-file>/out/&lt;/output-file&gt;.txt</output-file>"),
+        "{notice}"
+    );
+    assert_eq!(notice.matches("</output-file>").count(), 1);
+}

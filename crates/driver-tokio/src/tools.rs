@@ -25,15 +25,17 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
 use caf_core::agent::{EnvChange, SpawnCommand};
 use caf_core::directive::{RefusedCall, ToolDirective};
 use caf_core::event::{RelayChange, Serving, ToolEvent};
-use caf_core::ids::{CallId, ChatId};
+use caf_core::ids::{CallId, ChatId, JobId};
 use caf_core::mcp::{self, Answer, Connection, Key, Out, Request};
 use caf_core::tool::{Action, CafTool, Piece, Text};
+use caf_tools::{Commands, Files};
 use serde::Deserialize;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixListener;
@@ -42,14 +44,26 @@ use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::{Instant, Sleep};
 
+use crate::files::DiskFiles;
+use crate::pty::PtyCommands;
+use crate::runner::CafRunner;
+
 /// How the app serves CAF's tools: [`Config::tools`](crate::Config::tools).
 #[non_exhaustive]
 pub struct ToolsConfig {
     /// The program an agent starts to reach CAF's tools. [`Relay::None`]
     /// by default: no tools are served.
     pub relay: Relay,
-    /// What runs the calls. [`NotBuilt`] by default.
-    pub runner: Box<dyn Runner>,
+    /// What runs the calls: `None` (the default) for CAF's own runner,
+    /// which reads and writes through [`files`](Self::files) and runs
+    /// commands with [`commands`](Self::commands).
+    pub runner: Option<Box<dyn Runner>>,
+    /// Where CAF's own runner reads and writes files: the disk
+    /// ([`DiskFiles`]) by default, or the app's editor buffers.
+    pub files: Arc<dyn Files>,
+    /// Where CAF's own runner runs commands: a pty of its own for each
+    /// ([`PtyCommands`]) by default, or the app's visible terminals.
+    pub commands: Arc<dyn Commands>,
     /// The folder the socket relays connect to is made in, which must be
     /// the user's alone. `None` (the default) means `$XDG_RUNTIME_DIR/caf`,
     /// or else `caf-<uid>` in the temporary folder; either is made, mode
@@ -64,7 +78,9 @@ impl Default for ToolsConfig {
     fn default() -> Self {
         Self {
             relay: Relay::None,
-            runner: Box::new(NotBuilt),
+            runner: None,
+            files: Arc::new(DiskFiles),
+            commands: Arc::new(PtyCommands),
             folder: None,
             progress_every: PROGRESS_EVERY,
         }
@@ -144,19 +160,33 @@ impl std::error::Error for StartError {}
 /// What runs calls to CAF's tools, for the tools driver.
 ///
 /// Cancelling a call is dropping its future, so a runner cleans up on
-/// drop: a command it started is stopped, say.
+/// drop: a command it started is stopped, say. So is stopping a job
+/// (TaskStop): the driver drops the job's future, and never asks the
+/// runner.
 pub trait Runner: Send + 'static {
     /// What `action` would do, without doing anything, such as an edit's
-    /// diff.
-    fn preview(
-        &mut self,
-        call: &Call,
-        action: Action,
-    ) -> Pin<Box<dyn Future<Output = Vec<Piece>> + Send>>;
+    /// diff: or, if it can't be done, what the call ends with, at once,
+    /// asking no one, such as an edit of a file never read.
+    fn preview(&mut self, call: &Call, action: Action) -> Preview;
     /// Does `action`, printing a command's output with
-    /// [`Call::print`] as it comes.
+    /// [`Call::print`] as it comes. It may answer the model before it
+    /// ends, and go on as a job ([`Call::answer_now`]).
     fn run(&mut self, call: Call, action: Action) -> Pin<Box<dyn Future<Output = Ran> + Send>>;
+    /// The chat is let go, or no longer served tools: whatever the runner
+    /// keeps for it can go. Its calls have all been dropped already.
+    fn let_go(&mut self, chat: ChatId) {
+        let _ = chat;
+    }
+    /// Call `call` won't be run, or has gone, whether it was previewed or
+    /// not: whatever the runner keeps for it can go.
+    fn forget(&mut self, call: CallId) {
+        let _ = call;
+    }
 }
+
+/// What a [`Runner`] previews: what the call would do, or what it ends
+/// with, failed, if it can't be done.
+pub type Preview = Pin<Box<dyn Future<Output = Result<Vec<Piece>, Ran>> + Send>>;
 
 /// What a call did.
 #[non_exhaustive]
@@ -167,8 +197,18 @@ pub struct Ran {
     /// What it gave back, for the record
     /// ([`ToolEvent::Finished`]'s `pieces`).
     pub record: Vec<Piece>,
-    /// What the model is answered.
+    /// What the model is answered. Unused for a job: the model was
+    /// answered when it became one.
     pub answer: Answer,
+    /// The folder a command's shell ended in, if known, as an absolute
+    /// path: where the chat's next command runs.
+    pub folder: Option<String>,
+    /// For a job, what the agent is told of its end, in a notice turn.
+    /// A job ending by itself without one is given a plain one saying it
+    /// failed: only TaskStop's stop ([`Action::Stop`]) ends a job with
+    /// none, so the core tells a job that ended just as it was stopped
+    /// from one it stopped.
+    pub notice: Option<String>,
 }
 
 impl Ran {
@@ -180,7 +220,34 @@ impl Ran {
             done,
             record,
             answer,
+            folder: None,
+            notice: None,
         }
+    }
+
+    /// A call that failed, saying `why` to the record and the model.
+    #[must_use]
+    pub fn failed(why: impl Into<String>) -> Self {
+        let why = why.into();
+        Self::new(
+            false,
+            vec![Piece::Text(Text::new(why.clone()))],
+            Answer::error(why),
+        )
+    }
+
+    /// With the folder its command's shell ended in.
+    #[must_use]
+    pub fn with_folder(mut self, folder: impl Into<String>) -> Self {
+        self.folder = Some(folder.into());
+        self
+    }
+
+    /// With what the agent is told of a job's end.
+    #[must_use]
+    pub fn with_notice(mut self, notice: impl Into<String>) -> Self {
+        self.notice = Some(notice.into());
+        self
     }
 }
 
@@ -189,9 +256,17 @@ impl Ran {
 pub struct Call {
     chat: ChatId,
     id: CallId,
+    cwd: PathBuf,
     input: serde_json::Value,
+    agent_call: Option<String>,
     prints: mpsc::UnboundedSender<Print>,
+    jobs: Jobs,
+    job: Option<JobId>,
 }
+
+/// The last job number each chat was given, shared by the driver and its
+/// calls: so a job's number is known as its answer is made.
+type Jobs = Arc<Mutex<HashMap<ChatId, u64>>>;
 
 impl Call {
     /// The chat it's for.
@@ -204,6 +279,13 @@ impl Call {
     #[must_use]
     pub fn id(&self) -> CallId {
         self.id
+    }
+
+    /// The chat's folder: what the model is told is its working
+    /// directory.
+    #[must_use]
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
     }
 
     /// What the model gave it, whole: for what its action doesn't say,
@@ -219,15 +301,54 @@ impl Call {
     /// 0 ([`ToolEvent::Output`]). Batched: what's printed is reported at
     /// most every 100 ms or 16 KiB.
     pub fn print(&self, from: u64, lines: Vec<String>) {
-        let _ = self.prints.send(Print {
+        let _ = self.prints.send(Print::Lines {
             call: self.id,
             from,
             lines,
         });
     }
+
+    /// The agent's own id for the call, if it gave one, such as Claude's
+    /// `tool_use` id: for a job's notice.
+    #[must_use]
+    pub fn agent_call(&self) -> Option<&str> {
+        self.agent_call.as_deref()
+    }
+
+    /// Answers the model now, with what `answer` makes of the call's job
+    /// number, and goes on as that job: the run's future carries on, and
+    /// what it gives at the end is the job's record, and its notice
+    /// ([`Ran::with_notice`]). Reported as
+    /// [`ToolEvent::Detached`] before the answer is sent. Once only: a
+    /// second does nothing, and gives the job it is already.
+    pub fn answer_now(&mut self, answer: impl FnOnce(JobId) -> Answer) -> JobId {
+        if let Some(job) = self.job {
+            return job;
+        }
+        let job = {
+            let mut jobs = self.jobs.lock().unwrap_or_else(PoisonError::into_inner);
+            let last = jobs.entry(self.chat).or_default();
+            *last += 1;
+            JobId(*last)
+        };
+        self.job = Some(job);
+        let _ = self.prints.send(Print::Detach {
+            call: self.id,
+            job,
+            answer: answer(job),
+        });
+        job
+    }
+
+    /// The job it went on as, if it did.
+    #[must_use]
+    pub fn job(&self) -> Option<JobId> {
+        self.job
+    }
 }
 
-/// The runner until CAF's tools are built: every call fails, saying so.
+/// The runner that fails every call, saying CAF's tools aren't built:
+/// what a runner did before CAF's own were.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NotBuilt;
 
@@ -235,12 +356,8 @@ pub struct NotBuilt;
 const NOT_BUILT: &str = "CAF's tools aren't built yet";
 
 impl Runner for NotBuilt {
-    fn preview(
-        &mut self,
-        _call: &Call,
-        _action: Action,
-    ) -> Pin<Box<dyn Future<Output = Vec<Piece>> + Send>> {
-        Box::pin(std::future::ready(Vec::new()))
+    fn preview(&mut self, _call: &Call, _action: Action) -> Preview {
+        Box::pin(std::future::ready(Ok(Vec::new())))
     }
 
     fn run(&mut self, _call: Call, _action: Action) -> Pin<Box<dyn Future<Output = Ran> + Send>> {
@@ -250,7 +367,7 @@ impl Runner for NotBuilt {
 
 /// A call that failed, saying `why` to the record and the model.
 fn failed(why: &str) -> Ran {
-    Ran::new(false, vec![Piece::Text(Text::new(why))], Answer::error(why))
+    Ran::failed(why)
 }
 
 /// How long a relay has to say which chat it serves.
@@ -309,14 +426,17 @@ pub(crate) struct ToolsDriver {
     last_call: u64,
     prints: mpsc::UnboundedSender<Print>,
     printed: mpsc::UnboundedReceiver<Print>,
+    /// Each chat's last job number.
+    jobs: Jobs,
     /// Reports waiting to be handed out.
     reports: VecDeque<Report>,
-    /// The answer to each call that finished, held until the core has
-    /// taken its [`ToolEvent::Finished`]: so the agent can't end its turn
-    /// on hearing it before the core knows the call is done.
+    /// The answer to each call that finished, or became a job, held until
+    /// the core has taken its [`ToolEvent::Finished`] or
+    /// [`ToolEvent::Detached`]: so the agent can't end its turn, or stop
+    /// the job, on hearing it before the core knows.
     held: HashMap<CallId, Held>,
-    /// The call whose `Finished` was handed out last, its answer to be
-    /// written once the core has it ([`ToolsDriver::taken`]).
+    /// The call whose `Finished` or `Detached` was handed out last, its
+    /// answer to be written once the core has it ([`ToolsDriver::taken`]).
     finished: Option<CallId>,
     /// One sleep, moved to the next batch or progress due.
     sleep: Pin<Box<Sleep>>,
@@ -356,6 +476,8 @@ impl Drop for SocketFile {
 struct Served {
     tools: Vec<CafTool>,
     instructions: String,
+    /// The chat's folder.
+    cwd: PathBuf,
 }
 
 /// A finished call's answer, waiting for the core to take its `Finished`.
@@ -381,9 +503,14 @@ struct Each {
     chat: ChatId,
     conn: u64,
     request: Request,
+    /// The agent's own id for it.
+    agent_call: Option<String>,
     /// Whether the core has said to run it.
     running: bool,
-    preview: Option<Running<Vec<Piece>>>,
+    /// The job it became, once the model was answered and it went on:
+    /// its request is answered, and it's no longer its connection's.
+    job: Option<JobId>,
+    preview: Option<Running<Result<Vec<Piece>, Ran>>>,
     run: Option<Running<Ran>>,
     /// When its progress is next sent.
     progress_at: Instant,
@@ -399,12 +526,28 @@ struct Batch {
     due: Instant,
 }
 
-/// A [`Call::print`].
+/// Lines a call printed.
 #[derive(Debug)]
-struct Print {
-    call: CallId,
+struct Printed {
     from: u64,
     lines: Vec<String>,
+}
+
+/// What a call tells the driver as it runs.
+#[derive(Debug)]
+enum Print {
+    /// [`Call::print`].
+    Lines {
+        call: CallId,
+        from: u64,
+        lines: Vec<String>,
+    },
+    /// [`Call::answer_now`].
+    Detach {
+        call: CallId,
+        job: JobId,
+        answer: Answer,
+    },
 }
 
 /// What a connection's reading task tells the driver.
@@ -441,10 +584,25 @@ struct Hello {
 }
 
 impl ToolsDriver {
-    fn with(config: ToolsConfig, live: Option<Live>) -> Self {
+    /// A driver as `config` says, serving relays at `live`, if any, from
+    /// the tools' `folder`.
+    /// `folder` is the tools' folder, and the name of this driver's own in
+    /// its `out/`.
+    fn with(config: ToolsConfig, live: Option<Live>, folder: Option<(&Path, &str)>) -> Self {
         let (prints, printed) = mpsc::unbounded_channel();
+        let runner = match (config.runner, folder) {
+            (Some(runner), _) => runner,
+            (None, Some((folder, out))) => Box::new(CafRunner::new(
+                config.files,
+                config.commands,
+                &folder.join("out"),
+                out,
+            )),
+            // Nothing is served, so nothing is run.
+            (None, None) => Box::new(NotBuilt),
+        };
         Self {
-            runner: config.runner,
+            runner,
             progress_every: config.progress_every.max(Duration::from_millis(1)),
             live,
             served: HashMap::new(),
@@ -454,6 +612,7 @@ impl ToolsDriver {
             last_call: 0,
             prints,
             printed,
+            jobs: Jobs::default(),
             reports: VecDeque::new(),
             held: HashMap::new(),
             finished: None,
@@ -475,7 +634,7 @@ impl ToolsDriver {
         app: &str,
     ) -> Result<(Self, Option<Serving>), StartError> {
         let relay = match std::mem::take(&mut config.relay) {
-            Relay::None => return Ok((Self::with(config, None), None)),
+            Relay::None => return Ok((Self::with(config, None, None), None)),
             Relay::ThisProgram => {
                 let program = std::env::current_exe()
                     .map_err(|e| StartError::Serving(format!("it can't find this program: {e}")))?;
@@ -507,6 +666,12 @@ impl ToolsDriver {
         // A second CAF in the same process gets a name of its own.
         static STARTED: AtomicU64 = AtomicU64::new(0);
         let nth = STARTED.fetch_add(1, Ordering::Relaxed);
+        // Its output files' folder is named for this process too: one
+        // that's gone left its for the next to remove.
+        let out = match nth {
+            0 => std::process::id().to_string(),
+            nth => format!("{}-{nth}", std::process::id()),
+        };
         let name = match nth {
             0 => format!("{}-{}.sock", file_name(app), std::process::id()),
             nth => format!("{}-{}-{nth}.sock", file_name(app), std::process::id()),
@@ -538,7 +703,10 @@ impl ToolsDriver {
             last_conn: 0,
             accept_again: None,
         };
-        Ok((Self::with(config, Some(live)), serving))
+        Ok((
+            Self::with(config, Some(live), Some((&folder, &out))),
+            serving,
+        ))
     }
 
     /// Carries out the core's directive.
@@ -548,14 +716,14 @@ impl ToolsDriver {
                 chat,
                 tools,
                 instructions,
-                // For the runner, once it's CAF's own.
-                cwd: _,
+                cwd,
             } => {
                 self.served.insert(
                     chat,
                     Served {
                         tools,
                         instructions,
+                        cwd: PathBuf::from(cwd),
                     },
                 );
             }
@@ -564,27 +732,32 @@ impl ToolsDriver {
                 if let Some(conn) = self.bound.get(&chat).copied() {
                     self.close(conn, Closing::Ended);
                 }
+                // The core cancelled them already: any still here, whose
+                // connection was lost, stop now.
+                // Its job numbers go on counting: none is ever used twice.
+                self.calls.retain(|_, each| each.chat != chat);
+                let runner = &mut self.runner;
+                if std::panic::catch_unwind(AssertUnwindSafe(|| runner.let_go(chat))).is_err() {
+                    log::warn!(target: "caf", "the tool runner panicked letting go of chat {}", chat.0);
+                }
             }
             ToolDirective::Preview {
                 call,
                 action,
                 input,
             } => {
-                let Some(each) = self.calls.get_mut(&call) else {
+                let Some(given) = self.call_for(call, input) else {
                     return;
                 };
-                let given = Call {
-                    chat: each.chat,
-                    id: call,
-                    input,
-                    prints: self.prints.clone(),
+                let Some(each) = self.calls.get_mut(&call) else {
+                    return;
                 };
                 let runner = &mut self.runner;
                 let preview =
                     std::panic::catch_unwind(AssertUnwindSafe(|| runner.preview(&given, action)))
                         .unwrap_or_else(|_| {
                             log::warn!(target: "caf", "the tool runner panicked previewing call {}", call.0);
-                            Box::pin(std::future::ready(Vec::new()))
+                            Box::pin(std::future::ready(Err(failed(PANICKED))))
                         });
                 each.preview = Some(preview);
             }
@@ -593,14 +766,16 @@ impl ToolsDriver {
                 action,
                 input,
             } => {
-                let Some(each) = self.calls.get_mut(&call) else {
+                if let Action::Stop { job } = action {
+                    self.stop_job(call, job);
+                    self.wake_at_next();
+                    return;
+                }
+                let Some(given) = self.call_for(call, input) else {
                     return;
                 };
-                let given = Call {
-                    chat: each.chat,
-                    id: call,
-                    input,
-                    prints: self.prints.clone(),
+                let Some(each) = self.calls.get_mut(&call) else {
+                    return;
                 };
                 let runner = &mut self.runner;
                 let run = std::panic::catch_unwind(AssertUnwindSafe(|| runner.run(given, action)))
@@ -613,15 +788,21 @@ impl ToolsDriver {
                 each.run = Some(run);
             }
             ToolDirective::Refuse { call, why } => {
+                self.forget(call);
                 if let Some(each) = self.calls.remove(&call) {
                     self.answer(each.conn, &each.request, &Answer::error(refused(&why)));
                 }
             }
             ToolDirective::Cancel { call } => {
+                self.forget(call);
                 if let Some(each) = self.calls.remove(&call) {
-                    // Its work stops before the model hears it did.
+                    // Its work stops before the model hears it did. A job's
+                    // model was answered, unless that answer still waits.
+                    let job = each.job.is_some();
                     let (conn, request) = each.stop();
-                    self.answer(conn, &request, &Answer::error(CANCELLED));
+                    if !job || self.held.remove(&call).is_some() {
+                        self.answer(conn, &request, &Answer::error(CANCELLED));
+                    }
                 } else if let Some(held) = self.held.remove(&call) {
                     // It finished as the core stopped it: the work was
                     // done, so the model hears what it gave.
@@ -632,6 +813,77 @@ impl ToolsDriver {
             _ => {}
         }
         self.wake_at_next();
+    }
+
+    /// Tells the runner `call` won't run, or has gone.
+    fn forget(&mut self, call: CallId) {
+        let runner = &mut self.runner;
+        if std::panic::catch_unwind(AssertUnwindSafe(|| runner.forget(call))).is_err() {
+            log::warn!(target: "caf", "the tool runner panicked forgetting call {}", call.0);
+        }
+    }
+
+    /// The call `call` is, for the runner: `None` if it's gone.
+    fn call_for(&self, call: CallId, input: serde_json::Value) -> Option<Call> {
+        let each = self.calls.get(&call)?;
+        let cwd =
+            (self.served.get(&each.chat)).map_or_else(PathBuf::new, |served| served.cwd.clone());
+        Some(Call {
+            chat: each.chat,
+            id: call,
+            cwd,
+            input,
+            agent_call: each.agent_call.clone(),
+            prints: self.prints.clone(),
+            jobs: Arc::clone(&self.jobs),
+            job: None,
+        })
+    }
+
+    /// Runs TaskStop `call`, of job `job`: stops the job, if it's its
+    /// chat's and still running, and reports its end, then the
+    /// TaskStop's.
+    fn stop_job(&mut self, call: CallId, job: JobId) {
+        let Some(chat) = self.calls.get(&call).map(|each| each.chat) else {
+            return;
+        };
+        let found = (self.calls.iter())
+            .find(|(_, each)| each.chat == chat && each.job == Some(job))
+            .map(|(&target, _)| target);
+        let ran =
+            match found.and_then(|target| self.calls.remove(&target).map(|each| (target, each))) {
+                Some((target, mut each)) => {
+                    if let Some(batch) = each.batch.take() {
+                        self.reports.push_back(output(target, batch));
+                    }
+                    // Dropped, its command stops.
+                    let _ = each.stop();
+                    // Any answer it still had waiting is the model's.
+                    if let Some(held) = self.held.remove(&target) {
+                        self.answer(held.conn, &held.request, &held.answer);
+                    }
+                    self.reports.push_back(Report::Tool {
+                        call: target,
+                        event: ToolEvent::Finished {
+                            done: false,
+                            pieces: Vec::new(),
+                            folder: None,
+                            notice: None,
+                        },
+                    });
+                    Ran::new(
+                        true,
+                        vec![Piece::Text(Text::new(caf_tools::job_stopped(job.0)))],
+                        Answer::text(caf_tools::job_stopped(job.0)),
+                    )
+                }
+                None => Ran::failed(caf_tools::no_job(job.0)),
+            };
+        if let Some(each) = self.calls.get_mut(&call) {
+            each.running = true;
+            each.preview = None;
+            each.run = Some(Box::pin(std::future::ready(ran)));
+        }
     }
 
     /// The next report, for the core. Cancel-safe: everything is kept in
@@ -674,7 +926,7 @@ impl ToolsDriver {
         let report = self.reports.pop_front()?;
         if let Report::Tool {
             call,
-            event: ToolEvent::Finished { .. },
+            event: ToolEvent::Finished { .. } | ToolEvent::Detached { .. },
         } = &report
         {
             self.finished = Some(*call);
@@ -830,7 +1082,9 @@ impl ToolsDriver {
                             chat,
                             conn: no,
                             request,
+                            agent_call: agent_call.clone(),
                             running: false,
+                            job: None,
                             preview: None,
                             run: None,
                             progress_at: Instant::now() + self.progress_every,
@@ -847,12 +1101,17 @@ impl ToolsDriver {
                         },
                     });
                 }
+                // A job's request was answered: it's no longer the agent's
+                // to cancel, and goes on.
                 Out::Cancelled(request) => {
                     let found = (self.calls.iter())
-                        .find(|(_, each)| each.conn == no && each.request == request)
+                        .find(|(_, each)| {
+                            each.conn == no && each.request == request && each.job.is_none()
+                        })
                         .map(|(call, _)| *call);
                     if let Some(call) = found {
                         self.calls.remove(&call);
+                        self.forget(call);
                         self.reports.push_back(Report::Tool {
                             call,
                             event: ToolEvent::Gone,
@@ -882,15 +1141,22 @@ impl ToolsDriver {
         if self.bound.get(&conn.chat) == Some(&no) {
             self.bound.remove(&conn.chat);
         }
+        // A job isn't its connection's: its model was answered, and it
+        // goes on, unless its chat is let go or CAF shuts down.
         let ended: Vec<CallId> = (self.calls.iter())
-            .filter(|(_, each)| each.conn == no)
+            .filter(|(_, each)| {
+                each.conn == no && (each.job.is_none() || closing == Closing::Ended)
+            })
             .map(|(call, _)| *call)
             .collect();
         for call in ended {
+            self.forget(call);
             let Some(each) = self.calls.remove(&call) else {
                 continue;
             };
-            if closing == Closing::Ended {
+            if each.job.is_some() {
+                drop(each);
+            } else if closing == Closing::Ended {
                 // Its work stops before the model hears it did.
                 let (_, request) = each.stop();
                 if let Some(bytes) = conn.mcp.answer(&request, &Answer::error(CANCELLED)) {
@@ -966,13 +1232,20 @@ impl ToolsDriver {
     /// Batches what calls printed.
     fn poll_prints(&mut self, cx: &mut Context<'_>) {
         while let Poll::Ready(Some(print)) = self.printed.poll_recv(cx) {
-            let Some(each) = self.calls.get_mut(&print.call) else {
+            let (call, from, lines) = match print {
+                Print::Lines { call, from, lines } => (call, from, lines),
+                Print::Detach { call, job, answer } => {
+                    self.detach(call, job, answer);
+                    continue;
+                }
+            };
+            let Some(each) = self.calls.get_mut(&call) else {
                 continue;
             };
             if !each.running {
                 continue;
             }
-            let call = print.call;
+            let print = Printed { from, lines };
             match &mut each.batch {
                 Some(batch) => {
                     if let Some(earlier) = batch.add(print) {
@@ -1004,7 +1277,7 @@ impl ToolsDriver {
                     Ok(Poll::Ready(pieces)) => previewed.push((*call, pieces)),
                     Err(_) => {
                         log::warn!(target: "caf", "the tool runner panicked previewing call {}", call.0);
-                        previewed.push((*call, Vec::new()));
+                        previewed.push((*call, Err(failed(PANICKED))));
                     }
                 }
             }
@@ -1019,13 +1292,23 @@ impl ToolsDriver {
                 }
             }
         }
-        for (call, pieces) in previewed {
-            if let Some(each) = self.calls.get_mut(&call) {
-                each.preview = None;
-                self.reports.push_back(Report::Tool {
+        for (call, previewed) in previewed {
+            let Some(each) = self.calls.get_mut(&call) else {
+                continue;
+            };
+            each.preview = None;
+            match previewed {
+                Ok(pieces) => self.reports.push_back(Report::Tool {
                     call,
                     event: ToolEvent::Previewed { pieces },
-                });
+                }),
+                // It can't be done: it ends now, and the model hears why
+                // once the core knows.
+                Err(ran) => {
+                    if let Some(each) = self.calls.remove(&call) {
+                        self.finish_call(call, each, ran);
+                    }
+                }
             }
         }
         if !ran.is_empty() {
@@ -1033,27 +1316,41 @@ impl ToolsDriver {
             self.poll_prints(cx);
         }
         for (call, ran) in ran {
-            let Some(each) = self.calls.remove(&call) else {
-                continue;
-            };
-            let Each {
-                conn,
-                request,
-                batch,
-                ..
-            } = each;
-            if let Some(batch) = batch {
-                self.reports.push_back(output(call, batch));
+            if let Some(each) = self.calls.remove(&call) {
+                self.finish_call(call, each, ran);
             }
-            self.reports.push_back(Report::Tool {
-                call,
-                event: ToolEvent::Finished {
-                    done: ran.done,
-                    pieces: ran.record,
-                    folder: None,
-                    notice: None,
-                },
-            });
+        }
+    }
+
+    /// Reports `call`'s end, as `ran` says, and holds its answer until the
+    /// core has it: unless it's a job, whose model was answered already.
+    fn finish_call(&mut self, call: CallId, each: Each, ran: Ran) {
+        let Each {
+            conn,
+            request,
+            batch,
+            job,
+            agent_call,
+            ..
+        } = each;
+        if let Some(batch) = batch {
+            self.reports.push_back(output(call, batch));
+        }
+        self.reports.push_back(Report::Tool {
+            call,
+            event: ToolEvent::Finished {
+                done: ran.done,
+                pieces: ran.record,
+                folder: ran.folder,
+                // Only a TaskStop's stop ends a job without one
+                // ([`ToolsDriver::stop_job`]): that's how the core tells
+                // them apart.
+                notice: job.map(|job| {
+                    (ran.notice).unwrap_or_else(|| failed_notice(job, agent_call.as_deref()))
+                }),
+            },
+        });
+        if job.is_none() {
             self.held.insert(
                 call,
                 Held {
@@ -1063,6 +1360,36 @@ impl ToolsDriver {
                 },
             );
         }
+    }
+
+    /// `call`'s runner answered the model now, and goes on as job `job`:
+    /// reported, its answer held until the core has it. Nothing, for a
+    /// call that's gone, or not running, or a job already.
+    fn detach(&mut self, call: CallId, job: JobId, answer: Answer) {
+        let Some(each) = self.calls.get_mut(&call) else {
+            return;
+        };
+        if !each.running || each.job.is_some() {
+            return;
+        }
+        each.job = Some(job);
+        // Answered, it needs no more progress.
+        each.progress_at = far_off();
+        if let Some(batch) = each.batch.take() {
+            self.reports.push_back(output(call, batch));
+        }
+        self.reports.push_back(Report::Tool {
+            call,
+            event: ToolEvent::Detached { job },
+        });
+        self.held.insert(
+            call,
+            Held {
+                conn: each.conn,
+                request: each.request.clone(),
+                answer,
+            },
+        );
     }
 
     /// Reports batches and sends progress that are due.
@@ -1075,7 +1402,7 @@ impl ToolsDriver {
             {
                 self.reports.push_back(output(*call, batch));
             }
-            if each.progress_at <= now {
+            if each.job.is_none() && each.progress_at <= now {
                 while each.progress_at <= now {
                     each.progress_at += self.progress_every;
                 }
@@ -1159,7 +1486,7 @@ impl Each {
 
 impl Batch {
     /// A batch of one print, due [`BATCH_TIME`] from now.
-    fn new(print: Print) -> Self {
+    fn new(print: Printed) -> Self {
         Self {
             from: print.from,
             bytes: print.lines.iter().map(String::len).sum(),
@@ -1172,7 +1499,7 @@ impl Batch {
     /// from its `from` replace what was there. If it starts past the
     /// batch's end, leaving a gap, it starts a batch of its own, and the
     /// one before is given back, to be reported first.
-    fn add(&mut self, print: Print) -> Option<Self> {
+    fn add(&mut self, print: Printed) -> Option<Self> {
         let end = self.from + self.lines.len() as u64;
         if print.from > end {
             return Some(std::mem::replace(self, Self::new(print)));
@@ -1199,6 +1526,24 @@ fn output(call: CallId, batch: Batch) -> Report {
             lines: batch.lines,
         },
     }
+}
+
+/// The notice of job `job`'s end, for a runner that gave none, such as
+/// one that panicked.
+/// It's laid out as `caf_tools::notice` lays one out, but for the output
+/// file, which isn't known: the task's id, the agent's id for its call if
+/// known (`tool_use`), its status and a summary.
+fn failed_notice(job: JobId, tool_use: Option<&str>) -> String {
+    let mut out = format!("<task-notification>\n<task-id>{}</task-id>", job.0);
+    if let Some(tool_use) = tool_use {
+        let escaped = caf_tools::escape(tool_use);
+        out.push_str(&format!("\n<tool-use-id>{escaped}</tool-use-id>"));
+    }
+    out.push_str(&format!(
+        "\n<status>failed</status>\n<summary>Background task {} failed</summary>\n</task-notification>",
+        job.0
+    ));
+    out
 }
 
 /// What the model is told of a call stopped with its turn.
@@ -1581,6 +1926,7 @@ mod tests {
     struct Scripted {
         runs: mpsc::UnboundedSender<Run>,
         dropped: mpsc::UnboundedSender<CallId>,
+        forgot: mpsc::UnboundedSender<CallId>,
         panics: bool,
     }
 
@@ -1594,12 +1940,16 @@ mod tests {
     }
 
     impl Runner for Scripted {
-        fn preview(
-            &mut self,
-            _call: &Call,
-            _action: Action,
-        ) -> Pin<Box<dyn Future<Output = Vec<Piece>> + Send>> {
-            Box::pin(std::future::ready(vec![Piece::Text(Text::new("preview"))]))
+        fn preview(&mut self, _call: &Call, action: Action) -> Preview {
+            let previewed = match action {
+                Action::Edit { path } if path == "/fail" => Err(failed("it can't be")),
+                _ => Ok(vec![Piece::Text(Text::new("preview"))]),
+            };
+            Box::pin(std::future::ready(previewed))
+        }
+
+        fn forget(&mut self, call: CallId) {
+            let _ = self.forgot.send(call);
         }
 
         fn run(&mut self, call: Call, action: Action) -> Pin<Box<dyn Future<Output = Ran> + Send>> {
@@ -1636,6 +1986,7 @@ mod tests {
         reports: mpsc::UnboundedReceiver<Report>,
         runs: mpsc::UnboundedReceiver<Run>,
         dropped: mpsc::UnboundedReceiver<CallId>,
+        forgot: mpsc::UnboundedReceiver<CallId>,
         serving: Serving,
         finished: Option<tokio::task::JoinHandle<()>>,
         _dir: Dir,
@@ -1659,12 +2010,14 @@ mod tests {
         let dir = Dir::new();
         let (runs, run) = mpsc::unbounded_channel();
         let (dropped, drop_seen) = mpsc::unbounded_channel();
+        let (forgot, forgotten) = mpsc::unbounded_channel();
         let config = ToolsConfig {
-            runner: Box::new(Scripted {
+            runner: Some(Box::new(Scripted {
                 runs,
                 dropped,
+                forgot,
                 panics,
-            }),
+            })),
             folder: Some(dir.0.clone()),
             ..ToolsConfig::default()
         };
@@ -1698,6 +2051,7 @@ mod tests {
             reports,
             runs: run,
             dropped: drop_seen,
+            forgot: forgotten,
             serving,
             finished: Some(finished),
             _dir: dir,
@@ -2032,8 +2386,7 @@ mod tests {
 
     #[test]
     fn a_batch_keeps_what_the_terminal_would_show() {
-        let print = |from, lines: &[&str]| Print {
-            call: CallId(1),
+        let print = |from, lines: &[&str]| Printed {
             from,
             lines: lines.iter().map(|line| (*line).to_owned()).collect(),
         };
@@ -2770,5 +3123,259 @@ mod tests {
         // Its file is left behind, as a process that died leaves it.
         assert!(path.exists());
         listen(&path).unwrap();
+    }
+
+    /// Runs `call` as `action`, giving back the test's end of the run.
+    async fn running(h: &mut Harness, call: CallId, action: Action) -> Run {
+        h.apply(ToolDirective::Run {
+            call,
+            action,
+            input: serde_json::Value::Null,
+        });
+        h.run().await
+    }
+
+    fn a_read() -> Action {
+        Action::Read {
+            path: "/x".into(),
+            lines: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_preview_that_fails_ends_the_call_and_answers_why_once_the_core_has_it() {
+        let mut h = harness_of(false, false);
+        h.serve(CHAT);
+        let mut client = h.connect(CHAT).await;
+        assert_connected(h.report().await, CHAT);
+        h.taken();
+        client.init().await;
+        client.call(3, false).await;
+        let call = match h.report().await {
+            Report::Tool { call, .. } => call,
+            other => panic!("expected Called, got {other:?}"),
+        };
+        h.taken();
+        h.apply(ToolDirective::Preview {
+            call,
+            action: Action::Edit {
+                path: "/fail".into(),
+            },
+            input: serde_json::Value::Null,
+        });
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Finished { done: false, pieces, .. } if pieces.len() == 1),
+        );
+        // Not before the core has it.
+        client.nothing_waiting().await;
+        h.taken();
+        let answer = client.recv().await;
+        assert_eq!(answer["id"], 3);
+        assert_eq!(answer["result"]["isError"], true);
+        assert_eq!(answer["result"]["content"][0]["text"], "it can't be");
+    }
+
+    #[tokio::test]
+    async fn a_job_is_answered_after_its_detached_is_taken_and_ends_with_its_notice() {
+        let mut h = harness_of(false, false);
+        h.serve(CHAT);
+        let mut client = h.connect(CHAT).await;
+        assert_connected(h.report().await, CHAT);
+        h.taken();
+        client.init().await;
+        client.call(4, false).await;
+        let call = match h.report().await {
+            Report::Tool { call, .. } => call,
+            other => panic!("expected Called, got {other:?}"),
+        };
+        h.taken();
+        let mut run = running(&mut h, call, a_read()).await;
+        assert_eq!(run.call.agent_call(), Some("toolu_4"));
+        run.call.print(0, vec!["before".into()]);
+        let job = run
+            .call
+            .answer_now(|job| Answer::text(format!("job {}", job.0)));
+        assert_eq!(job, JobId(1));
+        // A second gives the same job, and says nothing.
+        assert_eq!(run.call.answer_now(|_| Answer::text("again")), job);
+        // What it printed first is reported before it's a job.
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Output { from: 0, .. })
+        });
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Detached { job: JobId(1) })
+        });
+        client.nothing_waiting().await;
+        h.taken();
+        let answer = client.recv().await;
+        assert_eq!(
+            (
+                answer["id"].clone(),
+                answer["result"]["content"][0]["text"].clone()
+            ),
+            (json!(4), json!("job 1"))
+        );
+        run.call.print(1, vec!["after".into()]);
+        run.finish
+            .send(Ran::new(true, Vec::new(), Answer::text("unheard")).with_notice("it ended"))
+            .unwrap();
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Output { from: 1, .. })
+        });
+        h.taken();
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Finished { done: true, notice: Some(notice), .. } if notice == "it ended"),
+        );
+        h.taken();
+        // The model was answered once, long ago.
+        client.nothing_waiting().await;
+    }
+
+    #[tokio::test]
+    async fn a_job_outlives_its_relay_and_task_stop_stops_it() {
+        let mut h = harness();
+        h.serve(CHAT);
+        let mut client = h.bound(CHAT).await;
+        let call = h.called(&mut client, 1, false).await;
+        let mut run = running(&mut h, call, a_read()).await;
+        run.call.answer_now(|_| Answer::text("in the background"));
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Detached { job: JobId(1) })
+        });
+        assert_eq!(client.recv().await["id"], 1);
+        // The agent cancelling its answered request leaves it running.
+        client
+            .send(&json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 1}}))
+            .await;
+        client.nothing_waiting().await;
+        h.quiet().await;
+        // Its relay goes: the job doesn't.
+        drop(client);
+        match h.report().await {
+            Report::Relay {
+                change: RelayChange::Lost,
+                ..
+            } => {}
+            other => panic!("expected Lost, got {other:?}"),
+        }
+        h.quiet().await;
+        let mut client = h.bound(CHAT).await;
+        // A second job is numbered on.
+        let second = h.called(&mut client, 2, false).await;
+        let mut other = running(&mut h, second, a_read()).await;
+        assert_eq!(other.call.answer_now(|_| Answer::text("too")), JobId(2));
+        assert_event(h.report().await, second, |event| {
+            matches!(event, ToolEvent::Detached { job: JobId(2) })
+        });
+        assert_eq!(client.recv().await["id"], 2);
+        let stop = h.called(&mut client, 3, false).await;
+        h.apply(ToolDirective::Run {
+            call: stop,
+            action: Action::Stop { job: JobId(1) },
+            input: serde_json::Value::Null,
+        });
+        assert_eq!(h.dropped().await, call);
+        assert_event(h.report().await, call, |event| {
+            matches!(
+                event,
+                ToolEvent::Finished {
+                    done: false,
+                    notice: None,
+                    ..
+                }
+            )
+        });
+        assert_event(h.report().await, stop, |event| {
+            matches!(event, ToolEvent::Finished { done: true, .. })
+        });
+        let answer = client.recv().await;
+        assert_eq!(
+            (
+                answer["id"].clone(),
+                answer["result"]["content"][0]["text"].clone()
+            ),
+            (json!(3), json!("Stopped task 1"))
+        );
+        // It's gone now.
+        let again = h.called(&mut client, 4, false).await;
+        h.apply(ToolDirective::Run {
+            call: again,
+            action: Action::Stop { job: JobId(1) },
+            input: serde_json::Value::Null,
+        });
+        assert_event(h.report().await, again, |event| {
+            matches!(event, ToolEvent::Finished { done: false, .. })
+        });
+        let answer = client.recv().await;
+        assert_eq!(answer["result"]["isError"], true);
+        assert_eq!(
+            answer["result"]["content"][0]["text"],
+            "No task 1 in this conversation"
+        );
+        // The core cancels a job: it stops, and no one's answered.
+        h.apply(ToolDirective::Cancel { call: second });
+        assert_eq!(h.dropped().await, second);
+        client.nothing_waiting().await;
+        drop(other);
+    }
+
+    #[tokio::test]
+    async fn letting_a_chat_go_stops_its_jobs_whatever_their_relay() {
+        let mut h = harness();
+        h.serve(CHAT);
+        let mut client = h.bound(CHAT).await;
+        let call = h.called(&mut client, 1, false).await;
+        let mut run = running(&mut h, call, a_read()).await;
+        run.call.answer_now(|_| Answer::text("in the background"));
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Detached { .. })
+        });
+        drop(client);
+        let _lost = h.report().await;
+        h.apply(ToolDirective::Unserve { chat: CHAT });
+        assert_eq!(h.dropped().await, call);
+        h.quiet().await;
+    }
+
+    #[tokio::test]
+    async fn a_job_ending_without_a_notice_is_given_one_so_it_isnt_taken_as_stopped() {
+        let mut h = harness();
+        h.serve(CHAT);
+        let mut client = h.bound(CHAT).await;
+        let call = h.called(&mut client, 1, false).await;
+        let mut run = running(&mut h, call, a_read()).await;
+        run.call.answer_now(|_| Answer::text("in the background"));
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Detached { .. })
+        });
+        run.finish.send(failed("it broke")).unwrap();
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Finished { done: false, notice: Some(notice), .. }
+                if notice == "<task-notification>\n<task-id>1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>failed</status>\n<summary>Background task 1 failed</summary>\n</task-notification>")
+        });
+    }
+
+    #[tokio::test]
+    async fn the_runner_forgets_a_call_refused_or_cancelled() {
+        let mut h = harness();
+        h.serve(CHAT);
+        let mut client = h.bound(CHAT).await;
+        let refused = h.called(&mut client, 1, false).await;
+        h.apply(ToolDirective::Refuse {
+            call: refused,
+            why: RefusedCall::NotAllowed,
+        });
+        let cancelled = h.called(&mut client, 2, false).await;
+        h.apply(ToolDirective::Cancel { call: cancelled });
+        for expected in [refused, cancelled] {
+            let forgot = tokio::time::timeout(Duration::from_secs(10), h.forgot.recv())
+                .await
+                .unwrap();
+            assert_eq!(forgot, Some(expected));
+        }
     }
 }

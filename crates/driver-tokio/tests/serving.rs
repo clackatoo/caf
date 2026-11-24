@@ -20,8 +20,8 @@ use caf_core::question::{Answer, QuestionKind};
 use caf_core::tool::{Action, CafTool, Piece, StoppedBy, Text, ToolCall, ToolStatus, Tools};
 use caf_core::{NoAppItems, OpenChat};
 use caf_driver_tokio::{
-    AlwaysAsk, Caf, Call, ChatHandle, Config, Policy, Ran, RefuseAll, Relay, Runner, Running,
-    StartError, Step, Steps,
+    AlwaysAsk, Caf, Call, ChatHandle, Config, Policy, Preview, Ran, RefuseAll, Relay, Runner,
+    Running, StartError, Step, Steps,
 };
 use common::{Dir, PATIENCE, after_handshake, end_turn, fake, host, prompt, until};
 use serde_json::{Value, json};
@@ -56,12 +56,8 @@ impl Drop for Dropped {
 }
 
 impl Runner for Scripted {
-    fn preview(
-        &mut self,
-        _call: &Call,
-        _action: Action,
-    ) -> Pin<Box<dyn Future<Output = Vec<Piece>> + Send>> {
-        Box::pin(std::future::ready(Vec::new()))
+    fn preview(&mut self, _call: &Call, _action: Action) -> Preview {
+        Box::pin(std::future::ready(Ok(Vec::new())))
     }
 
     fn run(&mut self, call: Call, _action: Action) -> Pin<Box<dyn Future<Output = Ran> + Send>> {
@@ -190,11 +186,11 @@ fn serve(
     let (dropped, drop_seen) = mpsc::unbounded_channel();
     config.policy = Box::new(policy);
     serve_with(&mut config, &dir);
-    config.tools.runner = Box::new(Scripted {
+    config.tools.runner = Some(Box::new(Scripted {
         doing,
         started,
         dropped,
-    });
+    }));
     if let Some(progress) = progress {
         config.tools.progress_every = progress;
     }

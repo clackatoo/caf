@@ -118,7 +118,7 @@
 //!
 //! # Serving CAF's tools
 //!
-//! CAF can give agents tools of its own (Read, Edit, Write and Bash), which
+//! CAF can give agents tools of its own (Read, Edit, Write, Bash and TaskStop), which
 //! it runs itself, asking the user as the [`Policy`] says. The agent
 //! starts them as an MCP server: a relay, which connects back to CAF over
 //! a unix socket. The relay is usually the app's own program, so the app
@@ -143,8 +143,15 @@
 //!   ([`ToolsConfig::folder`]), and each chat's relay proves which chat
 //!   it's for with a token made from a key drawn as CAF starts. The key is
 //!   never in a recording.
-//! - [`ToolsConfig::runner`] runs the calls. Until CAF's tools are built,
-//!   it's [`NotBuilt`], which fails every call saying so.
+//! - CAF runs the calls itself, as Claude Code's own tools behave: Read,
+//!   Edit and Write through [`ToolsConfig::files`] (the disk,
+//!   [`DiskFiles`], unless the app gives its editor's buffers), and Bash
+//!   through [`ToolsConfig::commands`] (a pty of CAF's own for each,
+//!   [`PtyCommands`], unless the app gives its visible terminals).
+//!   A command run in the background, or past its timeout, goes on as a
+//!   job, whose output grows in a file of the socket's folder, only the
+//!   user's, and whose end the agent is told in a notice turn; TaskStop
+//!   stops one. [`ToolsConfig::runner`] replaces the lot.
 //! - Unix only, for now.
 //!
 //! [`OpenChat`]: caf_core::OpenChat
@@ -209,7 +216,10 @@
 
 mod agent;
 mod caf;
+mod files;
 mod policy;
+mod pty;
+mod runner;
 mod setup;
 mod steps;
 mod storage;
@@ -223,8 +233,13 @@ pub use caf::{
     AgentsWatch, Caf, ChatHandle, ChatsWatch, Config, Error, Running, SavedWatch, Update,
     UsageConfig, Watch,
 };
+/// CAF's own tools' rules and backend traits, for an app giving its own
+/// [`ToolsConfig::files`] or [`ToolsConfig::commands`].
+pub use caf_tools;
+pub use files::{DiskFiles, MOST_READ};
 pub use policy::{AlwaysAsk, Policy, RefuseAll};
+pub use pty::{PtyCommands, STOP_GRACE};
 pub use setup::SetupDriver;
 pub use steps::{Step, Steps};
 pub use timer::TimerDriver;
-pub use tools::{Call, NotBuilt, Ran, Relay, Runner, StartError, ToolsConfig};
+pub use tools::{Call, NotBuilt, Preview, Ran, Relay, Runner, StartError, ToolsConfig};
