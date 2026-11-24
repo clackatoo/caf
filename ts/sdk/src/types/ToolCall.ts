@@ -6,6 +6,7 @@ import type { Location } from "./Location.ts";
 import type { NoAppItems } from "./NoAppItems.ts";
 import type { Origin } from "./Origin.ts";
 import type { Piece } from "./Piece.ts";
+import type { StoppedBy } from "./StoppedBy.ts";
 import type { ToolKind } from "./ToolKind.ts";
 import type { ToolStatus } from "./ToolStatus.ts";
 import type { JsonValue } from "./serde_json/JsonValue.ts";
@@ -76,4 +77,10 @@ decision: Decision,
  * The app's own item for this call, such as the map move one of its
  * tools made. *Later*, with the app's tools.
  */
-app: NoAppItems | null, };
+app: NoAppItems | null, 
+/**
+ * Who stopped it, for a call to a tool CAF serves that ended
+ * [`Cancelled`](ToolStatus::Cancelled): `None` for any other, and for
+ * a call saved before CAF kept it.
+ */
+stopped_by: StoppedBy | null, };

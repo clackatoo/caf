@@ -122,6 +122,60 @@ pub struct ToolCall<A: AppItem = NoAppItems> {
     /// The app's own item for this call, such as the map move one of its
     /// tools made. *Later*, with the app's tools.
     pub app: Option<A>,
+    /// Who stopped it, for a call to a tool CAF serves that ended
+    /// [`Cancelled`](ToolStatus::Cancelled): `None` for any other, and for
+    /// a call saved before CAF kept it.
+    #[serde(default)]
+    pub stopped_by: Option<StoppedBy>,
+}
+
+/// Who stopped a call that ended [`Cancelled`](ToolStatus::Cancelled).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", content = "value")]
+pub enum StoppedBy {
+    /// The user, stopping its turn; or its turn ended under it.
+    User,
+    /// The agent, cancelling it, or its connection to CAF's tools closing.
+    Agent,
+}
+
+/// The tools CAF serves a chat ([`OpenChat::tools`](crate::OpenChat::tools)):
+/// none by default. They aren't saved: the host gives them again when it
+/// restores the chat ([`RestoreChat::tools`](crate::RestoreChat::tools)).
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Tools {
+    /// CAF's own tools to serve, in the order given, each once.
+    pub caf: Vec<CafTool>,
+}
+
+impl Tools {
+    /// No tools.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// These of CAF's own tools, each once, in the order given.
+    #[must_use]
+    pub fn caf(tools: impl IntoIterator<Item = CafTool>) -> Self {
+        let mut caf = Vec::new();
+        for tool in tools {
+            if !caf.contains(&tool) {
+                caf.push(tool);
+            }
+        }
+        Self { caf }
+    }
+
+    /// Whether there are none.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.caf.is_empty()
+    }
 }
 
 /// What kind of tool a call is, for an icon and for counting ("Read 3

@@ -196,6 +196,8 @@ export function noteText(note: DeepReadonly<Note>): string {
       return "The agent's install failed, so the message that waited for it was stopped."
     case 'SignedIn':
       return 'You signed in to the agent: send the message again to try it now.'
+    case 'ToolsLost':
+      return "CAF's tools stopped working for this conversation; they'll be back when it's opened again."
     case 'AgentChanged':
     case 'NotOffered':
     case 'NotApplied':

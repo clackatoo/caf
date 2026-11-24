@@ -198,6 +198,7 @@ pub mod install;
 #[cfg(test)]
 mod kinds;
 pub mod limits;
+pub mod mcp;
 pub mod profiles;
 pub mod question;
 pub mod save;
@@ -221,3 +222,4 @@ pub use ids::{ChatId, ItemId, QuestionId, Shelf, Ticket, TurnId};
 pub use save::{RestoreChat, SavedChat};
 pub use settings::SettingChoice;
 pub use time::{Now, Window};
+pub use tool::Tools;

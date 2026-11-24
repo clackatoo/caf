@@ -98,7 +98,7 @@ fn sample(version: u32) -> Sample {
     match version {
         // The same values in each: what's added since is checked by
         // reading, and by the newest sample's shapes.
-        1..=6 => Sample {
+        1..=7 => Sample {
             header: from(header(version, 9)),
             before: before(),
             records: records(version),
@@ -351,9 +351,10 @@ fn header(version: u32, turns: u64) -> Value {
 /// off its agent's own tools; from version 3, the agent's settings, the
 /// model a turn was sent on, the notes about settings, and a message
 /// failed as a setting couldn't be applied; from version 4, what a turn
-/// spent and what the chat has spent; and from version 5, the names of
+/// spent and what the chat has spent; from version 5, the names of
 /// the choices in those notes and of the models a turn spent on, and the
-/// chat archived.
+/// chat archived; and from version 7, calls cancelled by the user and by
+/// the agent, and the note that CAF's tools were lost.
 fn records(version: u32) -> Vec<Vec<Entry<Pin, Notes>>> {
     let change = |change: Value| json!({ "type": "Change", "value": change });
     let own_tools = change(
@@ -383,23 +384,33 @@ fn records(version: u32) -> Vec<Vec<Entry<Pin, Notes>>> {
         ));
         last.push(change(json!({ "type": "Archived", "value": wall(1200) })));
     }
+    let mut first: Vec<Value> = from(json!([
+        change(json!({ "type": "Appended", "value": { "item": 80, "text": " on the docs." } })),
+        change(
+            json!({ "type": "ItemEnded", "value": { "item": 80, "end": { "type": "At", "value": wall(900) } } })
+        ),
+        change(json!({ "type": "ItemAdded", "value": {
+            "turn": 8,
+            "item": item(81, None, json!({ "type": "App", "value": { "place": "Lviv", "zoom": 4, "tags": [] } })),
+        }})),
+        change(
+            json!({ "type": "ToolChanged", "value": { "item": 12, "tool": tool("Read", "Done", Value::Null) } })
+        ),
+        change(
+            json!({ "type": "Usage", "value": { "used": 6000, "size": 200_000, "cost": null } })
+        ),
+        change(json!({ "type": "QuestionGone", "value": 90 })),
+        change(json!({ "type": "QuestionAsked", "value": {
+            "id": 92,
+            "window": { "start": wall(950), "end": { "type": "Open" } },
+            "kind": { "type": "Permission", "value": { "tool": null, "title": "Fetch docs.rs", "options": [] } },
+        }})),
+    ]));
+    if version >= 7 {
+        first.extend(stopped().into_iter().map(change));
+    }
     from(json!([
-        [
-            change(json!({ "type": "Appended", "value": { "item": 80, "text": " on the docs." } })),
-            change(json!({ "type": "ItemEnded", "value": { "item": 80, "end": { "type": "At", "value": wall(900) } } })),
-            change(json!({ "type": "ItemAdded", "value": {
-                "turn": 8,
-                "item": item(81, None, json!({ "type": "App", "value": { "place": "Lviv", "zoom": 4, "tags": [] } })),
-            }})),
-            change(json!({ "type": "ToolChanged", "value": { "item": 12, "tool": tool("Read", "Done", Value::Null) } })),
-            change(json!({ "type": "Usage", "value": { "used": 6000, "size": 200_000, "cost": null } })),
-            change(json!({ "type": "QuestionGone", "value": 90 })),
-            change(json!({ "type": "QuestionAsked", "value": {
-                "id": 92,
-                "window": { "start": wall(950), "end": { "type": "Open" } },
-                "kind": { "type": "Permission", "value": { "tool": null, "title": "Fetch docs.rs", "options": [] } },
-            }})),
-        ],
+        first,
         [
             change(json!({ "type": "TurnLife", "value": {
                 "turn": 8, "life": { "type": "Finished" }, "end": { "type": "At", "value": wall(1000) },
@@ -418,6 +429,24 @@ fn records(version: u32) -> Vec<Vec<Entry<Pin, Notes>>> {
         ],
         last,
     ]))
+}
+
+/// What version 7 added: a call the user stopped, one the agent did, and
+/// the note that CAF's tools stopped working.
+fn stopped() -> Vec<Value> {
+    let cancelled = |kind: &str, by: &str| {
+        let mut call = tool(kind, "Cancelled", Value::Null);
+        call["stopped_by"] = json!({ "type": by });
+        call
+    };
+    vec![
+        json!({ "type": "ToolChanged", "value": { "item": 13, "tool": cancelled("Edit", "User") } }),
+        json!({ "type": "ToolChanged", "value": { "item": 14, "tool": cancelled("Delete", "Agent") } }),
+        json!({ "type": "ItemAdded", "value": {
+            "turn": 8,
+            "item": item(82, None, json!({ "type": "Note", "value": { "type": "ToolsLost" } })),
+        }}),
+    ]
 }
 
 /// What version 3 added: the chat's settings, the model turn 8 was sent

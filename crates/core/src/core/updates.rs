@@ -607,6 +607,7 @@ impl ToolChange {
             locations_cut: 0,
             decision: Decision::NotAsked,
             app: None,
+            stopped_by: None,
         };
         self.apply(&mut tool);
         tool

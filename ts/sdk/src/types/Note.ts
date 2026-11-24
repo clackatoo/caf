@@ -29,4 +29,4 @@ choice: SettingChoice,
 /**
  * The agent's name for it, as it last said.
  */
-name: string | null, } };
+name: string | null, } } | { "type": "ToolsLost" };
