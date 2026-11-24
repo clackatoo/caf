@@ -25,7 +25,9 @@ use crate::event::Exit;
 use crate::install::SignedInAs;
 use crate::question::{Answer, OptionKind, Question, QuestionKind, SlowChoice};
 use crate::time::{End, Window};
-use crate::tool::{Action, CafTool, DecidedBy, Decision, Ending, LineChange, Origin, Piece};
+use crate::tool::{
+    Action, CafTool, DecidedBy, Decision, Ending, LineChange, Origin, Piece, StoppedBy,
+};
 use crate::usage::{BadQuery, PriceLayer, Resolution, UsageQuery};
 use crate::viewer::{AgentAction, FromViewer, Outcome, ToViewer};
 
@@ -171,6 +173,7 @@ kinds!(Refused {
     "NoSuchSetting" => Refused::NoSuchSetting,
     "ReservedServer" => Refused::ReservedServer,
     "SameServerName" => Refused::SameServerName,
+    "ToolsNotServed" => Refused::ToolsNotServed,
 });
 
 kinds!(SessionChoice {
@@ -393,6 +396,11 @@ kinds!(Decision {
     "NotRecorded" => Decision::NotRecorded,
 });
 
+kinds!(StoppedBy {
+    "User" => StoppedBy::User,
+    "Agent" => StoppedBy::Agent,
+});
+
 kinds!(DecidedBy {
     "Policy" => DecidedBy::Policy { .. },
     "User" => DecidedBy::User { .. },
@@ -408,6 +416,7 @@ kinds!(Note {
     "AgentChanged" => Note::AgentChanged { .. },
     "NotOffered" => Note::NotOffered { .. },
     "NotApplied" => Note::NotApplied { .. },
+    "ToolsLost" => Note::ToolsLost,
 });
 
 kinds!(QuestionKind {
@@ -472,6 +481,7 @@ impl Seen {
             self.missing::<ToolKind>(),
             self.missing::<ToolStatus>(),
             self.missing::<Note>(),
+            self.missing::<StoppedBy>(),
             self.missing::<QuestionKind>(),
             self.missing::<OptionKind>(),
             self.missing::<InstallState>(),
@@ -671,6 +681,9 @@ impl Seen {
         }
         if let Some(action) = &tool.action {
             self.mark(action);
+        }
+        if let Some(by) = &tool.stopped_by {
+            self.mark(by);
         }
         self.mark(&tool.decision);
         if let Decision::Allowed(by) | Decision::Refused(by) = &tool.decision {

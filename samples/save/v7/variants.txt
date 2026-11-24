@@ -1,0 +1,337 @@
+Entry: `Change`, `Session`, `Data`
+ItemKind: `Words`, `Thinking`, `Tool`, `Compacted`, `Note`, `App`, `Unknown`
+change<Appended> {type, value}
+change<Appended>.value {item, text}
+change<Archived> {type, value}
+change<ItemAdded> {type, value}
+change<ItemAdded>.value {turn, item}
+change<ItemAdded>.value.item {id, window, parent, kind}
+change<ItemAdded>.value.item.kind<Tool> {type, value}
+change<ItemAdded>.value.item.kind<Tool>.value {title, kind, status, origin, action, input, input_cut, result, locations, locations_cut, decision, app, stopped_by}
+change<ItemAdded>.value.item.kind<Tool>.value.action<Run> {type, value}
+change<ItemAdded>.value.item.kind<Tool>.value.action<Run>.value {command, folder, background}
+change<ItemAdded>.value.item.kind<Tool>.value.decision<Allowed> {type, value}
+change<ItemAdded>.value.item.kind<Tool>.value.decision<Allowed>.value<User> {type, value}
+change<ItemAdded>.value.item.kind<Tool>.value.decision<Allowed>.value<User>.value {option}
+change<ItemAdded>.value.item.kind<Tool>.value.kind<Execute> {type}
+change<ItemAdded>.value.item.kind<Tool>.value.locations[] {path, line}
+change<ItemAdded>.value.item.kind<Tool>.value.origin<Caf> {type, value}
+change<ItemAdded>.value.item.kind<Tool>.value.origin<Caf>.value<Bash> {type}
+change<ItemAdded>.value.item.kind<Tool>.value.result[]<Output> {type, value}
+change<ItemAdded>.value.item.kind<Tool>.value.result[]<Output>.value {lines, dropped, ending}
+change<ItemAdded>.value.item.kind<Tool>.value.result[]<Output>.value.ending<Exited> {type, value}
+change<ItemAdded>.value.item.kind<Tool>.value.result[]<Output>.value.ending<Exited>.value<Code> {type, value}
+change<ItemAdded>.value.item.kind<Tool>.value.status<Pending> {type}
+change<ItemAdded>.value.item.window {start, end}
+change<ItemAdded>.value.item.window.end<Open> {type}
+change<ItemEnded> {type, value}
+change<ItemEnded>.value {item, end}
+change<ItemEnded>.value.end<At> {type, value}
+change<OutputChanged> {type, value}
+change<OutputChanged>.value {item, from, lines, dropped}
+change<QuestionAsked> {type, value}
+change<QuestionAsked>.value {id, window, kind}
+change<QuestionAsked>.value.kind<Permission> {type, value}
+change<QuestionAsked>.value.kind<Permission>.value {tool, title, options}
+change<QuestionAsked>.value.kind<Permission>.value.options[] {id, label, kind}
+change<QuestionAsked>.value.kind<Permission>.value.options[].kind<AllowOnce> {type}
+change<QuestionAsked>.value.window {start, end}
+change<QuestionAsked>.value.window.end<Open> {type}
+change<QuestionGone> {type, value}
+change<Settings> {type, value}
+change<Settings>.value {offered, chosen, own}
+change<Settings>.value.chosen[] {kind, value}
+change<Settings>.value.chosen[].kind<Effort> {type}
+change<Settings>.value.chosen[].kind<Fast> {type}
+change<Settings>.value.chosen[].kind<Model> {type}
+change<Settings>.value.chosen[].value<Choice> {type, value}
+change<Settings>.value.chosen[].value<Switch> {type, value}
+change<Settings>.value.offered[] {kind, name, form, current}
+change<Settings>.value.offered[].current<Choice> {type, value}
+change<Settings>.value.offered[].current<Switch> {type, value}
+change<Settings>.value.offered[].form<Choices> {type, value}
+change<Settings>.value.offered[].form<Choices>.value[] {id, name, description, group}
+change<Settings>.value.offered[].form<Switch> {type}
+change<Settings>.value.offered[].kind<Effort> {type}
+change<Settings>.value.offered[].kind<Fast> {type}
+change<Settings>.value.offered[].kind<Model> {type}
+change<Settings>.value.own[]<Effort> {type}
+change<Settings>.value.own[]<Fast> {type}
+change<Spend> {type, value}
+change<Spend>.value {tokens, reported, estimated, unpriced, turns}
+change<Spend>.value.tokens {input, cache_read, cache_write, output, thinking}
+change<State> {type, value}
+change<State>.value<Closed> {type}
+change<State>.value<Idle> {type}
+change<State>.value<Lost> {type, value}
+change<State>.value<Lost>.value {reason}
+change<State>.value<Lost>.value.reason<AgentStopped> {type, value}
+change<State>.value<Lost>.value.reason<AgentStopped>.value {stderr}
+change<State>.value<Lost>.value.reason<CouldNotStart> {type, value}
+change<State>.value<Lost>.value.reason<CouldNotStart>.value {error}
+change<State>.value<Lost>.value.reason<InUse> {type}
+change<State>.value<Lost>.value.reason<Incompatible> {type, value}
+change<State>.value<Lost>.value.reason<Incompatible>.value<BadAnswer> {type}
+change<State>.value<Lost>.value.reason<Incompatible>.value<HttpMcp> {type}
+change<State>.value<Lost>.value.reason<Incompatible>.value<OwnTools> {type}
+change<State>.value<Lost>.value.reason<Incompatible>.value<Protocol> {type, value}
+change<State>.value<Lost>.value.reason<Incompatible>.value<Protocol>.value {version}
+change<State>.value<Lost>.value.reason<Refused> {type, value}
+change<State>.value<Lost>.value.reason<Refused>.value {message}
+change<State>.value<Lost>.value.reason<Restarted> {type}
+change<State>.value<Lost>.value.reason<ShutDown> {type}
+change<State>.value<Lost>.value.reason<SignInNeeded> {type}
+change<State>.value<Lost>.value.reason<Stopped> {type}
+change<State>.value<Open> {type, value}
+change<State>.value<Open>.value {session}
+change<State>.value<Opening> {type}
+change<State>.value<WaitingForAgent> {type}
+change<ToolChanged> {type, value}
+change<ToolChanged>.value {item, tool}
+change<ToolChanged>.value.tool {title, kind, status, origin, action, input, input_cut, result, locations, locations_cut, decision, app, stopped_by}
+change<ToolChanged>.value.tool.action<Run> {type, value}
+change<ToolChanged>.value.tool.action<Run>.value {command, folder, background}
+change<ToolChanged>.value.tool.decision<Allowed> {type, value}
+change<ToolChanged>.value.tool.decision<Allowed>.value<User> {type, value}
+change<ToolChanged>.value.tool.decision<Allowed>.value<User>.value {option}
+change<ToolChanged>.value.tool.kind<Execute> {type}
+change<ToolChanged>.value.tool.locations[] {path, line}
+change<ToolChanged>.value.tool.origin<Caf> {type, value}
+change<ToolChanged>.value.tool.origin<Caf>.value<Bash> {type}
+change<ToolChanged>.value.tool.result[]<Output> {type, value}
+change<ToolChanged>.value.tool.result[]<Output>.value {lines, dropped, ending}
+change<ToolChanged>.value.tool.result[]<Output>.value.ending<Exited> {type, value}
+change<ToolChanged>.value.tool.result[]<Output>.value.ending<Exited>.value<Code> {type, value}
+change<ToolChanged>.value.tool.status<Cancelled> {type}
+change<ToolChanged>.value.tool.stopped_by<Agent> {type}
+change<TurnAdded> {type, value}
+change<TurnAdded>.value {id, starter, life, window, items, imported, model, spent}
+change<TurnAdded>.value.life<Waiting> {type}
+change<TurnAdded>.value.starter<User> {type, value}
+change<TurnAdded>.value.starter<User>.value {parts}
+change<TurnAdded>.value.starter<User>.value.parts[]<Text> {type, value}
+change<TurnAdded>.value.window {start, end}
+change<TurnAdded>.value.window.end<Open> {type}
+change<TurnInserted> {type, value}
+change<TurnInserted>.value {before, turn}
+change<TurnInserted>.value.turn {id, starter, life, window, items, imported, model, spent}
+change<TurnInserted>.value.turn.items[] {id, window, parent, kind}
+change<TurnInserted>.value.turn.items[].kind<Note> {type, value}
+change<TurnInserted>.value.turn.items[].kind<Note>.value<SessionGone> {type}
+change<TurnInserted>.value.turn.items[].window {start, end}
+change<TurnInserted>.value.turn.items[].window.end<At> {type, value}
+change<TurnInserted>.value.turn.life<Finished> {type}
+change<TurnInserted>.value.turn.starter<Caf> {type}
+change<TurnInserted>.value.turn.window {start, end}
+change<TurnInserted>.value.turn.window.end<At> {type, value}
+change<TurnLife> {type, value}
+change<TurnLife>.value {turn, life, end}
+change<TurnLife>.value.end<At> {type, value}
+change<TurnLife>.value.end<Open> {type}
+change<TurnLife>.value.life<CutOff> {type}
+change<TurnLife>.value.life<Failed> {type, value}
+change<TurnLife>.value.life<Failed>.value {reason, agent_said, remedy}
+change<TurnLife>.value.life<Failed>.value.reason<AccessDenied> {type}
+change<TurnLife>.value.life<Failed>.value.reason<AgentStopped> {type}
+change<TurnLife>.value.life<Failed>.value.reason<BadAnswer> {type}
+change<TurnLife>.value.life<Failed>.value.reason<BadRequest> {type}
+change<TurnLife>.value.life<Failed>.value.reason<DidNotStop> {type}
+change<TurnLife>.value.life<Failed>.value.reason<Other> {type}
+change<TurnLife>.value.life<Failed>.value.reason<ProviderError> {type}
+change<TurnLife>.value.life<Failed>.value.reason<Refused> {type}
+change<TurnLife>.value.life<Failed>.value.reason<SettingNotApplied> {type}
+change<TurnLife>.value.life<Failed>.value.reason<SignInNeeded> {type}
+change<TurnLife>.value.life<Failed>.value.reason<TooLong> {type}
+change<TurnLife>.value.life<Failed>.value.reason<TooManySteps> {type}
+change<TurnLife>.value.life<Failed>.value.reason<UsageLimit> {type}
+change<TurnLife>.value.life<Failed>.value.remedy<NewChat> {type}
+change<TurnLife>.value.life<Failed>.value.remedy<SendAgain> {type}
+change<TurnLife>.value.life<Failed>.value.remedy<SignIn> {type}
+change<TurnLife>.value.life<Finished> {type}
+change<TurnLife>.value.life<Running> {type}
+change<TurnLife>.value.life<Stopped> {type}
+change<TurnLife>.value.life<Stopping> {type}
+change<TurnLife>.value.life<Waiting> {type}
+change<TurnModel> {type, value}
+change<TurnModel>.value {turn, model}
+change<TurnModel>.value.model {id, name}
+change<TurnSpent> {type, value}
+change<TurnSpent>.value {turn, usage}
+change<TurnSpent>.value.usage {models, cost, fast}
+change<TurnSpent>.value.usage.cost {amount, currency}
+change<TurnSpent>.value.usage.models[] {model, name, tokens}
+change<TurnSpent>.value.usage.models[].tokens {input, cache_read, cache_write, output, thinking}
+change<Usage> {type, value}
+change<Usage>.value {used, size, cost}
+chat {id, agent, cwd, state, turns, usage, questions, settings, spend, archived}
+chat.questions[] {id, window, kind}
+chat.questions[].kind<Permission> {type, value}
+chat.questions[].kind<Permission>.value {tool, title, options}
+chat.questions[].kind<Permission>.value.options[] {id, label, kind}
+chat.questions[].kind<Permission>.value.options[].kind<AllowAlways> {type}
+chat.questions[].kind<Permission>.value.options[].kind<AllowOnce> {type}
+chat.questions[].kind<Permission>.value.options[].kind<Other> {type}
+chat.questions[].kind<Permission>.value.options[].kind<RejectAlways> {type}
+chat.questions[].kind<Permission>.value.options[].kind<RejectOnce> {type}
+chat.questions[].kind<SlowToOpen> {type, value}
+chat.questions[].kind<SlowToOpen>.value {adapter_answered}
+chat.questions[].window {start, end}
+chat.questions[].window.end<Open> {type}
+chat.settings {offered, chosen, own}
+chat.settings.chosen[] {kind, value}
+chat.settings.chosen[].kind<Effort> {type}
+chat.settings.chosen[].kind<Fast> {type}
+chat.settings.chosen[].kind<Model> {type}
+chat.settings.chosen[].value<Choice> {type, value}
+chat.settings.chosen[].value<Switch> {type, value}
+chat.settings.offered[] {kind, name, form, current}
+chat.settings.offered[].current<Choice> {type, value}
+chat.settings.offered[].current<Switch> {type, value}
+chat.settings.offered[].form<Choices> {type, value}
+chat.settings.offered[].form<Choices>.value[] {id, name, description, group}
+chat.settings.offered[].form<Switch> {type}
+chat.settings.offered[].kind<Effort> {type}
+chat.settings.offered[].kind<Fast> {type}
+chat.settings.offered[].kind<Model> {type}
+chat.settings.own[]<Effort> {type}
+chat.settings.own[]<Fast> {type}
+chat.spend {tokens, reported, estimated, unpriced, turns}
+chat.spend.tokens {input, cache_read, cache_write, output, thinking}
+chat.state<Open> {type, value}
+chat.state<Open>.value {session}
+chat.turns[] {id, starter, life, window, items, imported, model, spent}
+chat.turns[].items[] {id, window, parent, kind}
+chat.turns[].items[].kind<Compacted> {type, value}
+chat.turns[].items[].kind<Compacted>.value {}
+chat.turns[].items[].kind<Note> {type, value}
+chat.turns[].items[].kind<Note>.value<AgentChanged> {type, value}
+chat.turns[].items[].kind<Note>.value<AgentChanged>.value {choice, name}
+chat.turns[].items[].kind<Note>.value<AgentChanged>.value.choice {kind, value}
+chat.turns[].items[].kind<Note>.value<AgentChanged>.value.choice.kind<Model> {type}
+chat.turns[].items[].kind<Note>.value<AgentChanged>.value.choice.value<Choice> {type, value}
+chat.turns[].items[].kind<Note>.value<CannotContinue> {type}
+chat.turns[].items[].kind<Note>.value<InstallFailed> {type}
+chat.turns[].items[].kind<Note>.value<NotApplied> {type, value}
+chat.turns[].items[].kind<Note>.value<NotApplied>.value {choice, name}
+chat.turns[].items[].kind<Note>.value<NotApplied>.value.choice {kind, value}
+chat.turns[].items[].kind<Note>.value<NotApplied>.value.choice.kind<Effort> {type}
+chat.turns[].items[].kind<Note>.value<NotApplied>.value.choice.value<Choice> {type, value}
+chat.turns[].items[].kind<Note>.value<NotInstalled> {type}
+chat.turns[].items[].kind<Note>.value<NotOffered> {type, value}
+chat.turns[].items[].kind<Note>.value<NotOffered>.value {choice, name}
+chat.turns[].items[].kind<Note>.value<NotOffered>.value.choice {kind, value}
+chat.turns[].items[].kind<Note>.value<NotOffered>.value.choice.kind<Fast> {type}
+chat.turns[].items[].kind<Note>.value<NotOffered>.value.choice.value<Switch> {type, value}
+chat.turns[].items[].kind<Note>.value<SessionGone> {type}
+chat.turns[].items[].kind<Note>.value<SessionStuck> {type}
+chat.turns[].items[].kind<Note>.value<SignedIn> {type}
+chat.turns[].items[].kind<Note>.value<ToolsLost> {type}
+chat.turns[].items[].kind<Thinking> {type, value}
+chat.turns[].items[].kind<Tool> {type, value}
+chat.turns[].items[].kind<Tool>.value {title, kind, status, origin, action, input, input_cut, result, locations, locations_cut, decision, app, stopped_by}
+chat.turns[].items[].kind<Tool>.value.action<Edit> {type, value}
+chat.turns[].items[].kind<Tool>.value.action<Edit>.value {path}
+chat.turns[].items[].kind<Tool>.value.action<Read> {type, value}
+chat.turns[].items[].kind<Tool>.value.action<Read>.value {path, lines}
+chat.turns[].items[].kind<Tool>.value.action<Read>.value.lines {first, last}
+chat.turns[].items[].kind<Tool>.value.action<Run> {type, value}
+chat.turns[].items[].kind<Tool>.value.action<Run>.value {command, folder, background}
+chat.turns[].items[].kind<Tool>.value.action<Tool> {type, value}
+chat.turns[].items[].kind<Tool>.value.action<Tool>.value {name}
+chat.turns[].items[].kind<Tool>.value.action<Write> {type, value}
+chat.turns[].items[].kind<Tool>.value.action<Write>.value {path}
+chat.turns[].items[].kind<Tool>.value.decision<Allowed> {type, value}
+chat.turns[].items[].kind<Tool>.value.decision<Allowed>.value<Policy> {type, value}
+chat.turns[].items[].kind<Tool>.value.decision<Allowed>.value<Policy>.value {reason}
+chat.turns[].items[].kind<Tool>.value.decision<Allowed>.value<User> {type, value}
+chat.turns[].items[].kind<Tool>.value.decision<Allowed>.value<User>.value {option}
+chat.turns[].items[].kind<Tool>.value.decision<NotAsked> {type}
+chat.turns[].items[].kind<Tool>.value.decision<NotRecorded> {type}
+chat.turns[].items[].kind<Tool>.value.decision<Refused> {type, value}
+chat.turns[].items[].kind<Tool>.value.decision<Refused>.value<Policy> {type, value}
+chat.turns[].items[].kind<Tool>.value.decision<Refused>.value<Policy>.value {reason}
+chat.turns[].items[].kind<Tool>.value.decision<Refused>.value<User> {type, value}
+chat.turns[].items[].kind<Tool>.value.decision<Refused>.value<User>.value {option}
+chat.turns[].items[].kind<Tool>.value.decision<Undecided> {type}
+chat.turns[].items[].kind<Tool>.value.input_cut {kept, total}
+chat.turns[].items[].kind<Tool>.value.kind<Delete> {type}
+chat.turns[].items[].kind<Tool>.value.kind<Edit> {type}
+chat.turns[].items[].kind<Tool>.value.kind<Execute> {type}
+chat.turns[].items[].kind<Tool>.value.kind<Fetch> {type}
+chat.turns[].items[].kind<Tool>.value.kind<Move> {type}
+chat.turns[].items[].kind<Tool>.value.kind<Other> {type}
+chat.turns[].items[].kind<Tool>.value.kind<Read> {type}
+chat.turns[].items[].kind<Tool>.value.kind<Search> {type}
+chat.turns[].items[].kind<Tool>.value.kind<Think> {type}
+chat.turns[].items[].kind<Tool>.value.locations[] {path, line}
+chat.turns[].items[].kind<Tool>.value.origin<Agent> {type, value}
+chat.turns[].items[].kind<Tool>.value.origin<App> {type, value}
+chat.turns[].items[].kind<Tool>.value.origin<Caf> {type, value}
+chat.turns[].items[].kind<Tool>.value.origin<Caf>.value<Bash> {type}
+chat.turns[].items[].kind<Tool>.value.origin<Caf>.value<Edit> {type}
+chat.turns[].items[].kind<Tool>.value.origin<Caf>.value<Read> {type}
+chat.turns[].items[].kind<Tool>.value.origin<Caf>.value<Write> {type}
+chat.turns[].items[].kind<Tool>.value.origin<NotRecorded> {type}
+chat.turns[].items[].kind<Tool>.value.origin<Server> {type, value}
+chat.turns[].items[].kind<Tool>.value.origin<Server>.value {server, tool}
+chat.turns[].items[].kind<Tool>.value.result[]<Diff> {type, value}
+chat.turns[].items[].kind<Tool>.value.result[]<Diff>.value {path, new_file, added, removed, hunks, more}
+chat.turns[].items[].kind<Tool>.value.result[]<Diff>.value.hunks[] {lines}
+chat.turns[].items[].kind<Tool>.value.result[]<Diff>.value.hunks[].lines[] {change, old, new, text}
+chat.turns[].items[].kind<Tool>.value.result[]<Diff>.value.hunks[].lines[].change<Added> {type}
+chat.turns[].items[].kind<Tool>.value.result[]<Diff>.value.hunks[].lines[].change<Kept> {type}
+chat.turns[].items[].kind<Tool>.value.result[]<Diff>.value.hunks[].lines[].change<Removed> {type}
+chat.turns[].items[].kind<Tool>.value.result[]<Image> {type, value}
+chat.turns[].items[].kind<Tool>.value.result[]<Image>.value {mime, data, size}
+chat.turns[].items[].kind<Tool>.value.result[]<Link> {type, value}
+chat.turns[].items[].kind<Tool>.value.result[]<Link>.value {uri, name}
+chat.turns[].items[].kind<Tool>.value.result[]<Output> {type, value}
+chat.turns[].items[].kind<Tool>.value.result[]<Output>.value {lines, dropped, ending}
+chat.turns[].items[].kind<Tool>.value.result[]<Output>.value.ending<Exited> {type, value}
+chat.turns[].items[].kind<Tool>.value.result[]<Output>.value.ending<Exited>.value<Code> {type, value}
+chat.turns[].items[].kind<Tool>.value.result[]<Output>.value.ending<Exited>.value<Signal> {type, value}
+chat.turns[].items[].kind<Tool>.value.result[]<Output>.value.ending<Unknown> {type}
+chat.turns[].items[].kind<Tool>.value.result[]<Text> {type, value}
+chat.turns[].items[].kind<Tool>.value.result[]<Text>.value {text, cut}
+chat.turns[].items[].kind<Tool>.value.result[]<Text>.value.cut {kept, total}
+chat.turns[].items[].kind<Tool>.value.result[]<Unknown> {type, value}
+chat.turns[].items[].kind<Tool>.value.result[]<Unknown>.value {what, raw, summary, cut}
+chat.turns[].items[].kind<Tool>.value.status<Asking> {type}
+chat.turns[].items[].kind<Tool>.value.status<Cancelled> {type}
+chat.turns[].items[].kind<Tool>.value.status<Done> {type}
+chat.turns[].items[].kind<Tool>.value.status<Failed> {type}
+chat.turns[].items[].kind<Tool>.value.status<Pending> {type}
+chat.turns[].items[].kind<Tool>.value.status<Refused> {type}
+chat.turns[].items[].kind<Tool>.value.status<Running> {type}
+chat.turns[].items[].kind<Tool>.value.stopped_by<User> {type}
+chat.turns[].items[].kind<Unknown> {type, value}
+chat.turns[].items[].kind<Unknown>.value {what, raw, summary, cut}
+chat.turns[].items[].kind<Words> {type, value}
+chat.turns[].items[].window {start, end}
+chat.turns[].items[].window.end<At> {type, value}
+chat.turns[].items[].window.end<Open> {type}
+chat.turns[].items[].window.end<Unknown> {type}
+chat.turns[].life<Finished> {type}
+chat.turns[].life<Running> {type}
+chat.turns[].life<Waiting> {type}
+chat.turns[].spent {models, cost, fast}
+chat.turns[].spent.cost {amount, currency}
+chat.turns[].spent.models[] {model, name, tokens}
+chat.turns[].spent.models[].tokens {input, cache_read, cache_write, output, thinking}
+chat.turns[].starter<Agent> {type}
+chat.turns[].starter<Caf> {type}
+chat.turns[].starter<Notice> {type, value}
+chat.turns[].starter<OtherChat> {type, value}
+chat.turns[].starter<OtherChat>.value {from, message}
+chat.turns[].starter<OtherChat>.value.message {parts}
+chat.turns[].starter<OtherChat>.value.message.parts[]<Text> {type, value}
+chat.turns[].starter<User> {type, value}
+chat.turns[].starter<User>.value {parts}
+chat.turns[].starter<User>.value.parts[]<Text> {type, value}
+chat.turns[].window {start, end}
+chat.turns[].window.end<At> {type, value}
+chat.turns[].window.end<Open> {type}
+chat.turns[].window.end<Unknown> {type}
+chat.usage {used, size, cost}
+chat.usage.cost {amount, currency}
+header {chat, agent, profile, cwd, made, changed, label, first, turns, closed, archived}

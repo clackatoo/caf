@@ -520,7 +520,8 @@
                           }
                         }
                       },
-                      "app": null
+                      "app": null,
+                      "stopped_by": null
                     }
                   }
                 },
@@ -618,7 +619,8 @@
                           }
                         }
                       },
-                      "app": null
+                      "app": null,
+                      "stopped_by": null
                     }
                   }
                 },
@@ -687,7 +689,8 @@
                           }
                         }
                       },
-                      "app": null
+                      "app": null,
+                      "stopped_by": null
                     }
                   }
                 },
@@ -747,7 +750,8 @@
                       "decision": {
                         "type": "NotAsked"
                       },
-                      "app": null
+                      "app": null,
+                      "stopped_by": null
                     }
                   }
                 },
@@ -805,7 +809,8 @@
                       "decision": {
                         "type": "Undecided"
                       },
-                      "app": null
+                      "app": null,
+                      "stopped_by": null
                     }
                   }
                 },
@@ -882,7 +887,8 @@
                           }
                         }
                       },
-                      "app": null
+                      "app": null,
+                      "stopped_by": null
                     }
                   }
                 },
@@ -940,7 +946,10 @@
                       "decision": {
                         "type": "NotRecorded"
                       },
-                      "app": null
+                      "app": null,
+                      "stopped_by": {
+                        "type": "User"
+                      }
                     }
                   }
                 },
@@ -1025,7 +1034,8 @@
                           }
                         }
                       },
-                      "app": null
+                      "app": null,
+                      "stopped_by": null
                     }
                   }
                 },
@@ -1096,7 +1106,8 @@
                       "decision": {
                         "type": "NotRecorded"
                       },
-                      "app": null
+                      "app": null,
+                      "stopped_by": null
                     }
                   }
                 },
@@ -1345,6 +1356,23 @@
                         },
                         "name": "High"
                       }
+                    }
+                  }
+                },
+                {
+                  "id": 47,
+                  "window": {
+                    "start": 1800000000300,
+                    "end": {
+                      "type": "At",
+                      "value": 1800000000300
+                    }
+                  },
+                  "parent": null,
+                  "kind": {
+                    "type": "Note",
+                    "value": {
+                      "type": "ToolsLost"
                     }
                   }
                 }
@@ -2662,7 +2690,8 @@
                           }
                         }
                       },
-                      "app": null
+                      "app": null,
+                      "stopped_by": null
                     }
                   }
                 }
@@ -2691,7 +2720,7 @@
                     "type": "Execute"
                   },
                   "status": {
-                    "type": "Done"
+                    "type": "Cancelled"
                   },
                   "origin": {
                     "type": "Caf",
@@ -2746,7 +2775,10 @@
                       }
                     }
                   },
-                  "app": null
+                  "app": null,
+                  "stopped_by": {
+                    "type": "Agent"
+                  }
                 }
               }
             }
@@ -4807,6 +4839,18 @@
           "type": "Refused",
           "value": {
             "type": "SameServerName"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 33,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "ToolsNotServed"
           }
         }
       }

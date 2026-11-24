@@ -143,6 +143,39 @@ pub(super) struct Served {
 }
 
 impl<A: AppItem, D: AppData> Core<A, D> {
+    /// The tools driver said how CAF's tools are served.
+    pub(super) fn serving_given(
+        &mut self,
+        serving: crate::event::Serving,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
+        if self.serving.is_some() {
+            report(
+                out,
+                Level::Warn,
+                "the tools driver said twice how CAF's tools are served: the first stands"
+                    .to_owned(),
+            );
+            return;
+        }
+        self.serving = Some(serving);
+    }
+
+    /// A chat's connection to CAF's tools changed.
+    pub(super) fn relay_changed(
+        &mut self,
+        _now: Now,
+        chat: ChatId,
+        change: crate::event::RelayChange,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
+        report(
+            out,
+            Level::Debug,
+            format!("chat {}'s connection to CAF's tools: {change:?}", chat.0),
+        );
+    }
+
     /// The tools driver reported something of a call.
     pub(super) fn tool_event(
         &mut self,
@@ -261,6 +294,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             locations_cut: 0,
             decision: Decision::Undecided,
             app: None,
+            stopped_by: None,
         });
         let item = match joins {
             Some(item) => {

@@ -148,9 +148,13 @@ mod common;
 ///    A save of an older version is migrated as it's read: its output is
 ///    one piece of text, its action not known, and where it came from and
 ///    who allowed it not recorded.
+/// 7. who stopped a cancelled call ([`ToolCall::stopped_by`](caf_core::tool::ToolCall::stopped_by)),
+///    and the note that CAF's tools stopped working for a session
+///    ([`Note::ToolsLost`](caf_core::chat::Note::ToolsLost)): additions,
+///    read from an older version's save as none.
 ///
 /// [`FailureReason::SettingNotApplied`]: caf_core::chat::FailureReason::SettingNotApplied
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 
 /// How hard to compress.
 #[non_exhaustive]

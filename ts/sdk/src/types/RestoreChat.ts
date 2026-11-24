@@ -2,6 +2,7 @@
 import type { ChatId } from "./ChatId.ts";
 import type { McpServer } from "./McpServer.ts";
 import type { Shelf } from "./Shelf.ts";
+import type { Tools } from "./Tools.ts";
 
 /**
  * What to restore.
@@ -26,4 +27,10 @@ mcp_servers: Array<McpServer>,
  * [`OpenChat::instructions`](crate::OpenChat::instructions): given
  * again, as it isn't saved.
  */
-instructions: string | null, };
+instructions: string | null, 
+/**
+ * CAF's own tools to give it, as
+ * [`OpenChat::tools`](crate::OpenChat::tools): given again, as they
+ * aren't saved. Recordings made before it was added read as none.
+ */
+tools: Tools, };
