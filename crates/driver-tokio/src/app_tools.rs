@@ -70,7 +70,8 @@ pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 /// Its futures run on threads the app's tools have to themselves, two of
 /// them. One that awaits, however long, holds nothing up. One that
 /// blocks anyway ties up one of those threads: it can hold up the app's
-/// other tools, but never CAF, its own tools or its other drivers.
+/// other tools, but never CAF, its own tools or its other drivers (if
+/// those threads can't be started, which is logged, they share CAF's).
 pub trait AppTool<A: AppItem = NoAppItems>: Send + Sync + 'static {
     /// What it's given: serde reads it from the model's JSON, and
     /// schemars describes it to the model, its doc comments as the
@@ -93,9 +94,9 @@ pub trait AppTool<A: AppItem = NoAppItems>: Send + Sync + 'static {
     ///
     /// A preview that fails ends the call, Failed, even if its `Done`
     /// says it was done: what it ends with is otherwise the call's, its
-    /// answer, record and item ([`Done::item`]) included. The future runs as a
-    /// task of its own, but `preview` itself is called on CAF's own task:
-    /// it must give its future at once, never blocking.
+    /// answer, record and item ([`Done::item`]) included. The future
+    /// runs as a task of its own, but `preview` itself is called on CAF's
+    /// own task: it must give its future at once, never blocking.
     fn preview(
         &self,
         call: &Call,

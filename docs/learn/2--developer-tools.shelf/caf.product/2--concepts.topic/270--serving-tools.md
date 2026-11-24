@@ -108,9 +108,8 @@ For a chat with tools, CAF adds its `caf` server to the MCP servers it gives
 the agent, and tells the agent about them in its instructions, in place of
 saying it has none. The server lists CAF's tools first, then the app's, in
 the order given, each with its hints, all but the kind, as MCP's
-annotations. The agent may
-call only the tools the chat was given: a call to any other is answered as
-an error, and never runs.
+annotations. The agent may call only the tools the chat was given: a call
+to any other is answered as an error, and never runs.
 
 ## How a connection finds its chat
 
@@ -173,10 +172,10 @@ already given the model the reason. So does a call to one of the app's
 tools whose input doesn't fit its type: the model is told what was wrong
 with it.
 
-**The policy** is given the hints of every call to a tool CAF serves that
-it asks about (`PermissionRequest::hints`): whether the tool only reads,
-may change or delete what was there, or reaches beyond the app and the
-chat's folder, and its kind. Every tool CAF serves has them: CAF's own
+**The policy** is given the hints of every call CAF asks the policy
+about, to a tool it serves (`PermissionRequest::hints`): whether the tool
+only reads, may change or delete what was there, or reaches beyond the
+app and the chat's folder, and its kind. Every tool CAF serves has them: CAF's own
 from `CafTool::hints`, the app's from its spec.
 A call the agent reports itself, to a tool CAF doesn't serve, has none.
 

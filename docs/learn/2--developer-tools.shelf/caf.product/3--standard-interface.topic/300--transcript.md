@@ -181,9 +181,9 @@ it, and any other in full:
 For one of the app's own tools (see
 [Your own tools](~caf/concepts/your-own-tools)), the app's code writes it,
 from the call's input: *Trim clip 3*. A call whose input doesn't fit, or
-whose title the app left empty, has the tool's own title: *Trim a clip*. Its icon is its kind's, as the tool
-says, and opened, it says first, muted, whose tool it is: *The app's own
-tool trim_clip*.
+whose title the app left empty, has the tool's own title: *Trim a clip*.
+Its icon is its kind's, as the tool says, and opened, it says first,
+muted, whose tool it is: *The app's own tool trim_clip*.
 
 **The app's own item on a call.** A call to one of the app's tools may
 leave an item of the app's on its record (`ToolCall::app`), such as the

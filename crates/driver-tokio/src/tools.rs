@@ -1936,8 +1936,9 @@ impl<A: AppItem> Drop for ToolsDriver<A> {
 }
 
 /// Runs `work`, one of the app's tool `name`'s, for `call`, as a task of
-/// its own, on `runtime` if given: the task, and a future of what it gives, or of `panicked()`
-/// if it panicked, as `doing` it, which is logged.
+/// its own, on `runtime` if given: the task, and a future of what it
+/// gives, or of `panicked()` if it panicked, as `doing` it, which is
+/// logged.
 fn spawn_app<T: Send + 'static>(
     runtime: Option<&tokio::runtime::Handle>,
     name: &str,

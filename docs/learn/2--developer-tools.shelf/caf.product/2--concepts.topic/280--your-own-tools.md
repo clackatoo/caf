@@ -134,7 +134,8 @@ the app's tools have to themselves, named `caf-app-tool-N`. One that
 awaits what it waits for, such as the UI thread's answer, holds nothing
 up, however long it takes. One that blocks anyway ties up one of those
 threads: it can hold up the app's other tools, but never CAF, its own
-tools or its other drivers. And a future blocking a thread can't be
+tools or its other drivers (if those threads can't be started, which is
+logged, they share CAF's). And a future blocking a thread can't be
 stopped (below).
 
 ## Names and schemas
@@ -172,7 +173,7 @@ calls are:
 | `kind` | The kind of tool its calls are, for icons and counting. |
 
 Each is off by default, and the kind is Other. The policy is given them
-with every call to a tool CAF serves that it asks about
+with every call CAF asks the policy about, to a tool it serves
 (`PermissionRequest::hints`): an app's tool's from its spec, and CAF's
 own from `CafTool::hints`, so a policy can allow every read-only call
 without knowing the tools by name. A call the agent reports itself, to a
