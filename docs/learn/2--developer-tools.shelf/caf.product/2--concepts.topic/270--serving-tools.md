@@ -17,11 +17,10 @@ It serves them to the agent over MCP, as a server named `caf`, from inside
 your program, so it knows exactly what each call does and can ask your
 policy, and the user, before anything runs.
 
+What the tools themselves do is [CAF's own tools](~caf/concepts/cafs-own-tools).
+
 > [!NOTE]
-> This is being built in steps. Today CAF serves the tools, binds each
-> connection to its chat, and records each call, but the tools themselves
-> aren't built yet: **every call fails**, with "CAF's tools aren't built
-> yet". Windows isn't supported yet either: serving needs Unix sockets.
+> Windows isn't supported yet: serving needs Unix sockets.
 
 ## The relay
 

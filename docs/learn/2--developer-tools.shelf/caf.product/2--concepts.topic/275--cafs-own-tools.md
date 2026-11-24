@@ -92,15 +92,16 @@ files its model read: each one's version, and the hash of what was read.
 
 - **A file the model hasn't read** can't be edited or written: "File has
   not been read yet. Read it first before writing to it." A new file needs
-  no read. A file read only in part (an `offset` or `limit` that didn't
-  cover it all) counts for Edit, as in Claude Code, so a file too big to
-  read whole can still be changed; Write needs the whole file read.
-- **A file that changed since** (its version moved, and its bytes too) is
-  *stale*: someone else, the user or a formatter, changed it. Write is
+  no read. A read of any part of a file counts, as in Claude Code, so a
+  file too big to read whole can still be changed.
+- **A file that changed since** is *stale*: its version moved, and its
+  bytes aren't the ones read, or were read only in part, so the model
+  can't know they're the same. Someone else, the user or a formatter,
+  changed it. Write is
   refused: "File has been modified since read, either by the user or by a
   linter. Read it again before attempting to write it." Edit, as Claude
-  Code's does, still makes the change if `old_string` is in the file as it
-  is now, just once, and its answer tells the model the file has changes
+  Code's does, still makes the change if it applies to the file as it is
+  now, and its answer tells the model the file has changes
   it hasn't seen, so it reads it before an edit that depends on them.
   Otherwise it's refused as stale.
 - **Between the question and the write,** the file may change again: the
@@ -229,9 +230,8 @@ starts a command, given its line, folder and variables, and hands CAF what it
 prints: raw terminal bytes, which CAF works into lines on its own screen, or
 lines already worked out, for a terminal emulator of your own. What it
 starts can be waited for, interrupted (Ctrl-C) and stopped, and says where
-the user can watch it, such as *terminal 7*: the call's title then says
-*(in terminal 7)*, and the model's answer starts *Ran in terminal 7*, so
-the model knows the user saw it. Dropping it must stop the command.
+the user can watch it, such as *terminal 7*: the model's answer then starts
+*Ran in terminal 7*, so the model knows the user saw it. Dropping it must stop the command.
 
 `PtyCommands` runs `bash -c`, or `sh -c` where there's no bash, in a
 session and process group of its own, its pty the terminal. The folder its

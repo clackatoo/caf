@@ -122,7 +122,7 @@ test.describe('reading and editing', () => {
     await expect(read.locator('.status')).toHaveText('Done')
     await read.locator('summary').first().click()
     await expect(read.locator('.result')).toContainText('The colour is red.')
-    await expect(read.locator('.locations')).toContainText(`${work}/notes.txt:1`)
+    await expect(read.locator('.locations')).toHaveText(`${work}/notes.txt`)
 
     // The edit's diff is in the question, before anything is written.
     await expect(question.locator('.ask')).toContainText('The agent wants to change a file: notes.txt')
@@ -215,11 +215,13 @@ test.describe('running commands', () => {
     await allow(page)
     const waiting = step(page, 'echo waiting; sleep 60; echo never')
     await expect(waiting.locator('.status')).toHaveText('Running')
-    await expect(waiting).toContainText('waiting')
+    // Live: its output, as it comes, before it ends.
+    await expect(waiting.locator('.output')).toContainText('waiting')
     await page.getByRole('button', { name: 'Stop' }).click()
     await expect(waiting.locator('.status')).toHaveText('Cancelled')
     await expect(page.locator('.caf-chat .turn').last().locator('.life')).toHaveText('Stopped')
-    await expect(waiting).not.toContainText('never')
+    await expect(waiting.locator('.output')).toContainText('waiting')
+    await expect(waiting.locator('.output')).not.toContainText('never')
   })
 })
 
