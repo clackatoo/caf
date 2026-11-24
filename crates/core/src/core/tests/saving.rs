@@ -3654,7 +3654,7 @@ fn a_chat_with_an_app_tools_call_is_saved_and_restored_given_them_again() {
             "tools": [],
             "app": ["word_count"],
             "cwd": "/work",
-            "instructions": "caf-test's own tools: word_count.",
+            "instructions": "caf-test's own tools (word_count).",
         } } })]
     );
     let back = &script.chat(CHAT)["turns"][0]["items"][0];

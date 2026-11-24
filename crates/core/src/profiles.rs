@@ -1369,13 +1369,7 @@ pub(crate) struct SettingsStyle {
 /// no longer has. The app's own come after them. What each of the app's
 /// tools does is its description's to say.
 pub(crate) fn own_instructions(host: &str, tools: &[CafTool], app: &[String]) -> String {
-    let apps = |lead: &str| {
-        if app.is_empty() {
-            String::new()
-        } else {
-            format!("{lead}{host}'s own tools: {}", app.join(", "))
-        }
-    };
+    let apps = app.join(", ");
     match (tools.is_empty(), app.is_empty()) {
         (true, true) => format!(
             "You are working inside {host}, the app the user is talking to you in. You have no \
@@ -1384,18 +1378,24 @@ pub(crate) fn own_instructions(host: &str, tools: &[CafTool], app: &[String]) ->
         ),
         (true, false) => format!(
             "You are working inside {host}, the app the user is talking to you in. {host} gives \
-             you {}, asking the user's leave where it must. You have no other tools of your \
-             own: you can't read or change files, run commands or browse the web, except \
-             through other tools {host} gives you. Answer in Markdown.",
-            apps("")
+             you tools of its own ({apps}), asking the user's leave where they must. You have \
+             no other tools of your own: you can't read or change files, run commands or browse \
+             the web, except through tools {host} gives you. Answer in Markdown."
         ),
-        (false, _) => format!(
+        (false, true) => format!(
             "You are working inside {host}, the app the user is talking to you in. {host} gives \
-             you tools to {}, in the folder you're working in{}, asking the user's leave where \
-             it must. You have no other tools of your own: you can't do anything else, such as \
+             you tools to {}, in the folder you're working in, asking the user's leave where it \
+             must. You have no other tools of your own: you can't do anything else, such as \
              browse the web, except through other tools {host} gives you. Answer in Markdown.",
-            tool_uses(tools),
-            apps(", and ")
+            tool_uses(tools)
+        ),
+        (false, false) => format!(
+            "You are working inside {host}, the app the user is talking to you in. {host} gives \
+             you tools to {}, in the folder you're working in, and tools of its own ({apps}), \
+             asking the user's leave where they must. You have no other tools of your own: you \
+             can't do anything else, such as browse the web, except through other tools {host} \
+             gives you. Answer in Markdown.",
+            tool_uses(tools)
         ),
     }
 }
@@ -1403,15 +1403,15 @@ pub(crate) fn own_instructions(host: &str, tools: &[CafTool], app: &[String]) ->
 /// What CAF's MCP server tells the agent of CAF's tools `tools` and the
 /// app's own tools named `app`, in a line, `host` being the app's name.
 pub(crate) fn served_instructions(host: &str, tools: &[CafTool], app: &[String]) -> String {
-    let apps = format!("{host}'s own tools: {}", app.join(", "));
+    let apps = app.join(", ");
     match (tools.is_empty(), app.is_empty()) {
-        (true, _) => format!("{apps}."),
+        (true, _) => format!("{host}'s own tools ({apps})."),
         (false, true) => format!(
             "{host}'s tools to {}, in the folder you're working in.",
             tool_uses(tools)
         ),
         (false, false) => format!(
-            "{host}'s tools to {}, in the folder you're working in, and {apps}.",
+            "{host}'s tools to {}, in the folder you're working in, and its own ({apps}).",
             tool_uses(tools)
         ),
     }
