@@ -19,6 +19,10 @@ inputs, behave the same way and answer in the same words, Claude Code's
 own, wherever CAF's design doesn't say otherwise. Where it does, this page
 says so.
 
+> [!NOTE]
+> CAF's own tools, and `caf-driver-tokio` that runs them, are Linux only
+> for now: they stop a command and everything it started through a pidfd.
+
 Give a chat all of them with `Tools::caf(CafTool::ALL)`, or some:
 
 ```rust
@@ -241,8 +245,8 @@ the user can watch it, such as *terminal 7*: the model's answer then starts
 `PtyCommands` runs `bash -c`, or `sh -c` where there's no bash, in a
 session and process group of its own, its pty the terminal. The folder its
 shell ended in comes back with how it ended, which is how Bash's folder
-carries over. It runs on Linux: it signals the command's process group
-through a pidfd.
+carries over. Like the rest of CAF's tools, it runs on Linux only: it
+signals the command's process group through a pidfd.
 
 A backend's methods return at once, and do their work in the future they
 give back, as CAF's other drivers' do.
