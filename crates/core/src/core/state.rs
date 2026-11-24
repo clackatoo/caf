@@ -345,8 +345,9 @@ pub(super) struct Run<A: AppItem> {
     pub(super) cwd: String,
     /// The tools given to it.
     pub(super) mcp: Vec<McpServer>,
-    /// The tools given to it, as they're sent.
-    pub(super) mcp_sent: Vec<serde_json::Value>,
+    /// The tools given to it, as they're sent: CAF's own last, if it has
+    /// any, its relay's token never shown.
+    pub(super) mcp_sent: SentServers,
     /// What the app tells the agent, after CAF's own instructions, each
     /// time its session is opened.
     pub(super) instructions: Option<String>,
@@ -395,6 +396,11 @@ pub(super) struct Run<A: AppItem> {
     /// What its session has cost so far, as the agent last said: an
     /// update that doesn't say leaves it as it was.
     pub(super) cost: Option<Cost>,
+    /// CAF's own tools it was given, served to it as the MCP server `caf`.
+    pub(super) caf_tools: Vec<crate::tool::CafTool>,
+    /// Its session was told its connection to CAF's tools was lost: it's
+    /// told at most once a session.
+    pub(super) tools_lost: bool,
 }
 
 /// Where a chat is with its session.
@@ -551,4 +557,46 @@ pub(super) enum Work {
     SignOut,
     /// Running a status command.
     Status,
+}
+
+/// A chat's MCP servers as they're sent: what's written or printed of
+/// them shows no relay's token, which is `[hidden]`
+/// ([`mcp::HIDDEN`](crate::mcp::HIDDEN)), so neither
+/// [`Core::inspect`](crate::Core::inspect) nor a log of a run holds one.
+#[derive(Clone, Default, PartialEq)]
+pub(super) struct SentServers(pub(super) Vec<serde_json::Value>);
+
+/// The variable that holds a relay's token.
+pub(super) const TOKEN_VAR: &str = "CAF_RELAY_TOKEN";
+
+impl SentServers {
+    /// The servers, with each relay's token `[hidden]`.
+    fn shown(&self) -> Vec<serde_json::Value> {
+        let mut shown = self.0.clone();
+        for server in &mut shown {
+            for pair in (server
+                .get_mut("env")
+                .and_then(serde_json::Value::as_array_mut))
+            .into_iter()
+            .flatten()
+            {
+                if pair["name"] == TOKEN_VAR {
+                    pair["value"] = crate::mcp::HIDDEN.into();
+                }
+            }
+        }
+        shown
+    }
+}
+
+impl Serialize for SentServers {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.shown().serialize(serializer)
+    }
+}
+
+impl std::fmt::Debug for SentServers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.shown().fmt(f)
+    }
 }

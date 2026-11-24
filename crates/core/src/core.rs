@@ -50,6 +50,7 @@ use crate::question::Answer;
 use crate::save::{RestoreChat, SavedChat};
 use crate::settings::SettingChoice;
 use crate::time::{Mono, Now};
+use crate::tool::Tools;
 
 /// The most of a change that didn't fit that's reported, in bytes.
 const MOST_MISFIT: usize = 1024;
@@ -136,6 +137,8 @@ pub struct Core<A: AppItem = NoAppItems, D: AppData = NoAppData> {
     /// Work owed to drivers, found where there's no list of work to add
     /// it to: added to the list when the call into the core finishes.
     owed: Vec<tools::Owed>,
+    /// How CAF's tools are served, once the tools driver has said.
+    serving: Option<crate::event::Serving>,
     /// What tests saw of each chat's record, change by change.
     #[cfg(test)]
     applied: BTreeMap<ChatId, record::Applied<A>>,
@@ -182,6 +185,14 @@ pub struct OpenChat {
     /// was added read as empty.
     #[serde(default)]
     pub settings: Vec<SettingChoice>,
+    /// CAF's own tools to give it, which CAF serves itself, as the MCP
+    /// server `caf`. None (the default) gives none. A chat given some is
+    /// refused while nothing serves them ([`Refused::ToolsNotServed`]).
+    /// Not saved: the host gives them again when it restores the chat
+    /// ([`RestoreChat::tools`](crate::save::RestoreChat::tools)).
+    /// Recordings made before it was added read as none.
+    #[serde(default)]
+    pub tools: Tools,
 }
 
 impl OpenChat {
@@ -197,7 +208,15 @@ impl OpenChat {
             shelf: None,
             instructions: None,
             settings: Vec::new(),
+            tools: Tools::none(),
         }
+    }
+
+    /// The same, given `tools`.
+    #[must_use]
+    pub fn with_tools(mut self, tools: Tools) -> Self {
+        self.tools = tools;
+        self
     }
 }
 
@@ -295,6 +314,11 @@ pub enum Refused {
     /// agent, as two the same, or as Claude Code writes `my tools` and
     /// `my.tools` alike as `my_tools`: it couldn't tell their tools apart.
     SameServerName,
+    /// The chat was given CAF's tools ([`OpenChat::tools`]), and nothing
+    /// serves them: the tools driver hasn't said how
+    /// ([`Event::Serving`](crate::Event::Serving)), as one that serves
+    /// none never does.
+    ToolsNotServed,
 }
 
 /// What the host can see of a connection: one adapter process.
@@ -372,6 +396,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             limits: limits::Limits::default(),
             misfits: Vec::new(),
             owed: Vec::new(),
+            serving: None,
             #[cfg(test)]
             applied: BTreeMap::new(),
             #[cfg(test)]
@@ -408,6 +433,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Event::Setup { ticket, event } => self.setup_event(now, ticket, event, out),
             Event::Prices(prices) => self.prices_given(prices),
             Event::Limits(limits) => self.limits_given(now, limits),
+            Event::Serving(serving) => self.serving_given(serving, out),
+            Event::Relay { chat, change } => self.relay_changed(now, chat, change, out),
         }
         self.finish(now, out);
     }
@@ -571,7 +598,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     ///
     /// [`Refused::NoSuchAgent`], [`Refused::OwnTools`] if CAF can't turn
     /// off the agent's own tools, [`Refused::RelativeFolder`],
-    /// [`Refused::Unsendable`], or [`Refused::BadShelf`] for its shelf.
+    /// [`Refused::Unsendable`], [`Refused::BadShelf`] for its shelf, or
+    /// [`Refused::ToolsNotServed`] if it's given CAF's tools and nothing
+    /// serves them.
     pub fn open_chat(
         &mut self,
         now: Now,
@@ -765,8 +794,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     ///
     /// # Errors
     ///
-    /// [`Refused::Loaded`], [`Refused::BadShelf`], or
-    /// [`Refused::Unsendable`] for its MCP servers or instructions. Which
+    /// [`Refused::Loaded`], [`Refused::BadShelf`],
+    /// [`Refused::Unsendable`] for its MCP servers or instructions, or
+    /// [`Refused::ToolsNotServed`] if it's given CAF's tools and nothing
+    /// serves them. Which
     /// agent the chat is with is known only once it's read, so a chat
     /// whose agent the host no longer offers, or whose own tools CAF can't
     /// turn off, is still restored, and sending to it is refused
@@ -1163,6 +1194,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             "setup": self.setup,
             "data": self.data,
             "saving": self.saving,
+            // Its key makes every relay's token: it's never shown.
+            "serving": self.serving.as_ref().map(|serving| {
+                let mut shown = serde_json::to_value(serving).unwrap_or_default();
+                shown["key"] = crate::mcp::HIDDEN.into();
+                shown
+            }),
         })
     }
 }

@@ -1009,6 +1009,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if self.is_loaded(restore.chat) {
             return Err(Refused::Loaded);
         }
+        self.caf_server(restore.chat, &restore.tools.caf)?;
         let ticket = Ticket(self.ids.take());
         self.relist_state(&restore.shelf, restore.chat, SavedState::Restoring);
         self.saving.restoring.insert(ticket, restore);
@@ -1106,10 +1107,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if *whole.spend != spend {
             changes.push(Change::Spend(Box::new(spend)));
         }
-        let mcp_sent = (restore.mcp_servers.iter())
+        let mut mcp_sent = (restore.mcp_servers.iter())
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
             .unwrap_or_default();
+        let caf_tools = crate::tool::Tools::caf(restore.tools.caf.iter().copied()).caf;
+        // Checked as the restore was asked for: nothing serves tools less.
+        if let Ok(Some(caf)) = self.caf_server(id, &caf_tools) {
+            mcp_sent.push(caf);
+        }
         let conn = self.conn_for(id, &whole.agent);
         self.saving.locks.insert((restore.shelf.clone(), id));
         let mut kept = Kept::new(restore.shelf, header.made, true);
@@ -1143,7 +1149,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 conn,
                 cwd,
                 mcp: restore.mcp_servers,
-                mcp_sent,
+                mcp_sent: super::state::SentServers(mcp_sent),
                 instructions: restore.instructions,
                 session,
                 open: Open::Idle,
@@ -1163,8 +1169,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 restored: true,
                 choosing: Choosing::default(),
                 cost: None,
+                caf_tools,
+                tools_lost: false,
             },
         );
+        self.serve(id, out);
         // Tidied as changes, so the store gets them as journal entries,
         // and viewers as changes like any other.
         for change in changes {
@@ -1270,8 +1279,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// Lets `chat` go from memory, with everything kept for it, and
     /// returns what was kept of its saving.
+    ///
+    /// It's no longer served once this call into the core finishes
+    /// ([`Core::unserve`]): no call into the core both lets a chat go and
+    /// restores it, so its `Serve` never comes before that `Unserve`. A
+    /// restore of it is answered by the store, later.
     fn forget(&mut self, chat: ChatId) -> Option<Kept<A, D>> {
         self.forget_calls(chat);
+        self.unserve(chat);
         self.chats.remove(&chat);
         self.data.remove(&chat);
         self.logs.remove(&chat);
@@ -1677,6 +1692,10 @@ fn saved_session<A: AppItem>(run: &Run<A>) -> Option<AgentSessionId> {
         // session opened again counts afresh, and a turn's cost reads it
         // that way.
         cost: _,
+        // The host gives a restore its tools again, as its MCP servers.
+        caf_tools: _,
+        // Each session is told once.
+        tools_lost: _,
     } = run;
     session.clone()
 }

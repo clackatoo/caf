@@ -14,7 +14,7 @@ use caf_core::save::RestoreChat;
 use caf_core::time::Now;
 use caf_core::{Core, Host, NoAppItems, OpenChat, Shelf};
 use caf_driver_tokio::viewer::ViewerRules;
-use caf_driver_tokio::{Caf, Config, Running, Step as CafStep, Steps, UsageConfig};
+use caf_driver_tokio::{Caf, Config, Running, Step as CafStep, Steps, ToolsConfig, UsageConfig};
 use caf_save::{FileStore, Store};
 use serde_json::value::RawValue;
 use tokio::sync::mpsc;
@@ -95,14 +95,15 @@ pub fn rules(agents: &[AgentSpec], saved: bool) -> ViewerRules {
 
 /// Starts CAF with `agents`, recording to `record` if given, keeping chats
 /// in a file store in `store` if given, and usage in the ledger `usage`
-/// says if given, and checking every step against replays of it. With a
-/// store, [`SHELF`] is listed at once. Must be called on a tokio runtime.
+/// says if given, serving CAF's tools as `tools` says, and checking every
+/// step against replays of it. With a store, [`SHELF`] is listed at once. Must be called on a tokio runtime.
 #[must_use]
 pub fn start(
     agents: Vec<AgentSpec>,
     record: Option<PathBuf>,
     store: Option<PathBuf>,
     usage: Option<UsageConfig>,
+    tools: ToolsConfig,
 ) -> Live {
     let base = Base {
         host: host(),
@@ -114,6 +115,7 @@ pub fn start(
     config.store = (store.as_ref()).map(|root| Box::new(FileStore::new(root)) as Box<dyn Store>);
     let ledger = (usage.as_ref()).map(|usage| usage.folder.clone());
     config.usage = usage;
+    config.tools = tools;
     let (tap, steps) = mpsc::unbounded_channel();
     let (caf, running) = Caf::start_watching(config, Tap(tap));
     if store.is_some() {
@@ -222,8 +224,8 @@ fn check(book: &Book, mut steps: mpsc::UnboundedReceiver<Raw>) {
         book.add([Step {
             no,
             now: raw.now,
-            event: raw.event,
-            directives: raw.directives,
+            event: shown_event(raw.event),
+            directives: shown_directives(raw.directives),
         }]);
         if let Some(diverged) = diverged.filter(|_| checking) {
             book.diverged_at(diverged);
@@ -284,6 +286,72 @@ fn check_recording(core: &mut Core, no: u64, raw: &Raw, line: &str) -> Option<Di
     })
 }
 
+/// A step's event as the book shows it: [`Serving`]'s key, which makes
+/// every chat's relay token, is `[hidden]`, as in a recording.
+///
+/// [`Serving`]: caf_core::event::Serving
+fn shown_event(event: Box<RawValue>) -> Box<RawValue> {
+    let Some(mut value) = json(&event).filter(|value| value["type"] == "Serving") else {
+        return event;
+    };
+    value["value"]["key"] = HIDDEN_KEY.into();
+    serde_json::value::to_raw_value(&value).unwrap_or(event)
+}
+
+/// A step's directives as the book shows them: each relay's token, in the
+/// `mcpServers` of a message that opens, loads or resumes a session, is
+/// `[hidden]`. Its `bytes` stay bytes.
+fn shown_directives(directives: Box<RawValue>) -> Box<RawValue> {
+    // The messages are bytes, so only a write's are looked into.
+    if !directives.get().contains(r#""Write""#) {
+        return directives;
+    }
+    let Some(mut all) = json(&directives) else {
+        return directives;
+    };
+    let mut changed = false;
+    for directive in all.as_array_mut().into_iter().flatten() {
+        if directive["type"] != "Agent" || directive["value"]["type"] != "Write" {
+            continue;
+        }
+        let bytes = &mut directive["value"]["value"]["bytes"];
+        let Some(raw) = serde_json::from_value::<Vec<u8>>(bytes.clone()).ok() else {
+            continue;
+        };
+        let Ok(mut message) = serde_json::from_slice::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let mut hid = false;
+        for server in message["params"]["mcpServers"]
+            .as_array_mut()
+            .into_iter()
+            .flatten()
+        {
+            for pair in server["env"].as_array_mut().into_iter().flatten() {
+                if pair["name"] == caf_relay::TOKEN_VAR {
+                    pair["value"] = HIDDEN_KEY.into();
+                    hid = true;
+                }
+            }
+        }
+        if hid {
+            let mut written = serde_json::to_vec(&message).unwrap_or_default();
+            if raw.ends_with(b"\n") {
+                written.push(b'\n');
+            }
+            *bytes = written.into();
+            changed = true;
+        }
+    }
+    if !changed {
+        return directives;
+    }
+    serde_json::value::to_raw_value(&all).unwrap_or(directives)
+}
+
+/// What the book shows for a secret, as a recording does.
+const HIDDEN_KEY: &str = caf_core::mcp::HIDDEN;
+
 /// Raw JSON, read.
 fn json(raw: &RawValue) -> Option<serde_json::Value> {
     serde_json::from_str(raw.get()).ok()
@@ -303,11 +371,17 @@ fn json(raw: &RawValue) -> Option<serde_json::Value> {
 ///   code, which a replay reads as empty: so each `Setup` `Paste`'s
 ///   `text` becomes `null`.
 ///
+/// - A recording hides [`Serving`]'s key, which a replay reads as zeros,
+///   so each relay's token differs: it's in an MCP server's `env`, which
+///   the first rule already takes out.
+///
 /// Nothing else a recording hides changes a directive:
 /// - of an agent's sign-in status, it keeps only the kind, which is all
 ///   the core reads;
 /// - agents' arguments and variables, left out of the header, reach
 ///   only `Start`, and the check's core is made with them as given.
+///
+/// [`Serving`]: caf_core::event::Serving
 fn hidden(directives: &mut serde_json::Value) {
     let Some(all) = directives.as_array_mut() else {
         return;
@@ -349,7 +423,10 @@ mod tests {
     use serde_json::json;
     use serde_json::value::RawValue;
 
-    use super::{Raw, Shelf, check_recording, check_steps, hidden, host, rules, shelf};
+    use super::{
+        Raw, Shelf, check_recording, check_steps, hidden, host, rules, shelf, shown_directives,
+        shown_event,
+    };
     use crate::inspector::Check;
     use crate::replay::{Base, take, to_json};
 
@@ -543,5 +620,38 @@ mod tests {
             None
         );
         assert!((unsaved.restore)(id, &shelf()).is_none());
+    }
+
+    #[test]
+    fn the_book_shows_the_key_and_relay_tokens_hidden_and_the_rest_as_it_was() {
+        let raw = |value: serde_json::Value| serde_json::value::to_raw_value(&value).unwrap();
+        let read = |raw: &RawValue| serde_json::from_str::<serde_json::Value>(raw.get()).unwrap();
+        let serving = json!({"type": "Serving", "value": {"socket": "/s", "key": "ab12"}});
+        let shown = read(&shown_event(raw(serving)));
+        assert_eq!(shown["value"], json!({"socket": "/s", "key": "[hidden]"}));
+        let other = json!({"type": "Woken"});
+        assert_eq!(read(&shown_event(raw(other.clone()))), other);
+
+        let message = json!({"jsonrpc": "2.0", "id": 1, "method": "session/new", "params": {"mcpServers": [
+            {"name": "caf", "env": [{"name": "CAF_RELAY", "value": "/s"}, {"name": "CAF_RELAY_TOKEN", "value": "f00d"}]},
+            {"name": "gh", "env": [{"name": "TOKEN", "value": "kept"}]},
+        ]}});
+        let mut bytes = serde_json::to_vec(&message).unwrap();
+        bytes.push(b'\n');
+        let directives = json!([
+            {"type": "Agent", "value": {"type": "Write", "value": {"process": 1, "bytes": bytes}}},
+            {"type": "Timer", "value": {"type": "WakeAt", "value": null}},
+        ]);
+        let shown = read(&shown_directives(raw(directives.clone())));
+        let written: Vec<u8> =
+            serde_json::from_value(shown[0]["value"]["value"]["bytes"].clone()).unwrap();
+        assert_eq!(written.last(), Some(&b'\n'));
+        let mut expected = message;
+        expected["params"]["mcpServers"][0]["env"][1]["value"] = json!("[hidden]");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&written).unwrap(),
+            expected
+        );
+        assert_eq!(shown[1], directives[1]);
     }
 }

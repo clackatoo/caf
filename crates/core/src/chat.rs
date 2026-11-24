@@ -590,6 +590,14 @@ pub enum Note {
         /// The agent's name for it, as it last said.
         name: Option<String>,
     },
+    /// CAF's tools stopped working for the agent's session, as its
+    /// connection to them closed: they're back when the session is opened
+    /// again. Said at most once a session, and only while it's open.
+    ///
+    /// When the agent's adapter dies, its connection to CAF's tools may be
+    /// found closed before the adapter is found gone, so a chat can say
+    /// this and then that its session was lost, for the one crash.
+    ToolsLost,
 }
 
 /// Something the agent sent that CAF couldn't read, or an app item a

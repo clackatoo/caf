@@ -1206,3 +1206,546 @@ fn waiting_for_a_file_can_time_out() {
         [json!({"failed": format!("timed out waiting for {}", never.display())})]
     );
 }
+
+/// An MCP server for the fake to start: the fake again, following
+/// `server.jsonl` in `dir`, and recording to `server-record.jsonl`.
+fn mcp_server(dir: &Dir, script: &str) -> Value {
+    mcp_server_in(dir, "server", script)
+}
+
+/// An MCP server named `caf`, following `<file>.jsonl` in `dir`, and
+/// recording to `<file>-record.jsonl`.
+fn mcp_server_in(dir: &Dir, file: &str, script: &str) -> Value {
+    let path = dir.path(&format!("{file}.jsonl"));
+    std::fs::write(&path, script).unwrap();
+    json!({
+        "name": "caf",
+        "command": env!("CARGO_BIN_EXE_caf-fake-agent"),
+        "args": ["--from-session"],
+        "env": [
+            {"name": caf_fake_agent::SCRIPT_VAR, "value": path},
+            {"name": caf_fake_agent::RECORD_VAR, "value": dir.path(&format!("{file}-record.jsonl"))},
+        ],
+    })
+}
+
+/// Starts the fake with `script` after [`HANDSHAKE`], and opens a session
+/// naming `server`.
+fn mcp_fake(dir: Dir, script: &str, server: &Value) -> Fake {
+    let path = dir.path("script.jsonl");
+    std::fs::write(&path, format!("{HANDSHAKE}{script}")).unwrap();
+    let mut fake = Fake::start_in(dir, &path);
+    fake.send(&request(0, "initialize", &json!({"protocolVersion": 1})));
+    assert_eq!(fake.recv()["id"], 0);
+    fake.send(&request(
+        1,
+        "session/new",
+        &json!({"cwd": "/", "mcpServers": [server]}),
+    ));
+    assert_eq!(fake.recv()["result"]["sessionId"], "s1");
+    fake
+}
+
+/// The server's record, but for its first line.
+fn server_record(fake: &Fake) -> Vec<Value> {
+    record_of(fake, "server")
+}
+
+/// The record of the server following `<file>.jsonl`, but for its first
+/// line: with a server started twice, both records are in it.
+fn record_of(fake: &Fake, file: &str) -> Vec<Value> {
+    let path = fake.record.with_file_name(format!("{file}-record.jsonl"));
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let whole = text.rfind('\n').map_or("", |end| &text[..end]);
+    let mut record: Vec<Value> = (whole.lines())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    if !record.is_empty() {
+        record.remove(0);
+    }
+    record
+}
+
+#[test]
+fn it_calls_an_mcp_servers_tools_as_claude_does() {
+    let dir = Dir::new();
+    let server = mcp_server(
+        &dir,
+        r#"
+{"record_env": ["CAF_TEST_EXTRA"]}
+{"wait": {"method": "server/discover", "timeout": 10000}}
+{"respond": {"error": {"code": -32601, "message": "Method not found"}}}
+{"wait": {"method": "initialize", "expect": {"params": {"protocolVersion": "2025-06-18", "clientInfo": {"name": "caf-fake-agent"}}}, "timeout": 10000}}
+{"respond": {"result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "caf", "version": "1"}}}}
+{"wait": {"method": "notifications/initialized", "timeout": 10000}}
+{"wait": {"method": "tools/list", "timeout": 10000}}
+{"respond": {"result": {"tools": [{"name": "Read"}, {"name": "Bash"}]}}}
+{"wait": {"method": "tools/call", "as": "read", "expect": {"id": 3, "params": {"name": "Read", "arguments": {"path": "/a"}, "_meta": {"claudecode/toolUseId": "toolu_1", "progressToken": 3}}}, "timeout": 10000}}
+{"notify": {"method": "notifications/progress", "params": {"progressToken": 3, "progress": 1, "message": "Running"}}}
+{"respond": {"to": "read", "result": {"content": [{"type": "text", "text": "hello"}], "isError": false}}}
+{"wait": {"method": "tools/call", "as": "bash", "expect": {"params": {"name": "Bash", "arguments": {}, "_meta": {}}}, "timeout": 10000}}
+{"wait": {"method": "notifications/cancelled", "expect": {"params": {"requestId": 4, "reason": "Stop"}}, "timeout": 10000}}
+{"note": "cancelled"}
+"wait_closed"
+{"note": "dropped"}
+"#,
+    );
+    let mut fake = mcp_fake(
+        dir,
+        r#"
+{"mcp_start": {"from": "session/new", "env": {"CAF_TEST_EXTRA": "yes"}, "discover": true, "expect": {"result": {"serverInfo": {"name": "caf"}}}, "timeout": 10000}}
+{"mcp_list": {"expect": ["Read", "Bash"], "timeout": 10000}}
+{"mcp_call": {"tool": "Read", "arguments": {"path": "/a"}, "tool_use_id": "toolu_1", "report": "s1", "as": "read"}}
+{"mcp_progress": {"expect": {"params": {"message": "Running"}}, "timeout": 10000}}
+{"mcp_await": {"to": "read", "expect": {"result": {"content": [{"text": "hello"}], "isError": false}}, "timeout": 10000}}
+{"mcp_call": {"tool": "Bash", "no_progress": true, "as": "bash"}}
+{"mcp_cancel": {"reason": "Stop"}}
+{"mcp_await": {"none": true, "timeout": 200}}
+{"mcp_drop": {}}
+{"note": "done"}
+"#,
+        &server,
+    );
+    let name = "mcp__caf__Read";
+    assert_eq!(
+        fake.recv()["params"],
+        json!({"sessionId": "s1", "update": {
+            "sessionUpdate": "tool_call", "toolCallId": "toolu_1", "title": name,
+            "status": "pending", "_meta": {"claudeCode": {"toolName": name}},
+            "rawInput": {"path": "/a"},
+        }})
+    );
+    fake.wait_for_record(&json!({"note": "done"}));
+    let until = Instant::now() + SOON;
+    while !server_record(&fake).contains(&json!({"note": "dropped"})) {
+        assert!(Instant::now() < until, "{:?}", server_record(&fake));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let server = server_record(&fake);
+    assert_eq!(server[0], json!({"env": {"CAF_TEST_EXTRA": "yes"}}));
+    assert!(server.contains(&json!({"note": "cancelled"})));
+    let record = fake.record();
+    let started = record.iter().find_map(|entry| entry.get("mcp_started"));
+    assert_eq!(
+        started,
+        Some(&json!({
+            "server": "caf",
+            "command": env!("CARGO_BIN_EXE_caf-fake-agent"),
+            "args": ["--from-session"],
+            "env": ["CAF_FAKE_AGENT_RECORD", "CAF_FAKE_AGENT_SCRIPT", "CAF_TEST_EXTRA"],
+        }))
+    );
+    assert!(record.contains(&json!({"mcp_dropped": "caf"})));
+    fake.close_stdin();
+    assert_eq!(fake.exit().code(), Some(0));
+}
+
+#[test]
+fn an_mcp_servers_answers_are_checked() {
+    let handshake = r#"
+{"wait": {"method": "initialize", "timeout": 10000}}
+{"respond": {"result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "caf", "version": "1"}}}}
+{"wait": {"method": "tools/list", "timeout": 10000}}
+{"respond": {"result": {"tools": [{"name": "Read"}]}}}
+"#;
+    let check = |server: &str, script: &str| {
+        let dir = Dir::new();
+        let server = mcp_server(&dir, &format!("{handshake}{server}"));
+        let mut fake = mcp_fake(dir, script, &server);
+        assert_eq!(fake.exit().code(), Some(EXIT_CHECK_FAILED));
+        let record = fake.script_record();
+        let failed = record.iter().find_map(|entry| entry.get("failed"));
+        failed
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let start = r#"{"mcp_start": {"timeout": 10000}}"#;
+    assert_eq!(
+        check(
+            "",
+            &format!("{start}\n{}", r#"{"mcp_list": {"expect": ["Bash"]}}"#)
+        ),
+        r#"caf has the tools ["Read"], not ["Bash"]"#
+    );
+    // The answers in these are JSON, whose keys the fake may write in
+    // either order, as serde_json's features say: so they're read back.
+    let answer = |failed: String, before: &str, after: &str| {
+        let rest = failed
+            .strip_prefix(before)
+            .unwrap_or_else(|| panic!("{failed}"));
+        let answer = rest
+            .strip_suffix(after)
+            .unwrap_or_else(|| panic!("{failed}"));
+        serde_json::from_str::<Value>(answer).unwrap()
+    };
+    assert_eq!(
+        answer(
+            check(
+                r#"{"wait": {"method": "tools/call", "timeout": 10000}}
+{"respond": {"result": {"content": [], "isError": true}}}"#,
+                &format!(
+                    "{start}\n{}",
+                    r#"{"mcp_list": {}}
+{"mcp_call": {"tool": "Read"}}
+{"mcp_await": {"expect": {"result": {"isError": false}}, "timeout": 10000}}"#
+                )
+            ),
+            "caf's answer to 2 was ",
+            r#", not {"result":{"isError":false}}"#
+        ),
+        json!({"jsonrpc": "2.0", "id": 2, "result": {"content": [], "isError": true}})
+    );
+    assert_eq!(
+        check(
+            r#"{"wait": {"method": "tools/call", "timeout": 10000}}
+{"exit": 0}"#,
+            &format!(
+                "{start}\n{}",
+                r#"{"mcp_list": {}}
+{"mcp_call": {"tool": "Read"}}
+{"mcp_await": {"timeout": 10000}}"#
+            )
+        ),
+        "caf closed without answering 2"
+    );
+    assert_eq!(
+        answer(
+            check(
+                r#"{"wait": {"method": "tools/call", "timeout": 10000}}
+{"respond": {"result": {"content": []}}}"#,
+                &format!(
+                    "{start}\n{}",
+                    r#"{"mcp_list": {}}
+{"mcp_call": {"tool": "Read"}}
+{"mcp_await": {"none": true, "timeout": 5000}}"#
+                )
+            ),
+            "caf answered 2, with ",
+            ""
+        ),
+        json!({"jsonrpc": "2.0", "id": 2, "result": {"content": []}})
+    );
+    assert_eq!(
+        check("", r#"{"mcp_start": {"server": "eyespy"}}"#),
+        "session/new names no MCP server eyespy"
+    );
+    assert_eq!(
+        check("", r#"{"mcp_list": {}}"#),
+        "no MCP server started called caf"
+    );
+}
+
+#[test]
+fn it_answers_cafs_relay_check() {
+    let output = Command::new(env!("CARGO_BIN_EXE_caf-fake-agent"))
+        .env(caf_relay::CHECK_VAR, "1")
+        .env_remove(caf_relay::RELAY_VAR)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim_end(),
+        caf_relay::CHECK_ANSWER
+    );
+}
+
+/// What starts every server in these tests: the handshake, then a list of
+/// one tool.
+const SERVER: &str = r#"
+{"wait": {"method": "initialize", "timeout": 10000}}
+{"respond": {"result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "caf", "version": "1"}}}}
+{"wait": {"method": "notifications/initialized", "timeout": 10000}}
+"#;
+
+/// Waits until `check` holds of the fake's record.
+fn wait_until(fake: &Fake, check: impl Fn(&[Value]) -> bool) {
+    let until = Instant::now() + SOON;
+    while !check(&fake.record()) {
+        assert!(Instant::now() < until, "{:#?}", fake.record());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The reason the fake's check failed, once it has exited.
+fn failure(fake: &mut Fake) -> String {
+    assert_eq!(fake.exit().code(), Some(EXIT_CHECK_FAILED));
+    let record = fake.script_record();
+    let failed = record.iter().find_map(|entry| entry.get("failed"));
+    failed
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+#[test]
+fn starting_a_server_again_under_its_name_replaces_it() {
+    let dir = Dir::new();
+    let server = mcp_server(
+        &dir,
+        &format!(
+            "{SERVER}{}",
+            r#"{"wait": {"method": "tools/list", "timeout": 10000}}
+{"respond": {"result": {"tools": [{"name": "Read"}]}}}
+"wait_closed""#
+        ),
+    );
+    // The first server goes as the second starts, which must not end the
+    // second, nor its answers be taken for the first's.
+    let mut fake = mcp_fake(
+        dir,
+        r#"
+{"mcp_start": {"timeout": 10000}}
+{"mcp_start": {"timeout": 10000}}
+{"mcp_list": {"expect": ["Read"], "timeout": 10000}}
+{"note": "done"}
+"#,
+        &server,
+    );
+    fake.wait_for_record(&json!({"note": "done"}));
+    fake.close_stdin();
+    assert_eq!(fake.exit().code(), Some(0));
+}
+
+#[test]
+fn a_server_can_be_started_from_a_session_loaded_as_another_connection() {
+    let dir = Dir::new();
+    let first = mcp_server_in(
+        &dir,
+        "first",
+        &format!(
+            "{SERVER}{}",
+            r#"{"wait": {"method": "tools/list", "timeout": 10000}}
+{"respond": {"result": {"tools": [{"name": "Read"}]}}}
+"wait_closed""#
+        ),
+    );
+    let second = mcp_server_in(
+        &dir,
+        "second",
+        r#"
+{"wait": {"method": "initialize", "expect": {"params": {"protocolVersion": "2025-11-25"}}, "timeout": 10000}}
+{"respond": {"result": {"protocolVersion": "2025-11-25", "capabilities": {"tools": {}}, "serverInfo": {"name": "caf", "version": "1"}}}}
+{"wait": {"method": "notifications/initialized", "timeout": 10000}}
+{"wait": {"method": "tools/list", "timeout": 10000}}
+{"respond": {"result": {"tools": [{"name": "Bash"}]}}}
+"wait_closed"
+"#,
+    );
+    let mut fake = mcp_fake(
+        dir,
+        r#"
+{"mcp_start": {"as": "first", "timeout": 10000}}
+{"wait": {"method": "session/load", "as": "load"}}
+{"respond": {"result": {}}}
+{"mcp_start": {"from": "load", "as": "second", "version": "2025-11-25", "timeout": 10000}}
+{"mcp_list": {"server": "second", "expect": ["Bash"], "timeout": 10000}}
+{"mcp_list": {"server": "first", "expect": ["Read"], "timeout": 10000}}
+{"note": "done"}
+"#,
+        &first,
+    );
+    fake.send(&request(
+        2,
+        "session/load",
+        &json!({"sessionId": "s1", "cwd": "/", "mcpServers": [second]}),
+    ));
+    assert_eq!(fake.recv()["id"], 2);
+    fake.wait_for_record(&json!({"note": "done"}));
+    let record = fake.record();
+    let started: Vec<&Value> = (record.iter())
+        .filter_map(|entry| entry.get("mcp_started"))
+        .map(|started| &started["server"])
+        .collect();
+    assert_eq!(started, [&json!("first"), &json!("second")]);
+    fake.close_stdin();
+    assert_eq!(fake.exit().code(), Some(0));
+}
+
+#[test]
+fn a_discover_not_refused_fails() {
+    let dir = Dir::new();
+    let server = mcp_server(
+        &dir,
+        r#"{"wait": {"method": "server/discover", "timeout": 10000}}
+{"respond": {"result": {}}}
+"wait_closed""#,
+    );
+    let mut fake = mcp_fake(
+        dir,
+        r#"{"mcp_start": {"discover": true, "timeout": 10000}}"#,
+        &server,
+    );
+    let failed = failure(&mut fake);
+    assert!(
+        failed.starts_with("caf answered server/discover with ")
+            && failed.ends_with(", not -32601"),
+        "{failed}"
+    );
+}
+
+#[test]
+fn waiting_for_progress_fails_without_a_token_a_notification_or_the_server() {
+    let call = |server: &str, script: &str| {
+        let dir = Dir::new();
+        let server = mcp_server(&dir, &format!("{SERVER}{server}"));
+        let mut fake = mcp_fake(
+            dir,
+            &format!(r#"{{"mcp_start": {{"timeout": 10000}}}}{script}"#),
+            &server,
+        );
+        failure(&mut fake)
+    };
+    assert_eq!(
+        call(
+            "\"wait_closed\"",
+            "\n{\"mcp_call\": {\"tool\": \"Read\", \"no_progress\": true}}\n{\"mcp_progress\": {\"timeout\": 10000}}"
+        ),
+        "the call 1 to caf asked for no progress"
+    );
+    assert_eq!(
+        call(
+            "\"wait_closed\"",
+            "\n{\"mcp_call\": {\"tool\": \"Read\"}}\n{\"mcp_progress\": {\"timeout\": 100}}"
+        ),
+        "timed out waiting for caf's progress on 1"
+    );
+    assert_eq!(
+        call(
+            "{\"wait\": {\"method\": \"tools/call\", \"timeout\": 10000}}\n{\"exit\": 0}",
+            "\n{\"mcp_call\": {\"tool\": \"Read\"}}\n{\"mcp_progress\": {\"timeout\": 10000}}"
+        ),
+        "caf closed, with no progress on 1"
+    );
+}
+
+#[test]
+fn no_answer_comes_from_a_server_that_closes() {
+    let dir = Dir::new();
+    let server = mcp_server(
+        &dir,
+        &format!(
+            "{SERVER}{}",
+            r#"{"wait": {"method": "tools/call", "timeout": 10000}}
+{"exit": 0}"#
+        ),
+    );
+    // Far longer than the test waits: it passes because the server went.
+    let mut fake = mcp_fake(
+        dir,
+        r#"
+{"mcp_start": {"timeout": 10000}}
+{"mcp_call": {"tool": "Read"}}
+{"mcp_await": {"none": true, "timeout": 600000}}
+{"note": "done"}
+"#,
+        &server,
+    );
+    fake.wait_for_record(&json!({"note": "done"}));
+    fake.close_stdin();
+    assert_eq!(fake.exit().code(), Some(0));
+}
+
+#[test]
+fn a_call_can_be_cancelled_by_name_and_without_progress_has_no_token() {
+    let dir = Dir::new();
+    let server = mcp_server(
+        &dir,
+        &format!(
+            "{SERVER}{}",
+            r#"{"wait": {"method": "tools/call", "as": "a", "timeout": 10000}}
+{"wait": {"method": "tools/call", "as": "b", "timeout": 10000}}
+{"wait": {"method": "notifications/cancelled", "timeout": 10000}}
+{"note": "cancelled"}
+"wait_closed""#
+        ),
+    );
+    let mut fake = mcp_fake(
+        dir,
+        r#"
+{"mcp_start": {"timeout": 10000}}
+{"mcp_call": {"tool": "Read", "no_progress": true, "as": "a"}}
+{"mcp_call": {"tool": "Bash", "as": "b"}}
+{"mcp_cancel": {"to": "a"}}
+{"note": "done"}
+"#,
+        &server,
+    );
+    fake.wait_for_record(&json!({"note": "done"}));
+    let until = Instant::now() + SOON;
+    while !server_record(&fake).contains(&json!({"note": "cancelled"})) {
+        assert!(Instant::now() < until, "{:#?}", server_record(&fake));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let received: Vec<Value> = (server_record(&fake).into_iter())
+        .filter_map(|entry| entry.get("received").cloned())
+        .collect();
+    let method = |method: &str| -> Vec<&Value> {
+        received
+            .iter()
+            .filter(|message| message["method"] == method)
+            .collect()
+    };
+    let calls = method("tools/call");
+    assert_eq!(calls[0]["params"]["_meta"], json!({}));
+    assert_eq!(calls[1]["params"]["_meta"], json!({"progressToken": 2}));
+    assert_eq!(
+        method("notifications/cancelled")[0]["params"],
+        json!({"requestId": 1})
+    );
+    fake.close_stdin();
+    assert_eq!(fake.exit().code(), Some(0));
+}
+
+#[test]
+fn a_servers_stderr_and_exit_are_recorded() {
+    let dir = Dir::new();
+    let server = mcp_server(
+        &dir,
+        &format!(
+            "{SERVER}{}",
+            "{\"stderr\": \"relay: hello\"}\n\"wait_closed\"\n{\"exit\": 3}"
+        ),
+    );
+    let mut fake = mcp_fake(
+        dir,
+        r#"
+{"mcp_start": {"timeout": 10000}}
+{"sleep": 50}
+{"mcp_drop": {}}
+"#,
+        &server,
+    );
+    wait_until(&fake, |record| {
+        record.contains(&json!({"mcp_stderr": {"server": "caf", "line": "relay: hello"}}))
+            && record.contains(&json!({"mcp_exited": {"server": "caf", "code": 3}}))
+    });
+    fake.close_stdin();
+    assert_eq!(fake.exit().code(), Some(0));
+}
+
+#[test]
+fn a_call_to_a_server_since_replaced_fails_clearly() {
+    let steps = |step: &str| {
+        format!(
+            "{}\n{step}",
+            r#"{"mcp_start": {"timeout": 10000}}
+{"mcp_call": {"tool": "Read", "as": "a"}}
+{"mcp_start": {"timeout": 10000}}"#
+        )
+    };
+    for step in [
+        r#"{"mcp_await": {"to": "a", "timeout": 2000}}"#,
+        r#"{"mcp_progress": {"to": "a", "timeout": 2000}}"#,
+        r#"{"mcp_cancel": {"to": "a"}}"#,
+    ] {
+        let dir = Dir::new();
+        let server = mcp_server(&dir, &format!("{SERVER}\"wait_closed\""));
+        let mut fake = mcp_fake(dir, &steps(step), &server);
+        assert_eq!(
+            failure(&mut fake),
+            "the call a was to a server since replaced",
+            "{step}"
+        );
+    }
+}

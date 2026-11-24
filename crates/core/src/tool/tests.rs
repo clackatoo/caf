@@ -282,3 +282,39 @@ fn a_diffs_lines_are_counted_as_they_are_compared_a_lone_return_ending_one() {
     assert_eq!((diff.added, diff.removed), (1, 1));
     assert_eq!(diff.hunks[0].lines[1].text, "b");
 }
+
+#[test]
+fn an_image_is_made_from_its_bytes_or_base64_and_capped() {
+    let cases: [(&[u8], &str); 5] = [
+        (b"", ""),
+        (b"f", "Zg=="),
+        (b"fo", "Zm8="),
+        (b"foo", "Zm9v"),
+        (&[0xfb, 0xff, 0x00, 0x7f], "+/8Afw=="),
+    ];
+    for (bytes, text) in cases {
+        let image = super::Image::new("image/png", bytes);
+        assert_eq!(image.data.as_deref(), Some(text), "{bytes:?}");
+        assert_eq!(image.size, bytes.len() as u64);
+        assert_eq!(image.mime, "image/png");
+        assert_eq!(super::Image::from_base64("image/png", text), image);
+    }
+    let biggest = vec![1u8; super::MOST_IMAGE];
+    assert!(super::Image::new("image/png", &biggest).data.is_some());
+    let bigger = vec![1u8; super::MOST_IMAGE + 1];
+    let image = super::Image::new("image/png", &bigger);
+    assert_eq!(image.data, None, "only its size is kept");
+    assert_eq!(image.size, bigger.len() as u64);
+    let text = super::base64(&bigger);
+    assert_eq!(super::Image::from_base64("image/png", text), image);
+}
+
+#[test]
+fn a_location_is_a_path_and_perhaps_a_line() {
+    let location = super::Location::new("/work/a.rs", Some(3));
+    assert_eq!(
+        serde_json::to_value(&location).expect("JSON"),
+        json!({ "path": "/work/a.rs", "line": 3 })
+    );
+    assert_eq!(super::Location::new("/work/a.rs", None).line, None);
+}

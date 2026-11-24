@@ -35,6 +35,7 @@ export function tool(title: string): ToolCall {
     locations_cut: 0,
     decision: { type: "Undecided" },
     app: null,
+    stopped_by: null,
   };
 }
 

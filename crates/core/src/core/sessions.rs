@@ -56,12 +56,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         let cwd = open.cwd.to_str().ok_or(Refused::Unsendable)?.to_owned();
         check_servers(&open.mcp_servers)?;
-        let mcp_sent = open
+        let mut mcp_sent = open
             .mcp_servers
             .iter()
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
             .ok_or(Refused::Unsendable)?;
+        let caf_tools = crate::tool::Tools::caf(open.tools.caf).caf;
+        mcp_sent.extend(self.caf_server(chat, &caf_tools)?);
         check_instructions(open.instructions.as_deref())?;
         if !open.settings.iter().all(sendable) {
             return Err(Refused::Unsendable);
@@ -106,7 +108,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 conn,
                 cwd,
                 mcp: open.mcp_servers,
-                mcp_sent,
+                mcp_sent: super::state::SentServers(mcp_sent),
                 instructions: open.instructions,
                 session: match open.session {
                     SessionChoice::New => None,
@@ -129,8 +131,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 restored: false,
                 choosing: Choosing::default(),
                 cost: None,
+                caf_tools,
+                tools_lost: false,
             },
         );
+        self.serve(chat, out);
         if let Some(shelf) = open.shelf {
             self.keep_new(now, chat, shelf);
         }
@@ -272,12 +277,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         let mut params = json!({
             "cwd": run.cwd,
-            "mcpServers": run.mcp_sent,
+            "mcpServers": run.mcp_sent.0,
         });
         if let Some(session) = &run.session {
             params["sessionId"] = json!(session.0);
         }
-        let own = own_instructions(&self.host.name);
+        let own = own_instructions(&self.host.name, &run.caf_tools);
         if let Some(meta) = profile.stripped(&own, run.instructions.as_deref()) {
             params["_meta"] = meta;
         }
@@ -447,6 +452,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         run.open = Open::Live { proc };
         run.session = Some(session.clone());
+        // A new session is told afresh if CAF's tools are lost.
+        run.tools_lost = false;
         // A session opened, new or again, says its cost afresh.
         run.cost = None;
         if let Some(each) = self.procs.get_mut(&proc) {

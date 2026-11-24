@@ -318,7 +318,20 @@ impl Script {
     /// Opens a saved chat with `agent` and its session, on a core with no
     /// chats yet: Claude's resumes, a plain agent's loads.
     fn open_saved(&mut self, agent: &str) {
-        let (chat, out) = self.open(saved_open(agent));
+        self.open_saved_as(saved_open(agent), agent);
+    }
+
+    /// Opens a chat as [`Script::open_saved`] does, CAF's tools served,
+    /// given all of them.
+    fn open_saved_serving(&mut self, agent: &str) {
+        self.serving();
+        let open = saved_open(agent).with_tools(crate::tool::Tools::caf(crate::tool::CafTool::ALL));
+        self.open_saved_as(open, agent);
+    }
+
+    /// Opens `open`, a chat with `agent`, as [`Script::open_saved`] does.
+    fn open_saved_as(&mut self, open: OpenChat, agent: &str) {
+        let (chat, out) = self.open(open);
         assert_eq!(chat, Ok(CHAT));
         let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
         let answer = if agent == "claude" {
@@ -667,7 +680,7 @@ fn a_restore_finds_what_was_under_way_and_tidies_it() {
         serde_json::to_value(&changes).expect("JSON"),
         json!([
             { "type": "ItemEnded", "value": { "item": 5003, "end": end } },
-            { "type": "ToolChanged", "value": { "item": 5005, "tool": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Failed" }, "input": null, "origin": { "type": "NotRecorded" }, "action": null, "input_cut": null, "result": [], "locations": [], "locations_cut": 0, "decision": { "type": "NotRecorded" }, "app": null } } },
+            { "type": "ToolChanged", "value": { "item": 5005, "tool": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Failed" }, "input": null, "origin": { "type": "NotRecorded" }, "action": null, "input_cut": null, "result": [], "locations": [], "locations_cut": 0, "decision": { "type": "NotRecorded" }, "app": null, "stopped_by": null } } },
             { "type": "ItemEnded", "value": { "item": 5005, "end": end } },
             { "type": "TurnLife", "value": { "turn": 5002, "life": { "type": "CutOff" }, "end": end } },
             { "type": "TurnLife", "value": { "turn": 5006, "life": { "type": "Stopped" }, "end": end } },
@@ -951,9 +964,106 @@ fn a_restored_chat_is_given_its_instructions_again_as_its_session_opens() {
     let options = &sent(&out, "session/resume")["params"]["_meta"]["claudeCode"]["options"];
     assert_eq!(
         options["systemPrompt"],
-        crate::profiles::own_instructions("caf-test") + "\n\nGiven again."
+        crate::profiles::own_instructions("caf-test", &[]) + "\n\nGiven again."
     );
     assert_eq!(options["tools"], json!([]));
+}
+
+#[test]
+fn a_restored_chat_is_given_its_tools_again_as_a_new_one_is() {
+    use crate::tool::{CafTool, Tools};
+    let mut script = Script::new(host());
+    let restore =
+        RestoreChat::new(CHAT, Shelf(SHELF.to_owned())).with_tools(Tools::caf([CafTool::Write]));
+    // Nothing serves them yet.
+    assert_eq!(
+        script.restore(restore.clone()).0,
+        Err(Refused::ToolsNotServed)
+    );
+    script.serving();
+    script.restore(restore).0.expect("restoring");
+    let saved = saved(&mid_turn("claude"), Some("old"), 0);
+    let out = script.storage(1000, StorageEvent::Loaded(Box::new(saved)));
+    assert_eq!(
+        with(&out, "tool"),
+        [json!({ "tool": { "type": "Serve", "value": {
+            "chat": CHAT,
+            "tools": [{ "type": "Write" }],
+            "instructions": "caf-test's tools to write whole files (Write), in the folder you're working in.",
+        } } })]
+    );
+    let out = script.send(CHAT, "Go on").1;
+    let proc = with(&out, "start")[0]["start"].as_u64().expect("a process");
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let out = script.answers(proc, init, &claude_init());
+    // The same server a new chat gets: the same relay, chat and token.
+    let resume = sent(&out, "session/resume");
+    assert_eq!(
+        resume["params"]["mcpServers"],
+        json!([super::serving::caf_server(CHAT)])
+    );
+    assert_eq!(
+        resume["params"]["_meta"]["claudeCode"]["options"]["systemPrompt"],
+        crate::profiles::own_instructions("caf-test", &[CafTool::Write])
+    );
+    // Put away, it's no longer served.
+    let id = resume["id"].as_u64().expect("an id");
+    script.answers(proc, id, &json!({ "modes": super::default_modes() }));
+    let out = script.put_away(CHAT).1;
+    assert!(
+        with(&out, "tool")
+            .contains(&json!({ "tool": { "type": "Unserve", "value": { "chat": CHAT } } })),
+        "{out:#?}"
+    );
+}
+
+#[test]
+fn a_restored_chat_has_the_apps_servers_then_cafs_and_none_named_caf() {
+    use crate::agent::McpServer;
+    use crate::tool::{CafTool, Tools};
+    let server = |name: &str| McpServer::Http {
+        name: name.to_owned(),
+        url: "http://localhost:1/mcp".to_owned(),
+        headers: Vec::new(),
+    };
+    let mut script = Script::new(host());
+    script.serving();
+    let mut restore =
+        RestoreChat::new(CHAT, Shelf(SHELF.to_owned())).with_tools(Tools::caf([CafTool::Read]));
+    restore.mcp_servers = vec![server("CAF")];
+    assert_eq!(
+        script.restore(restore.clone()).0,
+        Err(Refused::ReservedServer)
+    );
+    restore.mcp_servers = vec![server("maps")];
+    script.restore(restore.clone()).0.expect("restoring");
+    let saved = saved(&mid_turn("claude"), Some("old"), 0);
+    script.storage(1000, StorageEvent::Loaded(Box::new(saved)));
+    // Loaded already, whatever it's given.
+    assert_eq!(script.restore(restore).0, Err(Refused::Loaded));
+    let out = script.send(CHAT, "Go on").1;
+    let proc = with(&out, "start")[0]["start"].as_u64().expect("a process");
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let out = script.answers(proc, init, &claude_init());
+    let servers = &sent(&out, "session/resume")["params"]["mcpServers"];
+    assert_eq!(servers[0]["name"], "maps");
+    assert_eq!(servers[1], super::serving::caf_server(CHAT));
+    assert_eq!(servers.as_array().map(Vec::len), Some(2));
+}
+
+#[test]
+fn restoring_a_loaded_chat_is_refused_as_loaded_whatever_its_tools() {
+    use crate::tool::{CafTool, Tools};
+    let mut script = Script::new(host());
+    let restore = RestoreChat::new(CHAT, Shelf(SHELF.to_owned()));
+    script.restore(restore.clone()).0.expect("restoring");
+    // Nothing serves tools, and it's loaded: it's the second that's said.
+    assert_eq!(
+        script
+            .restore(restore.with_tools(Tools::caf([CafTool::Read])))
+            .0,
+        Err(Refused::Loaded)
+    );
 }
 
 #[test]
@@ -3295,7 +3405,7 @@ fn a_served_command_is_journaled_squashed_and_comes_back_cut_off() {
 
     let mut script = Script::new(host());
     let mut store = Store::default();
-    script.open_saved("claude");
+    script.open_saved_serving("claude");
     store.take(&script.list_saved(SHELF).1);
     script.serve(&mut store, false);
     script.at(1000);
@@ -3359,9 +3469,13 @@ fn a_served_command_is_journaled_squashed_and_comes_back_cut_off() {
 
     script.at(2500);
     let out = script.put_away(CHAT).1;
+    // Its call is cancelled, and it's no longer served, as it's let go.
     assert_eq!(
         with(&out, "tool"),
-        [json!({ "tool": { "type": "Cancel", "value": { "call": 1 } } })]
+        [
+            json!({ "tool": { "type": "Cancel", "value": { "call": 1 } } }),
+            json!({ "tool": { "type": "Unserve", "value": { "chat": CHAT } } }),
+        ]
     );
     store.take(&out);
     script.serve(&mut store, false);
@@ -3381,6 +3495,8 @@ fn a_served_command_is_journaled_squashed_and_comes_back_cut_off() {
             } }],
         } } }),
     );
+    // Cut off as its chat was put away, not stopped: no one stopped it.
+    assert_eq!(tool["kind"]["value"]["stopped_by"], Value::Null);
     assert_ne!(tool["window"]["end"]["type"], "Open");
 }
 
@@ -3393,7 +3509,7 @@ fn a_chatty_commands_journal_entry_stays_as_small_as_its_output() {
 
     let mut script = Script::new(host());
     let mut store = Store::default();
-    script.open_saved("claude");
+    script.open_saved_serving("claude");
     store.take(&script.list_saved(SHELF).1);
     script.serve(&mut store, false);
     script.at(1000);

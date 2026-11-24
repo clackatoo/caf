@@ -242,7 +242,9 @@ impl Script {
             let Some(tool) = directive.get("tool") else {
                 continue;
             };
-            if tool["type"] == "Preview" {
+            // What's served is no call's.
+            if ["Preview", "Serve", "Unserve"].contains(&tool["type"].as_str().unwrap_or_default())
+            {
                 continue;
             }
             let call = tool["value"]["call"].as_u64().expect("a call");

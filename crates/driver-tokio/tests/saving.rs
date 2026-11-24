@@ -8,15 +8,17 @@ use std::sync::{Arc, Mutex};
 
 use caf_core::agent::{AgentSpec, McpServer, SpawnCommand};
 use caf_core::chat::{AppData, ChatState, NoAppData, NoAppItems, UserMessage};
+use caf_core::directive::{Directive, ToolDirective};
 use caf_core::event::Event;
 use caf_core::host::Host;
 use caf_core::ids::{ChatId, Shelf};
 use caf_core::save::{CannotRestore, Header, RestoreChat, SavedChat, SavedState};
 use caf_core::settings::{SettingKind, SettingValue};
+use caf_core::tool::{CafTool, Tools};
 use caf_core::viewer::{FromViewer, Outcome, RequestNo, ToViewer};
 use caf_core::{Core, Now, OpenChat, Refused, SettingChoice};
 use caf_driver_tokio::viewer::{ViewerRules, serve};
-use caf_driver_tokio::{Caf, Error, Running, SavedWatch};
+use caf_driver_tokio::{Caf, Error, Relay, Running, SavedWatch, Steps};
 use caf_save::{FileStore, Store, StoreError, Stored};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1579,5 +1581,58 @@ async fn a_viewers_restore_holds_up_nothing_else_on_its_link() {
         _ => None,
     })
     .await;
+    stop(&caf, running).await;
+}
+
+/// Each chat CAF's tools were served to, with its tools.
+type ServedTo = Vec<(ChatId, Vec<CafTool>)>;
+
+/// The chats CAF's tools are served to, each time, with their tools.
+#[derive(Clone, Default)]
+struct Served(Arc<Mutex<ServedTo>>);
+
+impl Steps<NoAppItems, NoAppData> for Served {
+    fn step(&mut self, step: caf_driver_tokio::Step<'_, NoAppItems, NoAppData>) {
+        for directive in step.directives {
+            if let Directive::Tool(ToolDirective::Serve { chat, tools, .. }) = directive {
+                self.0.lock().unwrap().push((*chat, tools.clone()));
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_chat_a_viewer_restores_gets_the_tools_the_host_gives_it() {
+    let dir = Dir::new();
+    let id = a_chat_saved_by_another_run(&dir).await;
+    let script = dir.script("idle.jsonl", &handshake("s1"));
+    let mut config = config_for(host(), vec![fake(&dir, &script)]);
+    config.store = Some(Box::new(FileStore::new(root(&dir))));
+    config.tools.relay = Relay::Command(SpawnCommand::new(caf_fake_agent::binary()));
+    config.tools.folder = Some(dir.path("s"));
+    let served = Served::default();
+    let (caf, running) = Caf::start_watching(config, served.clone());
+    let mut saved = caf.watch_saved();
+    caf.list_saved(shelf(SHELF)).await.unwrap();
+    listed(&mut saved, "the chat saved before", |saved| {
+        !saved.is_empty()
+    })
+    .await;
+    // The hook that gives a restored chat its MCP servers and instructions
+    // gives it CAF's tools too.
+    let mut rules = ViewerRules::default();
+    rules.restore = Box::new(|chat, on| {
+        Some(RestoreChat::new(chat, on.clone()).with_tools(Tools::caf([CafTool::Read])))
+    });
+    let (to, mut from) = viewer(&caf, rules).await;
+    to.send(FromViewer::Restore {
+        request: RequestNo(1),
+        chat: id,
+        shelf: shelf(SHELF),
+    })
+    .await
+    .unwrap();
+    assert_eq!(outcome(&mut from, 1).await, Outcome::Opened(id));
+    assert_eq!(*served.0.lock().unwrap(), [(id, vec![CafTool::Read])]);
     stop(&caf, running).await;
 }

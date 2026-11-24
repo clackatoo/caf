@@ -5,10 +5,11 @@
 //!
 //! [`Caf::start`] spawns one task that owns the [`Core`], the
 //! [`AgentDriver`], the [`TimerDriver`], the [`SetupDriver`], the store
-//! ([`Config::store`]), the usage driver ([`Config::usage`]) and the
-//! [`Policy`]. Handles talk to it through a queue, and it waits on seven
-//! things at once: a handle's command, an adapter's event, the timer, the
-//! setup driver's report, the store's answer, the usage driver's prices,
+//! ([`Config::store`]), the usage driver ([`Config::usage`]), the tools
+//! driver ([`Config::tools`]) and the [`Policy`]. Handles talk to it
+//! through a queue, and it waits on eight things at once: a handle's
+//! command, an adapter's event, the timer, the setup driver's report, the
+//! store's answer, the usage driver's prices, the tools driver's report,
 //! and a policy's answer. Each
 //! goes into the core with the time from [`TimerDriver::now`], and every
 //! directive that comes out goes to its driver:
@@ -23,12 +24,15 @@
 //! | `Setup` | [`SetupDriver::apply`]; its reports come back as [`Event::Setup`] |
 //! | `Storage` | [`caf_save::carry_out`] with [`Config::store`], on a thread of its own, in order; its reports come back as [`Event::Storage`] |
 //! | `Usage` | [`caf_usage::Ledger::record`] and [`caf_usage::limits::save`] with [`Config::usage`], on a thread of its own, in order. The prices, read on the same thread as it starts and whenever they change, come back as [`Event::Prices`]; the limits kept, read after them, and those a save found news in, as [`Event::Limits`] |
+//! | `Tool` | The tools driver, which serves CAF's tools to relays over MCP on a socket of its own, and runs calls with [`Config::tools`]' runner; its reports come back as [`Event::Tool`] and [`Event::Relay`]. A call's answer to the agent is written once the core has its `Finished` |
 //! | `Report` | The [`log`] facade, target `caf` |
 //!
 //! A [`Steps`] given to [`Caf::start_watching`] sees each event once the
 //! core has it, with its directives, before they go to their drivers.
 //!
-//! As it starts, before the task runs, CAF calls [`Core::check_agents`],
+//! As it starts, before the task runs, CAF gives the core
+//! [`Event::Serving`] if it serves tools, so every chat given tools is
+//! served, then calls [`Core::check_agents`],
 //! recorded as [`HostCommand::CheckAgents`], so the setup driver's survey
 //! is under way by the time anything else happens. After each event, the
 //! [`AgentsWatch`]es are told if any agent's status changed: they read
@@ -103,6 +107,7 @@ use crate::setup::SetupDriver;
 use crate::steps::{Step, Steps};
 use crate::storage::StorageDriver;
 use crate::timer::TimerDriver;
+use crate::tools::{Report as ToolsReport, StartError, ToolsConfig, ToolsDriver};
 use crate::usage::{Report as UsageReport, UsageDriver};
 
 /// What to start CAF with.
@@ -122,7 +127,7 @@ pub struct Config {
     /// It's JSON lines, of version 3
     /// ([`RECORDING_VERSION`](caf_core::event::RECORDING_VERSION)). The
     /// first holds the host and the agents:
-    /// `{"caf_recording": 4, "host": …, "agents": […]}`; a reader
+    /// `{"caf_recording": 5, "host": …, "agents": […]}`; a reader
     /// checks the version before reading the rest: an older version's
     /// recording isn't read, as CAF isn't released yet. Each line
     /// after it is one event the core was given, with its time, in order:
@@ -198,6 +203,16 @@ pub struct Config {
     /// Tests set it to a folder of their own, or `None`, so they never
     /// write to the user's.
     pub usage: Option<UsageConfig>,
+    /// Whether and how CAF's own tools are served to agents, over MCP
+    /// through a relay, and what runs them. By default none are: a chat
+    /// given tools is refused
+    /// ([`Refused::ToolsNotServed`](caf_core::Refused::ToolsNotServed)).
+    ///
+    /// With [`Relay::ThisProgram`](crate::Relay::ThisProgram), the app's
+    /// `main` must call [`caf_relay::relay_if_asked`] before anything
+    /// else: [`Caf::try_start`] checks it does, and says if it doesn't;
+    /// [`Caf::start`] panics.
+    pub tools: ToolsConfig,
 }
 
 /// Where the usage ledger is, and whether prices are fetched.
@@ -246,6 +261,7 @@ impl Config {
             installs: None,
             store: None,
             usage: UsageConfig::for_user(),
+            tools: ToolsConfig::default(),
         }
     }
 }
@@ -573,8 +589,34 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     /// `limits.biggest_message`: the driver and the core must agree on what
     /// a too-big line is. Also if called outside a tokio runtime, which
     /// must have its I/O and time drivers enabled.
+    ///
+    /// Also if CAF can't serve its tools as [`Config::tools`] says, with
+    /// the [`StartError`] [`Caf::try_start`] would give: a relay that
+    /// doesn't call [`caf_relay::relay_if_asked`], say.
     #[must_use]
     pub fn start(config: Config) -> (Self, Running) {
+        Self::try_start(config).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// Starts CAF as [`Caf::start`] does, or says why it can't serve its
+    /// tools as [`Config::tools`] says. With [`Relay::None`](crate::Relay::None),
+    /// the default, it always starts.
+    ///
+    /// The relay's check runs the relay once, on this thread: it takes as
+    /// long as the program takes to start, and at most 10 s.
+    ///
+    /// # Errors
+    ///
+    /// [`StartError::NoRelayHook`] if the relay doesn't answer its check as
+    /// [`caf_relay::relay_if_asked`] does, [`StartError::SocketPathTooLong`]
+    /// if the socket's path is too long, and [`StartError::Serving`] for
+    /// anything else, such as a socket folder others can reach. Nothing is
+    /// started then, and no recording is made.
+    ///
+    /// # Panics
+    ///
+    /// As [`Caf::start`], but for serving tools.
+    pub fn try_start(config: Config) -> Result<(Self, Running), StartError> {
         Self::start_with(config, None)
     }
 
@@ -591,15 +633,21 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     /// As [`Caf::start`].
     #[must_use]
     pub fn start_watching(config: Config, steps: impl Steps<A, D>) -> (Self, Running) {
-        Self::start_with(config, Some(Box::new(steps)))
+        Self::start_with(config, Some(Box::new(steps))).unwrap_or_else(|error| panic!("{error}"))
     }
 
     /// Starts CAF, with `steps` seeing every step if there are any.
-    fn start_with(config: Config, steps: Option<Box<dyn Steps<A, D>>>) -> (Self, Running) {
+    fn start_with(
+        mut config: Config,
+        steps: Option<Box<dyn Steps<A, D>>>,
+    ) -> Result<(Self, Running), StartError> {
         assert_eq!(
             config.agent_limits.biggest_line, config.host.limits.biggest_message,
             "the agent driver's biggest line must be the host's biggest message"
         );
+        // First, so nothing is started if it fails.
+        let (tools, serving) =
+            ToolsDriver::start(std::mem::take(&mut config.tools), &config.host.name)?;
         let recorder = (config.record.as_ref())
             .and_then(|path| Recorder::start(path, &config.host, &config.agents));
         let (commands, inbox) = mpsc::channel(COMMANDS);
@@ -633,6 +681,7 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
             setup: SetupDriver::new(root),
             storage: StorageDriver::new(config.store),
             usage,
+            tools,
             priced: false,
             unpriced: Vec::new(),
             policy: config.policy,
@@ -660,6 +709,10 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
             waiting: Vec::new(),
             out: Vec::new(),
         };
+        // Before any host's command, so every chat given tools is served.
+        if let Some(serving) = serving {
+            task.give(Event::Serving(serving));
+        }
         task.check_agents();
         let task = tokio::spawn(task.run());
         let caf = Self {
@@ -675,7 +728,7 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
                 run: new_run().into(),
             },
         };
-        (caf, Running { task })
+        Ok((caf, Running { task }))
     }
 
     /// The names of the agents CAF was started with, in order.
@@ -1716,6 +1769,7 @@ struct Task<A: AppItem, D: AppData> {
     setup: SetupDriver,
     storage: StorageDriver<A, D>,
     usage: UsageDriver,
+    tools: ToolsDriver,
     /// The core has been given the usage driver's first prices.
     priced: bool,
     /// Those waiting for the first prices.
@@ -1801,6 +1855,13 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 (ticket, event) = self.setup.next() => self.give(Event::Setup { ticket, event }),
                 (ticket, event) = self.storage.next() => self.stored(ticket, event),
                 report = self.usage.next() => self.usage_report(report),
+                report = self.tools.next() => {
+                    self.give(match report {
+                        ToolsReport::Tool { call, event } => Event::Tool { call, event },
+                        ToolsReport::Relay { chat, change } => Event::Relay { chat, change },
+                    });
+                    self.tools.taken();
+                }
                 () = self.timers.woken() => self.give(Event::Woken),
                 Some(decided) = self.deciding.join_next_with_id() => self.decided(decided),
             }
@@ -1851,6 +1912,8 @@ impl<A: AppItem, D: AppData> Task<A, D> {
         self.inbox.close();
         self.reads.close();
         self.feeds.clear();
+        // Every call still open is answered, and the socket removed.
+        self.tools.finish().await;
         // The store lets go of the chats the core released last before
         // its thread ends, so once shutting down returns, they're free.
         let storage = std::mem::replace(&mut self.storage, StorageDriver::new(None));
@@ -2498,8 +2561,7 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 }
                 // No other kind is given yet.
                 Directive::Usage(_) => {}
-                // The tools driver comes with serving tools (feature 11).
-                Directive::Tool(_) => {}
+                Directive::Tool(tool) => self.tools.apply(tool),
                 // No other kind is given yet. One added later needs a
                 // driver here.
                 _ => {}
@@ -2580,6 +2642,10 @@ fn new_run() -> String {
 
 /// What's written in a recording for "redacted".
 const HIDDEN: &str = "[redacted]";
+
+/// What's written in a recording for [`Serving::key`](caf_core::event::Serving::key),
+/// which reads back as all zeros.
+const HIDDEN_KEY: &str = caf_core::mcp::HIDDEN;
 
 /// `open`, with its MCP servers' variables' and headers' values hidden.
 fn hide_mcp_secrets(open: &OpenChat) -> OpenChat {
@@ -2845,6 +2911,12 @@ fn line<A: AppItem, D: AppData>(now: Now, event: &Event<A, D>) -> serde_json::Re
                 "value": { "type": "Paste", "value": { "agent": agent, "text": null } },
             });
             return serde_json::to_string(&serde_json::json!({ "now": now, "event": event }));
+        }
+        // The key makes every chat's token: a replay reads it as zeros.
+        Event::Serving(_) => {
+            let mut line = serde_json::to_value(Line { now, event })?;
+            line["event"]["value"]["key"] = HIDDEN_KEY.into();
+            return serde_json::to_string(&line);
         }
         _ => return serde_json::to_string(&Line { now, event }),
     };

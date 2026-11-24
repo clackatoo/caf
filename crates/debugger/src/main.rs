@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use caf_debugger::server::{self, App};
 use caf_debugger::{agents, fake, files, live, replay};
-use caf_driver_tokio::UsageConfig;
+use caf_driver_tokio::{Relay, ToolsConfig, UsageConfig};
 use caf_save::FileStore;
 
 /// Prints a line, as `println!` does, but one that can't be printed, as
@@ -117,8 +117,18 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     Ok(parsed)
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
+    // First: run as CAF's relay, it does nothing else.
+    caf_relay::relay_if_asked();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("a tokio runtime");
+    runtime.block_on(debug())
+}
+
+/// The debugger, once it's known not to be a relay.
+async fn debug() -> ExitCode {
     log::set_logger(&Logger).expect("the only logger");
     log::set_max_level(log::LevelFilter::Info);
     let args = match parse(std::env::args().skip(1)) {
@@ -209,7 +219,11 @@ async fn run(args: Args) -> Result<(), String> {
                 usage.fetch_prices = args.fetch_prices;
                 usage
             });
-            let live = live::start(agents, Some(recording), store, usage);
+            // Served through the debugger itself, run again: its `main`
+            // is the relay. Its chats are given no tools yet.
+            let mut tools = ToolsConfig::default();
+            tools.relay = Relay::ThisProgram;
+            let live = live::start(agents, Some(recording), store, usage, tools);
             let names: Vec<_> = live
                 .caf
                 .agents()
