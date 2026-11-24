@@ -138,7 +138,7 @@ says who stopped it:
 | `StoppedBy` | Means |
 | --- | --- |
 | `User` | The user stopped the turn, or the turn ended with it still open. CAF stops its work, and answers the model that the user stopped it. |
-| `Agent` | The agent cancelled it. CAF stops its work, and answers nothing, as MCP says. |
+| `Agent` | The agent cancelled it, or its connection to CAF went: it closed, or a newer one replaced it. CAF stops its work, and answers nothing, as MCP says. |
 
 Stopping a call's work drops it, so a tool still running is stopped too.
 
