@@ -21,6 +21,7 @@
   const kind = $derived(tool.action?.type === 'Stop' ? { icon: '⏹️', name: 'Stop a task' } : toolKind(tool.kind))
   const time = $derived(took(window))
   const ended = $derived(hasEnded(tool.status))
+  const job = $derived(jobText(tool))
   const decision = $derived(decisionText(tool.decision))
   // Cut, the input is the start of its JSON, as a string: shown as it is.
   const input = $derived(
@@ -47,7 +48,7 @@
     <span class="icon" title={kind.name} aria-hidden="true">{kind.icon}</span>
     <span class="kind">{kind.name}</span>
     <span class="title">{tool.title}</span>
-    {#if tool.job !== null && !ended}<span class="job" title={jobText(tool.job, false)}>Background</span>{/if}
+    {#if tool.job !== null && !ended}<span class="job" title={job}>Background</span>{/if}
     <span class="status">{toolStatus(tool.status)}</span>
     {#if time !== null}<span class="time">{time}</span>{/if}
   </summary>
@@ -55,8 +56,8 @@
     {#if decision !== null}
       <div class="decision" data-decision={tool.decision.type}>{decision}</div>
     {/if}
-    {#if tool.job !== null}
-      <div class="decision background">{jobText(tool.job, ended)}</div>
+    {#if job !== null}
+      <div class="decision background">{job}</div>
     {/if}
     <div class="label">{resultLabel}</div>
     {#if tool.result.length === 0}

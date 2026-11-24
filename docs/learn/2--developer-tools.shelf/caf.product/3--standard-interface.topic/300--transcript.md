@@ -295,10 +295,13 @@ while the job runs.
 
 **CAF tells the agent when a job ends,** in a turn of its own, sent as a
 message is: at once if nothing runs, or else once the running turn ends.
+After the user's Stop, CAF holds them: none comes right after a Stop, and
+each held one appears, as a turn of its own, just before the user's next
+message (see [Serving tools](~caf/concepts/serving-tools#background-jobs)).
 In place of a message, the turn starts with the CAF badge and what CAF
 told the agent, in words: the notice's own summary, *Told Claude:
 Background command "cargo test --test integration" completed (exit code
-0)* (or *failed*, or *was stopped*), with `&amp;`, `&lt;` and `&gt;`
+0)* (or *failed*), with `&amp;`, `&lt;` and `&gt;`
 read back as `&`, `<` and `>`. It's CAF's voice, not the agent's nor the user's, so it never
 looks like something the user sent. The rest of the turn is the agent's
 answer, drawn as any. The agent was given the path of a file holding the

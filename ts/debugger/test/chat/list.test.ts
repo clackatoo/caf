@@ -2,7 +2,8 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CafError, type AgentStatus } from '@clackatoo/caf'
+import { CafError, type AgentStatus, type CafTool } from '@clackatoo/caf'
+import { newChat } from '../../src/chat/actions.ts'
 import ChatList from '../../src/chat/ChatList.svelte'
 
 afterEach(cleanup)
@@ -53,6 +54,29 @@ describe('the chat list', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
     expect((screen.getByRole('checkbox', { name: "CAF's tools" }) as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('asks CAF for what the form gave, as the debugger opens it: its tools, or none outright when unticked', async () => {
+    const asked: unknown[] = []
+    const actions = {
+      select: vi.fn(),
+      open: vi.fn(async (agent: string, cwd: string, _settings: unknown, tools: readonly CafTool[] = []) => {
+        asked.push(newChat(agent, cwd, tools))
+      }),
+    }
+    render(ChatList, { chats, agents: ['claude'], selected: null, actions, offersTools: true })
+    const all = [{ type: 'Read' }, { type: 'Edit' }, { type: 'Write' }, { type: 'Bash' }, { type: 'TaskStop' }]
+    for (const ticked of [true, false]) {
+      await fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+      if (!ticked) await fireEvent.click(screen.getByRole('checkbox', { name: "CAF's tools" }))
+      await fireEvent.input(screen.getByRole('textbox'), { target: { value: '/home/me/new' } })
+      await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Open' })).toBeNull())
+    }
+    expect(asked).toEqual([
+      { agent: 'claude', cwd: '/home/me/new', session: { type: 'New' }, tools: { caf: all } },
+      { agent: 'claude', cwd: '/home/me/new', session: { type: 'New' }, tools: { caf: [] } },
+    ])
   })
 
   it("offers no tools where the host doesn't", async () => {

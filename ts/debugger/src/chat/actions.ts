@@ -11,6 +11,7 @@ import {
   type Answer,
   type CafTool,
   type ChatId,
+  type OpenRequest,
   type DeepReadonly,
   type QuestionId,
   type Refused,
@@ -169,6 +170,14 @@ export function oneAtATime<K>(): OneAtATime<K> {
 /** Whether `error` is CAF refusing, for this reason. */
 function refused(error: unknown, why: Refused['type']): boolean {
   return error instanceof CafError && error.why.type === 'Refused' && error.why.value.type === why
+}
+
+/**
+ * What a host asks CAF for as it opens a new chat with `agent` in `cwd`,
+ * giving it `tools` of CAF's own: none, `[]`, says so outright.
+ */
+export function newChat(agent: AgentName, cwd: string, tools: readonly CafTool[]): OpenRequest {
+  return { agent, cwd, session: { type: 'New' }, tools: { caf: [...tools] } }
 }
 
 /**

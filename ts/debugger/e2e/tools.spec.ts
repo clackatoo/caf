@@ -6,7 +6,7 @@
 // bar redrawn in place, Stop, a job in the background, CAF's notice of
 // its end, and TaskStop.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Page } from './server.ts'
 
@@ -225,13 +225,16 @@ test.describe('running commands', () => {
   })
 })
 
+/** A job that runs until the test makes the file `release` in its folder. */
+const HELD = 'while [ ! -e release ]; do sleep 0.1; done; echo finished'
+
 test.describe('background jobs', () => {
   test.use({
     setup: setup([
       {
         message: 'go',
         steps: [
-          call('Bash', { command: 'sleep 2; echo finished', run_in_background: true }),
+          call('Bash', { command: HELD, run_in_background: true }),
           answered({ result: { isError: false } }),
           call('Bash', { command: 'echo serving; sleep 120', run_in_background: true }),
           answered({ result: { isError: false } }),
@@ -249,7 +252,7 @@ test.describe('background jobs', () => {
     const question = page.locator('.questions .question')
     await expect(question.locator('.about .folder')).toContainText(', in the background')
     await allow(page)
-    const first = step(page, 'sleep 2; echo finished')
+    const first = step(page, HELD)
     await expect(first.locator('.job')).toHaveText('Background')
     await allow(page)
     const dev = step(page, 'echo serving; sleep 120')
@@ -259,13 +262,15 @@ test.describe('background jobs', () => {
     // Its turn is over; the jobs run on.
     await expect(dev.locator('.status')).toHaveText('Running')
     await expect(dev).toContainText('serving')
+    await expect(first.locator('.status')).toHaveText('Running')
 
-    // The first ends by itself: CAF tells the agent, in its own voice.
+    // The first ends by itself, once let go: CAF tells the agent, in its own voice.
+    writeFileSync(join(server.state, 'work', 'release'), '')
     await expect(first.locator('.status')).toHaveText('Done', { timeout: 30_000 })
     await expect(first.locator('.job')).toHaveCount(0)
     const notice = page.locator('.caf-chat .turn[data-starter="Notice"]')
     await expect(notice.locator('.starter')).toHaveText('CAF')
-    await expect(notice.locator('.message')).toContainText('Background command "sleep 2; echo finished" completed (exit code 0)')
+    await expect(notice.locator('.message')).toContainText(`Background command "${HELD}" completed (exit code 0)`)
     await expect(notice.locator('.life')).toHaveText('Finished')
 
     // TaskStop, asking nobody, stops the other.
@@ -275,5 +280,38 @@ test.describe('background jobs', () => {
     await expect(stop.locator('.kind')).toHaveText('Stop a task')
     await expect(dev.locator('.status')).toHaveText('Cancelled')
     await expect(dev.locator('.job')).toHaveCount(0)
+  })
+})
+
+test.describe('a chat opened without CAF\'s tools', () => {
+  // The fake takes a session only if it names no MCP servers: one naming
+  // CAF's is refused, as a method it doesn't know, and the chat can't open
+  // its session.
+  const unticked = [
+    { on: { method: 'session/prompt', fallback: true, do: [{ respond: { result: { stopReason: 'end_turn' } } }] } },
+    { on: { fallback: true, do: [{ respond: { error: { code: -32601, message: 'Method not found' } } }] } },
+    { wait: { method: 'initialize' } },
+    { respond: { result: { protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'caf-fake-agent', version: '0.0.0' } } } },
+    { wait: { method: 'session/new', match: { params: { mcpServers: [] } } } },
+    { respond: { result: { sessionId: SESSION } } },
+    { wait: { method: 'session/prompt', match: prompt('go'), as: 'prompt' } },
+    { say: { session: SESSION, text: 'No tools here.' } },
+    { respond: { to: 'prompt', result: { stopReason: 'end_turn' } } },
+  ]
+  test.use({ setup: { ...setup([]), files: { 'tools.jsonl': unticked.map(line).join('\n') + '\n', 'work/.keep': '' } } })
+  test.setTimeout(60_000)
+
+  test('is given none: its session names no MCP server', async ({ page, server }) => {
+    await page.goto(server.url)
+    await page.getByRole('button', { name: 'New chat' }).click()
+    await page.getByRole('combobox', { name: /^Agent/ }).selectOption('tools')
+    await page.getByRole('textbox', { name: /Folder/ }).fill(join(server.state, 'work'))
+    await page.getByRole('checkbox', { name: "CAF's tools" }).uncheck()
+    await page.getByRole('button', { name: 'Open' }).click()
+    await expect(page.locator('.caf-chat .agent')).toHaveText('tools')
+    await send(page, 'go')
+    const turn = page.locator('.caf-chat .turn').last()
+    await expect(turn.locator('.life')).toHaveText('Finished')
+    await expect(turn).toContainText('No tools here.')
   })
 })

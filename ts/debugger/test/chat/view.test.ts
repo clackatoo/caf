@@ -109,7 +109,9 @@ describe('turns', () => {
 
   it("draws CAF's notice of a background job's end in CAF's voice, not the app's, the agent's text kept as its title", () => {
     const words = (element: Element | null) => (element?.textContent ?? '').replace(/\s+/g, ' ').trim()
-    const told = '<task-notification>Task 2 (sleep 1; echo done) completed with exit code 0. Output: /run/caf/out/1/2.txt</task-notification>'
+    // As caf_tools::notice writes it.
+    const told =
+      '<task-notification>\n<task-id>2</task-id>\n<tool-use-id>toolu_9</tool-use-id>\n<output-file>/run/user/1000/caf/out/0190e2a1-7c3b-7000-8000-000000000001/17.txt</output-file>\n<status>completed</status>\n<summary>Background command "sleep 1; echo done" completed (exit code 0)</summary>\n</task-notification>'
     const { container } = draw(
       chat({ turns: [turn({ starter: { type: 'Notice', value: told } }), turn({ starter: { type: 'Notice', value: 'The build finished' } })] }),
     )
@@ -117,7 +119,7 @@ describe('turns', () => {
     expect(words(job!.querySelector('.starter'))).toBe('CAF')
     expect(job!.querySelector('.starter')!.classList.contains('caf')).toBe(true)
     const said = job!.querySelector('.message.notice')!
-    expect(words(said)).toBe('Told the agent: Task 2 (sleep 1; echo done) completed with exit code 0. Output: /run/caf/out/1/2.txt')
+    expect(words(said)).toBe('Told the agent: Background command "sleep 1; echo done" completed (exit code 0)')
     expect(said.getAttribute('title')).toBe(told)
     expect(words(app!.querySelector('.starter'))).toBe('A notice from the app')
     expect(words(app!.querySelector('.message.notice'))).toBe('The build finished')

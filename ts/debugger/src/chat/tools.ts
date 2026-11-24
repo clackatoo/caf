@@ -14,42 +14,45 @@ export function ended(status: DeepReadonly<ToolStatus>): boolean {
 }
 
 /**
- * What a job is, as TaskStop names it: one running in the background,
- * the agent answered as it went there and told when it ends, or one that
- * ran there and has `ended`.
+ * What a job is, as TaskStop names it, from how its call stands: running
+ * in the background, the agent answered as it went there; or how it
+ * ended. CAF tells the agent only of a job that ended by itself, so only
+ * a Done one says so: a Failed one may have been cut off as the chat was
+ * put away or the app shut down, which tells no one, and a Cancelled one
+ * was stopped by the agent's TaskStop or with its chat.
  */
-export function jobText(job: number, ended: boolean): string {
-  return ended
-    ? `Ran in the background, as task ${job}: the agent was told when it ended.`
-    : `Running in the background, as task ${job}: the agent was answered and goes on, and is told when it ends.`
+export function jobText(tool: DeepReadonly<Pick<ToolCall, 'job' | 'status' | 'stopped_by'>>): string | null {
+  if (tool.job === null) return null
+  const task = `task ${tool.job}`
+  switch (tool.status.type) {
+    case 'Done':
+      return `Ran in the background, as ${task}: the agent was told when it ended.`
+    case 'Failed':
+      return `Ran in the background, as ${task}, and failed.`
+    case 'Cancelled':
+      return tool.stopped_by?.type === 'Agent'
+        ? `Ran in the background, as ${task}, until the agent stopped it.`
+        : `Ran in the background, as ${task}, until it was stopped with its chat.`
+    default:
+      return `Running in the background, as ${task}: the agent was answered and goes on, and is told when it ends.`
+  }
 }
 
-// CAF's notice of a job's end, as Claude Code words its own: the whole
-// text in one tag.
-const NOTIFICATION = /^\s*<task-notification>([\s\S]*)<\/task-notification>\s*$/
+// CAF's notice of a job's end, as caf_tools::notice writes it: its parts,
+// in its order, each with &, < and > escaped, so none holds a tag.
+const NOTIFICATION =
+  /^<task-notification>\n<task-id>[^<]*<\/task-id>\n(?:<tool-use-id>[^<]*<\/tool-use-id>\n)?<output-file>[^<]*<\/output-file>\n<status>[^<]*<\/status>\n<summary>([^<]*)<\/summary>\n<\/task-notification>$/
 
 /**
  * What CAF told the agent of a background job's end, from a notice turn's
- * text, in words for the user: null for any other notice, such as the
- * app's. The sentence is the notice's own, or its `<summary>` if it's in
- * parts; parts with no summary are told as task, status and output.
+ * text, in words for the user: its summary, read back unescaped. Null for
+ * anything else, such as the app's own notice, even one in tags of the
+ * same names: only CAF's own parts, in its order, are CAF's.
  */
 export function jobNotice(text: string): string | null {
-  const inner = NOTIFICATION.exec(text)?.[1]
-  if (inner === undefined) return null
-  const part = (name: string) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(inner)?.[1]?.trim() ?? null
-  // CAF escapes &, < and > in what it says inside the tags, as XML.
-  const tidy = (words: string) =>
-    words.replace(/\s+/g, ' ').trim().replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&')
-  if (!/<[a-z-]+>/.test(inner)) return tidy(inner) || 'A background task ended.'
-  const summary = part('summary')
-  if (summary !== null) return tidy(summary)
-  const id = part('task-id')
-  const status = part('status')
-  const output = part('output-file')
-  const said = [`${id === null ? 'A background task' : `Task ${id}`}${status === null ? ' ended' : ` ${status}`}.`]
-  if (output !== null) said.push(`Output: ${output}`)
-  return tidy(said.join(' '))
+  const summary = NOTIFICATION.exec(text)?.[1]
+  if (summary === undefined) return null
+  return summary.replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&')
 }
 
 /** A size in bytes, short: `512 B`, `64 KB`, `2.4 MB`, counting 1,024 to a KB as CAF's caps do. */

@@ -36,8 +36,8 @@ which are taken. Its answer is the file's lines, numbered from 1, each as
 - **How much:** 2,000 lines unless `limit` says. A read of more than about
   25,000 tokens (a quarter of its bytes) is refused, in Claude Code's
   words, telling the model to read part of it; so is a read of a whole
-  file bigger than 256 KiB with no `limit`. `allow_large` raises the
-  tokens to 100,000.
+  file bigger than 256 KiB with no `limit`. `allow_large` lifts both:
+  the whole file is read, up to 100,000 tokens.
 - **Lines** are split at `\n`. A `\r` before it is dropped, so the model
   never sees a Windows line ending; Edit puts them back (below). A UTF-8
   byte order mark is skipped.
@@ -179,10 +179,15 @@ on, past the model's answer and its turn.
   mark it *Background* (see [the transcript](~caf/standard-interface/transcript#background-jobs)).
 - **When it ends, CAF tells the agent** with a notice, as Claude Code
   does: `<task-notification>` with the job's number, where its output is,
-  and how it ended (completed, with its exit code, failed, or was
-  stopped). It's sent as a message is, in a turn of its own
+  and how it ended (completed, with its exit code, or failed). It's sent as a message is, in a turn of its own
   (`Starter::Notice`): at once if the chat is idle, else once the running
-  turn ends. Its call ends *Done*, *Failed* or *Cancelled* where it is.
+  turn ends. After the user's Stop, notices are held, so the agent isn't
+  set working again, and each is sent as its own turn just before the
+  user's next message (see
+  [Serving tools](~caf/concepts/serving-tools#background-jobs)). Its call
+  ends *Done* or *Failed* where it is. A job stopped by TaskStop gets no
+  notice, as the agent stopped it itself, and nor does one stopped with its
+  chat or by the app shutting down.
 - **At most 8 run at once** in a chat; a ninth is refused, telling the
   model to stop one with TaskStop first.
 - **Jobs don't outlive the app.** A restored chat has none: a call saved
@@ -236,7 +241,8 @@ the user can watch it, such as *terminal 7*: the model's answer then starts
 `PtyCommands` runs `bash -c`, or `sh -c` where there's no bash, in a
 session and process group of its own, its pty the terminal. The folder its
 shell ended in comes back with how it ended, which is how Bash's folder
-carries over. It runs on Linux and macOS.
+carries over. It runs on Linux: it signals the command's process group
+through a pidfd.
 
 A backend's methods return at once, and do their work in the future they
 give back, as CAF's other drivers' do.
