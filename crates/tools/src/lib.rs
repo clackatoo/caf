@@ -17,6 +17,7 @@
 mod backend;
 mod edit;
 mod read;
+mod screen;
 mod state;
 mod text;
 
@@ -28,5 +29,6 @@ pub use read::{
     DEFAULT_LIMIT, FileTool, ImageRead, MOST_TOKENS, MOST_TOKENS_LARGE, Reading, TextRead,
     file_error, missing, read,
 };
+pub use screen::{COLUMNS, ROWS, Redraw, Screen, strip_sgr};
 pub use state::{Check, NOT_READ, ReadState, STALE};
 pub use text::format_size;
