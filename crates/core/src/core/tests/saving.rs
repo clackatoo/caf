@@ -989,6 +989,7 @@ fn a_restored_chat_is_given_its_tools_again_as_a_new_one_is() {
         [json!({ "tool": { "type": "Serve", "value": {
             "chat": CHAT,
             "tools": [{ "type": "Write" }],
+            "app": [],
             "cwd": "/work",
             "instructions": "caf-test's tools to write whole files (Write), in the folder you're working in.",
         } } })]

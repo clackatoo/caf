@@ -17,8 +17,10 @@
 //!   instructions.
 //! - **`notifications/initialized`** is taken, and **`ping`** answered
 //!   `{}`.
-//! - **`tools/list`** gives the chat's tools, on one page ([`tool_list`]).
-//! - **`tools/call`** is a call ([`Out::Call`]). One to a tool CAF doesn't
+//! - **`tools/list`** gives the chat's tools, on one page ([`tool_list`]):
+//!   CAF's own, then the app's ([`AppListing`]).
+//! - **`tools/call`** is a call: to one of CAF's own ([`Out::Call`]), or
+//!   to one of the app's ([`Out::AppCall`]). One to a tool CAF doesn't
 //!   have, or didn't give this chat, is answered at once as an error, and
 //!   never reaches the driver; one naming no tool is answered -32602.
 //! - **`notifications/cancelled`** for an open call ends it
@@ -45,7 +47,7 @@ use serde_json::{Map, Value, json};
 use sha2::Sha256;
 
 use crate::ids::ChatId;
-use crate::tool::CafTool;
+use crate::tool::{CafTool, Hints};
 
 /// The longest line a connection takes from the agent, in bytes: one
 /// longer closes it ([`Out::Close`]). The driver enforces it while
@@ -64,8 +66,10 @@ const INVALID_PARAMS: i64 = -32602;
 /// One relay's MCP connection, from its handshake on: a state machine.
 #[derive(Debug)]
 pub struct Connection {
-    /// The tools it serves.
+    /// CAF's own tools it serves.
     tools: Vec<CafTool>,
+    /// The app's own tools it serves, after CAF's.
+    app: Vec<AppListing>,
     /// What it tells the agent as it starts.
     instructions: String,
     /// The calls not yet answered or cancelled.
@@ -87,9 +91,18 @@ impl Connection {
     pub fn new(tools: &[CafTool], instructions: &str) -> Self {
         Self {
             tools: tools.to_vec(),
+            app: Vec::new(),
             instructions: instructions.to_owned(),
             open: BTreeMap::new(),
         }
+    }
+
+    /// The same, serving the app's own `tools` too, after CAF's, in the
+    /// order given.
+    #[must_use]
+    pub fn with_app_tools(mut self, tools: Vec<AppListing>) -> Self {
+        self.app = tools;
+        self
     }
 
     /// One line the agent sent (without its newline). What to do about it.
@@ -137,10 +150,7 @@ impl Connection {
         match method {
             "initialize" => vec![result_line(&id, &self.initialized(params))],
             "ping" => vec![result_line(&id, &json!({}))],
-            "tools/list" => vec![result_line(
-                &id,
-                &json!({ "tools": tool_list(&self.tools) }),
-            )],
+            "tools/list" => vec![result_line(&id, &json!({ "tools": self.listed() }))],
             "tools/call" => self.called(id, params),
             _ => vec![error_line(
                 Some(&id),
@@ -174,6 +184,15 @@ impl Connection {
     #[must_use]
     pub fn open(&self) -> Vec<Request> {
         self.open.keys().cloned().collect()
+    }
+
+    /// What `tools/list` gives: CAF's own tools, then the app's.
+    fn listed(&self) -> Value {
+        let mut list = tool_list(&self.tools);
+        if let Value::Array(tools) = &mut list {
+            tools.extend(self.app.iter().map(AppListing::definition));
+        }
+        list
     }
 
     /// The answer to `initialize`, given `params`.
@@ -220,10 +239,14 @@ impl Connection {
                 "Invalid params: `name` must be a string",
             )];
         };
-        let Some(tool) = CafTool::named(name).filter(|tool| self.tools.contains(tool)) else {
-            let name = crate::core::agent_text(name, 256);
-            let answer = Answer::error(format!("There's no tool named `{name}` here."));
-            return vec![Out::Write(answer_bytes(&id, &answer))];
+        let tool = match CafTool::named(name).filter(|tool| self.tools.contains(tool)) {
+            Some(tool) => Some(tool),
+            None if self.app.iter().any(|tool| tool.name == name) => None,
+            None => {
+                let name = crate::core::agent_text(name, 256);
+                let answer = Answer::error(format!("There's no tool named `{name}` here."));
+                return vec![Out::Write(answer_bytes(&id, &answer))];
+            }
         };
         let input = match params.get("arguments") {
             None | Some(Value::Null) => Value::Object(Map::new()),
@@ -237,12 +260,76 @@ impl Connection {
             .and_then(Value::as_str)
             .map(str::to_owned);
         self.open.insert(id.clone(), Open { token, progress: 0 });
-        vec![Out::Call {
-            request: id,
-            tool,
-            input,
-            agent_call,
-        }]
+        match tool {
+            Some(tool) => vec![Out::Call {
+                request: id,
+                tool,
+                input,
+                agent_call,
+            }],
+            None => vec![Out::AppCall {
+                request: id,
+                name: name.to_owned(),
+                input,
+                agent_call,
+            }],
+        }
+    }
+}
+
+/// One of the app's own tools, as `tools/list` gives it
+/// ([`Connection::with_app_tools`]).
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AppListing {
+    /// Its name, as the model calls it.
+    pub name: String,
+    /// What it's called, such as "Trim a clip".
+    pub title: String,
+    /// What it does, for the model.
+    pub description: String,
+    /// Its input's JSON Schema: an object's.
+    pub schema: Value,
+    /// What it says of itself.
+    pub hints: Hints,
+}
+
+impl AppListing {
+    /// The app's tool `name`, called `title`, doing what `description`
+    /// says, taking input of `schema`, with `hints`.
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        title: impl Into<String>,
+        description: impl Into<String>,
+        schema: Value,
+        hints: Hints,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            title: title.into(),
+            description: description.into(),
+            schema,
+            hints,
+        }
+    }
+
+    /// Its definition, as `tools/list` gives it: as CAF's own tools' are
+    /// ([`tool_list`]).
+    fn definition(&self) -> Value {
+        json!({
+            "name": self.name,
+            "title": self.title,
+            "description": self.description,
+            "inputSchema": self.schema,
+            "annotations": {
+                "title": self.title,
+                "readOnlyHint": self.hints.read_only,
+                "destructiveHint": self.hints.destructive,
+                "openWorldHint": self.hints.open_world,
+            },
+            "_meta": { "anthropic/alwaysLoad": true },
+        })
     }
 }
 
@@ -309,6 +396,18 @@ pub enum Out {
         input: serde_json::Value,
         /// The agent's id for the call, if it sent one, such as Claude's
         /// `_meta["claudecode/toolUseId"]`.
+        agent_call: Option<String>,
+    },
+    /// The agent called one of the app's own tools.
+    AppCall {
+        /// The call, to answer it by.
+        request: Request,
+        /// The tool's name.
+        name: String,
+        /// What it was given, as the model wrote it.
+        input: serde_json::Value,
+        /// The agent's id for the call, if it sent one, as for
+        /// [`Out::Call`].
         agent_call: Option<String>,
     },
     /// The agent cancelled a call: stop its work and send nothing for it.
@@ -1131,6 +1230,118 @@ mod tests {
         let line = call(json!(1), "Bash", json!({ "command": "ls" }), json!({})).to_string();
         let (_, tool, ..) = called(connection.take(line.as_bytes()));
         assert_eq!(tool, CafTool::Bash);
+    }
+
+    /// A connection serving Read, and the app's `word_count` and
+    /// `trim_clip`.
+    fn with_app() -> Connection {
+        let hints = Hints {
+            read_only: true,
+            ..Hints::default()
+        };
+        Connection::new(&[CafTool::Read], "Tools.").with_app_tools(vec![
+            AppListing::new(
+                "word_count",
+                "Count words",
+                "Counts a text's words.",
+                json!({ "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] }),
+                hints,
+            ),
+            AppListing::new(
+                "trim_clip",
+                "Trim a clip",
+                "Trims a clip.",
+                json!({ "type": "object", "properties": {} }),
+                Hints {
+                    destructive: true,
+                    open_world: true,
+                    ..Hints::default()
+                },
+            ),
+        ])
+    }
+
+    #[test]
+    fn the_apps_tools_are_listed_after_cafs_with_their_hints() {
+        let mut connection = with_app();
+        let answer = answer_to(
+            &mut connection,
+            &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+        );
+        let tools = answer["result"]["tools"].as_array().expect("tools");
+        let names: Vec<&str> = (tools.iter())
+            .map(|tool| tool["name"].as_str().expect("a name"))
+            .collect();
+        assert_eq!(names, ["Read", "word_count", "trim_clip"]);
+        assert_eq!(
+            tools[1],
+            json!({
+                "name": "word_count",
+                "title": "Count words",
+                "description": "Counts a text's words.",
+                "inputSchema": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] },
+                "annotations": {
+                    "title": "Count words",
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "openWorldHint": false,
+                },
+                "_meta": { "anthropic/alwaysLoad": true },
+            })
+        );
+        assert_eq!(tools[2]["annotations"]["destructiveHint"], true);
+        assert_eq!(tools[2]["annotations"]["openWorldHint"], true);
+        assert_eq!(tools[2]["annotations"]["readOnlyHint"], false);
+    }
+
+    #[test]
+    fn a_call_to_the_apps_tool_is_handed_on_by_its_name() {
+        let mut connection = with_app();
+        let out = connection.take(
+            call(
+                json!(5),
+                "word_count",
+                json!({ "text": "a b" }),
+                json!({ "claudecode/toolUseId": "toolu_1", "progressToken": 1 }),
+            )
+            .to_string()
+            .as_bytes(),
+        );
+        let [
+            Out::AppCall {
+                request,
+                name,
+                input,
+                agent_call,
+            },
+        ] = <[Out; 1]>::try_from(out).expect("one")
+        else {
+            panic!("not an app call");
+        };
+        assert_eq!(name, "word_count");
+        assert_eq!(input, json!({ "text": "a b" }));
+        assert_eq!(agent_call.as_deref(), Some("toolu_1"));
+        assert_eq!(connection.open(), std::slice::from_ref(&request));
+        // It's answered, and has progress, as any call.
+        assert!(connection.progress(&request, "Running").is_some());
+        assert!(connection.answer(&request, &Answer::text("2")).is_some());
+        // CAF's own still come as theirs; a name of neither, or of the
+        // app's in another case, is no tool here.
+        let line = call(json!(6), "Read", json!({ "file_path": "/a" }), json!({}));
+        assert_eq!(
+            called(connection.take(line.to_string().as_bytes())).1,
+            CafTool::Read
+        );
+        for name in ["Word_count", "Bash", "nothing"] {
+            let answer = answer_to(&mut connection, &call(json!(7), name, json!({}), json!({})));
+            assert_eq!(answer["result"]["isError"], true, "{name}");
+        }
+        // A call with no arguments is given an empty object.
+        let line = json!({ "jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": { "name": "trim_clip" } });
+        assert!(matches!(
+            &connection.take(line.to_string().as_bytes())[..],
+            [Out::AppCall { input, agent_call: None, .. }] if *input == json!({})
+        ));
     }
 
     #[test]

@@ -222,6 +222,26 @@ pub struct AppToolSpec {
     pub previews: bool,
 }
 
+impl AppToolSpec {
+    /// The app's tool `name`, called `title` in general, saying `hints` of
+    /// itself, and showing what it would do before it's asked about if it
+    /// `previews`.
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        title: impl Into<String>,
+        hints: Hints,
+        previews: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            title: title.into(),
+            hints,
+            previews,
+        }
+    }
+}
+
 /// The longest name of an app's tool, in bytes: Claude names a tool
 /// `mcp__caf__` and its name, and a tool's whole name may be at most 64.
 pub const MOST_TOOL_NAME: usize = 54;
