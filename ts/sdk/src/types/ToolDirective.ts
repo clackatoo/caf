@@ -90,6 +90,11 @@ chat: ChatId,
  */
 tools: Array<CafTool>, 
 /**
+ * The chat's folder, as the agent's told it: what the model is
+ * told is its working directory.
+ */
+cwd: string, 
+/**
  * What the MCP server tells the agent, in a line
  * (`initialize`'s `instructions`).
  */
