@@ -218,7 +218,7 @@ impl<A: AppItem> AppTools<A> {
     /// # Errors
     ///
     /// [`ToolError`] if its name isn't one a model can call, is taken
-    /// (by another of the app's or, in any case, by one of CAF's own), or
+    /// in any case (by another of the app's, or by one of CAF's own), or
     /// its schema isn't an object's.
     pub fn with(mut self, tool: impl AppTool<A>) -> Result<Self, ToolError> {
         let mut spec = tool.spec();
@@ -229,7 +229,7 @@ impl<A: AppItem> AppTools<A> {
         if (CafTool::ALL.iter()).any(|caf| caf.name().eq_ignore_ascii_case(&name)) {
             return Err(ToolError::Cafs(name));
         }
-        if self.tools.iter().any(|known| known.spec.name == name) {
+        if (self.tools.iter()).any(|known| known.spec.name.eq_ignore_ascii_case(&name)) {
             return Err(ToolError::Taken(name));
         }
         let schema = match spec.schema.take() {
@@ -311,7 +311,7 @@ pub enum ToolError {
     /// Its name has a character other than `[A-Za-z0-9_-]`, or is empty,
     /// or is longer than [`MOST_TOOL_NAME`] bytes.
     BadName(String),
-    /// Another of the app's tools has its name.
+    /// Another of the app's tools has its name, in some case.
     Taken(String),
     /// One of CAF's own tools has its name, in some case.
     Cafs(String),
@@ -327,7 +327,10 @@ impl std::fmt::Display for ToolError {
                 "the tool name {name:?} isn't one a model can call: it must be 1 to \
                  {MOST_TOOL_NAME} of A-Z, a-z, 0-9, _ and -"
             ),
-            Self::Taken(name) => write!(formatter, "the app has two tools named {name:?}"),
+            Self::Taken(name) => write!(
+                formatter,
+                "the app has two tools named {name:?}, in some case"
+            ),
             Self::Cafs(name) => {
                 write!(formatter, "the tool name {name:?} is one of CAF's own")
             }
@@ -675,13 +678,19 @@ mod tests {
     }
 
     #[test]
-    fn a_name_taken_by_another_of_the_apps_is_refused_but_not_in_another_case() {
+    fn a_name_taken_by_another_of_the_apps_in_any_case_is_refused() {
         let tools = AppTools::new().with(named("trim")).unwrap();
-        let tools = tools.with(named("Trim")).unwrap();
-        assert_eq!(
-            tools.with(named("trim")).err(),
-            Some(ToolError::Taken("trim".into()))
-        );
+        for taken in ["trim", "Trim", "TRIM"] {
+            assert_eq!(
+                AppTools::new()
+                    .with(named("trim"))
+                    .unwrap()
+                    .with(named(taken))
+                    .err(),
+                Some(ToolError::Taken(taken.into()))
+            );
+        }
+        assert!(tools.with(named("trim_clip")).is_ok());
     }
 
     #[test]
