@@ -66,6 +66,11 @@ pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 /// reach the app's state, such as a channel to framewright's UI thread.
 /// Only its futures must be `Send`; its state needn't move between
 /// threads.
+///
+/// Its futures run on threads the app's tools have to themselves, two of
+/// them. One that awaits, however long, holds nothing up. One that
+/// blocks anyway ties up one of those threads: it can hold up the app's
+/// other tools, but never CAF, its own tools or its other drivers.
 pub trait AppTool<A: AppItem = NoAppItems>: Send + Sync + 'static {
     /// What it's given: serde reads it from the model's JSON, and
     /// schemars describes it to the model, its doc comments as the
@@ -107,13 +112,13 @@ pub trait AppTool<A: AppItem = NoAppItems>: Send + Sync + 'static {
     /// heard `Done`'s answer. Dropping the future cancels it: it must
     /// stop its work then.
     ///
-    /// The future runs as a task of its own, so a slow one holds up
-    /// nothing else; but `run` itself is called on CAF's own task: it
-    /// must give its future at once, never blocking. A future should
-    /// await, not block: one that blocks a thread can't be aborted, and
-    /// when its call is stopped, the model is told it was once the
-    /// future has been dropped, or after five seconds, whichever comes
-    /// first.
+    /// The future runs as a task of its own, on the app's tools' own
+    /// threads; but `run` itself is called on CAF's own task: it must
+    /// give its future at once, never blocking. A future should await,
+    /// not block: one that blocks a thread ties it up, and can't be
+    /// aborted, and when its call is stopped, the model is told it was
+    /// once the future has been dropped, or after five seconds,
+    /// whichever comes first.
     fn run(&self, call: Call, input: Self::Input) -> BoxFuture<Done<A>>;
 }
 
@@ -278,6 +283,11 @@ impl<A: AppItem> AppTools<A> {
                 )
             })
             .collect()
+    }
+
+    /// Whether there are none.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.tools.is_empty()
     }
 
     /// The tool named `name`, if there's one.
