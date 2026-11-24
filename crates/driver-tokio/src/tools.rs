@@ -977,18 +977,7 @@ impl<A: AppItem> ToolsDriver<A> {
                     // One of the app's tools may have finished just now,
                     // its end not yet taken: it ended as the core stopped
                     // it, so the model hears what it gave.
-                    let finished = match (&each.app, &mut each.run) {
-                        (Some(_), Some(run)) => {
-                            let mut cx = Context::from_waker(std::task::Waker::noop());
-                            match run.as_mut().poll(&mut cx) {
-                                Poll::Ready(ended) => Some(ended),
-                                Poll::Pending => None,
-                            }
-                        }
-                        _ => None,
-                    };
-                    if let Some(ended) = finished {
-                        each.run = None;
+                    if let Some(ended) = each.finished_now() {
                         self.finish_call(call, each, ended);
                         if let Some(held) = self.held.remove(&call) {
                             self.answer(held.conn, &held.request, &held.answer);
@@ -1075,34 +1064,43 @@ impl<A: AppItem> ToolsDriver<A> {
         let mut stopping = None;
         let ran =
             match found.and_then(|target| self.calls.remove(&target).map(|each| (target, each))) {
-                Some((target, mut each)) => {
-                    if let Some(batch) = each.batch.take() {
-                        self.reports.push_back(output(target, batch));
+                Some((target, mut each)) => match each.finished_now() {
+                    // It ended just as it was stopped, its end not yet
+                    // taken: it ends as it did, with its notice, and
+                    // there's no job left to stop.
+                    Some(ended) => {
+                        self.finish_call(target, each, ended);
+                        Ran::failed(caf_tools::no_job(job.0))
                     }
-                    // Dropped, its command stops; the app's tool is waited
-                    // for, before the TaskStop is answered.
-                    let (_, _, task) = each.stop();
-                    stopping = task;
-                    // Any answer it still had waiting is the model's.
-                    if let Some(held) = self.held.remove(&target) {
-                        self.answer(held.conn, &held.request, &held.answer);
+                    None => {
+                        if let Some(batch) = each.batch.take() {
+                            self.reports.push_back(output(target, batch));
+                        }
+                        // Dropped, its command stops; the app's tool is waited
+                        // for, before the TaskStop is answered.
+                        let (_, _, task) = each.stop();
+                        stopping = task;
+                        // Any answer it still had waiting is the model's.
+                        if let Some(held) = self.held.remove(&target) {
+                            self.answer(held.conn, &held.request, &held.answer);
+                        }
+                        self.reports.push_back(Report::Tool {
+                            call: target,
+                            event: ToolEvent::Finished {
+                                done: false,
+                                pieces: Vec::new(),
+                                folder: None,
+                                notice: None,
+                                item: None,
+                            },
+                        });
+                        Ran::new(
+                            true,
+                            vec![Piece::Text(Text::new(caf_tools::job_stopped(job.0)))],
+                            Answer::text(caf_tools::job_stopped(job.0)),
+                        )
                     }
-                    self.reports.push_back(Report::Tool {
-                        call: target,
-                        event: ToolEvent::Finished {
-                            done: false,
-                            pieces: Vec::new(),
-                            folder: None,
-                            notice: None,
-                            item: None,
-                        },
-                    });
-                    Ran::new(
-                        true,
-                        vec![Piece::Text(Text::new(caf_tools::job_stopped(job.0)))],
-                        Answer::text(caf_tools::job_stopped(job.0)),
-                    )
-                }
+                },
                 None => Ran::failed(caf_tools::no_job(job.0)),
             };
         if let Some(each) = self.calls.get_mut(&call) {
@@ -1844,6 +1842,21 @@ impl<A: AppItem> ToolsDriver<A> {
 }
 
 impl<A: AppItem> Each<A> {
+    /// What one of the app's tools' run ended with, if it has just now,
+    /// its end not yet taken: polled once, as the call is being stopped.
+    fn finished_now(&mut self) -> Option<Ended<A>> {
+        self.app.as_ref()?;
+        let run = self.run.as_mut()?;
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        match run.as_mut().poll(&mut cx) {
+            Poll::Ready(ended) => {
+                self.run = None;
+                Some(ended)
+            }
+            Poll::Pending => None,
+        }
+    }
+
     /// Drops its work, giving back where to answer it, and the app's
     /// tool's task, aborted, if it's one of the app's, to wait for.
     fn stop(self) -> (u64, Request, Option<AppTask>) {
@@ -1936,8 +1949,9 @@ impl<A: AppItem> Drop for ToolsDriver<A> {
 }
 
 /// Runs `work`, one of the app's tool `name`'s, for `call`, as a task of
-/// its own, on `runtime` if given: the task, and a future of what it gives, or of `panicked()`
-/// if it panicked, as `doing` it, which is logged.
+/// its own, on `runtime` if given: the task, and a future of what it
+/// gives, or of `panicked()` if it panicked, as `doing` it, which is
+/// logged.
 fn spawn_app<T: Send + 'static>(
     runtime: Option<&tokio::runtime::Handle>,
     name: &str,
@@ -4359,7 +4373,7 @@ mod tests {
             }))
         }
 
-        fn run(&self, call: Call, input: How) -> crate::app_tools::BoxFuture<Done> {
+        fn run(&self, mut call: Call, input: How) -> crate::app_tools::BoxFuture<Done> {
             assert!(input.how != "run", "running");
             let (started, blocked) = (Arc::clone(&self.started), Arc::clone(&self.blocked));
             Box::pin(async move {
@@ -4372,6 +4386,12 @@ mod tests {
                     "drop_cancel" => {
                         let _dropped = PanicsDropped;
                         std::future::pending().await
+                    }
+                    "job_sleep" => {
+                        call.answer_now(|job| Answer::text(format!("As job {}", job.0)));
+                        tokio::time::sleep(Duration::from_millis(input.ms)).await;
+                        blocked.store(true, Ordering::SeqCst);
+                        Done::answer("rendered")
                     }
                     "drop_slow" => {
                         let _dropped = SlowDropped;
@@ -4733,5 +4753,122 @@ mod tests {
         h.shut_down().await;
         let answer = client.recv().await;
         assert_eq!(text_of(&answer), CANCELLED);
+    }
+
+    #[tokio::test]
+    async fn an_app_job_that_finished_as_task_stop_came_ends_as_it_did() {
+        let dir = Dir::new();
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let blocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let app = AppTools::new()
+            .with(Misbehaving {
+                started,
+                blocked: Arc::clone(&blocked),
+            })
+            .unwrap();
+        let config: ToolsConfig = ToolsConfig {
+            app,
+            folder: Some(dir.0.clone()),
+            ..ToolsConfig::default()
+        };
+        let (mut driver, serving) =
+            ToolsDriver::listen(config, SpawnCommand::new("/bin/false"), "test").unwrap();
+        driver.apply(ToolDirective::Serve {
+            chat: CHAT,
+            tools: vec![CafTool::TaskStop],
+            app: vec!["misbehave".into()],
+            cwd: "/work".into(),
+            instructions: "Use them.".into(),
+        });
+        let stream = UnixStream::connect(&serving.socket).await.unwrap();
+        let (read, write) = stream.into_split();
+        let mut client = Client {
+            read: BufReader::new(read),
+            write,
+        };
+        let token = mcp::token(&serving.key, CHAT);
+        client
+            .send(&json!({"caf_relay": 1, "chat": CHAT, "token": token}))
+            .await;
+        assert_connected(next_within(&mut driver).await, CHAT);
+        let input = json!({"how": "job_sleep", "ms": 500});
+        client.call_tool(1, "misbehave", input.clone()).await;
+        let job_call = match next_within(&mut driver).await {
+            Report::Tool { call, .. } => call,
+            other => panic!("expected Called, got {other:?}"),
+        };
+        driver.apply(app_directive(job_call, input, true));
+        match next_within(&mut driver).await {
+            Report::Tool {
+                event: ToolEvent::Detached { job: JobId(1) },
+                ..
+            } => {}
+            other => panic!("expected Detached, got {other:?}"),
+        }
+        driver.taken();
+        let early = tokio::select! {
+            answer = client.recv() => answer,
+            report = next_within(&mut driver) => panic!("unexpected report: {report:?}"),
+        };
+        assert_eq!(text_of(&early), "As job 1");
+        client
+            .call_tool(2, "TaskStop", json!({"task_id": "1"}))
+            .await;
+        let stop_call = loop {
+            match next_within(&mut driver).await {
+                Report::Tool {
+                    call,
+                    event: ToolEvent::Called { .. },
+                } => break call,
+                Report::Tool {
+                    event: ToolEvent::Output { .. },
+                    ..
+                } => {}
+                other => panic!("expected TaskStop's Called, got {other:?}"),
+            }
+        };
+        // The job ends, and the driver hasn't seen it yet when TaskStop
+        // is run.
+        while !blocked.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        driver.apply(ToolDirective::Run {
+            call: stop_call,
+            action: Action::Stop { job: JobId(1) },
+            input: json!({"task_id": "1"}),
+        });
+        match next_within(&mut driver).await {
+            Report::Tool {
+                call,
+                event:
+                    ToolEvent::Finished {
+                        done: true,
+                        notice: Some(notice),
+                        ..
+                    },
+            } => {
+                assert_eq!(call, job_call);
+                assert!(notice.contains("<result>rendered</result>"), "{notice}");
+            }
+            other => panic!("expected the job's Finished, with its notice, got {other:?}"),
+        }
+        driver.taken();
+        match next_within(&mut driver).await {
+            Report::Tool {
+                call,
+                event: ToolEvent::Finished { done: false, .. },
+            } => assert_eq!(call, stop_call),
+            other => panic!("expected TaskStop's Finished, got {other:?}"),
+        }
+        driver.taken();
+        // Its job had ended: TaskStop finds none.
+        let answer = tokio::select! {
+            answer = client.recv() => answer,
+            report = next_within(&mut driver) => panic!("unexpected report: {report:?}"),
+        };
+        assert_eq!(answer["id"], 2);
+        assert_eq!(text_of(&answer), caf_tools::no_job(1));
+        driver.finish().await;
     }
 }
