@@ -324,3 +324,40 @@ async fn a_read_gives_its_bytes_sha256() {
     let read = read_at(&path).await.unwrap();
     assert_eq!(read.sha256, Some(Sha256::digest(b"x").into()));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_file_named_two_ways_by_two_backends_is_still_written_once_at_a_time() {
+    let dir = Dir::new();
+    std::fs::create_dir(dir.path("real")).unwrap();
+    std::os::unix::fs::symlink("real", dir.path("link")).unwrap();
+    let names = [
+        dir.path("real/a.txt"),
+        dir.path("link/a.txt"),
+        dir.path("link/../real/a.txt"),
+    ];
+    for _ in 0..20 {
+        std::fs::write(&names[0], b"start").unwrap();
+        let read = read_at(&names[0]).await.unwrap();
+        let writes: Vec<_> = (0..9)
+            .map(|n| {
+                let (path, version) = (names[n % 3].clone(), read.version.clone());
+                tokio::spawn(async move {
+                    // A backend of its own, as a second CAF has.
+                    DiskFiles
+                        .write(
+                            &path,
+                            FileText::new(format!("write {n}").into_bytes()),
+                            Some(version),
+                            CallId(1),
+                        )
+                        .await
+                })
+            })
+            .collect();
+        let mut made = 0;
+        for write in writes {
+            made += usize::from(write.await.unwrap().is_ok());
+        }
+        assert_eq!(made, 1);
+    }
+}
