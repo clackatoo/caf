@@ -15,6 +15,7 @@
 //! CAF's design says otherwise, as each function's docs say.
 
 mod backend;
+mod bash;
 mod edit;
 mod read;
 mod screen;
@@ -23,6 +24,11 @@ mod text;
 
 pub use backend::{
     BoxFuture, CommandSpec, Commands, Ended, FileError, FileText, Files, Output, Running, Version,
+};
+pub use bash::{
+    DEFAULT_TIMEOUT, JobEnd, MOST_ANSWER, MOST_JOBS, MOST_TIMEOUT, PREVIEW, answer, background,
+    format_duration, job_stopped, no_job, notice, output_text, timed_out, timeout, too_large,
+    too_many_jobs,
 };
 pub use edit::{EditError, Edited, MOST_EDIT, created, edit, updated, write};
 pub use read::{
