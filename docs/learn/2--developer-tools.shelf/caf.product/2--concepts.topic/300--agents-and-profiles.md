@@ -64,13 +64,14 @@ can usually read and edit files, run commands and search the web, and it
 loads the user's own setup: their MCP servers, skills, plugins, hooks,
 slash commands, and instruction files such as `CLAUDE.md` and `AGENTS.md`.
 CAF turns all of that off, as the agent's profile says how. The only tools
-the agent has are the ones your program gives it, as MCP servers
+the agent has are the ones your program gives it: CAF's own, Read, Edit,
+Write and Bash, as you choose for each chat (`OpenChat::with_tools`, see
+[Serving tools](~caf/concepts/serving-tools)), and your own MCP servers
 (`OpenChat::mcp_servers`).
 
-Each of the agent's own tools will come back, one at a time, once CAF
-supports it fully: what it does, in CAF's own terms, the permission it
-needs, and how it shows in the chat. CAF serves its own tools to the agent
-as an MCP server named `caf`, so no server of yours may have that name, in
+CAF's tools replace the agent's own, in CAF's own terms: what each does,
+the permission it needs, and how it shows in the chat. CAF serves them to
+the agent as an MCP server named `caf`, so no server of yours may have that name, in
 any case, nor one the agent would write as `caf`, or as `caf_` or
 anything starting `caf__`: Claude Code writes each character but a
 letter, a digit, `_` and `-` as `_`, so `caf.` and `caf__x` would name
@@ -98,6 +99,9 @@ longer has, CAF gives it short ones of its own. For a program called
 > in. You have no tools of your own: you can't read or change files, run
 > commands or browse the web, except through tools framewright gives you.
 > Answer in Markdown.
+
+That's for a chat with no tools of CAF's. For a chat with some, the second
+sentence gives way to a paragraph naming the tools it has.
 
 Your program can add its own after them, such as a description of the
 project open, with `OpenChat::instructions`. They're sent each time the

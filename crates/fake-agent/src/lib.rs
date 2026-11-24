@@ -197,7 +197,7 @@
 //! ends, and doesn't wait for it to go. Anything else a server sends is
 //! in the record, and otherwise let be.
 //!
-//! Calling CAF's `Read`, and stopping a `Bash` the user never allowed:
+//! Calling CAF's `Read`, then calling `Bash` and cancelling it:
 //!
 //! ```text
 //! {"wait": {"method": "session/new"}}
