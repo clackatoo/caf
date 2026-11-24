@@ -36,6 +36,7 @@ export function tool(title: string): ToolCall {
     decision: { type: "Undecided" },
     app: null,
     stopped_by: null,
+    job: null,
   };
 }
 

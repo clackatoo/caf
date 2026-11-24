@@ -275,7 +275,7 @@ impl Serving {
 fn start_relay() -> Vec<Value> {
     vec![
         json!({"mcp_start": {"discover": true, "expect": {"result": {"serverInfo": {"name": "caf"}}}, "timeout": 30000}}),
-        json!({"mcp_list": {"expect": ["Read", "Edit", "Write", "Bash"], "timeout": 30000}}),
+        json!({"mcp_list": {"expect": ["Read", "Edit", "Write", "Bash", "TaskStop"], "timeout": 30000}}),
     ]
 }
 
@@ -659,7 +659,7 @@ async fn the_newest_relay_for_a_chat_wins() {
     steps.extend([
         json!({"wait_file": {"path": dir.path("asked").display().to_string(), "timeout": 30000}}),
         json!({"mcp_start": {"from": "new", "as": "second", "timeout": 30000}}),
-        json!({"mcp_list": {"server": "second", "expect": ["Read", "Edit", "Write", "Bash"], "timeout": 30000}}),
+        json!({"mcp_list": {"server": "second", "expect": ["Read", "Edit", "Write", "Bash", "TaskStop"], "timeout": 30000}}),
         json!({"mcp_call": {"server": "second", "tool": "Read", "arguments": {"file_path": path}, "tool_use_id": "toolu_2", "report": "s1"}}),
         json!({"mcp_await": {"expect": {"result": {"isError": false}}, "timeout": 30000}}),
         end_turn(),
