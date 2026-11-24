@@ -15,7 +15,18 @@
 //! CAF's design says otherwise, as each function's docs say.
 
 mod backend;
+mod edit;
+mod read;
+mod state;
+mod text;
 
 pub use backend::{
     BoxFuture, CommandSpec, Commands, Ended, FileError, FileText, Files, Output, Running, Version,
 };
+pub use edit::{EditError, Edited, MOST_EDIT, created, edit, updated, write};
+pub use read::{
+    DEFAULT_LIMIT, FileTool, ImageRead, MOST_TOKENS, MOST_TOKENS_LARGE, Reading, TextRead,
+    file_error, missing, read,
+};
+pub use state::{Check, NOT_READ, ReadState, STALE};
+pub use text::format_size;
