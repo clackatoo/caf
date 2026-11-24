@@ -970,6 +970,103 @@ fn a_restored_chat_is_given_its_instructions_again_as_its_session_opens() {
 }
 
 #[test]
+fn a_restored_chat_is_given_its_tools_again_as_a_new_one_is() {
+    use crate::tool::{CafTool, Tools};
+    let mut script = Script::new(host());
+    let restore =
+        RestoreChat::new(CHAT, Shelf(SHELF.to_owned())).with_tools(Tools::caf([CafTool::Write]));
+    // Nothing serves them yet.
+    assert_eq!(
+        script.restore(restore.clone()).0,
+        Err(Refused::ToolsNotServed)
+    );
+    script.serving();
+    script.restore(restore).0.expect("restoring");
+    let saved = saved(&mid_turn("claude"), Some("old"), 0);
+    let out = script.storage(1000, StorageEvent::Loaded(Box::new(saved)));
+    assert_eq!(
+        with(&out, "tool"),
+        [json!({ "tool": { "type": "Serve", "value": {
+            "chat": CHAT,
+            "tools": [{ "type": "Write" }],
+            "instructions": "caf-test's tools to write whole files (Write), in the folder you're working in.",
+        } } })]
+    );
+    let out = script.send(CHAT, "Go on").1;
+    let proc = with(&out, "start")[0]["start"].as_u64().expect("a process");
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let out = script.answers(proc, init, &claude_init());
+    // The same server a new chat gets: the same relay, chat and token.
+    let resume = sent(&out, "session/resume");
+    assert_eq!(
+        resume["params"]["mcpServers"],
+        json!([super::serving::caf_server(CHAT)])
+    );
+    assert_eq!(
+        resume["params"]["_meta"]["claudeCode"]["options"]["systemPrompt"],
+        crate::profiles::own_instructions("caf-test", &[CafTool::Write])
+    );
+    // Put away, it's no longer served.
+    let id = resume["id"].as_u64().expect("an id");
+    script.answers(proc, id, &json!({ "modes": super::default_modes() }));
+    let out = script.put_away(CHAT).1;
+    assert!(
+        with(&out, "tool")
+            .contains(&json!({ "tool": { "type": "Unserve", "value": { "chat": CHAT } } })),
+        "{out:#?}"
+    );
+}
+
+#[test]
+fn a_restored_chat_has_the_apps_servers_then_cafs_and_none_named_caf() {
+    use crate::agent::McpServer;
+    use crate::tool::{CafTool, Tools};
+    let server = |name: &str| McpServer::Http {
+        name: name.to_owned(),
+        url: "http://localhost:1/mcp".to_owned(),
+        headers: Vec::new(),
+    };
+    let mut script = Script::new(host());
+    script.serving();
+    let mut restore =
+        RestoreChat::new(CHAT, Shelf(SHELF.to_owned())).with_tools(Tools::caf([CafTool::Read]));
+    restore.mcp_servers = vec![server("CAF")];
+    assert_eq!(
+        script.restore(restore.clone()).0,
+        Err(Refused::ReservedServer)
+    );
+    restore.mcp_servers = vec![server("maps")];
+    script.restore(restore.clone()).0.expect("restoring");
+    let saved = saved(&mid_turn("claude"), Some("old"), 0);
+    script.storage(1000, StorageEvent::Loaded(Box::new(saved)));
+    // Loaded already, whatever it's given.
+    assert_eq!(script.restore(restore).0, Err(Refused::Loaded));
+    let out = script.send(CHAT, "Go on").1;
+    let proc = with(&out, "start")[0]["start"].as_u64().expect("a process");
+    let init = sent(&out, "initialize")["id"].as_u64().expect("an id");
+    let out = script.answers(proc, init, &claude_init());
+    let servers = &sent(&out, "session/resume")["params"]["mcpServers"];
+    assert_eq!(servers[0]["name"], "maps");
+    assert_eq!(servers[1], super::serving::caf_server(CHAT));
+    assert_eq!(servers.as_array().map(Vec::len), Some(2));
+}
+
+#[test]
+fn restoring_a_loaded_chat_is_refused_as_loaded_whatever_its_tools() {
+    use crate::tool::{CafTool, Tools};
+    let mut script = Script::new(host());
+    let restore = RestoreChat::new(CHAT, Shelf(SHELF.to_owned()));
+    script.restore(restore.clone()).0.expect("restoring");
+    // Nothing serves tools, and it's loaded: it's the second that's said.
+    assert_eq!(
+        script
+            .restore(restore.with_tools(Tools::caf([CafTool::Read])))
+            .0,
+        Err(Refused::Loaded)
+    );
+}
+
+#[test]
 fn a_chat_whose_agent_caf_cant_strip_comes_back_and_sending_to_it_is_refused() {
     let mut agents = super::harness::agents();
     agents.push(crate::agent::AgentSpec::command(

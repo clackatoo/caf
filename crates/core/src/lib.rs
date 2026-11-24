@@ -45,6 +45,9 @@
 //! usage ([`usage`]): what each turn spent, what each chat has spent, and
 //! the usage ledger every CAF app on a machine shares, which the usage
 //! driver keeps.
+//! Features 10 and 11 add tool calls ([`tool`]), whoever ran them, and
+//! serving CAF's own tools to the agent over MCP ([`mcp`],
+//! [`OpenChat::tools`](crate::OpenChat::tools)).
 //!
 //! The types already hold everything the architecture fixed, so later
 //! features add behaviour without reshaping them. Items and variants
@@ -181,6 +184,23 @@
 //!     Cancelled if the user stopped the turn, and Failed otherwise, as is
 //!     one a restored chat was cut off in, or one imported unfinished
 //!     (`every_call_settles_when_its_turn_ends`).
+//! 16. **A chat given CAF's tools always has them served, or isn't
+//!     opened.** It's refused while nothing serves them
+//!     ([`Refused::ToolsNotServed`]), and its MCP server `caf` is the same
+//!     each time its session is opened, new, loaded or resumed, in a run
+//!     (`a_restored_chat_is_given_its_tools_again_as_a_new_one_is`).
+//! 17. **A relay serves only its own chat, and only the tools it was
+//!     given.** Its token is the chat's, made with a key drawn each run,
+//!     and checked in constant time ([`mcp::token_is`],
+//!     `tokens_are_each_chats_and_compared_whole`); a call to a tool the
+//!     chat wasn't given is refused
+//!     (`a_call_to_a_tool_the_chat_wasnt_given_is_refused`).
+//! 18. **A call to CAF's tools is answered at most once, and never once
+//!     it's cancelled** (`a_cancelled_call_is_never_answered`,
+//!     `a_call_is_handed_on_with_the_agents_id_for_it`).
+//! 19. **A chat whose tools stop working says so**, once a session, while
+//!     its session is open
+//!     (`a_lost_relay_is_said_once_a_session_while_its_open`).
 
 // `acp`'s framer and parser are being written apart from the rest.
 pub mod acp;

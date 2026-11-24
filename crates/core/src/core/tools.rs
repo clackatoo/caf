@@ -226,7 +226,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             set("CAF_RELAY", serving.socket.clone().into_os_string()),
             set("CAF_RELAY_CHAT", chat.to_string().into()),
             set(
-                "CAF_RELAY_TOKEN",
+                super::state::TOKEN_VAR,
                 crate::mcp::token(&serving.key, chat).into(),
             ),
         ]);
@@ -892,15 +892,24 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(each) = self.calls.remove(&call) else {
             return stale(out, call, "its going");
         };
-        if let Some(ticket) =
-            self.drop_call(now, &each, ToolStatus::Cancelled, Some(StoppedBy::Agent))
-        {
+        // The agent gives up on a call as its turn is stopped, too: then
+        // it was the user who stopped it.
+        let stopping = (self.runs.get(&each.chat))
+            .and_then(|run| run.running.as_ref())
+            .is_some_and(|running| running.stop_by.is_some());
+        let by = if stopping {
+            StoppedBy::User
+        } else {
+            StoppedBy::Agent
+        };
+        if let Some(ticket) = self.drop_call(now, &each, ToolStatus::Cancelled, Some(by)) {
             out.push(Directive::Policy(PolicyDirective::Withdrawn { ticket }));
         }
     }
 
-    /// Ends `each` as `status`, stopped `by` someone if it was cancelled: its question is taken away, its output,
-    /// if it has one, ends not saying how, and its item ends. Returns the
+    /// Ends `each` as `status`, stopped `by` someone if it was cancelled:
+    /// its question is taken away, its output, if it has one, ends not
+    /// saying how, and its item ends. Returns the
     /// ticket of the policy's decision on it to withdraw, if it was still
     /// deciding.
     fn drop_call(
@@ -1355,10 +1364,11 @@ mod tests {
             let required: Vec<&str> = (schema["required"].as_array().expect("required").iter())
                 .map(|name| name.as_str().expect("a name"))
                 .collect();
-            // A value of each field's type that the parser takes.
+            // A value of each field's type that the parser takes: a whole
+            // number its least.
             let value = |name: &str| match properties[name]["type"].as_str() {
                 Some("string") => json!("x"),
-                Some("number") => json!(5),
+                Some("integer") => properties[name]["minimum"].clone(),
                 Some("boolean") => json!(true),
                 other => panic!("{tool:?}.{name} is of type {other:?}"),
             };
@@ -1395,7 +1405,27 @@ mod tests {
                     action_of(tool, &wrong, "/w").is_err(),
                     "{tool:?}.{name} is typed"
                 );
+                // A whole number is whole, and no less than its least.
+                if let Some(least) = properties[*name]["minimum"].as_u64() {
+                    for bad in [json!(least as f64 + 0.5), json!(least as i64 - 1)] {
+                        let mut wrong = only(&all);
+                        wrong[*name] = bad.clone();
+                        assert!(
+                            action_of(tool, &wrong, "/w").is_err(),
+                            "{tool:?}.{name} refuses {bad}"
+                        );
+                    }
+                }
             }
+            // A field the schema doesn't name, as Claude Code's own tools
+            // have more, is let be, as nothing refuses it.
+            assert!(schema.get("additionalProperties").is_none());
+            let mut more = only(&required);
+            more["dangerouslyDisableSandbox"] = json!(true);
+            assert!(
+                action_of(tool, &more, "/w").is_ok(),
+                "{tool:?} lets more be"
+            );
         }
     }
 

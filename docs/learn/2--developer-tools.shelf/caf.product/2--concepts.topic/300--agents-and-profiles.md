@@ -100,15 +100,15 @@ longer has, CAF gives it short ones of its own. For a program called
 > commands or browse the web, except through tools framewright gives you.
 > Answer in Markdown.
 
-That's for a chat with no tools of CAF's. For a chat with some, the second
-sentence gives way to two naming the tools it has. With Read and Bash:
+That's for a chat with no tools of CAF's. For a chat given Read and Bash,
+the second sentence names them instead:
 
 > You are working inside framewright, the app the user is talking to you
 > in. framewright gives you tools to read files (Read) and run commands
 > (Bash), in the folder you're working in, asking the user's leave where it
 > must. You have no other tools of your own: you can't do anything else,
-> such as browse the web, except through other tools framewright gives you.
-> Answer in Markdown.
+> such as browse the web, except through other tools framewright gives
+> you. Answer in Markdown.
 
 Your program can add its own after them, such as a description of the
 project open, with `OpenChat::instructions`. They're sent each time the

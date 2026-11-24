@@ -534,6 +534,7 @@ fn a_stopped_turn_cancels_its_calls_and_a_finished_one_fails_them() {
     );
     for tool in tools(&script) {
         assert_eq!(tool["status"], kind("Cancelled"));
+        assert_eq!(tool["stopped_by"], kind("User"));
         assert_ne!(tool["end"]["type"], "Open");
     }
     // The command's output ended, not saying how.
@@ -568,6 +569,11 @@ fn a_stopped_turn_cancels_its_calls_and_a_finished_one_fails_them() {
         json!({ "type": "Cancel", "value": { "call": 1 } })
     );
     assert_eq!(the_tool(&script)["status"], kind("Failed"));
+    assert_eq!(
+        the_tool(&script)["stopped_by"],
+        Value::Null,
+        "only a cancelled call was stopped"
+    );
 }
 
 #[test]
@@ -580,6 +586,7 @@ fn a_call_the_agent_gives_up_on_is_cancelled_and_not_answered() {
     assert!(out.contains(&json!({ "withdrawn": deciding })));
     let tool = the_tool(&script);
     assert_eq!(tool["status"], kind("Cancelled"));
+    assert_eq!(tool["stopped_by"], kind("Agent"));
     assert_ne!(tool["end"]["type"], "Open");
     // Nothing more comes of it.
     let out = script.policy(deciding, PolicyAnswer::Allow);
@@ -776,6 +783,7 @@ fn a_stop_ends_the_calls_waiting_to_be_allowed_at_once() {
     assert_eq!(script.chat(CHAT)["questions"], json!([]));
     for tool in tools(&script) {
         assert_eq!(tool["status"], kind("Cancelled"));
+        assert_eq!(tool["stopped_by"], kind("User"));
     }
     // Nothing allows them after.
     assert!(told(&script.policy(deciding, PolicyAnswer::Allow)).is_empty());
@@ -1217,4 +1225,17 @@ fn a_call_naming_a_report_held_only_for_now_takes_it() {
     assert_eq!(statuses, [kind("Pending"), kind("Pending")]);
     script.policy(ticket(&first), PolicyAnswer::Refuse);
     script.policy(second, PolicyAnswer::Refuse);
+}
+
+#[test]
+fn a_call_the_agent_gives_up_on_as_the_user_stops_its_turn_was_stopped_by_the_user() {
+    let mut script = bash_running("sleep 100");
+    script.stop(CHAT).0.expect("stopping");
+    // Claude Code ends its MCP calls as its turn is cancelled.
+    let out = script.tool(1, ToolEvent::Gone);
+    assert!(told(&out).is_empty(), "nothing to answer");
+    script.answers(PROC, PROMPT, &json!({ "stopReason": "cancelled" }));
+    let tool = the_tool(&script);
+    assert_eq!(tool["status"], kind("Cancelled"));
+    assert_eq!(tool["stopped_by"], kind("User"));
 }

@@ -1006,10 +1006,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .collect::<Option<Vec<_>>>()
             .ok_or(Refused::Unsendable)?;
         check_instructions(restore.instructions.as_deref())?;
-        self.caf_server(restore.chat, &restore.tools.caf)?;
         if self.is_loaded(restore.chat) {
             return Err(Refused::Loaded);
         }
+        self.caf_server(restore.chat, &restore.tools.caf)?;
         let ticket = Ticket(self.ids.take());
         self.relist_state(&restore.shelf, restore.chat, SavedState::Restoring);
         self.saving.restoring.insert(ticket, restore);
@@ -1111,7 +1111,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
             .unwrap_or_default();
-        let caf_tools = restore.tools.caf.clone();
+        let caf_tools = crate::tool::Tools::caf(restore.tools.caf.iter().copied()).caf;
         // Checked as the restore was asked for: nothing serves tools less.
         if let Ok(Some(caf)) = self.caf_server(id, &caf_tools) {
             mcp_sent.push(caf);
@@ -1149,7 +1149,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 conn,
                 cwd,
                 mcp: restore.mcp_servers,
-                mcp_sent,
+                mcp_sent: super::state::SentServers(mcp_sent),
                 instructions: restore.instructions,
                 session,
                 open: Open::Idle,
@@ -1279,6 +1279,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// Lets `chat` go from memory, with everything kept for it, and
     /// returns what was kept of its saving.
+    ///
+    /// It's no longer served once this call into the core finishes
+    /// ([`Core::unserve`]): no call into the core both lets a chat go and
+    /// restores it, so its `Serve` never comes before that `Unserve`. A
+    /// restore of it is answered by the store, later.
     fn forget(&mut self, chat: ChatId) -> Option<Kept<A, D>> {
         self.forget_calls(chat);
         self.unserve(chat);

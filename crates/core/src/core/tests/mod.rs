@@ -17,6 +17,7 @@ mod process;
 mod reported;
 mod saving;
 mod served;
+mod serving;
 mod settings;
 mod setup;
 mod shared;
