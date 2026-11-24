@@ -3651,10 +3651,10 @@ fn a_chat_with_an_app_tools_call_is_saved_and_restored_given_them_again() {
         with(&out, "tool"),
         [json!({ "tool": { "type": "Serve", "value": {
             "chat": CHAT,
-            "tools": [],
+            "tools": [{ "type": "TaskStop" }],
             "app": ["word_count"],
             "cwd": "/work",
-            "instructions": "caf-test's own tools: word_count.",
+            "instructions": "caf-test's own tools (word_count), and TaskStop to stop their background tasks.",
         } } })]
     );
     let back = &script.chat(CHAT)["turns"][0]["items"][0];

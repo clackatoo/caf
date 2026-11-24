@@ -107,10 +107,12 @@ fn a_chat_given_only_app_tools_is_served_them_and_told_of_them() {
         with(&opened, "tool"),
         [json!({ "tool": { "type": "Serve", "value": {
             "chat": CHAT,
-            "tools": [],
+            // TaskStop comes with the app's tools, which may answer early
+            // as background jobs.
+            "tools": [{ "type": "TaskStop" }],
             "app": ["trim_clip", "word_count"],
             "cwd": "/work",
-            "instructions": "caf-test's own tools: trim_clip, word_count.",
+            "instructions": "caf-test's own tools (trim_clip, word_count), and TaskStop to stop their background tasks.",
         } } })]
     );
     let new = sent(&out, "session/new");
@@ -118,10 +120,10 @@ fn a_chat_given_only_app_tools_is_served_them_and_told_of_them() {
     assert_eq!(
         new["params"]["_meta"]["claudeCode"]["options"]["systemPrompt"],
         "You are working inside caf-test, the app the user is talking to you in. caf-test gives \
-         you caf-test's own tools: trim_clip, word_count, asking the user's leave where it \
-         must. You have no other tools of your own: you can't read or change files, run \
-         commands or browse the web, except through other tools caf-test gives you. Answer in \
-         Markdown."
+         you tools of its own (trim_clip, word_count), and TaskStop to stop their background \
+         tasks, asking the user's leave where they must. You have no other tools of your own: \
+         you can't read or change files, run commands or browse the web, except through tools \
+         caf-test gives you. Answer in Markdown."
     );
 }
 
@@ -131,20 +133,20 @@ fn cafs_tools_and_the_apps_are_named_together() {
     script.serving();
     let (opened, out) = open_given(
         &mut script,
-        Tools::caf([CafTool::Read]).and_app(["word_count"]),
+        Tools::caf([CafTool::Read]).and_app(["word_count", "trim_clip"]),
     );
     assert_eq!(
         one_told(&opened)["value"]["instructions"],
-        "caf-test's tools to read files (Read), in the folder you're working in, and caf-test's \
-         own tools: word_count."
+        "caf-test's tools to read files (Read) and stop background tasks (TaskStop), in the \
+         folder you're working in, and its own (word_count, trim_clip)."
     );
     assert_eq!(
         sent(&out, "session/new")["params"]["_meta"]["claudeCode"]["options"]["systemPrompt"],
         "You are working inside caf-test, the app the user is talking to you in. caf-test gives \
-         you tools to read files (Read), in the folder you're working in, and caf-test's own \
-         tools: word_count, asking the user's leave where it must. You have no other tools of \
-         your own: you can't do anything else, such as browse the web, except through other \
-         tools caf-test gives you. Answer in Markdown."
+         you tools to read files (Read) and stop background tasks (TaskStop), in the folder \
+         you're working in, and tools of its own (word_count, trim_clip), asking the user's leave where they must. You have no other \
+         tools of your own: you can't do anything else, such as browse the web, except through \
+         other tools caf-test gives you. Answer in Markdown."
     );
 }
 
@@ -442,15 +444,377 @@ fn bad_input_fails_only_a_report_its_sure_is_its_own() {
     if let ToolEvent::Called { agent_call, .. } = &mut call {
         *agent_call = None;
     }
-    script.tool(1, call);
+    let out = script.tool(1, call);
+    // As for CAF's own tools: refused, with no item of its own, the
+    // report left to say how it went.
+    assert_eq!(
+        one_told(&out),
+        json!({ "type": "Refuse", "value": { "call": 1, "why": { "type": "BadInput", "value": "bad `clip`" } } })
+    );
     let tools = tools(&script);
-    assert_eq!(tools.len(), 2, "{tools:#?}");
+    assert_eq!(tools.len(), 1, "{tools:#?}");
     assert_eq!(tools[0]["status"], kind("Pending"), "the report is let be");
-    assert_eq!(tools[1]["status"], kind("Failed"));
     // An app call's empty title is its tool's.
     let out = script.tool(2, called("trim_clip", json!({ "clip": 1 }), Some(""), None));
-    assert_eq!(super::served::tools(&script)[2]["title"], "Trim a clip");
+    assert_eq!(super::served::tools(&script)[1]["title"], "Trim a clip");
     assert_eq!(one_told(&out)["type"], "Preview");
     script.tool(2, ToolEvent::Previewed { pieces: Vec::new() });
     script.stop(CHAT).0.expect("stopping");
+}
+
+#[test]
+fn the_agent_asking_about_an_app_tool_is_answered_at_once() {
+    let mut script = running(Tools::caf([CafTool::Read]).and_app(["word_count"]));
+    let ask = |id: u64, tool: &str, name: &str| {
+        json!({
+            "jsonrpc": "2.0", "id": id, "method": "session/request_permission",
+            "params": {
+                "sessionId": SESSION,
+                "toolCall": {
+                    "toolCallId": tool, "title": name, "rawInput": {},
+                    "_meta": { "claudeCode": { "toolName": name } },
+                },
+                "options": [
+                    { "optionId": "allow", "name": "Allow", "kind": "allow_once" },
+                    { "optionId": "reject", "name": "Reject", "kind": "reject_once" }
+                ]
+            }
+        })
+    };
+    // CAF asks about its own tools itself, and the app's, before any
+    // report of the call.
+    for (id, tool, name) in [
+        (7, "toolu_1", "mcp__caf__Read"),
+        (8, "toolu_2", "mcp__caf__word_count"),
+    ] {
+        let out = script.says(PROC, &ask(id, tool, name));
+        assert!(with(&out, "decide").is_empty(), "{name}: {out:#?}");
+        let replies = super::harness::replies(&out, &json!(id));
+        assert_eq!(
+            replies.first().map(|reply| reply["result"].clone()),
+            Some(json!({ "outcome": { "outcome": "selected", "optionId": "allow" } })),
+            "{name}: {out:#?}"
+        );
+    }
+    // One the chat wasn't given is another server's, which the policy
+    // decides on.
+    let out = script.says(PROC, &ask(9, "toolu_3", "mcp__caf__trim_clip"));
+    let decided = ticket(&out);
+    script.policy(decided, PolicyAnswer::Refuse);
+}
+
+/// The app's item type in these tests, and a core's copy of `script`
+/// with it: the warnings it gave for `event`.
+fn warnings_for(script: &Script, event: ToolEvent<Trim>, call: u64) -> Vec<String> {
+    let (mut core, now) = script.copy_as::<Trim>();
+    let mut out = Vec::new();
+    core.handle(
+        now,
+        crate::event::Event::Tool {
+            call: crate::ids::CallId(call),
+            event,
+        },
+        &mut out,
+    );
+    (out.iter())
+        .filter_map(|directive| match directive {
+            crate::directive::Directive::Report(report)
+                if report.level == crate::directive::Level::Warn =>
+            {
+                Some(report.message.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn an_item_for_a_call_the_core_doesnt_have_isnt_warned_of() {
+    let script = running(Tools::none().and_app(["word_count"]));
+    assert_eq!(
+        warnings_for(&script, finished(true, "x", Some(Trim { clip: 1 })), 99),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn the_apps_tools_are_taken_only_as_the_app_may_name_them() {
+    use crate::tool::{AppToolSpec, Hints, MOST_TOOL_NAME};
+    let mut script = Script::new(host());
+    let mut serving = super::serving();
+    let spec = |name: &str| AppToolSpec::new(name, "A tool", Hints::default(), false);
+    let long = "x".repeat(MOST_TOOL_NAME + 1);
+    let most = "y".repeat(MOST_TOOL_NAME);
+    serving.app_tools = vec![
+        spec("word_count"),
+        spec("Word_Count"),
+        spec("read"),
+        spec("TASKSTOP"),
+        spec(""),
+        spec("has space"),
+        spec("caf.x"),
+        spec("caf\u{e9}"),
+        spec(&long),
+        spec(&most),
+        spec("a-b_9"),
+    ];
+    let out = script.event(crate::event::Event::Serving(serving));
+    let warned: Vec<Value> = (with(&out, "report").into_iter())
+        .filter(|each| each["report"] == "Warn")
+        .collect();
+    assert_eq!(warned.len(), 8, "{out:#?}");
+    let opens = |script: &mut Script, name: &str| {
+        script
+            .open(OpenChat::new("claude", "/work").with_tools(Tools::none().and_app([name])))
+            .0
+    };
+    for name in [
+        "Word_Count",
+        "read",
+        "TASKSTOP",
+        "has space",
+        "caf.x",
+        long.as_str(),
+    ] {
+        assert_eq!(
+            opens(&mut script, name),
+            Err(Refused::UnknownTool(name.to_owned())),
+            "{name}"
+        );
+    }
+    for name in ["word_count", most.as_str(), "a-b_9"] {
+        assert!(opens(&mut script, name).is_ok(), "{name}");
+    }
+}
+
+/// A chat given Bash and the app's `word_count`, with a call to it
+/// allowed and running: call 1.
+fn count_running() -> Script {
+    let mut script = running(Tools::caf([CafTool::Bash]).and_app(["word_count"]));
+    let out = script.tool(
+        1,
+        called("word_count", json!({ "text": "a" }), Some("Count"), None),
+    );
+    script.policy(ticket(&out), PolicyAnswer::Allow);
+    script
+}
+
+#[test]
+fn an_app_call_the_agent_gives_up_on_is_cancelled_by_it() {
+    let mut script = count_running();
+    let out = script.tool(1, ToolEvent::Gone);
+    assert!(told(&out).is_empty());
+    assert_has(
+        &the_tool(&script),
+        &json!({ "status": kind("Cancelled"), "stopped_by": { "type": "Agent" } }),
+    );
+}
+
+#[test]
+fn an_app_call_in_a_stopped_turn_is_cancelled_by_the_user() {
+    let mut script = count_running();
+    script.stop(CHAT).0.expect("stopping");
+    let out = script.answers(
+        PROC,
+        super::served::PROMPT,
+        &json!({ "stopReason": "cancelled" }),
+    );
+    assert_eq!(
+        told(&out),
+        [json!({ "type": "Cancel", "value": { "call": 1 } })]
+    );
+    assert_has(
+        &the_tool(&script),
+        &json!({ "status": kind("Cancelled"), "stopped_by": { "type": "User" } }),
+    );
+}
+
+#[test]
+fn an_app_call_waiting_for_the_policy_is_cancelled_as_its_turn_is_stopped() {
+    let mut script = running(Tools::none().and_app(["word_count"]));
+    let out = script.tool(
+        1,
+        called("word_count", json!({ "text": "a" }), Some("Count"), None),
+    );
+    let decided = ticket(&out);
+    let out = script.stop(CHAT).1;
+    assert!(told(&out).contains(&json!({ "type": "Cancel", "value": { "call": 1 } })));
+    assert!(with(&out, "withdrawn").contains(&json!({ "withdrawn": decided })));
+    assert_eq!(the_tool(&script)["status"], kind("Cancelled"));
+}
+
+#[test]
+fn an_app_call_can_go_on_as_a_job_told_of_its_end_or_stopped_by_task_stop() {
+    use crate::ids::JobId;
+    const NOTICE: &str = "<task-notification>\n<task-id>1</task-id>\n</task-notification>";
+    let mut script = count_running();
+    script.tool(1, ToolEvent::Detached { job: JobId(1) });
+    assert_has(
+        &the_tool(&script),
+        &json!({ "status": kind("Running"), "job": 1 }),
+    );
+    // Its turn ends: it runs on.
+    let out = script.answers(
+        PROC,
+        super::served::PROMPT,
+        &json!({ "stopReason": "end_turn" }),
+    );
+    assert!(told(&out).is_empty(), "{out:#?}");
+    // It ends, and the agent is told.
+    let out = script.tool(
+        1,
+        ToolEvent::Finished {
+            done: true,
+            pieces: Vec::new(),
+            folder: None,
+            notice: Some(NOTICE.to_owned()),
+            item: None,
+        },
+    );
+    let prompt = sent(&out, "session/prompt");
+    assert_eq!(prompt["params"]["prompt"][0]["text"], NOTICE);
+    let id = prompt["id"].as_u64().expect("an id");
+    script.answers(PROC, id, &json!({ "stopReason": "end_turn" }));
+    assert_eq!(the_tool(&script)["status"], kind("Done"));
+
+    // Another, stopped by TaskStop.
+    let out = script.send(CHAT, "again");
+    let next = sent(&out.1, "session/prompt")["id"]
+        .as_u64()
+        .expect("an id");
+    let out = script.tool(
+        2,
+        called("word_count", json!({ "text": "b" }), Some("Count"), None),
+    );
+    script.policy(ticket(&out), PolicyAnswer::Allow);
+    script.tool(2, ToolEvent::Detached { job: JobId(2) });
+    let stop = ToolEvent::Called {
+        chat: CHAT,
+        tool: ServedTool::Caf(CafTool::TaskStop),
+        input: json!({ "task_id": "2" }),
+        agent_call: None,
+        title: None,
+        bad_input: None,
+    };
+    let out = script.tool(3, stop);
+    assert_eq!(one_told(&out)["type"], "Run", "no one's asked");
+    script.tool(2, finished(false, "stopped", None));
+    script.tool(3, finished(true, "Stopped", None));
+    let calls = tools(&script);
+    let count = calls.iter().find(|call| call["job"] == 2).expect("job 2");
+    assert_has(
+        count,
+        &json!({ "status": kind("Cancelled"), "stopped_by": { "type": "Agent" } }),
+    );
+    script.answers(PROC, next, &json!({ "stopReason": "end_turn" }));
+}
+
+#[test]
+fn an_app_call_the_policy_asks_the_user_about_runs_when_they_allow_it() {
+    use crate::ids::QuestionId;
+    use crate::question::{Answer, OptionId};
+    let mut script = running(Tools::none().and_app(["word_count"]));
+    let out = script.tool(
+        1,
+        called("word_count", json!({ "text": "a" }), Some("Count a"), None),
+    );
+    script.policy(ticket(&out), PolicyAnswer::AskUser);
+    assert_eq!(the_tool(&script)["status"], kind("Asking"));
+    let question = &script.chat(CHAT)["questions"][0];
+    assert_has(
+        question,
+        &json!({ "kind": { "type": "Permission", "value": { "title": "Count a" } } }),
+    );
+    let question = QuestionId(question["id"].as_u64().expect("asked"));
+    let (answered, out) = script.answer(question, Answer::Permission(OptionId("allow".to_owned())));
+    answered.expect("answered");
+    assert_eq!(one_told(&out)["type"], "Run");
+    assert_has(
+        &the_tool(&script),
+        &json!({ "status": kind("Running"), "decision": { "type": "Allowed", "value": { "type": "User", "value": { "option": "Allow" } } } }),
+    );
+    script.tool(1, finished(true, "1", None));
+}
+
+#[test]
+fn task_stop_is_served_with_the_apps_tools_and_stops_their_jobs() {
+    use crate::ids::JobId;
+    // Read alone isn't served TaskStop; with an app tool it is, after
+    // CAF's others, once, however it's given.
+    let serve = |tools: Tools| {
+        let mut script = Script::new(host());
+        script.serving();
+        let (opened, out) = open_given(&mut script, tools);
+        let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
+        script.answers(
+            PROC,
+            new,
+            &json!({ "modes": default_modes(), "sessionId": SESSION }),
+        );
+        one_told(&opened)["value"]["tools"].clone()
+    };
+    assert_eq!(serve(Tools::caf([CafTool::Read])), json!([kind("Read")]));
+    assert_eq!(
+        serve(Tools::caf([CafTool::Read]).and_app(["trim_clip"])),
+        json!([kind("Read"), kind("TaskStop")])
+    );
+    assert_eq!(
+        serve(Tools::caf([CafTool::TaskStop, CafTool::Read]).and_app(["trim_clip"])),
+        json!([kind("TaskStop"), kind("Read")])
+    );
+    assert_eq!(
+        serve(Tools::caf([CafTool::Bash, CafTool::Read]).and_app(["trim_clip"])),
+        json!([kind("Bash"), kind("TaskStop"), kind("Read")])
+    );
+
+    // A chat without Bash stops the app's job with TaskStop.
+    let mut script = running(Tools::caf([CafTool::Read]).and_app(["word_count"]));
+    let out = script.tool(
+        1,
+        called("word_count", json!({ "text": "a" }), Some("Count"), None),
+    );
+    script.policy(ticket(&out), PolicyAnswer::Allow);
+    script.tool(1, ToolEvent::Detached { job: JobId(1) });
+    let stop = |call: &str| ToolEvent::Called {
+        chat: CHAT,
+        tool: ServedTool::Caf(CafTool::TaskStop),
+        input: json!({ "task_id": call }),
+        agent_call: None,
+        title: None,
+        bad_input: None,
+    };
+    let out = script.tool(2, stop("1"));
+    // Run at once, no one asked: the driver stops the job.
+    assert_eq!(
+        one_told(&out),
+        json!({ "type": "Run", "value": {
+            "call": 2,
+            "action": { "type": "Stop", "value": { "job": 1 } },
+            "input": { "task_id": "1" },
+        } })
+    );
+    // The job ends once, stopped by the agent, and nothing's told of it.
+    let out = script.tool(1, finished(false, "stopped", None));
+    assert!(sent_prompts(&out).is_empty(), "no notice");
+    script.tool(2, finished(true, "Stopped", None));
+    let calls = tools(&script);
+    assert_has(
+        &calls[0],
+        &json!({ "status": kind("Cancelled"), "stopped_by": { "type": "Agent" }, "job": 1 }),
+    );
+    assert_eq!(calls[1]["status"], kind("Done"));
+    // Ended, it's no job: a second TaskStop of it is refused.
+    let out = script.tool(3, stop("1"));
+    assert_eq!(
+        one_told(&out),
+        json!({ "type": "Refuse", "value": { "call": 3, "why": { "type": "BadInput", "value": "No task 1 in this conversation" } } })
+    );
+}
+
+/// The prompts written to the agent in `out`.
+fn sent_prompts(out: &[Value]) -> Vec<Value> {
+    (super::harness::writes(out).into_iter())
+        .map(|(_, message)| message)
+        .filter(|message| message["method"] == "session/prompt")
+        .collect()
 }

@@ -28,9 +28,10 @@
 //!
 //! let trim = tool("trim_clip", |call, input: Trim| async move {
 //!     // Ask the app's UI thread to do it, through a handle the closure
-//!     // captured, and wait for its answer.
+//!     // captured, and await its answer: never block on it.
 //!     Done::answer(format!("Trimmed clip {} to {}s", input.clip, input.seconds))
 //! })
+//! .called("Trim a clip")
 //! .title(|input: &Trim| format!("Trim clip {}", input.clip))
 //! .describe("Trims a clip to a length in seconds.")
 //! .destructive();
@@ -75,13 +76,20 @@ pub trait AppTool<A: AppItem = NoAppItems>: Send + Sync + 'static {
     /// registered.
     fn spec(&self) -> ToolSpec;
 
-    /// A call's title in the transcript, such as "Trim clip 3".
+    /// A call's title in the transcript, such as "Trim clip 3". It's
+    /// worked out as the call comes, on CAF's own task, so it must be
+    /// cheap, and never block or wait for anything.
     fn title(&self, input: &Self::Input) -> String;
 
     /// What the call would do, without doing it, shown before anyone's
     /// asked about it (such as the change it would make), or what it
     /// ends with, failed, if it can't be done. `None` (the default) for a
     /// tool that doesn't preview: [`ToolSpec::previews`] says which.
+    ///
+    /// A preview that fails ends the call: what it ends with is the
+    /// call's, its item ([`Done::item`]) included. The future runs as a
+    /// task of its own, but `preview` itself is called on CAF's own task:
+    /// it must give its future at once, never blocking.
     fn preview(
         &self,
         call: &Call,
@@ -97,6 +105,14 @@ pub trait AppTool<A: AppItem = NoAppItems>: Send + Sync + 'static {
     /// notice, with what it ended with as its result, as the model never
     /// heard `Done`'s answer. Dropping the future cancels it: it must
     /// stop its work then.
+    ///
+    /// The future runs as a task of its own, so a slow one holds up
+    /// nothing else; but `run` itself is called on CAF's own task: it
+    /// must give its future at once, never blocking. A future should
+    /// await, not block: one that blocks a thread can't be aborted, and
+    /// when its call is stopped, the model is told it was once the
+    /// future has been dropped, or after five seconds, whichever comes
+    /// first.
     fn run(&self, call: Call, input: Self::Input) -> BoxFuture<Done<A>>;
 }
 
@@ -380,7 +396,16 @@ where
 }
 
 impl<I, F, A: AppItem> Built<I, F, A> {
-    /// Each call's title, from its input. The tool's name by default.
+    /// What it's called in general, such as "Trim a clip"
+    /// ([`ToolSpec::title`]). Its name by default.
+    #[must_use]
+    pub fn called(mut self, title: impl Into<String>) -> Self {
+        self.spec.title = title.into();
+        self
+    }
+
+    /// Each call's title, from its input, such as "Trim clip 3". The
+    /// tool's name by default. It must be cheap ([`AppTool::title`]).
     #[must_use]
     pub fn title(mut self, title: impl Fn(&I) -> String + Send + Sync + 'static) -> Self {
         self.title = Some(Box::new(title));
@@ -505,6 +530,8 @@ pub async fn try_tool<A: AppItem>(
         }),
         false => None,
     };
+    // What it printed as it previewed isn't kept, as CAF keeps none.
+    while printed.try_recv().is_ok() {}
     let done = match &preview {
         Some(Err(done)) => done.clone(),
         _ => tool.run(call, read).await,
@@ -886,6 +913,57 @@ mod tests {
         .await;
         assert!(matches!(&tried.preview, Some(Err(done)) if !done.done));
         assert_eq!(text(&tried.done.answer), "There's no clip 0");
+    }
+
+    #[test]
+    fn a_built_tool_may_be_called_something_in_general() {
+        let named = tool("trim_clip", |_call, _input: Trim| async {
+            Done::<NoAppItems>::answer("")
+        })
+        .called("Trim a clip");
+        assert_eq!(named.spec().title, "Trim a clip");
+        assert_eq!(named.spec().name, "trim_clip");
+    }
+
+    #[tokio::test]
+    async fn a_tool_tried_keeps_only_what_it_printed_as_it_ran() {
+        let tried = try_tool(
+            &Printing,
+            json!({ "clip": 1, "seconds": 1 }),
+            Path::new("/"),
+        )
+        .await;
+        assert!(tried.printed.is_empty(), "{:?}", tried.printed);
+    }
+
+    /// A tool that prints as it previews, and not as it runs.
+    struct Printing;
+
+    impl AppTool for Printing {
+        type Input = Trim;
+
+        fn spec(&self) -> ToolSpec {
+            let mut spec = ToolSpec::new("print");
+            spec.previews = true;
+            spec
+        }
+
+        fn title(&self, _input: &Trim) -> String {
+            String::new()
+        }
+
+        fn preview(
+            &self,
+            call: &Call,
+            _input: &Trim,
+        ) -> Option<BoxFuture<Result<Vec<Piece>, Done>>> {
+            call.print(0, vec!["previewing".into(), "more".into()]);
+            Some(Box::pin(async { Ok(Vec::new()) }))
+        }
+
+        fn run(&self, _call: Call, _input: Trim) -> BoxFuture<Done> {
+            Box::pin(async { Done::answer("") })
+        }
     }
 
     /// A tool of its own spec, doing nothing.

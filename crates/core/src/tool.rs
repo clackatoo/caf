@@ -264,7 +264,8 @@ pub enum ServedTool {
 /// restores the chat ([`RestoreChat::tools`](crate::RestoreChat::tools)).
 ///
 /// A chat given Bash is served TaskStop too, just after it, as Bash's
-/// background jobs need it.
+/// background jobs need it; and so is one given any of the app's tools,
+/// which may answer early and go on as jobs, after CAF's others.
 #[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -322,15 +323,18 @@ impl Tools {
         self.caf.is_empty() && self.app.is_empty()
     }
 
-    /// CAF's own tools as a chat given these is served them: each once,
-    /// in order, with TaskStop just after Bash if Bash is given and it
-    /// isn't.
-    pub(crate) fn served(tools: impl IntoIterator<Item = CafTool>) -> Vec<CafTool> {
+    /// CAF's own tools as a chat given these, and the app's if `app`, is
+    /// served them: each once, in order, with TaskStop just after Bash if
+    /// Bash is given and it isn't, or else last if the chat has the app's
+    /// tools.
+    pub(crate) fn served(tools: impl IntoIterator<Item = CafTool>, app: bool) -> Vec<CafTool> {
         let mut caf = Self::caf(tools).caf;
-        if !caf.contains(&CafTool::TaskStop)
-            && let Some(at) = caf.iter().position(|&tool| tool == CafTool::Bash)
-        {
-            caf.insert(at + 1, CafTool::TaskStop);
+        if !caf.contains(&CafTool::TaskStop) {
+            match caf.iter().position(|&tool| tool == CafTool::Bash) {
+                Some(at) => caf.insert(at + 1, CafTool::TaskStop),
+                None if app => caf.push(CafTool::TaskStop),
+                None => {}
+            }
         }
         caf
     }

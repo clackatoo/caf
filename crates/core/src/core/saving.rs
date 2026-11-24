@@ -1112,11 +1112,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
             .unwrap_or_default();
-        let caf_tools = crate::tool::Tools::served(restore.tools.caf.iter().copied());
         // Checked as the restore was asked for: nothing serves tools less.
         let app_tools = self
             .app_tools_given(restore.tools.app.clone())
             .unwrap_or_default();
+        let caf_tools =
+            crate::tool::Tools::served(restore.tools.caf.iter().copied(), !app_tools.is_empty());
         if let Ok(Some(caf)) = self.caf_server(id, &caf_tools, &app_tools) {
             mcp_sent.push(caf);
         }

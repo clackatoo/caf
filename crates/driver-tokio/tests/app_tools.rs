@@ -17,7 +17,9 @@ use caf_core::directive::PermissionRequest;
 use caf_core::event::PolicyAnswer;
 use caf_core::ids::{ChatId, JobId};
 use caf_core::mcp::Answer;
-use caf_core::tool::{CafTool, Hints, Origin, Piece, Text, ToolCall, ToolKind, ToolStatus, Tools};
+use caf_core::tool::{
+    CafTool, Hints, Origin, Piece, StoppedBy, Text, ToolCall, ToolKind, ToolStatus, Tools,
+};
 use caf_core::{OpenChat, Refused};
 use caf_driver_tokio::{
     AppTool, AppTools, BoxFuture, Caf, Call, ChatHandle, Config, Done, Error, Policy, Relay,
@@ -59,9 +61,10 @@ struct Clip {
 }
 
 /// trim_clip: previews, then trims, leaving the clip trimmed as its item.
+/// There's no clip 0: its preview fails, leaving an item all the same.
 /// Clip 7 waits until it's dropped, saying so in the test's folder; clip
-/// 9 answers early, going on as a job, until the test's `go` file is
-/// there.
+/// 8 does too, answering early, as a job; clip 9 answers early, going on
+/// as a job, until the test's `go` file is there.
 struct Trim {
     work: PathBuf,
 }
@@ -88,10 +91,15 @@ impl AppTool<Trimmed> for Trim {
         _call: &Call,
         input: &Clip,
     ) -> Option<BoxFuture<Result<Vec<Piece>, Done<Trimmed>>>> {
-        let would = format!("Would trim clip {}", input.clip);
-        Some(Box::pin(
-            async move { Ok(vec![Piece::Text(Text::new(would))]) },
-        ))
+        let clip = input.clip;
+        Some(Box::pin(async move {
+            match clip {
+                0 => Err(Done::failed("There's no clip 0").with_item(Trimmed(0))),
+                clip => Ok(vec![Piece::Text(Text::new(format!(
+                    "Would trim clip {clip}"
+                )))]),
+            }
+        }))
     }
 
     fn run(&self, mut call: Call, input: Clip) -> BoxFuture<Done<Trimmed>> {
@@ -99,6 +107,11 @@ impl AppTool<Trimmed> for Trim {
         Box::pin(async move {
             match input.clip {
                 7 => {
+                    let _dropped = Dropped(work.join("dropped"));
+                    std::future::pending::<()>().await;
+                }
+                8 => {
+                    call.answer_now(|job| Answer::text(format!("Trimming as job {}", job.0)));
                     let _dropped = Dropped(work.join("dropped"));
                     std::future::pending::<()>().await;
                 }
@@ -152,7 +165,7 @@ fn serve(steps: impl FnOnce(&Path) -> Vec<Value>) -> App {
     let work = std::fs::canonicalize(work).unwrap();
     let mut all = vec![
         json!({"mcp_start": {"discover": true, "expect": {"result": {"serverInfo": {"name": "caf"}}}, "timeout": 30000}}),
-        json!({"mcp_list": {"expect": ["Read", "trim_clip", "word_count"], "timeout": 30000}}),
+        json!({"mcp_list": {"expect": ["Read", "TaskStop", "trim_clip", "word_count"], "timeout": 30000}}),
         prompt(),
     ];
     all.extend(steps(&work));
@@ -357,14 +370,16 @@ async fn the_apps_tools_are_listed_called_and_leave_their_items() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["Read", "trim_clip", "word_count"]);
-    assert_eq!(listed[2]["description"], "Counts the words in some text.");
+    // TaskStop is served with the app's tools, so their jobs can be
+    // stopped.
+    assert_eq!(names, ["Read", "TaskStop", "trim_clip", "word_count"]);
+    assert_eq!(listed[3]["description"], "Counts the words in some text.");
     assert_eq!(
-        listed[2]["inputSchema"]["properties"]["text"]["description"],
+        listed[3]["inputSchema"]["properties"]["text"]["description"],
         "The text."
     );
-    assert_eq!(listed[2]["annotations"]["readOnlyHint"], true);
-    assert_eq!(listed[1]["annotations"]["destructiveHint"], true);
+    assert_eq!(listed[3]["annotations"]["readOnlyHint"], true);
+    assert_eq!(listed[2]["annotations"]["destructiveHint"], true);
     app.shut_down().await;
 }
 
@@ -530,4 +545,90 @@ async fn a_chat_given_an_app_tool_never_registered_is_refused() {
         other => panic!("expected UnknownTool, got {:?}", other.map(|_| ())),
     }
     app.shut_down().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_app_tools_preview_that_fails_ends_its_call_with_its_item() {
+    let mut app = serve(|_| {
+        [
+            call(
+                "trim_clip",
+                "t1",
+                json!({"clip": 0}),
+                says("There's no clip 0", true),
+            ),
+            [end_turn(), json!({"note": "turn ended"})],
+        ]
+        .concat()
+    });
+    let chat = app.chat().await;
+    let mut watch = chat.watch();
+    app.script_done().await;
+    let done = until(&chat, &mut watch, "the call ended", |chat| {
+        calls(chat).len() == 1 && ended(calls(chat)[0])
+    })
+    .await;
+    let trim = calls(&done)[0];
+    assert_eq!(trim.status, ToolStatus::Failed);
+    assert_eq!(trim.app, Some(Trimmed(0)));
+    assert!(
+        app.asked.lock().unwrap().is_empty(),
+        "the policy wasn't asked"
+    );
+    app.shut_down().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn task_stop_stops_an_app_tools_job_before_it_answers() {
+    let mut app = serve(|_| {
+        [
+            vec![
+                json!({"mcp_call": {"tool": "trim_clip", "arguments": {"clip": 8}, "tool_use_id": "t1", "report": "s1", "as": "t1"}}),
+                json!({"mcp_await": {"to": "t1", "expect": {"result": says("Trimming as job 1", false)}, "timeout": 30000}}),
+            ],
+            call("TaskStop", "s1", json!({"task_id": "1"}), says("Stopped task 1", false)).to_vec(),
+            vec![end_turn(), json!({"note": "turn ended"})],
+        ]
+        .concat()
+    });
+    let chat = app.chat().await;
+    let mut watch = chat.watch();
+    app.script_done().await;
+    let done = until(&chat, &mut watch, "both calls ended", |chat| {
+        calls(chat).len() == 2 && calls(chat).iter().all(|call| ended(call))
+    })
+    .await;
+    // Its task was stopped before TaskStop was answered.
+    assert!(app.work.join("dropped").exists(), "its task was stopped");
+    let all = calls(&done);
+    assert_eq!(
+        (all[0].status, all[0].job, all[0].stopped_by),
+        (
+            ToolStatus::Cancelled,
+            Some(JobId(1)),
+            Some(StoppedBy::Agent)
+        )
+    );
+    assert_eq!(all[1].status, ToolStatus::Done);
+    app.shut_down().await;
+    // The job's end came before the TaskStop's, and with no notice: the
+    // agent stopped it, so it isn't told it ended.
+    let finished: Vec<(u64, Value)> = (app.recorded().iter())
+        .filter(|line| line["event"]["type"] == "Tool")
+        .filter(|line| line["event"]["value"]["event"]["type"] == "Finished")
+        .map(|line| {
+            let value = &line["event"]["value"];
+            (
+                value["call"].as_u64().unwrap(),
+                value["event"]["value"]["notice"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(finished.len(), 2, "{finished:?}");
+    assert!(
+        finished[0].0 < finished[1].0,
+        "the job's first: {finished:?}"
+    );
+    assert_eq!(finished[0].1, Value::Null);
+    assert_eq!(app.prompts().len(), 1, "no notice turn");
 }

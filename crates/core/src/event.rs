@@ -142,7 +142,9 @@ pub struct Serving {
     pub key: Key,
     /// The app's own tools, as registered (`ToolsConfig::app` in the
     /// tokio kit), in order: which a chat may be given, and what the core
-    /// knows of each. Recordings made before it was added read as none.
+    /// knows of each. One whose name the app couldn't register (as
+    /// `AppTools::with` checks it) is ignored, with a warning. Recordings
+    /// made before it was added read as none.
     #[serde(default)]
     pub app_tools: Vec<AppToolSpec>,
 }
