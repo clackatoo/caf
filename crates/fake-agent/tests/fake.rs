@@ -1723,3 +1723,29 @@ fn a_servers_stderr_and_exit_are_recorded() {
     fake.close_stdin();
     assert_eq!(fake.exit().code(), Some(0));
 }
+
+#[test]
+fn a_call_to_a_server_since_replaced_fails_clearly() {
+    let steps = |step: &str| {
+        format!(
+            "{}\n{step}",
+            r#"{"mcp_start": {"timeout": 10000}}
+{"mcp_call": {"tool": "Read", "as": "a"}}
+{"mcp_start": {"timeout": 10000}}"#
+        )
+    };
+    for step in [
+        r#"{"mcp_await": {"to": "a", "timeout": 2000}}"#,
+        r#"{"mcp_progress": {"to": "a", "timeout": 2000}}"#,
+        r#"{"mcp_cancel": {"to": "a"}}"#,
+    ] {
+        let dir = Dir::new();
+        let server = mcp_server(&dir, &format!("{SERVER}\"wait_closed\""));
+        let mut fake = mcp_fake(dir, &steps(step), &server);
+        assert_eq!(
+            failure(&mut fake),
+            "the call a was to a server since replaced",
+            "{step}"
+        );
+    }
+}
