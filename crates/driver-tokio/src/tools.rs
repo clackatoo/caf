@@ -1990,6 +1990,15 @@ impl<A: AppItem> ToolsDriver<A> {
                 self.send(no, bytes);
             }
         }
+        // What one of the app's tools prints as it's being stopped comes
+        // as it would while it ran.
+        for (call, each) in &mut self.stopping {
+            if each.batch.as_ref().is_some_and(|batch| batch.due <= now)
+                && let Some(batch) = each.batch.take()
+            {
+                self.reports.push_back(output(*call, batch));
+            }
+        }
         self.wake_at_next();
         if self.sleep.as_mut().poll(cx).is_ready() {
             // It's due already: poll again at once, so it's waited for.
@@ -1999,9 +2008,12 @@ impl<A: AppItem> ToolsDriver<A> {
 
     /// Moves the sleep to the next batch or progress due.
     fn wake_at_next(&mut self) {
+        let stopping =
+            (self.stopping.values()).filter_map(|each| each.batch.as_ref().map(|b| b.due));
         let next = (self.calls.values())
             .flat_map(|each| [Some(each.progress_at), each.batch.as_ref().map(|b| b.due)])
             .flatten()
+            .chain(stopping)
             .chain(self.live.as_ref().and_then(|live| live.accept_again))
             .min()
             .unwrap_or_else(far_off);
@@ -4707,8 +4719,9 @@ mod tests {
     struct How {
         /// `title`, `preview`, `preview_poll`, `run`, `run_poll`, `drop`,
         /// `drop_cancel`, `block` (its thread, for `ms`), `block_then_print`
-        /// (the same, then printing a line), or `stuck` (its thread, for
-        /// `ms`, once started).
+        /// (the same, then printing a line), `block_print_block` (the same,
+        /// then blocking for `ms` again), or `stuck` (its thread, for `ms`,
+        /// once started).
         how: String,
         #[serde(default)]
         ms: u64,
@@ -4786,6 +4799,7 @@ mod tests {
                     }
                     "drop_cancel" => {
                         let _dropped = PanicsDropped;
+                        started.store(true, Ordering::SeqCst);
                         std::future::pending().await
                     }
                     "job_sleep" => {
@@ -4798,14 +4812,18 @@ mod tests {
                         let _dropped = SlowDropped;
                         std::future::pending().await
                     }
-                    "block" | "stuck" | "print_block" | "block_then_print" => {
+                    "block" | "stuck" | "print_block" | "block_then_print"
+                    | "block_print_block" => {
                         if input.how == "print_block" {
                             call.print(0, vec!["printed".into()]);
                         }
                         started.store(true, Ordering::SeqCst);
                         std::thread::sleep(Duration::from_millis(input.ms));
-                        if input.how == "block_then_print" {
+                        if input.how == "block_then_print" || input.how == "block_print_block" {
                             call.print(0, vec!["printed".into()]);
+                        }
+                        if input.how == "block_print_block" {
+                            std::thread::sleep(Duration::from_millis(input.ms));
                         }
                         blocked.store(true, Ordering::SeqCst);
                         Done::answer("unblocked")
@@ -4975,6 +4993,32 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn what_a_stopped_app_tool_prints_as_it_stops_comes_as_it_would_running() {
+        let (mut h, _go, started, _blocked) = misbehaving();
+        h.serve_app(CHAT, &["misbehave"]);
+        let mut client = h.bound(CHAT).await;
+        let input = json!({"how": "block_print_block", "ms": 1000});
+        let (call, _) = call_app(&mut h, &mut client, 1, "misbehave", input.clone()).await;
+        h.apply(app_directive(call, input, true));
+        while !started.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        // Stopped as it blocks, it prints a second later, and a second
+        // after that it ends: what it printed comes a batch's time after.
+        h.apply(ToolDirective::Cancel { call });
+        let report = h.report_within(Duration::from_millis(1600)).await;
+        assert_event(
+            report,
+            call,
+            |event| matches!(event, ToolEvent::Output { from: 0, lines } if *lines == ["printed"]),
+        );
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Finished { done: true, .. })
+        });
+        assert_eq!(text_of(&client.recv().await), "unblocked");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_app_call_being_stopped_as_its_chat_is_let_go_is_answered_as_it_ended() {
         // Stopped first, it's answered as cancelled.
         let (mut h, _go, _drops) = trimming();
@@ -5047,13 +5091,16 @@ mod tests {
 
     #[tokio::test]
     async fn a_stopped_app_tool_that_panics_as_its_dropped_fails_once_its_future_is_dropped() {
-        let (mut h, _go, _started, _blocked) = misbehaving();
+        let (mut h, _go, started, _blocked) = misbehaving();
         h.serve_app(CHAT, &["misbehave"]);
         let mut client = h.bound(CHAT).await;
         let input = json!({"how": "drop_cancel"});
         let (call, _) = call_app(&mut h, &mut client, 1, "misbehave", input.clone()).await;
         h.apply(app_directive(call, input, true));
-        h.quiet().await;
+        // Only once its future has been polled has it anything to drop.
+        while !started.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         h.apply(ToolDirective::Cancel { call });
         // A panic is a failure, however it came.
         assert_event(h.report().await, call, |event| {
