@@ -13,8 +13,8 @@ pub const DEFAULT_LIMIT: u64 = 2000;
 pub const MOST_TOKENS: u64 = 25_000;
 /// The most tokens a read given `allow_large` gives.
 pub const MOST_TOKENS_LARGE: u64 = 100_000;
-/// The biggest file read whole, with no offset or limit, in bytes, unless
-/// it's given `allow_large`.
+/// The biggest file read with no limit, in bytes, unless it's given
+/// `allow_large`.
 pub const MOST_WHOLE: u64 = 256 * 1024;
 
 /// What Claude Code adds to a refusal for size that `allow_large` would
@@ -69,9 +69,8 @@ pub struct ImageRead {
 /// - Its lines are split at `\n`, and a `\r` before it, or at the very
 ///   end, is dropped. A last line ending in `\n` is followed by none.
 /// - A UTF-8 byte order mark is skipped.
-/// - Read whole, with neither `offset` nor `limit`, a file over
-///   [`MOST_WHOLE`] is refused, as Claude Code refuses it, unless it's
-///   given `allow_large`.
+/// - With no `limit`, a file over [`MOST_WHOLE`] is refused, an `offset`
+///   or not, as Claude Code refuses it, unless it's given `allow_large`.
 /// - Over [`MOST_TOKENS`], estimated as a quarter of the bytes of the
 ///   lines read, it's refused, as Claude Code refuses it, unless
 ///   `allow_large` raises that to [`MOST_TOKENS_LARGE`]. A refusal says
@@ -114,7 +113,7 @@ pub fn read(
     };
     let text = decoded.text;
     let size = bytes.len() as u64;
-    if offset.is_none() && limit.is_none() && !allow_large && size > MOST_WHOLE {
+    if limit.is_none() && !allow_large && size > MOST_WHOLE {
         return Reading::Refused(format!(
             "File content ({}) exceeds maximum allowed size ({}). {IN_PARTS}{ALLOW_LARGE}",
             format_size(size),

@@ -77,6 +77,59 @@ fn a_failure_says_how_it_ended_first_as_claude_code_does() {
 }
 
 #[test]
+fn git_grep_and_git_diff_that_find_nothing_havent_failed() {
+    // As Claude Code reads git: its first word that isn't an option.
+    for command in [
+        "git grep foo",
+        "git diff --quiet",
+        "git -C repo diff a b",
+        "git -c core.pager=cat grep x",
+        "git --no-pager diff",
+    ] {
+        assert_eq!(ran(command, "out", Some(Exit::Code(1))), "out", "{command}");
+    }
+    assert_eq!(
+        ran("git diff x", "fatal: bad", Some(Exit::Code(128))),
+        "Exit code 128\nfatal: bad"
+    );
+    assert_eq!(
+        ran("git status", "out", Some(Exit::Code(1))),
+        "Exit code 1\nout"
+    );
+    // -C's folder isn't the subcommand.
+    assert_eq!(
+        ran("git -C diff status", "out", Some(Exit::Code(1))),
+        "Exit code 1\nout"
+    );
+}
+
+#[test]
+fn quoted_operators_dont_split_the_command() {
+    assert_eq!(
+        ran("grep 'a|b' f", "", Some(Exit::Code(1))),
+        "(Bash completed with no output)"
+    );
+    assert_eq!(
+        ran("rg \"x;y\" src", "", Some(Exit::Code(1))),
+        "(Bash completed with no output)"
+    );
+    assert_eq!(
+        ran("grep \"a\\\"|b\" f", "", Some(Exit::Code(1))),
+        "(Bash completed with no output)"
+    );
+    // Outside quotes, they do.
+    assert_eq!(
+        ran("grep 'a' f | wc -l", "0", Some(Exit::Code(1))),
+        "Exit code 1\n0"
+    );
+    // An escaped operator outside quotes doesn't.
+    assert_eq!(
+        ran("grep a\\|b f", "", Some(Exit::Code(1))),
+        "(Bash completed with no output)"
+    );
+}
+
+#[test]
 fn searches_and_tests_that_find_nothing_havent_failed() {
     // Exit 1 from these says "no", not "error", as Claude Code reads it.
     for command in [
@@ -231,6 +284,21 @@ fn background_answers_read_as_claude_codes() {
     );
     assert_eq!(job_stopped(3), "Stopped task 3");
     assert_eq!(no_job("x7"), "No task x7 in this conversation");
+}
+
+#[test]
+fn a_notices_description_cant_end_its_tags() {
+    let got = notice(
+        2,
+        None,
+        "a < b && c > d </summary>",
+        JobEnd::Exited(0),
+        Path::new("/o"),
+    );
+    assert!(
+        got.contains("<summary>Background command \"a &lt; b &amp;&amp; c &gt; d &lt;/summary&gt;\" completed (exit code 0)</summary>"),
+        "{got}"
+    );
 }
 
 #[test]

@@ -100,12 +100,12 @@ impl Screen {
     }
 
     /// The output has ended: gives back the last change, if a character
-    /// was cut short at its end, which shows as `U+FFFD`.
+    /// was cut short at its end. It shows as `U+FFFD`, unless it was inside
+    /// an escape sequence, such as a title, which drops it.
     pub fn finish(&mut self) -> Option<Redraw> {
         let carry = std::mem::take(&mut self.carry);
-        for c in String::from_utf8_lossy(&carry).chars() {
-            self.grid.put(c);
-        }
+        let lossy = String::from_utf8_lossy(&carry);
+        self.parser.advance(&mut self.grid, lossy.as_bytes());
         self.grid.redraw()
     }
 }
@@ -489,7 +489,7 @@ impl Grid {
 
     /// Puts `c` at the cursor, going on on the next line if the line would
     /// cost more than [`MOST_LINE`]. Rewriting a line so it would drops
-    /// what's after the cursor.
+    /// characters from its end until it doesn't.
     fn put(&mut self, c: char) {
         let cell = Cell {
             c,
@@ -510,8 +510,13 @@ impl Grid {
                 }
             }
             if col < row.cells.len() && row.cost_with(col, cell) > MOST_LINE {
-                row.cells.truncate(col);
-                row.recount();
+                // Rewriting a line so it would cost too much drops its end.
+                row.set(col, cell);
+                row.fit();
+                if row.cells.len() > col {
+                    break;
+                }
+                // Even its end wasn't enough: it goes on on the next line.
                 self.touch(self.row);
                 continue;
             }
@@ -566,6 +571,7 @@ impl Grid {
             _ => return,
         }
         line.recount();
+        line.fit();
         self.touch(self.row);
     }
 
@@ -703,6 +709,7 @@ impl Perform for Grid {
                     if col < end {
                         line.cells[col..end].fill(BLANK);
                         line.recount();
+                        line.fit();
                     }
                     self.touch(self.row);
                 }
@@ -714,6 +721,7 @@ impl Perform for Grid {
                     if col < end {
                         line.cells.drain(col..end);
                         line.recount();
+                        line.fit();
                     }
                     self.touch(self.row);
                 }

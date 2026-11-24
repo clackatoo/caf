@@ -79,8 +79,9 @@ pub fn too_large(text: &str) -> bool {
 ///   (`None`), as much of its start as fits.
 /// - **A command that failed** starts with how it ended: `Exit code {n}`,
 ///   or `Killed by signal {n}`. Exit 1 from `grep`, `rg`, `egrep`,
-///   `fgrep`, `find`, `diff`, `test` or `[`, the last command in the line,
-///   isn't a failure: it says "no", as Claude Code reads it.
+///   `fgrep`, `find`, `diff`, `test`, `[`, `git grep` or `git diff`, the
+///   last command in the line (quotes kept whole), isn't a failure: it
+///   says "no", as Claude Code reads it.
 /// - **A command `stopped`** ends with Claude Code's abort error instead,
 ///   whatever its exit.
 /// - **If the user can watch it somewhere,** its `place`, the answer
@@ -137,18 +138,63 @@ pub fn answer(
     parts.join("\n")
 }
 
-/// Whether `command` exiting with `code` failed, as Claude Code reads it.
+/// Whether `command` exiting with `code` failed, as Claude Code reads it:
+/// by the last command in the line, and, for git, its subcommand.
 fn failed(command: &str, code: i32) -> bool {
-    let last = command
-        .split(['|', '&', ';', '\n'])
-        .map(str::trim)
-        .rfind(|part| !part.is_empty())
-        .unwrap_or("");
-    let name = last.split_whitespace().next().unwrap_or("");
-    match name {
-        "grep" | "rg" | "egrep" | "fgrep" | "find" | "diff" | "test" | "[" => code >= 2,
-        _ => code != 0,
+    let words: Vec<&str> = last_command(command).split_whitespace().collect();
+    let says_no = match words.first().copied().unwrap_or("") {
+        "grep" | "rg" | "egrep" | "fgrep" | "find" | "diff" | "test" | "[" => true,
+        "git" => matches!(git_subcommand(&words), Some("diff" | "grep")),
+        _ => false,
+    };
+    if says_no { code >= 2 } else { code != 0 }
+}
+
+/// The last command in `command`'s line: after its last `|`, `&`, `;` or
+/// line end outside quotes, and not escaped.
+fn last_command(command: &str) -> &str {
+    let (mut single, mut double, mut escaped) = (false, false, false);
+    let mut start = 0;
+    let mut last = "";
+    for (at, c) in command.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' if !single => escaped = true,
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '|' | '&' | ';' | '\n' if !single && !double => {
+                if !command[start..at].trim().is_empty() {
+                    last = &command[start..at];
+                }
+                start = at + 1;
+            }
+            _ => {}
+        }
     }
+    if command[start..].trim().is_empty() {
+        last
+    } else {
+        &command[start..]
+    }
+}
+
+/// git's subcommand in `words`, a git command's: its first word that isn't
+/// an option, past `-C` and `-c`'s values.
+fn git_subcommand<'a>(words: &[&'a str]) -> Option<&'a str> {
+    let mut words = words.iter().skip(1);
+    while let Some(word) = words.next() {
+        if word.starts_with('-') {
+            if matches!(*word, "-C" | "-c") {
+                words.next();
+            }
+            continue;
+        }
+        return Some(word);
+    }
+    None
 }
 
 /// The start of `text`, at most `most` characters, cut at the last line
@@ -263,10 +309,18 @@ pub fn notice(
         out.push_str(&format!("\n<tool-use-id>{tool_use}</tool-use-id>"));
     }
     out.push_str(&format!(
-        "\n<output-file>{}</output-file>\n<status>{status}</status>\n<summary>Background command \"{description}\" {how}</summary>\n</task-notification>",
-        path.display()
+        "\n<output-file>{}</output-file>\n<status>{status}</status>\n<summary>Background command \"{}\" {how}</summary>\n</task-notification>",
+        path.display(),
+        escape(description)
     ));
     out
+}
+
+/// `text` with `&`, `<` and `>` escaped, so it can't end the tags it's in.
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[cfg(test)]

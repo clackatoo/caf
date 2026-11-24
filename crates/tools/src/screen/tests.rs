@@ -291,6 +291,37 @@ fn a_long_coloured_line_is_broken_into_lines_each_coloured_on_its_own() {
     assert_eq!(text, "x".repeat(MOST_LINE));
 }
 
+/// A line of red `x`s whose rendered bytes are exactly [`MOST_LINE`]:
+/// its code, the `x`s, and the reset.
+fn full_red_line() -> Vec<u8> {
+    let count = MOST_LINE - "\x1b[0;31m".len() - "\x1b[0m".len();
+    format!("\x1b[31m{}\x1b[0m", "x".repeat(count)).into_bytes()
+}
+
+#[test]
+fn erasing_characters_in_a_full_line_keeps_it_within_the_cap() {
+    // A blank in a red line costs a reset and the red again.
+    let mut input = full_red_line();
+    input.extend_from_slice(b"\x1b[100G\x1b[3X");
+    let out = lines(&input);
+    assert_eq!(out.len(), 1);
+    assert!(out[0].len() <= MOST_LINE, "{} bytes", out[0].len());
+    assert!(strip_sgr(&out[0]).starts_with(&format!("{}   x", "x".repeat(99))));
+}
+
+#[test]
+fn rewriting_a_character_of_a_full_line_drops_only_from_its_end() {
+    // A blue x among red ones costs two codes more: the line's end goes,
+    // not everything after the cursor.
+    let mut input = full_red_line();
+    input.extend_from_slice(b"\x1b[100G\x1b[34mB\x1b[0m");
+    let out = lines(&input);
+    assert_eq!(out.len(), 1, "nothing goes on to the next line");
+    assert!(out[0].len() <= MOST_LINE);
+    let text = strip_sgr(&out[0]);
+    assert!(text.starts_with(&format!("{}B{}", "x".repeat(99), "x".repeat(1000))));
+}
+
 #[test]
 fn reverse_index_at_the_top_scrolls_down() {
     assert_eq!(lines(b"top\x1b[H\x1bMnew\n"), ["new", "top"]);
@@ -304,6 +335,18 @@ fn reverse_index_at_the_top_scrolls_down() {
     assert_eq!(out[1], "x");
     assert_eq!(out[2], "1");
     assert_eq!(out.len(), ROWS + 1);
+}
+
+#[test]
+fn finishing_inside_an_escape_shows_nothing() {
+    // The part of a character is the title's, which is dropped.
+    let mut screen = Screen::new();
+    let mut all = Vec::new();
+    apply(&mut all, screen.feed(b"ok\x1b]0;title\xE2\x82").unwrap());
+    if let Some(redraw) = screen.finish() {
+        apply(&mut all, redraw);
+    }
+    assert_eq!(all, ["ok"]);
 }
 
 #[test]
@@ -438,8 +481,9 @@ proptest! {
             // Bounded: the window, and its lines.
             prop_assert!(screen.grid.rows.len() <= ROWS);
             for row in &screen.grid.rows {
-                prop_assert_eq!(row.cost, render(&row.cells).len(), "a row's cost is its bytes");
-                prop_assert!(row.cost <= MOST_LINE);
+                let rendered = render(&row.cells).len();
+                prop_assert_eq!(row.cost, rendered, "a row's cost is its bytes");
+                prop_assert!(rendered <= MOST_LINE);
             }
             prop_assert!(screen.grid.scrolled.is_empty());
             prop_assert!(screen.grid.row < ROWS);
@@ -455,6 +499,34 @@ proptest! {
             // And starts from it: its first code sets everything.
             if let Some(first) = line.find('\x1b') {
                 prop_assert!(line[first..].starts_with("\x1b[0"), "{line:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn editing_a_full_line_never_takes_it_past_the_cap(
+        edits in prop::collection::vec(
+            (
+                1usize..MOST_LINE,
+                0u16..40,
+                prop::sample::select(vec!["X", "P", "@", "K", "1K", "2K"]),
+                0u8..8,
+            ),
+            1..12,
+        ),
+    ) {
+        let mut screen = Screen::new();
+        screen.feed(&full_red_line());
+        for (col, n, action, color) in edits {
+            let edit = format!("\x1b[{col}G\x1b[3{color}m\x1b[{n}{action}");
+            // The action, then a character at the cursor: each on its own.
+            for part in [edit.as_str(), "y\x1b[0m"] {
+                screen.feed(part.as_bytes());
+                for row in &screen.grid.rows {
+                    let rendered = render(&row.cells).len();
+                    prop_assert_eq!(row.cost, rendered);
+                    prop_assert!(rendered <= MOST_LINE, "{} bytes after {:?}", rendered, part);
+                }
             }
         }
     }

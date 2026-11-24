@@ -163,9 +163,10 @@ fn a_file_over_256_kb_read_whole_is_refused_as_claude_code_does() {
         read(Path::new("big"), file.as_bytes(), Some(1), Some(10), false),
         Reading::Text(_)
     ));
+    // An offset with no limit is still capped, as Claude Code caps it.
     assert!(matches!(
         read(Path::new("big"), file.as_bytes(), Some(5), None, false),
-        Reading::Text(_)
+        Reading::Refused(why) if why.starts_with("File content (293KB) exceeds maximum allowed size")
     ));
     // Given allow_large, only the token cap counts.
     assert!(matches!(
