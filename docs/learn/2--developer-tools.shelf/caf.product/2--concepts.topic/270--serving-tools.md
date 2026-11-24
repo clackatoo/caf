@@ -59,15 +59,15 @@ config.tools.relay = Relay::ThisProgram;
 
 With `ThisProgram` or `Command`, CAF checks the relay as it starts, by
 running it once and checking its answer. If your `main` doesn't call
-`relay_if_asked`, starting CAF fails at once, with an error that says to
-add it, rather than every chat's tools failing later.
+`relay_if_asked`, `Caf::start` panics, with a message that says to add
+it, rather than every chat's tools failing later. So does anything else
+that keeps CAF from serving, such as a socket path that's too long.
 
 CAF listens on a socket in `$XDG_RUNTIME_DIR/caf`, or a folder of its own
 in the temp folder if there's no runtime folder, readable only by the user
 (`ToolsConfig::folder` says another). The socket is named after your program
 and its process, and removed when CAF shuts down. A socket's path is
-limited to about 108 bytes; a longer one fails starting CAF, naming the
-path.
+limited to about 108 bytes; the panic for a longer one names the path.
 
 ## Choosing a chat's tools
 
