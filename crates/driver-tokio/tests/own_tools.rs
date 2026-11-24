@@ -446,7 +446,7 @@ async fn a_command_past_its_timeout_goes_on_in_the_background() {
 async fn an_output_too_large_to_answer_is_saved_whole_and_the_model_given_its_start() {
     let own = serve(|_| {
         [
-            vec![json!({"mcp_call": {"tool": "Bash", "arguments": {"command": "seq 1 40000"}, "tool_use_id": "b1", "report": "s1", "as": "b1"}})],
+            vec![json!({"mcp_call": {"tool": "Bash", "arguments": {"command": "seq 1 100000"}, "tool_use_id": "b1", "report": "s1", "as": "b1"}})],
             vec![json!({"mcp_await": {"to": "b1", "expect": {"result": {"isError": false}}, "timeout": 30000}})],
             vec![end_turn()],
         ]
@@ -461,7 +461,7 @@ async fn an_output_too_large_to_answer_is_saved_whole_and_the_model_given_its_st
     .await;
     let saved = own.saved();
     assert_eq!(saved.len(), 1);
-    let expected: String = (1..=40000).map(|n| format!("{n}\n")).collect();
+    let expected: String = (1..=100000).map(|n| format!("{n}\n")).collect();
     assert_eq!(saved[0].1, expected);
     own.shut_down().await;
 }
@@ -605,4 +605,38 @@ async fn a_chat_runs_at_most_eight_jobs_and_closing_it_stops_them() {
     let out = own.out();
     own.shut_down().await;
     assert!(!out.exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_progress_bar_is_recorded_as_its_last_drawing() {
+    let own = serve(|_| {
+        let command = "echo start; for n in 10 50 100; do printf '\\r\\033[32m%s%%\\033[0m' $n; sleep 0.05; done; echo";
+        [
+            call(
+                "Bash",
+                "b1",
+                json!({"command": command}),
+                says("start\n100%", false),
+            )
+            .to_vec(),
+            vec![end_turn()],
+        ]
+        .concat()
+    });
+    let chat = own.chat().await;
+    let mut watch = chat.watch();
+    own.script_done().await;
+    let done = until(&chat, &mut watch, "the call ended", |chat| {
+        calls(chat).first().is_some_and(|call| ended(call))
+    })
+    .await;
+    let output = (calls(&done)[0].result.iter())
+        .find_map(|piece| match piece {
+            Piece::Output(output) => Some(output.clone()),
+            _ => None,
+        })
+        .unwrap();
+    // Its colours are kept for the user; the model has none.
+    assert_eq!(output.lines, ["start", "\u{1b}[0;32m100%\u{1b}[0m"]);
+    own.shut_down().await;
 }
