@@ -560,7 +560,8 @@ export const sample541: T.Event = {
             "instructions": null,
             "settings": [],
             "tools": {
-              "caf": []
+              "caf": [],
+              "app": []
             }
           }
         }

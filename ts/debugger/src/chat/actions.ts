@@ -177,7 +177,7 @@ function refused(error: unknown, why: Refused['type']): boolean {
  * giving it `tools` of CAF's own: none, `[]`, says so outright.
  */
 export function newChat(agent: AgentName, cwd: string, tools: readonly CafTool[]): OpenRequest {
-  return { agent, cwd, session: { type: 'New' }, tools: { caf: [...tools] } }
+  return { agent, cwd, session: { type: 'New' }, tools: { caf: [...tools], app: [] } }
 }
 
 /**

@@ -74,8 +74,8 @@ describe('the chat list', () => {
       await waitFor(() => expect(screen.queryByRole('button', { name: 'Open' })).toBeNull())
     }
     expect(asked).toEqual([
-      { agent: 'claude', cwd: '/home/me/new', session: { type: 'New' }, tools: { caf: all } },
-      { agent: 'claude', cwd: '/home/me/new', session: { type: 'New' }, tools: { caf: [] } },
+      { agent: 'claude', cwd: '/home/me/new', session: { type: 'New' }, tools: { caf: all, app: [] } },
+      { agent: 'claude', cwd: '/home/me/new', session: { type: 'New' }, tools: { caf: [], app: [] } },
     ])
   })
 

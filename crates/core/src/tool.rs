@@ -201,12 +201,6 @@ pub struct Hints {
     pub kind: ToolKind,
 }
 
-impl Default for ToolKind {
-    fn default() -> Self {
-        ToolKind::Other
-    }
-}
-
 /// One of the app's own tools, as the core knows it: everything about it
 /// but its input's type, which only the app's code knows. The tools
 /// driver gives the core these as it starts
@@ -323,7 +317,7 @@ impl Tools {
 /// What kind of tool a call is, for an icon and for counting ("Read 3
 /// files").
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum ToolKind {
@@ -344,6 +338,7 @@ pub enum ToolKind {
     /// Fetching from the web.
     Fetch,
     /// Anything else.
+    #[default]
     Other,
 }
 
