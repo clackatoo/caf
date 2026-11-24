@@ -95,15 +95,26 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return;
         }
         // A saved chat's journal has every change, as the store's copy is
-        // built from them too; a turn ending saves it at once.
+        // built from them too; a turn ending saves it at once, and so does
+        // a call ending in a turn that has ended already (one stopped with
+        // it, or a job), as the agent may have been told how it went.
         if let Some(kept) = self.saving.kept.get_mut(&chat) {
-            if let Change::TurnLife { life, .. } = &change
-                && !matches!(
+            let ended = |life: &TurnLife| {
+                !matches!(
                     life,
                     TurnLife::Waiting | TurnLife::Running | TurnLife::Stopping
                 )
-            {
-                kept.urgent = true;
+            };
+            match &change {
+                Change::TurnLife { life, .. } if ended(life) => kept.urgent = true,
+                Change::ToolChanged { item, tool } if tool.status.ended() => {
+                    let turn = (whole.turns.iter().rev())
+                        .find(|turn| turn.items.iter().any(|each| each.id == *item));
+                    if turn.is_some_and(|turn| ended(&turn.life)) {
+                        kept.urgent = true;
+                    }
+                }
+                _ => {}
             }
             kept.add_with(|| crate::save::Entry::Change(change.clone()));
             if let Change::OutputChanged { item, .. } = &change {

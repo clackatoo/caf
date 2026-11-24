@@ -3667,3 +3667,91 @@ fn a_chat_with_an_app_tools_call_is_saved_and_restored_given_them_again() {
         } } }),
     );
 }
+
+#[test]
+fn a_call_that_ends_after_its_turn_did_is_written_at_once() {
+    use crate::event::{PolicyAnswer, ToolEvent};
+    use crate::ids::JobId;
+    use crate::tool::{CafTool, ServedTool};
+
+    let bash = |input: Value| ToolEvent::Called {
+        chat: CHAT,
+        tool: ServedTool::Caf(CafTool::Bash),
+        input,
+        agent_call: None,
+        title: None,
+        bad_input: None,
+    };
+    let mut script = Script::new(host());
+    let mut store = Store::default();
+    script.open_saved_serving("claude");
+    store.take(&script.list_saved(SHELF).1);
+    script.serve(&mut store, false);
+    script.at(1000);
+    store.take(&script.woken());
+    script.serve(&mut store, false);
+    let out = script.send(CHAT, "Build it").1;
+    let prompt = sent(&out, "session/prompt")["id"].as_u64().expect("an id");
+    // One call goes on as a job, and one is stopped with its turn.
+    let out = script.tool(
+        1,
+        bash(json!({ "command": "make", "run_in_background": true })),
+    );
+    script.policy(
+        with(&out, "decide")[0]["decide"]
+            .as_u64()
+            .expect("a ticket"),
+        PolicyAnswer::Allow,
+    );
+    script.tool(1, ToolEvent::Detached { job: JobId(1) });
+    let out = script.tool(2, bash(json!({ "command": "cargo build" })));
+    script.policy(
+        with(&out, "decide")[0]["decide"]
+            .as_u64()
+            .expect("a ticket"),
+        PolicyAnswer::Allow,
+    );
+    script.stop(CHAT).0.expect("stopping");
+    script.at(2000);
+    store.take(&script.answers(PROC, prompt, &json!({ "stopReason": "cancelled" })));
+    script.serve(&mut store, false);
+
+    // Its end, after the model was told, is written as the call ends:
+    // restored from before it, it would be Cancelled.
+    script.at(3000);
+    let out = script.tool(
+        2,
+        ToolEvent::Finished {
+            done: true,
+            pieces: Vec::new(),
+            folder: None,
+            notice: None,
+            item: None,
+        },
+    );
+    let append = one_storage(&out);
+    assert!(
+        append.to_string().contains(r#""status":{"type":"Done"}"#),
+        "{append:#}"
+    );
+    store.take(&out);
+    script.serve(&mut store, false);
+
+    // So is a job's.
+    script.at(4000);
+    let out = script.tool(
+        1,
+        ToolEvent::Finished {
+            done: true,
+            pieces: Vec::new(),
+            folder: None,
+            notice: Some("<task-notification>…</task-notification>".to_owned()),
+            item: None,
+        },
+    );
+    let append = one_storage(&out);
+    assert!(
+        append.to_string().contains(r#""status":{"type":"Done"}"#),
+        "{append:#}"
+    );
+}
