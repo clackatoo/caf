@@ -368,7 +368,10 @@ pub enum AnswerPart {
 
 /// The tool definitions `tools/list` gives, for `tools`, in their order.
 /// Each has:
-/// - its name, title and description (at most 4096 characters);
+/// - its name, title and description (at most 4096 characters): Claude
+///   Code's own, as the model is trained on them, adapted where CAF's
+///   tools differ (Bash points only to the tools given, and never to
+///   Glob or Grep);
 /// - its input schema: Claude Code's own for its tool of that name, as the
 ///   model is trained on it, less the fields CAF doesn't read (a call may
 ///   still send those, and they're ignored);
@@ -377,25 +380,24 @@ pub enum AnswerPart {
 ///   once rather than searching for it.
 #[must_use]
 pub fn tool_list(tools: &[CafTool]) -> Value {
-    Value::Array(tools.iter().map(|&tool| definition(tool)).collect())
+    Value::Array(tools.iter().map(|&tool| definition(tool, tools)).collect())
 }
 
-/// One tool's definition, for [`tool_list`]. The descriptions are short
-/// placeholders, until the tools are built.
-fn definition(tool: CafTool) -> Value {
+/// One tool's definition, for [`tool_list`], in a list of `tools`: what
+/// Bash points the model to depends on which others it has.
+fn definition(tool: CafTool, tools: &[CafTool]) -> Value {
     let text = |description: &str| json!({ "type": "string", "description": description });
     let whole = |description: &str, minimum: u64| json!({ "type": "integer", "minimum": minimum, "description": description });
     let flag = |description: &str| json!({ "type": "boolean", "description": description });
     let (title, description, properties, required, read_only, open_world) = match tool {
         CafTool::Read => (
             "Read file",
-            "Reads a file from the local filesystem. `file_path` is absolute. By default it \
-             reads the whole file; `offset` (the line to start at) and `limit` (how many \
-             lines) read part of a long one. Lines come back numbered from 1.",
+            READ.to_owned(),
             json!({
-                "file_path": text("The absolute path of the file to read"),
-                "offset": whole("The line number to start reading from", 0),
-                "limit": whole("The number of lines to read", 1),
+                "file_path": text("The absolute path to the file to read"),
+                "offset": whole("The line number to start reading from. Only provide if the file is too large to read at once", 0),
+                "limit": whole("The number of lines to read. Only provide if the file is too large to read at once.", 1),
+                "allow_large": flag("Set to true to read a text file, or a line range of one, that is over the usual size limits, up to what still fits in your context. Only use this when you genuinely need all of it or the user asked for the whole file; otherwise read it in parts with offset and limit."),
             }),
             vec!["file_path"],
             true,
@@ -403,14 +405,12 @@ fn definition(tool: CafTool) -> Value {
         ),
         CafTool::Edit => (
             "Edit file",
-            "Replaces exact text in a file. `old_string` must be found in the file exactly, \
-             and only once, unless `replace_all` is true, which replaces every occurrence. \
-             Read the file first.",
+            EDIT.to_owned(),
             json!({
-                "file_path": text("The absolute path of the file to change"),
+                "file_path": text("The absolute path to the file to modify"),
                 "old_string": text("The text to replace"),
-                "new_string": text("The text to replace it with (must differ from old_string)"),
-                "replace_all": flag("Replace every occurrence of old_string (default false)"),
+                "new_string": text("The text to replace it with (must be different from old_string)"),
+                "replace_all": flag("Replace all occurrences of old_string (default false)"),
             }),
             vec!["file_path", "old_string", "new_string"],
             false,
@@ -418,11 +418,10 @@ fn definition(tool: CafTool) -> Value {
         ),
         CafTool::Write => (
             "Write file",
-            "Writes a whole file, making it if it isn't there, and replacing what was there \
-             if it is. Read an existing file first. Prefer Edit for changing part of a file.",
+            WRITE.to_owned(),
             json!({
-                "file_path": text("The absolute path of the file to write"),
-                "content": text("What to write to the file"),
+                "file_path": text("The absolute path to the file to write (must be absolute, not relative)"),
+                "content": text("The content to write to the file"),
             }),
             vec!["file_path", "content"],
             false,
@@ -430,14 +429,12 @@ fn definition(tool: CafTool) -> Value {
         ),
         CafTool::Bash => (
             "Run command",
-            "Runs a shell command in the chat's folder, and gives back its output. \
-             `timeout` is in milliseconds. `run_in_background` starts it and returns at \
-             once. Give a short `description` of what it does.",
+            bash(tools),
             json!({
-                "command": text("The command to run"),
-                "timeout": whole("How long it may run, in milliseconds", 0),
-                "description": text("What the command does, in a few words"),
-                "run_in_background": flag("Run it in the background, returning at once"),
+                "command": text("The command to execute"),
+                "timeout": whole("Optional timeout in milliseconds (max 600000)", 0),
+                "description": text("Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does."),
+                "run_in_background": flag("Set to true to run this command in the background. You'll be notified when it finishes."),
             }),
             vec!["command"],
             false,
@@ -445,9 +442,7 @@ fn definition(tool: CafTool) -> Value {
         ),
         CafTool::TaskStop => (
             "Stop Task",
-            "\n- Stops a running background task by its ID\n- Takes a task_id parameter \
-             identifying the task to stop\n- Returns a success or failure status\n- Use this \
-             tool when you need to terminate a long-running task\n",
+            TASK_STOP.to_owned(),
             json!({
                 "task_id": text("The ID of the background task to stop"),
                 "shell_id": text("Deprecated: use task_id instead"),
@@ -474,6 +469,118 @@ fn definition(tool: CafTool) -> Value {
         },
         "_meta": { "anthropic/alwaysLoad": true },
     })
+}
+
+/// Read's description: Claude Code 2.1's own, short form, but for PDFs,
+/// which CAF doesn't read yet, and notebooks, which it reads as their
+/// JSON.
+const READ: &str = "Reads a file from the local filesystem.
+- `file_path` must be an absolute path.
+- Reads up to 2000 lines by default.
+- When you already know which part of the file you need, only read that part. This can be important for larger files.
+- Results are returned using cat -n format, with line numbers starting at 1
+- Reads images (PNG, JPG, \u{2026}) and presents them visually. Reads Jupyter notebooks (.ipynb) as their JSON.
+- Reading a directory, a missing file, or an empty file returns an error or system reminder rather than content.";
+
+/// Edit's description: Claude Code 2.1's own, short form.
+const EDIT: &str = "Performs exact string replacement in a file.
+- You must Read the file in this conversation before editing, or the call will fail.
+- `old_string` must match the file exactly, including indentation, and be unique \u{2014} the edit fails otherwise. Strip the Read line prefix (line number + tab) before matching.
+- `replace_all: true` replaces every occurrence instead.";
+
+/// Write's description: Claude Code 2.1's own, short form.
+const WRITE: &str = "Writes a file to the local filesystem, overwriting if one exists.
+When to use: creating a new file, or fully replacing one you've already Read. Overwriting an existing file you haven't Read will fail. For partial changes, use Edit instead.";
+
+/// TaskStop's description: Claude Code 2.1's own, less what it says of
+/// agent teams, which CAF hasn't.
+const TASK_STOP: &str = "
+- Stops a running background task by its ID
+- Takes a task_id parameter identifying the task to stop
+- Returns a success or failure status
+- Use this tool when you need to terminate a long-running task
+";
+
+/// Bash's description, given `tools`: Claude Code 2.1's own, adapted. It
+/// points to Read, Edit and Write only if they're given, and never to
+/// Glob and Grep, which CAF hasn't; a command still running at its
+/// timeout goes on in the background, as Claude Code's does; and its
+/// background commands are stopped with TaskStop.
+fn bash(tools: &[CafTool]) -> String {
+    let mut out = String::from(
+        "Executes a given bash command and returns its output.\n\n\
+         The working directory persists between commands, but shell state does not.\n",
+    );
+    let dedicated: Vec<&str> = [
+        (CafTool::Read, "Read files: Use Read (NOT cat/head/tail)"),
+        (CafTool::Edit, "Edit files: Use Edit (NOT sed/awk)"),
+        (
+            CafTool::Write,
+            "Write files: Use Write (NOT echo >/cat <<EOF)",
+        ),
+    ]
+    .into_iter()
+    .filter(|(tool, _)| tools.contains(tool))
+    .map(|(_, line)| line)
+    .collect();
+    if !dedicated.is_empty() {
+        out.push_str(
+            "\nIMPORTANT: Avoid using this tool to run `cat`, `head`, `tail`, `sed`, `awk`, or \
+             `echo` commands, unless explicitly instructed or after you have verified that a \
+             dedicated tool cannot accomplish your task. Instead, use the appropriate dedicated \
+             tool as this will provide a much better experience for the user:\n\n",
+        );
+        for line in dedicated {
+            out.push_str(&format!(" - {line}\n"));
+        }
+        out.push_str(
+            " - Communication: Output text directly (NOT echo/printf)\n\
+             While the Bash tool can do similar things, it\u{2019}s better to use the built-in \
+             tools as they provide a better user experience and make it easier to review tool \
+             calls and give permission.\n",
+        );
+    }
+    out.push_str(
+        "\n# Instructions\n\
+         \x20- If your command will create new directories or files, first use this tool to run \
+         `ls` to verify the parent directory exists and is the correct location.\n\
+         \x20- Always quote file paths that contain spaces with double quotes in your command \
+         (e.g., cd \"path with spaces/file.txt\")\n\
+         \x20- Try to maintain your current working directory throughout the session by using \
+         absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly \
+         requests it.\n\
+         \x20- You may specify an optional timeout in milliseconds (up to 600000ms / 10 \
+         minutes). By default, your command will timeout after 120000ms (2 minutes). A command \
+         still running at its timeout isn't stopped: it continues in the background, and you'll \
+         be notified when it finishes.\n\
+         \x20- You can use the `run_in_background` parameter to run the command in the \
+         background. Only use this if you don't need the result immediately and are OK being \
+         notified when the command completes later. You do not need to check the output right \
+         away - you'll be notified when it finishes. You do not need to use '&' at the end of \
+         the command when using this parameter.",
+    );
+    if tools.contains(&CafTool::TaskStop) {
+        out.push_str(" To stop a background command, use TaskStop with its ID.");
+    }
+    out.push_str(
+        "\n\
+         \x20- For git commands:\n\
+         \x20 - Prefer to create a new commit rather than amending an existing commit.\n\
+         \x20 - Before running destructive operations (e.g., git reset --hard, git push --force, \
+         git checkout --), consider whether there is a safer alternative that achieves the same \
+         goal. Only use destructive operations when they are truly the best approach.\n\
+         \x20 - Never skip hooks (--no-verify) or bypass signing (--no-gpg-sign, -c \
+         commit.gpgsign=false) unless the user has explicitly asked for it. If a hook fails, \
+         investigate and fix the underlying issue.\n\
+         \x20- Avoid unnecessary `sleep` commands:\n\
+         \x20 - Do not sleep between commands that can run immediately \u{2014} just run them.\n\
+         \x20 - If your command is long running and you would like to be notified when it \
+         finishes \u{2014} use `run_in_background`. No sleep needed.\n\
+         \x20 - Do not retry failing commands in a sleep loop \u{2014} diagnose the root cause.\n\
+         \x20 - If waiting for a background task you started with `run_in_background`, you will \
+         be notified when it completes \u{2014} do not poll.",
+    );
+    out
 }
 
 /// The per-run key, 32 bytes, that each chat's [`token`] is made with.
@@ -683,6 +790,25 @@ mod tests {
     }
 
     #[test]
+    fn bash_points_only_to_the_tools_given() {
+        let bash = |tools: &[CafTool]| {
+            let list = tool_list(tools);
+            let bash = (list.as_array().expect("a list").iter())
+                .find(|tool| tool["name"] == "Bash")
+                .expect("Bash");
+            bash["description"].as_str().expect("text").to_owned()
+        };
+        let all = bash(&CafTool::ALL);
+        assert!(all.contains("Read files: Use Read") && all.contains("use TaskStop"));
+        assert!(!all.contains("Glob") && !all.contains("Grep"));
+        assert!(all.contains("Never skip hooks"), "the git rules stay");
+        let alone = bash(&[CafTool::Bash]);
+        assert!(!alone.contains("IMPORTANT") && !alone.contains("TaskStop"));
+        let some = bash(&[CafTool::Bash, CafTool::Edit]);
+        assert!(some.contains("Use Edit") && !some.contains("Use Read"));
+    }
+
+    #[test]
     fn tool_definitions_are_claude_codes_with_their_hints() {
         let list = tool_list(&CafTool::ALL);
         let tools = list.as_array().expect("a list");
@@ -710,7 +836,7 @@ mod tests {
             fields.sort();
             fields
         };
-        assert_eq!(fields(0), ["file_path", "limit", "offset"]);
+        assert_eq!(fields(0), ["allow_large", "file_path", "limit", "offset"]);
         assert_eq!(
             fields(1),
             ["file_path", "new_string", "old_string", "replace_all"]
@@ -720,6 +846,7 @@ mod tests {
             fields(3),
             ["command", "description", "run_in_background", "timeout"]
         );
+        assert_eq!(fields(4), ["shell_id", "task_id"]);
     }
 
     #[test]

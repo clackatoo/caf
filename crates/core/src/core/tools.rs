@@ -1350,6 +1350,7 @@ pub(super) fn action_of(
             let path = path()?;
             let offset = number("offset")?;
             let limit = number("limit")?;
+            flag("allow_large")?;
             if limit == Some(0) {
                 return Err("`limit` must be 1 or more.".to_owned());
             }
