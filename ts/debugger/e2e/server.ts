@@ -4,7 +4,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { test as base } from '@playwright/test'
 
 const repo = resolve(import.meta.dirname, '../../..')
@@ -42,6 +42,12 @@ export interface Setup {
    * left off, with its saved chats. A new one of its own by default.
    */
   state?: string
+  /**
+   * Files to write in the test's folder before it starts, by their paths
+   * in it, with `{state}` in their text as the folder: such as a script
+   * of the fake agent's own, for `agents` to name as `{state}/script.jsonl`.
+   */
+  files?: Record<string, string>
 }
 
 /** Starts caf-debugger with `args`; resolves once it says where it is. */
@@ -63,6 +69,10 @@ export function start(args: string[], setup: Setup = {}): Promise<Server & { pro
   if (setup.agents !== undefined) {
     writeFileSync(join(state, 'agents.toml'), fill(setup.agents))
     extra.push('--agents', join(state, 'agents.toml'))
+  }
+  for (const [path, text] of Object.entries(setup.files ?? {})) {
+    mkdirSync(dirname(join(state, path)), { recursive: true })
+    writeFileSync(join(state, path), fill(text))
   }
   const auth = join(state, 'auth.json')
   if (setup.auth !== undefined) writeFileSync(auth, fill(JSON.stringify(setup.auth)))
