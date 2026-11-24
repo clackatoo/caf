@@ -301,6 +301,28 @@ pub struct Call {
 type Jobs = Arc<Mutex<HashMap<ChatId, u64>>>;
 
 impl Call {
+    /// Call `id` in `chat`, telling `prints` what it prints, with job
+    /// numbers of its own: for [`try_tool`](crate::try_tool).
+    pub(crate) fn new(
+        chat: ChatId,
+        id: CallId,
+        cwd: PathBuf,
+        input: serde_json::Value,
+        agent_call: Option<String>,
+        prints: mpsc::UnboundedSender<Print>,
+    ) -> Self {
+        Self {
+            chat,
+            id,
+            cwd,
+            input,
+            agent_call,
+            prints,
+            jobs: Jobs::default(),
+            job: None,
+        }
+    }
+
     /// The chat it's for.
     #[must_use]
     pub fn chat(&self) -> ChatId {
@@ -567,7 +589,7 @@ struct Printed {
 
 /// What a call tells the driver as it runs.
 #[derive(Debug)]
-enum Print {
+pub(crate) enum Print {
     /// [`Call::print`].
     Lines {
         call: CallId,
