@@ -110,7 +110,7 @@ fn a_chat_given_only_app_tools_is_served_them_and_told_of_them() {
             "tools": [],
             "app": ["trim_clip", "word_count"],
             "cwd": "/work",
-            "instructions": "caf-test's own tools: trim_clip, word_count.",
+            "instructions": "caf-test's own tools (trim_clip, word_count).",
         } } })]
     );
     let new = sent(&out, "session/new");
@@ -118,10 +118,9 @@ fn a_chat_given_only_app_tools_is_served_them_and_told_of_them() {
     assert_eq!(
         new["params"]["_meta"]["claudeCode"]["options"]["systemPrompt"],
         "You are working inside caf-test, the app the user is talking to you in. caf-test gives \
-         you caf-test's own tools: trim_clip, word_count, asking the user's leave where it \
-         must. You have no other tools of your own: you can't read or change files, run \
-         commands or browse the web, except through other tools caf-test gives you. Answer in \
-         Markdown."
+         you tools of its own (trim_clip, word_count), asking the user's leave where they must. \
+         You have no other tools of your own: you can't read or change files, run commands or \
+         browse the web, except through tools caf-test gives you. Answer in Markdown."
     );
 }
 
@@ -131,20 +130,20 @@ fn cafs_tools_and_the_apps_are_named_together() {
     script.serving();
     let (opened, out) = open_given(
         &mut script,
-        Tools::caf([CafTool::Read]).and_app(["word_count"]),
+        Tools::caf([CafTool::Read]).and_app(["word_count", "trim_clip"]),
     );
     assert_eq!(
         one_told(&opened)["value"]["instructions"],
-        "caf-test's tools to read files (Read), in the folder you're working in, and caf-test's \
-         own tools: word_count."
+        "caf-test's tools to read files (Read), in the folder you're working in, and its own \
+         (word_count, trim_clip)."
     );
     assert_eq!(
         sent(&out, "session/new")["params"]["_meta"]["claudeCode"]["options"]["systemPrompt"],
         "You are working inside caf-test, the app the user is talking to you in. caf-test gives \
-         you tools to read files (Read), in the folder you're working in, and caf-test's own \
-         tools: word_count, asking the user's leave where it must. You have no other tools of \
-         your own: you can't do anything else, such as browse the web, except through other \
-         tools caf-test gives you. Answer in Markdown."
+         you tools to read files (Read), in the folder you're working in, and tools of its own \
+         (word_count, trim_clip), asking the user's leave where they must. You have no other \
+         tools of your own: you can't do anything else, such as browse the web, except through \
+         other tools caf-test gives you. Answer in Markdown."
     );
 }
 
