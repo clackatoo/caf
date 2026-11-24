@@ -892,7 +892,7 @@ struct Leader {
 
 /// `pidfd_send_signal`'s flag to signal the pidfd's process group, from
 /// `linux/pidfd.h`, which the libc crate doesn't have.
-const PIDFD_SIGNAL_PROCESS_GROUP: libc::c_uint = 4;
+pub(crate) const PIDFD_SIGNAL_PROCESS_GROUP: libc::c_uint = 4;
 
 impl Leader {
     /// Whether its exit is still to be waited for.
@@ -964,7 +964,7 @@ impl Drop for Leader {
 /// The `pidfd_send_signal` system call, with `flags`, which rustix's
 /// doesn't take, and signal 0, which its `Signal` can't be.
 #[allow(unsafe_code)]
-fn pidfd_send_signal(
+pub(crate) fn pidfd_send_signal(
     pidfd: BorrowedFd<'_>,
     signal: libc::c_int,
     flags: libc::c_uint,
@@ -1143,7 +1143,7 @@ pub(crate) fn absolute_only(path: &OsStr) -> OsString {
 /// it, with how it exited: `None` if something else reaped it first. An
 /// error means it can't be waited for, and wasn't reaped. Cancel-safe:
 /// it's reaped only as this resolves.
-async fn exit(pidfd: &AsyncFd<OwnedFd>) -> io::Result<Option<WaitIdStatus>> {
+pub(crate) async fn exit(pidfd: &AsyncFd<OwnedFd>) -> io::Result<Option<WaitIdStatus>> {
     loop {
         let mut ready = pidfd.readable().await?;
         let waited = rustix::process::waitid(

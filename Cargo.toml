@@ -34,7 +34,7 @@ jiff = { version = "0.2", features = ["tzdb-bundle-platform"] }
 rmp-serde = "1.3"
 # pidfds and waitid, for watching, reaping and signalling adapters; flock,
 # for the setup driver's locks on installs.
-rustix = { version = "1.1", features = ["fs", "process"] }
+rustix = { version = "1.1", features = ["fs", "pipe", "process", "pty", "termios"] }
 # The setup driver's download check, and the core's relay tokens, with
 # hmac: HMAC-SHA256 of each chat's id, under a key drawn each run.
 hmac = "0.12"

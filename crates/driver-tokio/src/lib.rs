@@ -209,7 +209,9 @@
 
 mod agent;
 mod caf;
+mod files;
 mod policy;
+mod pty;
 mod setup;
 mod steps;
 mod storage;
@@ -223,7 +225,12 @@ pub use caf::{
     AgentsWatch, Caf, ChatHandle, ChatsWatch, Config, Error, Running, SavedWatch, Update,
     UsageConfig, Watch,
 };
+/// CAF's own tools' rules and backend traits, for an app giving its own
+/// [`ToolsConfig::files`] or [`ToolsConfig::commands`].
+pub use caf_tools;
+pub use files::{DiskFiles, MOST_READ};
 pub use policy::{AlwaysAsk, Policy, RefuseAll};
+pub use pty::{PtyCommands, STOP_GRACE};
 pub use setup::SetupDriver;
 pub use steps::{Step, Steps};
 pub use timer::TimerDriver;

@@ -35,6 +35,7 @@ use caf_core::event::{RelayChange, Serving, ToolEvent};
 use caf_core::ids::{CallId, ChatId, JobId};
 use caf_core::mcp::{self, Answer, Connection, Key, Out, Request};
 use caf_core::tool::{Action, CafTool, Piece, Text};
+use caf_tools::{Commands, Files};
 use serde::Deserialize;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixListener;
@@ -43,14 +44,25 @@ use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::{Instant, Sleep};
 
+use crate::files::DiskFiles;
+use crate::pty::PtyCommands;
+
 /// How the app serves CAF's tools: [`Config::tools`](crate::Config::tools).
 #[non_exhaustive]
 pub struct ToolsConfig {
     /// The program an agent starts to reach CAF's tools. [`Relay::None`]
     /// by default: no tools are served.
     pub relay: Relay,
-    /// What runs the calls: `None` (the default) for CAF's own runner.
+    /// What runs the calls: `None` (the default) for CAF's own runner,
+    /// which reads and writes through [`files`](Self::files) and runs
+    /// commands with [`commands`](Self::commands).
     pub runner: Option<Box<dyn Runner>>,
+    /// Where CAF's own runner reads and writes files: the disk
+    /// ([`DiskFiles`]) by default, or the app's editor buffers.
+    pub files: Arc<dyn Files>,
+    /// Where CAF's own runner runs commands: a pty of its own for each
+    /// ([`PtyCommands`]) by default, or the app's visible terminals.
+    pub commands: Arc<dyn Commands>,
     /// The folder the socket relays connect to is made in, which must be
     /// the user's alone. `None` (the default) means `$XDG_RUNTIME_DIR/caf`,
     /// or else `caf-<uid>` in the temporary folder; either is made, mode
@@ -66,6 +78,8 @@ impl Default for ToolsConfig {
         Self {
             relay: Relay::None,
             runner: None,
+            files: Arc::new(DiskFiles),
+            commands: Arc::new(PtyCommands),
             folder: None,
             progress_every: PROGRESS_EVERY,
         }
