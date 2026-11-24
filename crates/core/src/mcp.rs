@@ -366,14 +366,15 @@ pub enum AnswerPart {
     },
 }
 
-/// The tool definitions `tools/list` gives, for `tools`, in their order:
-/// each one's name, title, description (at most 4096 characters), input
-/// schema, which is Claude Code's own for its tool of that name, as the
-/// model is trained on it, but for the fields CAF doesn't read, which a
-/// call may still send, as nothing refuses them, its annotations (`readOnlyHint`,
-/// `destructiveHint`, `openWorldHint`), and `_meta`
-/// `{"anthropic/alwaysLoad": true}`, so Claude Code loads it at once
-/// rather than searching for it.
+/// The tool definitions `tools/list` gives, for `tools`, in their order.
+/// Each has:
+/// - its name, title and description (at most 4096 characters);
+/// - its input schema: Claude Code's own for its tool of that name, as the
+///   model is trained on it, less the fields CAF doesn't read (a call may
+///   still send those, and they're ignored);
+/// - its annotations (`readOnlyHint`, `destructiveHint`, `openWorldHint`);
+/// - `_meta` `{"anthropic/alwaysLoad": true}`, so Claude Code loads it at
+///   once rather than searching for it.
 #[must_use]
 pub fn tool_list(tools: &[CafTool]) -> Value {
     Value::Array(tools.iter().map(|&tool| definition(tool)).collect())

@@ -140,11 +140,13 @@ says who stopped it:
 
 | `StoppedBy` | Means |
 | --- | --- |
-| `User` | The user stopped the turn, or closed, put away or deleted the chat: CAF stops its work, and answers the model that the user stopped it. Or the agent gave up on the call as the user stopped the turn: CAF stops its work, and answers nothing, as MCP says. |
+| `User` | The user stopped the turn, or closed or deleted the chat: CAF cancels the call, stops its work, and answers the model that the user stopped it. Or the agent gave up on the call as the user stopped the turn: CAF stops its work, and answers nothing, as MCP says. |
 | `Agent` | The agent cancelled it while its turn wasn't being stopped, or its relay went: it closed, or a newer one replaced it. CAF stops its work, and answers nothing, as MCP says. |
 
 A turn that ends by itself with a call still open doesn't cancel it: the
-call ends Failed, and `stopped_by` stays empty.
+call ends Failed, and `stopped_by` stays empty. So does a turn cut off
+as the chat is put away or CAF shuts down: its calls end Failed, stopped
+by no one.
 
 Stopping a call's work drops it, so a tool still running is stopped too.
 

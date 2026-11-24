@@ -3495,6 +3495,8 @@ fn a_served_command_is_journaled_squashed_and_comes_back_cut_off() {
             } }],
         } } }),
     );
+    // Cut off as its chat was put away, not stopped: no one stopped it.
+    assert_eq!(tool["kind"]["value"]["stopped_by"], Value::Null);
     assert_ne!(tool["window"]["end"]["type"], "Open");
 }
 

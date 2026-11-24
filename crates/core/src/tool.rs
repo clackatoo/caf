@@ -135,9 +135,10 @@ pub struct ToolCall<A: AppItem = NoAppItems> {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", content = "value")]
 pub enum StoppedBy {
-    /// The user: they stopped its turn, or closed, put away or deleted its
-    /// chat. (A turn that ends by itself fails the calls still open in it,
-    /// with no one said to have stopped them.)
+    /// The user: they stopped its turn, or closed or deleted its chat. A
+    /// turn that ends by itself, or is cut off as its chat is put away or
+    /// CAF shuts down, fails the calls still open in it instead, with no
+    /// one said to have stopped them.
     User,
     /// The agent, cancelling it while its turn wasn't being stopped, or its
     /// connection to CAF's tools closing.
