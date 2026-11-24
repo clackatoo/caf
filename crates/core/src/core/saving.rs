@@ -1006,6 +1006,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .collect::<Option<Vec<_>>>()
             .ok_or(Refused::Unsendable)?;
         check_instructions(restore.instructions.as_deref())?;
+        self.caf_server(restore.chat, &restore.tools.caf)?;
         if self.is_loaded(restore.chat) {
             return Err(Refused::Loaded);
         }
@@ -1106,10 +1107,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if *whole.spend != spend {
             changes.push(Change::Spend(Box::new(spend)));
         }
-        let mcp_sent = (restore.mcp_servers.iter())
+        let mut mcp_sent = (restore.mcp_servers.iter())
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
             .unwrap_or_default();
+        let caf_tools = restore.tools.caf.clone();
+        // Checked as the restore was asked for: nothing serves tools less.
+        if let Ok(Some(caf)) = self.caf_server(id, &caf_tools) {
+            mcp_sent.push(caf);
+        }
         let conn = self.conn_for(id, &whole.agent);
         self.saving.locks.insert((restore.shelf.clone(), id));
         let mut kept = Kept::new(restore.shelf, header.made, true);
@@ -1163,8 +1169,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 restored: true,
                 choosing: Choosing::default(),
                 cost: None,
+                caf_tools,
+                tools_lost: false,
             },
         );
+        self.serve(id, out);
         // Tidied as changes, so the store gets them as journal entries,
         // and viewers as changes like any other.
         for change in changes {
@@ -1272,6 +1281,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// returns what was kept of its saving.
     fn forget(&mut self, chat: ChatId) -> Option<Kept<A, D>> {
         self.forget_calls(chat);
+        self.unserve(chat);
         self.chats.remove(&chat);
         self.data.remove(&chat);
         self.logs.remove(&chat);
@@ -1677,6 +1687,10 @@ fn saved_session<A: AppItem>(run: &Run<A>) -> Option<AgentSessionId> {
         // session opened again counts afresh, and a turn's cost reads it
         // that way.
         cost: _,
+        // The host gives a restore its tools again, as its MCP servers.
+        caf_tools: _,
+        // Each session is told once.
+        tools_lost: _,
     } = run;
     session.clone()
 }

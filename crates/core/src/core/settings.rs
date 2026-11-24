@@ -957,7 +957,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .filter(|root| std::path::Path::new(root).is_absolute())
             .unwrap_or("/");
         let mut params = json!({ "cwd": cwd, "mcpServers": [] });
-        if let Some(meta) = profile.stripped(&own_instructions(&self.host.name), None) {
+        if let Some(meta) = profile.stripped(&own_instructions(&self.host.name, &[]), None) {
             params["_meta"] = meta;
         }
         let wait = self.host.timers.session_open;

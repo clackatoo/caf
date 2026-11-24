@@ -26,19 +26,26 @@ use std::collections::VecDeque;
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use super::Refused;
 use super::clean::agent_text;
+use super::sessions::mcp_server;
+use super::state::Open;
 use super::{Core, report};
+use crate::agent::{EnvChange, McpServer};
 use crate::chat::{AppData, AppItem, ItemKind, ToolCall, ToolStatus};
+use crate::chat::{ChatState, Note};
 use crate::directive::{
     Directive, Level, PermissionRequest, PolicyDirective, RefusedCall, ToolDirective,
 };
+use crate::event::RelayChange;
 use crate::event::{PolicyAnswer, ToolEvent};
 use crate::ids::{CallId, ChatId, ItemId, QuestionId, Ticket, TurnId};
+use crate::profiles::{CAF_SERVER, served_instructions};
 use crate::question::{OptionId, OptionKind, Permission, PermissionOption, QuestionKind};
 use crate::time::{Now, Window};
 use crate::tool::{
     Action, CafTool, DecidedBy, Decision, Ending, Lines, MOST_LINE, MOST_OUTPUT, Origin, Output,
-    Piece, output_size,
+    Piece, StoppedBy, output_size,
 };
 
 /// The longest title CAF writes for a call, in bytes.
@@ -104,6 +111,8 @@ pub(super) enum Owed {
     Cancel(CallId),
     /// Withdraw a request from the policy.
     Withdrawn(Ticket),
+    /// Stop serving a chat.
+    Unserve(ChatId),
 }
 
 impl Owed {
@@ -112,6 +121,7 @@ impl Owed {
         match self {
             Self::Cancel(call) => Directive::Tool(ToolDirective::Cancel { call }),
             Self::Withdrawn(ticket) => Directive::Policy(PolicyDirective::Withdrawn { ticket }),
+            Self::Unserve(chat) => Directive::Tool(ToolDirective::Unserve { chat }),
         }
     }
 }
@@ -161,12 +171,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.serving = Some(serving);
     }
 
-    /// A chat's connection to CAF's tools changed.
+    /// A chat's connection to CAF's tools changed. Lost while its session
+    /// is open, the chat says so, once a session: not while it's closing,
+    /// nor once its session has gone.
     pub(super) fn relay_changed(
         &mut self,
-        _now: Now,
+        now: Now,
         chat: ChatId,
-        change: crate::event::RelayChange,
+        change: RelayChange,
         out: &mut Vec<Directive<A, D>>,
     ) {
         report(
@@ -174,6 +186,79 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Level::Debug,
             format!("chat {}'s connection to CAF's tools: {change:?}", chat.0),
         );
+        if change != RelayChange::Lost {
+            return;
+        }
+        let open = matches!(
+            self.chats.get(&chat).map(|whole| &whole.state),
+            Some(ChatState::Open { .. })
+        );
+        let Some(run) = self.runs.get_mut(&chat) else {
+            return;
+        };
+        if !open
+            || !matches!(run.open, Open::Live { .. })
+            || run.tools_lost
+            || run.caf_tools.is_empty()
+        {
+            return;
+        }
+        run.tools_lost = true;
+        self.say(now, chat, Note::ToolsLost);
+    }
+
+    /// The MCP server `caf`, as it's sent, serving `tools` to `chat`:
+    /// `None` if there are none. [`Refused::ToolsNotServed`] if nothing
+    /// serves them, and [`Refused::Unsendable`] if the relay's command
+    /// can't be sent exactly as it is.
+    pub(super) fn caf_server(
+        &self,
+        chat: ChatId,
+        tools: &[CafTool],
+    ) -> Result<Option<Value>, Refused> {
+        if tools.is_empty() {
+            return Ok(None);
+        }
+        let serving = self.serving.as_ref().ok_or(Refused::ToolsNotServed)?;
+        let mut command = serving.relay.clone();
+        let set = |name: &str, value: std::ffi::OsString| EnvChange::Set(name.into(), value);
+        command.env.extend([
+            set("CAF_RELAY", serving.socket.clone().into_os_string()),
+            set("CAF_RELAY_CHAT", chat.to_string().into()),
+            set(
+                "CAF_RELAY_TOKEN",
+                crate::mcp::token(&serving.key, chat).into(),
+            ),
+        ]);
+        let server = McpServer::Stdio {
+            name: CAF_SERVER.to_owned(),
+            command,
+        };
+        mcp_server(&server).map(Some).ok_or(Refused::Unsendable)
+    }
+
+    /// Tells the tools driver what to serve `chat`, if it has tools.
+    pub(super) fn serve(&self, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
+        let Some(run) = self.runs.get(&chat).filter(|run| !run.caf_tools.is_empty()) else {
+            return;
+        };
+        out.push(Directive::Tool(ToolDirective::Serve {
+            chat,
+            tools: run.caf_tools.clone(),
+            instructions: served_instructions(&self.host.name, &run.caf_tools),
+        }));
+    }
+
+    /// Tells the tools driver, as this call into the core finishes, to stop
+    /// serving `chat`, if it has tools: it's let go.
+    pub(super) fn unserve(&mut self, chat: ChatId) {
+        if self
+            .runs
+            .get(&chat)
+            .is_some_and(|run| !run.caf_tools.is_empty())
+        {
+            self.owed.push(Owed::Unserve(chat));
+        }
     }
 
     /// The tools driver reported something of a call.
@@ -229,11 +314,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(turn) = turn else {
             return refuse(out, RefusedCall::NotRunning);
         };
-        // Until a chat is given only some of CAF's tools, every chat is
-        // given them all, and `RefusedCall::NotGiven` is never said.
-        let Some(cwd) = self.runs.get(&chat).map(|run| run.cwd.clone()) else {
+        let Some(run) = self.runs.get(&chat) else {
             return refuse(out, RefusedCall::NotRunning);
         };
+        if !run.caf_tools.contains(&tool) {
+            return refuse(out, RefusedCall::NotGiven);
+        }
+        let cwd = run.cwd.clone();
         // A report held only for now by a call that came without the
         // agent's id is this call's, as it names it: let go.
         if let Some(id) = &agent_call
@@ -805,21 +892,30 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(each) = self.calls.remove(&call) else {
             return stale(out, call, "its going");
         };
-        if let Some(ticket) = self.drop_call(now, &each, ToolStatus::Cancelled) {
+        if let Some(ticket) =
+            self.drop_call(now, &each, ToolStatus::Cancelled, Some(StoppedBy::Agent))
+        {
             out.push(Directive::Policy(PolicyDirective::Withdrawn { ticket }));
         }
     }
 
-    /// Ends `each` as `status`: its question is taken away, its output,
+    /// Ends `each` as `status`, stopped `by` someone if it was cancelled: its question is taken away, its output,
     /// if it has one, ends not saying how, and its item ends. Returns the
     /// ticket of the policy's decision on it to withdraw, if it was still
     /// deciding.
-    fn drop_call(&mut self, now: Now, each: &Call, status: ToolStatus) -> Option<Ticket> {
+    fn drop_call(
+        &mut self,
+        now: Now,
+        each: &Call,
+        status: ToolStatus,
+        by: Option<StoppedBy>,
+    ) -> Option<Ticket> {
         if let Stage::Asking(question) = each.stage {
             self.unask(each.chat, question);
         }
         self.change_tool(each.chat, each.item, |tool| {
             tool.status = status;
+            tool.stopped_by = by.filter(|_| status == ToolStatus::Cancelled);
             for piece in &mut tool.result {
                 if let Piece::Output(output) = piece
                     && output.ending.is_none()
@@ -856,7 +952,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         for call in calls {
             if let Some(each) = self.calls.remove(&call) {
                 self.owed.push(Owed::Cancel(call));
-                if let Some(ticket) = self.drop_call(now, &each, status) {
+                if let Some(ticket) = self.drop_call(now, &each, status, Some(StoppedBy::User)) {
                     self.owed.push(Owed::Withdrawn(ticket));
                 }
             }
@@ -874,7 +970,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         for call in calls {
             if let Some(each) = self.calls.remove(&call) {
                 out.push(Directive::Tool(ToolDirective::Cancel { call }));
-                if let Some(ticket) = self.drop_call(now, &each, ToolStatus::Cancelled) {
+                if let Some(ticket) =
+                    self.drop_call(now, &each, ToolStatus::Cancelled, Some(StoppedBy::User))
+                {
                     out.push(Directive::Policy(PolicyDirective::Withdrawn { ticket }));
                 }
             }

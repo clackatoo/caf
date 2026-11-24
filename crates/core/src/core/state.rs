@@ -395,6 +395,11 @@ pub(super) struct Run<A: AppItem> {
     /// What its session has cost so far, as the agent last said: an
     /// update that doesn't say leaves it as it was.
     pub(super) cost: Option<Cost>,
+    /// CAF's own tools it was given, served to it as the MCP server `caf`.
+    pub(super) caf_tools: Vec<crate::tool::CafTool>,
+    /// Its session was told its connection to CAF's tools was lost: it's
+    /// told at most once a session.
+    pub(super) tools_lost: bool,
 }
 
 /// Where a chat is with its session.

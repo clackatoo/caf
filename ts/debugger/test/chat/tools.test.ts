@@ -31,6 +31,7 @@ function call(fields: Partial<ToolCall> = {}): ToolCall {
     locations_cut: 0,
     decision: { type: 'NotAsked' },
     app: null,
+    stopped_by: null,
     ...fields,
   }
 }
