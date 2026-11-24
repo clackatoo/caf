@@ -26,8 +26,8 @@ use crate::ids::{ChatId, ItemId, Ticket, TurnId};
 use crate::profiles::ProfileChoice;
 use crate::time::{End, Now, Window};
 use crate::tool::{
-    Cut, Decision, Diff, Link, Location, MOST_DIFF_WORK, Origin, Output, Piece, Text, capped_input,
-    capped_locations, image, reported_action,
+    Cut, Decision, Diff, Link, Location, MOST_DIFF_WORK, Origin, Output, Piece, ServedTool, Text,
+    capped_input, capped_locations, image, reported_action,
 };
 
 /// The longest tool title kept, in bytes.
@@ -330,19 +330,28 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         change: ToolChange,
         out: &mut Vec<Directive<A, D>>,
     ) {
+        // A tool of CAF's server that isn't CAF's own is one of the app's
+        // own, if the chat was given it: the adapter can't know which.
+        let mut change = change;
+        if let Some(Origin::Server { server, tool }) = &change.origin
+            && server == crate::profiles::CAF_SERVER
+            && (self.runs.get(&chat)).is_some_and(|run| run.app_tools.contains(tool))
+        {
+            change.origin = Some(Origin::App(tool.clone()));
+        }
         // A report of a call CAF serves changes nothing of it.
-        let caf = match change.origin {
-            Some(Origin::Caf(tool)) => Some(tool),
+        let served = match &change.origin {
+            Some(Origin::Caf(tool)) => Some(ServedTool::Caf(*tool)),
+            Some(Origin::App(name)) => Some(ServedTool::App(name.clone())),
             _ => None,
         };
         let input = change.input.as_ref().map(|(input, _)| input);
-        if self.served_report(chat, &id, caf, input).is_some() {
+        if self.served_report(chat, &id, served, input).is_some() {
             return;
         }
         // While the user stops a turn, Claude's adapter says each call it
         // didn't finish failed, as ACP's first version has no other word
         // for it, before it answers the prompt: they were cancelled.
-        let mut change = change;
         let stopping = (self.runs.get(&chat))
             .and_then(|run| run.running.as_ref())
             .is_some_and(|running| running.stop_by.is_some());

@@ -1009,7 +1009,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if self.is_loaded(restore.chat) {
             return Err(Refused::Loaded);
         }
-        self.caf_server(restore.chat, &restore.tools.caf)?;
+        let app_tools = self.app_tools_given(restore.tools.app.clone())?;
+        self.caf_server(restore.chat, &restore.tools.caf, &app_tools)?;
         let ticket = Ticket(self.ids.take());
         self.relist_state(&restore.shelf, restore.chat, SavedState::Restoring);
         self.saving.restoring.insert(ticket, restore);
@@ -1113,7 +1114,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .unwrap_or_default();
         let caf_tools = crate::tool::Tools::served(restore.tools.caf.iter().copied());
         // Checked as the restore was asked for: nothing serves tools less.
-        if let Ok(Some(caf)) = self.caf_server(id, &caf_tools) {
+        let app_tools = self
+            .app_tools_given(restore.tools.app.clone())
+            .unwrap_or_default();
+        if let Ok(Some(caf)) = self.caf_server(id, &caf_tools, &app_tools) {
             mcp_sent.push(caf);
         }
         let conn = self.conn_for(id, &whole.agent);
@@ -1173,6 +1177,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 choosing: Choosing::default(),
                 cost: None,
                 caf_tools,
+                app_tools,
                 tools_lost: false,
             },
         );
@@ -1697,6 +1702,7 @@ fn saved_session<A: AppItem>(run: &Run<A>) -> Option<AgentSessionId> {
         cost: _,
         // The host gives a restore its tools again, as its MCP servers.
         caf_tools: _,
+        app_tools: _,
         // Each session is told once.
         tools_lost: _,
         // A restored chat's commands start again in its folder.
