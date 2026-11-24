@@ -161,6 +161,10 @@ as the chat is put away or CAF shuts down: its calls end Failed, stopped
 by no one.
 
 Stopping a call's work drops it, so a tool still running is stopped too.
+For one of the app's tools, whose work runs as a task of its own, CAF
+aborts the task, and answers the model only once its future has been
+dropped, or five seconds have passed (see
+[Your own tools](~caf/concepts/your-own-tools#a-call-step-by-step)).
 
 **A preview that fails** (an edit to a file not read first, say) ends its
 call Failed with the reason, and no one is asked: the tool's driver has
@@ -198,7 +202,8 @@ It ends in one of these ways:
 | The chat put away, or CAF shutting down | Failed, stopped by no one |
 
 A restored chat has no jobs: one saved while running ends Failed. TaskStop
-is served with Bash automatically. A notice turn is `Starter::Notice`: the
+is served with Bash automatically, and with any of the app's tools, which
+can go on as jobs too. A notice turn is `Starter::Notice`: the
 app can send its own with `Core::notify`, and it's queued like a message,
 but never counts against the host's limit on messages waiting
 (`queued_messages`): only the user's messages do.

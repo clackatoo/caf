@@ -36,9 +36,10 @@ struct Trim {
 
 let trim = tool("trim_clip", |call, input: Trim| async move {
     // Ask the app's UI thread to do it, through a handle the closure
-    // captured, and wait for its answer.
+    // captured, and await its answer: never block on it.
     Done::answer(format!("Trimmed clip {} to {}s", input.clip, input.seconds))
 })
+.called("Trim a clip")
 .title(|input: &Trim| format!("Trim clip {}", input.clip))
 .describe("Trims a clip to a length in seconds.")
 .destructive();
@@ -51,7 +52,8 @@ they're fixed for the run. The builder's methods:
 
 | Method | What it says |
 | --- | --- |
-| `title(..)` | Each call's title in the transcript, from its input. The tool's name by default. |
+| `called(..)` | What it's called in general, such as *Trim a clip*: what a call whose input doesn't fit is titled. Its name by default. |
+| `title(..)` | Each call's title in the transcript, from its input, such as *Trim clip 3*. The tool's name by default. |
 | `describe(..)` | What it does, for the model. |
 | `read_only()`, `destructive()`, `open_world()` | Its hints (below). |
 | `kind(..)` | The kind of tool its calls are, for an icon: `ToolKind::Other` by default. |
@@ -124,6 +126,14 @@ threads.
 hint off, of kind Other, not previewing, with schemars' schema. `spec` is
 asked once, as the tool is registered.
 
+**Never block.** `title`, `preview` and `run` are called on CAF's own
+task, so each must give its answer, or its future, at once: `title` must
+be cheap, and `preview` and `run` must do their work in the future they
+give, not before. Each future runs as a task of its own, so a slow one
+holds up nothing else, but it should await what it waits for, such as
+the UI thread's answer, and not block a thread: a future blocking a
+thread can't be stopped (below).
+
 ## Names and schemas
 
 `AppTools::with` checks each tool as it's registered, and refuses one with
@@ -174,12 +184,14 @@ let tools = Tools::caf([CafTool::Read]).and_app(["trim_clip", "word_count"]);
 let chat = caf.open_chat(OpenChat::new("claude", folder).with_tools(tools)).await?;
 ```
 
-A chat may have the app's tools and none of CAF's. The agent is listed
-CAF's tools first, then the app's, in the order given, and is told of
+A chat may have the app's tools and none of CAF's; it's served TaskStop
+with them, so their jobs can be stopped. The agent is listed CAF's tools
+first, then the app's, in the order given, each once, and is told of
 both in its instructions: "framewright gives you tools to read files
-(Read), in the folder you're working in, and framewright's own tools:
-trim_clip, word_count, asking the user's leave where it must." What each
-of the app's tools does is its description's to say.
+(Read) and stop background tasks (TaskStop), in the folder you're working
+in, and tools of its own (trim_clip, word_count), asking the user's leave
+where they must." What each of the app's tools does is its description's
+to say.
 
 A chat given a tool the app didn't register is refused, as it opens and as
 it's restored (`Refused::UnknownTool`). A chat's tools aren't saved: give
@@ -222,9 +234,19 @@ asks no one, as there's nothing to ask about. The model is told what serde
 said, so it can call again: *Refused: invalid type: string "three",
 expected u64*.
 
-**Cancelling** a call drops its future, as for CAF's own tools: the user
-stopped the turn, or the agent gave up on it. A tool stops its work when
-its future is dropped.
+**Stopping** a call drops its future: the user stopped the turn, closed
+the chat, or the policy or the user refused it, or the agent gave up on
+it. A tool stops its work when its future is dropped. CAF aborts the
+future's task first, and tells the model the call was stopped only once
+the future has been dropped, so the model never hears it was while the
+work goes on. A tool that doesn't stop within five seconds, such as one
+blocking its thread, has its call answered all the same, and CAF logs
+that the app's tool didn't stop.
+
+**A panic** in `title` titles the call as the tool is; one in `preview`
+or `run`, in their futures, or as a future is dropped, ends the call
+Failed: the model is told *The app's tool failed unexpectedly*, and the
+log names the tool.
 
 ## Jobs
 
@@ -241,9 +263,11 @@ let render = tool("render", |mut call: Call, input: Render| async move {
 ```
 
 The job ends as any does (see
-[Serving tools](~caf/concepts/serving-tools#background-jobs)): the agent
-can stop it with TaskStop, and a job's call is cancelled when its chat is
-closed. When it ends by itself, the model never heard the `Done`'s
+[Serving tools](~caf/concepts/serving-tools#background-jobs)): a chat
+given any of the app's tools is served TaskStop too, so the agent can
+stop it, and a job's call is cancelled when its chat is closed. TaskStop
+is answered once the job's future has been dropped, or five seconds have
+passed, as any stopped call is. When it ends by itself, the model never heard the `Done`'s
 answer, so CAF tells the agent in a notice, laid out as its own are, with
 the answer as its result:
 
@@ -260,15 +284,17 @@ the answer as its result:
 The task's id is the job's number, the summary names the call by its
 title, and the status is `failed`, as the summary says, for a `Done` that
 failed. The result's text is the answer's, with `&`, `<` and `>` written as
-`&amp;`, `&lt;` and `&gt;`, as is everything in a notice.
+`&amp;`, `&lt;` and `&gt;`, as is everything in a notice. A result longer
+than an answer may be, 30,000 characters, is cut there, and ends saying
+so: *[Cut here: the first 30000 of its 45210 characters were kept]*.
 
 ## The app's own item on a call
 
 A call may leave the app's own item on its record: `Done::with_item`. It
 arrives with the call's end, and becomes `ToolCall::app`, which the app's
 own view draws, such as the edit a trim made, with a button to undo it.
-It's set once, as the call ends: nothing in a preview, and no updates
-while it runs. The model never sees it: it's told the `Done`'s answer.
+It's set once, as the call ends: no updates while it runs. A preview
+that fails ends the call, so the item its `Done` has is the call's. The model never sees it: it's told the `Done`'s answer.
 Only the app's own tools may leave one: an item on a call to one of CAF's
 is dropped, with a warning in the log.
 
@@ -298,7 +324,7 @@ async fn trimming_answers_and_leaves_the_edit() {
 | `title` | The call's title. |
 | `preview` | What it previewed, if it previews. |
 | `done` | What it ended with, or the answer CAF would give if its input didn't fit. |
-| `printed` | The output it printed, as lines. |
+| `printed` | The output it printed as it ran, as lines: as CAF keeps none of what a preview prints. |
 | `answered_now` | What the model was answered early, if it went on as a job. |
 
 The debugger has a tool of its own, `word_count`, given to every chat

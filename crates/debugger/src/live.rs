@@ -106,6 +106,7 @@ pub fn word_count() -> impl AppTool {
         1 => "Count the words in 1 character".to_owned(),
         characters => format!("Count the words in {characters} characters"),
     })
+    .called("Count words")
     .describe("Counts the words in a text: the runs of characters between spaces.")
     .read_only()
 }
@@ -1054,7 +1055,10 @@ mod tests {
     async fn word_count_counts_the_words_only_reading() {
         let tools = app_tools();
         let [spec] = tools.specs().try_into().unwrap();
-        assert_eq!(spec.name, WORD_COUNT);
+        assert_eq!(
+            (spec.name.as_str(), spec.title.as_str()),
+            (WORD_COUNT, "Count words")
+        );
         assert!(spec.hints.read_only && !spec.hints.destructive && !spec.hints.open_world);
         let tool = word_count();
         let count = |text: &str| {
