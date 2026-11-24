@@ -720,6 +720,21 @@ impl Script {
         core
     }
 
+    /// A core of its own for an app with items of type `A`, as this one
+    /// is now: a fresh one given every event so far, which hold none.
+    pub(crate) fn copy_as<A: crate::chat::AppItem>(&self) -> (Core<A>, Now) {
+        let mut core = Core::<A>::starting_ids_at(self.host.clone(), self.agents.clone(), FIRST);
+        for (ms, json) in &self.trace {
+            let event: Event<A> = serde_json::from_str(json).expect("recorded events read back");
+            let now = Now {
+                wall: Wall(EPOCH + i64::try_from(*ms).unwrap_or(0)),
+                mono: Mono(ms * 1_000_000),
+            };
+            core.handle(now, event, &mut Vec::new());
+        }
+        (core, self.now())
+    }
+
     /// Feeds the recording to a fresh core, checking it gives the same
     /// directives at every step and ends in the same state.
     pub(crate) fn replay(&self) {
@@ -887,6 +902,7 @@ pub(crate) fn render(directive: &Directive) -> Value {
             json!({
                 "decide": ticket.0, "chat": chat, "item": request.item, "title": request.title,
                 "origin": request.origin, "action": request.action, "input": request.input,
+                "hints": request.hints,
             })
         }
         Directive::Policy(PolicyDirective::Withdrawn { ticket }) => {

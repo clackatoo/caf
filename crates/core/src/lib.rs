@@ -186,7 +186,8 @@
 //!     (`every_call_settles_when_its_turn_ends`).
 //! 16. **A chat given CAF's tools always has them served, or isn't
 //!     opened.** It's refused while nothing serves them
-//!     ([`Refused::ToolsNotServed`]), and its MCP server `caf` is the same
+//!     ([`Refused::ToolsNotServed`]), or given an app's tool the app
+//!     didn't register ([`Refused::UnknownTool`]), and its MCP server `caf` is the same
 //!     each time its session is opened, new, loaded or resumed, in a run
 //!     (`a_restored_chat_is_given_its_tools_again_as_a_new_one_is`).
 //! 17. **A relay serves only its own chat, and only the tools it was

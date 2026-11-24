@@ -2,6 +2,7 @@
 
 mod harness;
 
+mod app_tools;
 mod basics;
 mod chats;
 mod continuing;
@@ -84,11 +85,37 @@ fn default_modes() -> Value {
 /// The key the tests' tools driver serves with.
 const KEY: crate::mcp::Key = crate::mcp::Key([7; 32]);
 
-/// How the tests' tools driver serves CAF's tools.
+/// How the tests' tools driver serves CAF's tools, with the app's own
+/// two: `word_count`, read-only, and `trim_clip`, which changes what was
+/// there and shows what it would do first.
 fn serving() -> crate::event::Serving {
+    use crate::tool::{AppToolSpec, Hints, ToolKind};
     let mut relay = crate::agent::SpawnCommand::new("/opt/app/bin/app");
     relay.args = vec!["--relay".into()];
-    crate::event::Serving::new(relay, "/run/user/1000/caf/app-1.sock", KEY)
+    let mut serving = crate::event::Serving::new(relay, "/run/user/1000/caf/app-1.sock", KEY);
+    serving.app_tools = vec![
+        AppToolSpec::new(
+            "word_count",
+            "Count words",
+            Hints {
+                read_only: true,
+                kind: ToolKind::Search,
+                ..Hints::default()
+            },
+            false,
+        ),
+        AppToolSpec::new(
+            "trim_clip",
+            "Trim a clip",
+            Hints {
+                destructive: true,
+                kind: ToolKind::Edit,
+                ..Hints::default()
+            },
+            true,
+        ),
+    ];
+    serving
 }
 
 impl Script {

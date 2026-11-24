@@ -146,7 +146,8 @@ pub struct ToolCall<A: AppItem = NoAppItems> {
     /// Whether it was allowed, and by whom.
     pub decision: Decision,
     /// The app's own item for this call, such as the map move one of its
-    /// tools made. *Later*, with the app's tools.
+    /// tools made: set once, as a call to one of the app's own tools ends,
+    /// and only on such a call. The model never sees it.
     pub app: Option<A>,
     /// Who stopped it, for a call to a tool CAF serves that ended
     /// [`Cancelled`](ToolStatus::Cancelled): `None` for any other, and for
@@ -414,7 +415,6 @@ pub enum Origin {
     /// One of CAF's own tools.
     Caf(CafTool),
     /// One of the app's tools, which CAF serves for it, by its name.
-    /// *Later*, with the app's tools.
     App(String),
     /// A tool of an MCP server the app gave the chat.
     Server {
