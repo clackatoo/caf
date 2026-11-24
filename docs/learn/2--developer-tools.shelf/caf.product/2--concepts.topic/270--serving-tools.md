@@ -190,7 +190,9 @@ the user) ends at once, as nothing ran.
 
 The agent giving up on a call whose work had just finished is the same:
 the driver reports it `Finished`, not gone, and answers nothing, as MCP
-says.
+says. So is one of the app's tools that runs to its end as it's being
+stopped while its relay is replaced by a newer one: it's recorded as it
+went, but no one is left to answer.
 
 **A preview that fails** (an edit to a file not read first, say) ends its
 call Failed with the reason, and no one is asked: the tool's driver has
