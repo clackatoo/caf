@@ -354,7 +354,8 @@ impl JobEnd {
 /// The notice the agent is sent when job `job` ended, as Claude Code's:
 /// the model's call that started it (`tool_use`, the agent's id for it, if
 /// known), what it is (`description`, the call's, or its command), and
-/// where its output is (`path`).
+/// where its output is (`path`). Each is escaped as XML, so none can end
+/// its tag, or forge another part: the agent's id is the agent's to choose.
 ///
 /// A job that exited is "completed", with its code, whatever the code, as
 /// Claude Code says it.
@@ -373,11 +374,14 @@ pub fn notice(
     };
     let mut out = format!("<task-notification>\n<task-id>{job}</task-id>");
     if let Some(tool_use) = tool_use {
-        out.push_str(&format!("\n<tool-use-id>{tool_use}</tool-use-id>"));
+        out.push_str(&format!(
+            "\n<tool-use-id>{}</tool-use-id>",
+            escape(tool_use)
+        ));
     }
     out.push_str(&format!(
         "\n<output-file>{}</output-file>\n<status>{status}</status>\n<summary>Background command \"{}\" {how}</summary>\n</task-notification>",
-        path.display(),
+        escape(&path.display().to_string()),
         escape(description)
     ));
     out
