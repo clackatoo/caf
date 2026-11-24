@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use caf_core::agent::SpawnCommand;
-use caf_core::chat::{AppItem, Chat, ItemKind, UserMessage};
+use caf_core::chat::{AppItem, Chat, ItemKind, TurnLife, UserMessage};
 use caf_core::directive::PermissionRequest;
 use caf_core::event::PolicyAnswer;
 use caf_core::ids::{ChatId, JobId};
@@ -66,7 +66,8 @@ struct Clip {
 /// dropped in the test's folder; clip
 /// 8 does too, answering early, as a job; clip 9 answers early, going on
 /// as a job, until the test's `go` file is there. Clip 5 says when it
-/// starts, and finishes as soon as the `go` file is there.
+/// starts, and finishes as soon as the `go` file is there. Clip 6 says when
+/// it starts, then blocks its thread for a second, so it can't be stopped.
 struct Trim {
     work: PathBuf,
 }
@@ -130,6 +131,10 @@ impl AppTool<Trimmed> for Trim {
                     while !work.join("go").exists() {
                         tokio::time::sleep(Duration::from_millis(1)).await;
                     }
+                }
+                6 => {
+                    let _ = std::fs::write(work.join("started"), "");
+                    std::thread::sleep(Duration::from_secs(1));
                 }
                 _ => {}
             }
@@ -524,6 +529,39 @@ async fn stopping_the_turn_drops_an_app_tools_run() {
         ),
         "{events:#?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_run_that_cant_stop_as_its_turn_is_stopped_ends_done_with_its_item() {
+    let mut app = serve(|_| {
+        vec![
+            json!({"mcp_call": {"tool": "trim_clip", "arguments": {"clip": 6}, "tool_use_id": "t1", "report": "s1", "as": "t1"}}),
+            json!({"on": {"method": "session/cancel", "do": [{"respond": {"to": "prompt", "result": {"stopReason": "cancelled"}}}]}}),
+            json!({"mcp_await": {"to": "t1", "expect": {"result": says("Trimmed clip 6", false)}, "timeout": 30000}}),
+        ]
+    });
+    let chat = app.chat().await;
+    let mut watch = chat.watch();
+    tokio::time::timeout(PATIENCE, async {
+        while !app.work.join("started").exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("its run started");
+    // Stopped as it blocks its thread, it runs to its end all the same.
+    chat.stop().await.unwrap();
+    app.script_done().await;
+    let done = until(&chat, &mut watch, "the call ended", |chat| {
+        calls(chat).first().is_some_and(|call| ended(call))
+    })
+    .await;
+    let trim = calls(&done)[0];
+    assert_eq!(trim.status, ToolStatus::Done);
+    assert_eq!(trim.stopped_by, None);
+    assert_eq!(trim.app, Some(Trimmed(6)));
+    assert_eq!(done.turns[0].life, TurnLife::Stopped);
+    app.shut_down().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

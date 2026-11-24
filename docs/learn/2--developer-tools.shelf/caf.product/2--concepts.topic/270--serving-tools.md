@@ -179,7 +179,10 @@ until the driver reports one of:
 A driver reports one or the other for every call it's told to cancel that
 it still has, running or not; the core ignores either for a call it has
 already ended. The tokio kit's driver does: it polls a call's work once
-as it's stopped, and one that finished just then ends as it went. If no
+as it's stopped, and one that finished just then ends as it went; and for
+one of the app's tools, it waits, within its five seconds, for what the
+tool's task gives, so one that ran to its end anyway, such as one
+blocking its thread, ends as it went too. If no
 report comes within 10 seconds, the core ends the call as stopped, and
 logs a warning that the driver never said. A call that hadn't started
 running as its turn ended (being previewed, or waiting for the policy or
