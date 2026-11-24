@@ -840,7 +840,13 @@ describe("CAF's notice of a job's end", () => {
   })
 
   it("is told for the tools driver's notice of a job whose run failed, which has no output file", () => {
-    // caf-driver-tokio's failed_notice, exactly.
+    // caf-driver-tokio's failed_notice, exactly: job 1 of call toolu_1,
+    // and of a call whose id the agent didn't give.
+    expect(
+      jobNotice(
+        '<task-notification>\n<task-id>1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>failed</status>\n<summary>Background task 1 failed</summary>\n</task-notification>',
+      ),
+    ).toBe('Background task 1 failed')
     expect(
       jobNotice('<task-notification>\n<task-id>3</task-id>\n<status>failed</status>\n<summary>Background task 3 failed</summary>\n</task-notification>'),
     ).toBe('Background task 3 failed')

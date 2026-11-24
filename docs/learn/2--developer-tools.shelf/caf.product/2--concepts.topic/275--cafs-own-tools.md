@@ -162,9 +162,11 @@ background, as Claude Code does now, and the model is told so.
 
 **Its environment** is your program's, with `TERM=xterm-256color`, and
 `PAGER` and `GIT_PAGER` set to `cat` so nothing waits for a key. `CLAUDECODE`
-and CAF's own relay variables are taken out. **Its input is `/dev/null`:** a
-command that waits for input, such as a password prompt, finds none at once,
-rather than waiting out its timeout.
+and CAF's own relay variables are taken out. **Its input is `/dev/null`,
+and it has no controlling terminal:** a command that waits for input finds
+none at once, rather than waiting out its timeout, and a password prompt
+such as `sudo`'s, `ssh`'s or `gpg`'s fails at once. Its output is still a
+terminal, so its colours and progress bars are drawn.
 
 **Stopping** a command (the user's Stop, while its turn runs) sends
 `SIGTERM` to it and everything it started, then `SIGKILL` 3 seconds later.
@@ -205,9 +207,11 @@ asks anyone, as all it can do is stop what its own chat started. The job's
 call ends *Cancelled*, stopped by the agent.
 
 **Output files** (a job's, and a long output's) are kept at
-`out/<process>/<chat>/<call>.txt` under CAF's tools folder
+`out/<runner>/<chat>/<call>.txt` under CAF's tools folder
 (`ToolsConfig::folder`, by default `$XDG_RUNTIME_DIR/caf`), readable by the
-user alone, so one app never touches another's. Each holds at most 64 MiB of
+user alone. `<runner>` is the app's process id, with `-2`, `-3`… for a
+second runner in one process, and each runner locks its folder, so one
+never touches another's. Each holds at most 64 MiB of
 output, then says the rest wasn't kept. They're removed when the chat is let
 go or the app ends, and those an app that's gone left behind are removed as
 the next starts.
