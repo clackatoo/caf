@@ -166,6 +166,29 @@ aborts the task, and answers the model only once its future has been
 dropped, or five seconds have passed (see
 [Your own tools](~caf/concepts/your-own-tools#a-call-step-by-step)).
 
+**A call running as its turn ends ends as the tools driver says.** The
+core tells the driver to stop it (`ToolDirective::Cancel`), and the call
+stays `Running`, with `stopped_by` set if the user stopped the turn,
+until the driver reports one of:
+
+| The driver reports | When | The call ends |
+| --- | --- | --- |
+| `ToolEvent::Stopped` | Its work stopped before it finished, and the model was answered that it was cancelled. | Cancelled, stopped by the user; or Failed, if the turn ended any other way. |
+| `ToolEvent::Finished` | Its work had already finished, and the model was answered with what it gave. | Done or Failed as it went, with its pieces and the app's item, `stopped_by` cleared. |
+
+A driver reports one or the other for every call it's told to cancel that
+it still has, running or not; the core ignores either for a call it has
+already ended. The tokio kit's driver does: it polls a call's work once
+as it's stopped, and one that finished just then ends as it went. If no
+report comes within 10 seconds, the core ends the call as stopped, and
+logs a warning that the driver never said. A call that hadn't started
+running as its turn ended (being previewed, or waiting for the policy or
+the user) ends at once, as nothing ran.
+
+The agent giving up on a call whose work had just finished is the same:
+the driver reports it `Finished`, not gone, and answers nothing, as MCP
+says.
+
 **A preview that fails** (an edit to a file not read first, say) ends its
 call Failed with the reason, and no one is asked: the tool's driver has
 already given the model the reason. So does a call to one of the app's

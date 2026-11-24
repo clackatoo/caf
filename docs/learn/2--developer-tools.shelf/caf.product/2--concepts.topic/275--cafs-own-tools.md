@@ -170,6 +170,11 @@ terminal, so its colours and progress bars are drawn.
 
 **Stopping** a command (the user's Stop, while its turn runs) sends
 `SIGTERM` to it and everything it started, then `SIGKILL` 3 seconds later.
+Its call is *Stopping…* until then, and ends Cancelled once it has
+stopped; or, if it had already finished as the user stopped the turn,
+Done or Failed as it went, the model told what it gave (see
+[Tool calls](~caf/concepts/tool-calls#where-it-is)). The same goes for
+Read, Edit and Write.
 
 ## Background jobs
 

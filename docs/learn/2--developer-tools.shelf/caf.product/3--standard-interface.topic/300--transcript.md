@@ -124,7 +124,10 @@ ends *Stopped*, muted. A step that failed makes its chip red: here,
 *cargo build -p caf-core* with a cross. Opened, a failed step shows its
 output. A step still waiting or running when the user stopped the turn is
 *Cancelled*, muted; one a turn ended under any other way, such as a failure
-or the app closing, is *Failed*.
+or the app closing, is *Failed*. A step of CAF's tools, or the app's, that
+was running says *Stopping…*, muted, its output no longer live, until its
+work has stopped, a moment later: then it's *Cancelled*; or, if it had
+already finished, *Done* or *Failed* as it went, as the agent was told.
 
 **A message that never went.** Stop also stops the messages waiting for the
 turn, and a message that waited for an agent that wasn't installed is
@@ -198,6 +201,7 @@ Where it is, by its status:
 | `Pending` | Its kind's icon | *Waiting to start* | Calm |
 | `Asking` | Its kind's icon, in the accent | *Waiting for you ↓* | Accent |
 | `Running` | A spinner, in the accent | How long so far | Accent |
+| `Running`, being stopped | Its kind's icon, muted | *Stopping…* | Muted |
 | `Done` | Its kind's icon, muted | How long it ran | Muted |
 | `Failed` | A cross, in the warning colour | How long it ran | Warning |
 | `Refused` | A cross, in the warning colour | *Refused* | Warning |
@@ -622,7 +626,7 @@ Everything else is calm.
 | How long the agent worked | From the start of the first `Words`, `Thinking` or `Tool` item's `Item.window` to the end of `Turn.window`. |
 | The turn's model | `Turn.model`, as the agent said when it was sent. |
 | The steps | `Turn.items`: `ItemKind::Words`, `Thinking`, `Tool`, `Note`, `App` and `Unknown`. Thinking is kept only if the app asks for it (`Host.shows.thinking`). |
-| A tool's line | `ToolCall.title`, as given; its `kind` (`ToolKind`) for the icon and the chip; its `status` (`ToolStatus::Pending`, `Asking`, `Running`, `Done`, `Failed`, `Refused` or `Cancelled`); and its `Item.window`. |
+| A tool's line | `ToolCall.title`, as given; its `kind` (`ToolKind`) for the icon and the chip; its `status` (`ToolStatus::Pending`, `Asking`, `Running`, `Done`, `Failed`, `Refused` or `Cancelled`); and its `Item.window`. It's *Stopping…* while `status` is `Running` and `stopped_by` is set. |
 | Background | `ToolCall.job`, the job's number (`JobId`), set once the call went on after the agent was answered (`ToolEvent::Detached`). It's *Background* while `status` is `Running`. A TaskStop's `action` is `Action::Stop`, with the `job`. |
 | Who decided | `ToolCall.decision`: `Decision::Allowed` or `Refused`, each with its `DecidedBy` (`User`, or `Policy` with its `reason`). |
 | A tool, opened | `ToolCall.result`, a list of `Piece`s: `Text` (its `cut`, a `Cut`), `Diff`, `Output`, `Image`, `Link` and `Unknown` (its `cut`: if CAF kept only the start of its data, `raw` is the start of its JSON, as a string). Then `ToolCall.locations` (and `locations_cut`), and `ToolCall.input` (and `input_cut`). |
