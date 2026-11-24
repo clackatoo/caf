@@ -1148,6 +1148,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Run {
                 conn,
                 shell: cwd.clone(),
+                notices_held: false,
                 cwd,
                 mcp: restore.mcp_servers,
                 mcp_sent: super::state::SentServers(mcp_sent),
@@ -1699,6 +1700,8 @@ fn saved_session<A: AppItem>(run: &Run<A>) -> Option<AgentSessionId> {
         tools_lost: _,
         // A restored chat's commands start again in its folder.
         shell: _,
+        // A restored chat's notices waiting are stopped, held or not.
+        notices_held: _,
     } = run;
     session.clone()
 }
