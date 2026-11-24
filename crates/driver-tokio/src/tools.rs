@@ -4411,30 +4411,55 @@ mod tests {
         let (mut h, go, mut drops) = trimming();
         h.serve_app(CHAT, &["trim_clip"]);
         let mut client = h.bound(CHAT).await;
-        let (call, _) = trim(&mut h, &mut client, 6, json!({"clip": 6})).await;
-        h.apply(ToolDirective::Run {
-            call,
-            action: Action::Tool {
-                name: "trim_clip".into(),
-            },
-            input: json!({"clip": 6}),
-        });
-        assert_event(h.report().await, call, |event| {
-            matches!(event, ToolEvent::Output { .. })
-        });
-        // It finishes, and the core stops it before it hears.
-        go.notify_one();
-        let dropped = tokio::time::timeout(Duration::from_secs(10), drops.recv()).await;
-        assert_eq!(dropped.unwrap(), Some(6));
-        h.apply(ToolDirective::Cancel { call });
-        assert_event(h.report().await, call, |event| {
-            matches!(event, ToolEvent::Finished { done: true, pieces, .. }
-                if *pieces == [Piece::Text(Text::new("trimmed"))])
-        });
-        let answer = client.recv().await;
-        assert_eq!(text_of(&answer), "Trimmed clip 6");
-        client.nothing_waiting().await;
-        h.quiet().await;
+        // Its future is dropped a moment before its task has ended: only
+        // then has it finished, as the driver sees it, so each try ends as
+        // the model is told, and some try finishes first.
+        // Clip 9 goes on as a job.
+        for clip in (1..=21).filter(|&clip| clip != 9) {
+            let (call, _) = trim(&mut h, &mut client, clip, json!({ "clip": clip })).await;
+            h.apply(ToolDirective::Run {
+                call,
+                action: Action::Tool {
+                    name: "trim_clip".into(),
+                },
+                input: json!({ "clip": clip }),
+            });
+            assert_event(h.report().await, call, |event| {
+                matches!(event, ToolEvent::Output { .. })
+            });
+            // It finishes, and the core stops it before it hears.
+            go.notify_one();
+            let dropped = tokio::time::timeout(Duration::from_secs(10), drops.recv()).await;
+            assert_eq!(dropped.unwrap(), Some(clip));
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            h.apply(ToolDirective::Cancel { call });
+            let finished = match h.report().await {
+                Report::Tool {
+                    call: reported,
+                    event: ToolEvent::Finished { done, pieces, .. },
+                } if reported == call => {
+                    assert!(done);
+                    assert_eq!(pieces, [Piece::Text(Text::new("trimmed"))]);
+                    true
+                }
+                Report::Tool {
+                    call: reported,
+                    event: ToolEvent::Stopped,
+                } if reported == call => false,
+                other => panic!("unexpected report: {other:?}"),
+            };
+            let answer = client.recv().await;
+            match finished {
+                true => assert_eq!(text_of(&answer), format!("Trimmed clip {clip}")),
+                false => assert_eq!(text_of(&answer), CANCELLED),
+            }
+            client.nothing_waiting().await;
+            h.quiet().await;
+            if finished {
+                return;
+            }
+        }
+        panic!("no run had finished as it was stopped");
     }
 
     #[tokio::test]
