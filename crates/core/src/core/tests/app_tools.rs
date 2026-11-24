@@ -625,8 +625,44 @@ fn an_app_call_in_a_stopped_turn_is_cancelled_by_the_user() {
     );
     assert_has(
         &the_tool(&script),
+        &json!({ "status": kind("Running"), "stopped_by": { "type": "User" } }),
+    );
+    script.tool(1, ToolEvent::Stopped);
+    assert_has(
+        &the_tool(&script),
         &json!({ "status": kind("Cancelled"), "stopped_by": { "type": "User" } }),
     );
+}
+
+#[test]
+fn an_app_call_that_had_finished_as_its_turn_was_stopped_keeps_its_item() {
+    let mut script = count_running();
+    script.stop(CHAT).0.expect("stopping");
+    script.answers(
+        PROC,
+        super::served::PROMPT,
+        &json!({ "stopReason": "cancelled" }),
+    );
+    let (mut core, now) = script.copy_as::<Trim>();
+    let mut out = Vec::new();
+    let event = crate::event::Event::Tool {
+        call: crate::ids::CallId(1),
+        event: finished(true, "3 words", Some(Trim { clip: 3 })),
+    };
+    core.handle(now, event, &mut out);
+    let chat = serde_json::to_value(core.chat(CHAT).expect("the chat")).expect("JSON");
+    let call = (chat["turns"][0]["items"].as_array().expect("items").iter())
+        .find(|item| item["kind"]["type"] == "Tool")
+        .map(|item| item["kind"]["value"].clone())
+        .expect("the call");
+    assert_has(
+        &call,
+        &json!({ "status": kind("Done"), "stopped_by": null, "app": { "clip": 3 } }),
+    );
+    assert_ne!(call["result"], json!([]));
+    // This script's call ends too.
+    script.tool(1, finished(true, "3 words", None));
+    assert_eq!(the_tool(&script)["status"], kind("Done"));
 }
 
 #[test]

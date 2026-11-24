@@ -7,7 +7,14 @@
  * one still Pending, Asking or Running is Cancelled if the user stopped
  * the turn, and Failed otherwise, and so is one a restored chat was cut
  * off in. But for a background job ([`ToolCall::job`]), which runs on
- * past its turn: see [the jobs](crate::tool#jobs). One the agent says failed while the user stops its turn was
+ * past its turn: see [the jobs](crate::tool#jobs). And but for a call to
+ * a tool CAF serves that's running as its turn ends: it's stopped, and
+ * stays Running, with [`stopped_by`](ToolCall::stopped_by) set if the
+ * user stopped the turn, until the tools driver says how it ended, as
+ * only it knows whether the work stopped or had finished: Cancelled (or
+ * Failed, if the turn failed under it) if it stopped, Done or Failed as
+ * it went if it had finished. Within 10 seconds, it ends so all the same.
+ * One the agent says failed while the user stops its turn was
  * cancelled, as an agent of ACP's first version, such as Claude's, has
  * no other word for it. Once a call has ended it stays so, whatever the
  * agent says of it after, though what it gave back may still come.

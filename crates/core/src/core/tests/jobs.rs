@@ -683,6 +683,12 @@ fn a_task_stop_cancelled_after_it_was_issued_still_stopped_its_job() {
             told(&out),
             [json!({ "type": "Cancel", "value": { "call": 2 } })]
         );
+        // The TaskStop was running: it ends once the driver says.
+        assert_has(
+            &tools(&script)[1],
+            &json!({ "status": kind("Running"), "stopped_by": kind("User") }),
+        );
+        script.tool(2, ToolEvent::Stopped);
         let tools = tools(&script);
         assert_eq!(tools[0]["status"], kind("Running"));
         assert_has(

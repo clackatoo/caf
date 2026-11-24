@@ -349,7 +349,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// Ends `chat`'s turn `turn` as `life`: its words stop growing, and
     /// every tool call in it that hasn't ended does: Cancelled if the user
     /// stopped the turn, else Failed. But for a background job, which goes
-    /// on.
+    /// on, and a call CAF serves that was running, which is being stopped,
+    /// and ends shortly after, as its tools driver says.
     pub(super) fn end_turn(&mut self, now: Now, chat: ChatId, turn: TurnId, life: TurnLife) {
         // Calls CAF serves are settled first.
         self.settle_calls(now, chat, turn, life == TurnLife::Stopped);
@@ -363,7 +364,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map(|item| (item.id, item.window.end == End::Open, item.kind.clone()))
             .collect();
         for (item, open, kind) in items {
-            if matches!(&kind, ItemKind::Tool(tool) if tool.job.is_some() && !tool.status.ended()) {
+            if matches!(&kind, ItemKind::Tool(tool) if tool.job.is_some() && !tool.status.ended())
+                || self.is_stopping(chat, item)
+            {
                 continue;
             }
             if let ItemKind::Tool(mut tool) = kind

@@ -150,8 +150,11 @@ pub struct ToolCall<A: AppItem = NoAppItems> {
     /// and only on such a call. The model never sees it.
     pub app: Option<A>,
     /// Who stopped it, for a call to a tool CAF serves that ended
-    /// [`Cancelled`](ToolStatus::Cancelled): `None` for any other, and for
-    /// a call saved before CAF kept it.
+    /// [`Cancelled`](ToolStatus::Cancelled), or is being stopped: one
+    /// still [`Running`](ToolStatus::Running) with it set is stopping, and
+    /// keeps it if it ends Cancelled, or loses it if it had finished first
+    /// and ends Done or Failed. `None` for any other, and for a call saved
+    /// before CAF kept it.
     #[serde(default)]
     pub stopped_by: Option<StoppedBy>,
     /// The job it became, if it went on after the model was answered
@@ -374,7 +377,14 @@ pub enum ToolKind {
 /// one still Pending, Asking or Running is Cancelled if the user stopped
 /// the turn, and Failed otherwise, and so is one a restored chat was cut
 /// off in. But for a background job ([`ToolCall::job`]), which runs on
-/// past its turn: see [the jobs](crate::tool#jobs). One the agent says failed while the user stops its turn was
+/// past its turn: see [the jobs](crate::tool#jobs). And but for a call to
+/// a tool CAF serves that's running as its turn ends: it's stopped, and
+/// stays Running, with [`stopped_by`](ToolCall::stopped_by) set if the
+/// user stopped the turn, until the tools driver says how it ended, as
+/// only it knows whether the work stopped or had finished: Cancelled (or
+/// Failed, if the turn failed under it) if it stopped, Done or Failed as
+/// it went if it had finished. Within 10 seconds, it ends so all the same.
+/// One the agent says failed while the user stops its turn was
 /// cancelled, as an agent of ACP's first version, such as Claude's, has
 /// no other word for it. Once a call has ended it stays so, whatever the
 /// agent says of it after, though what it gave back may still come.
@@ -387,7 +397,9 @@ pub enum ToolStatus {
     Pending,
     /// Waiting for the user: its permission question is open.
     Asking,
-    /// Running.
+    /// Running: or, with [`stopped_by`](ToolCall::stopped_by) set,
+    /// stopping, until the tools driver says how it ended. A viewer shows
+    /// that as "Stopping…".
     Running,
     /// Finished.
     Done,

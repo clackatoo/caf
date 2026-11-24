@@ -6,9 +6,16 @@
 //! ([`ToolDirective::Preview`]), so its diff is on the call before
 //! anyone's asked; then the policy is asked, and the user if it says so
 //! (Asking); then it's run (Running), or refused (Refused). Its output
-//! comes in as it runs, and it ends Done or Failed, or Cancelled if its
-//! turn is stopped or the agent cancels it. A preview that fails ends it
-//! Failed, asking no one. A call the driver detaches is a job: it runs on
+//! comes in as it runs, and it ends Done or Failed, or Cancelled if the
+//! agent cancels it. A preview that fails ends it Failed, asking no one.
+//!
+//! As its turn ends, a call not yet running ends at once: Cancelled if
+//! the user stopped the turn, Failed otherwise. One running is stopped
+//! (Stopping), and ends as the driver says, as only it knows whether the
+//! work stopped or had finished: as stopped, Cancelled or Failed
+//! ([`ToolEvent::Stopped`]), or as it went ([`ToolEvent::Finished`]). If
+//! the driver says neither within [`STOPPING_TIME`], or the chat is let
+//! go first, it ends as stopped all the same. A call the driver detaches is a job: it runs on
 //! past its turn, and its end is told the agent in a notice turn
 //! ([`crate::tool`]'s jobs). A TaskStop of the chat's own job runs
 //! unasked.
@@ -26,6 +33,7 @@
 //! call change nothing of it ([`Core::served_report`]).
 
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -46,7 +54,7 @@ use crate::event::{PolicyAnswer, ToolEvent};
 use crate::ids::{CallId, ChatId, ItemId, JobId, QuestionId, Ticket, TurnId};
 use crate::profiles::{CAF_SERVER, served_instructions};
 use crate::question::{OptionId, OptionKind, Permission, PermissionOption, QuestionKind};
-use crate::time::{Now, Window};
+use crate::time::{Mono, Now, Window};
 use crate::tool::{
     Action, AppToolSpec, CafTool, DecidedBy, Decision, Ending, Lines, MOST_LINE, MOST_OUTPUT,
     MOST_TOOL_NAME, Origin, Output, Piece, ServedTool, StoppedBy, output_size,
@@ -57,6 +65,11 @@ const MOST_TITLE: usize = 1024;
 
 /// The longest shell folder CAF takes from the driver, in bytes.
 const MOST_FOLDER: usize = 4096;
+
+/// How long a running call being stopped waits for the tools driver to
+/// say how it ended, before it ends as stopped all the same: longer than
+/// the tokio kit waits for one of the app's tools to stop (5 seconds).
+pub(super) const STOPPING_TIME: Duration = Duration::from_secs(10);
 
 /// The id and label of CAF's own options when it asks the user about a
 /// call: allow it once, or refuse it.
@@ -101,6 +114,19 @@ pub(super) enum Stage {
     Asking(QuestionId),
     /// Running.
     Running,
+    /// Its turn ended while it ran, and the driver was told to stop it: it
+    /// ends as the driver says, [`ToolEvent::Stopped`] or
+    /// [`ToolEvent::Finished`], or as `status`, by `by`, if it says
+    /// neither within [`STOPPING_TIME`] of `since`.
+    Stopping {
+        /// How it ends if it's stopped: Cancelled if the user stopped its
+        /// turn, Failed if the turn failed under it.
+        status: ToolStatus,
+        /// Who stopped it, if it's Cancelled.
+        by: Option<StoppedBy>,
+        /// When it was told to stop.
+        since: Mono,
+    },
 }
 
 /// Which of the lines a command printed are kept, as the driver numbers
@@ -404,6 +430,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 self.finished(now, call, ended, out);
             }
             ToolEvent::Gone => self.gone(now, call, out),
+            ToolEvent::Stopped => self.stopped(now, call, out),
         }
     }
 
@@ -1005,7 +1032,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(each) = self.calls.get(&call) else {
             return stale(out, call, "output");
         };
-        if each.stage != Stage::Running {
+        // A call being stopped may still print, until it stops.
+        if !matches!(each.stage, Stage::Running | Stage::Stopping { .. }) {
             return stale(out, call, "output before it ran");
         }
         let (chat, item) = (each.chat, each.item);
@@ -1067,8 +1095,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(each) = self.calls.get(&call) else {
             return stale(out, call, "a job");
         };
+        // One being stopped isn't let go on: its Cancel stops it.
         if each.stage != Stage::Running || each.job.is_some() {
-            return stale(out, call, "a job before it ran, or a second");
+            return stale(
+                out,
+                call,
+                "a job before it ran, or as it's stopped, or a second",
+            );
         }
         let (chat, item) = (each.chat, each.item);
         if self.job_call(chat, job).is_some() {
@@ -1132,7 +1165,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 });
                 return self.end_item(now, chat, at);
             }
-            Some(each) if each.stage != Stage::Running => {
+            // One being stopped had finished first: it ends as it went.
+            Some(each) if !matches!(each.stage, Stage::Running | Stage::Stopping { .. }) => {
                 return stale(out, call, "a finish before it ran");
             }
             Some(_) => {}
@@ -1207,6 +1241,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             self.drop_call(now, &each, ToolStatus::Failed, None);
             return;
         }
+        // Being stopped, it ends as it would have.
+        if let Stage::Stopping { status, by, .. } = each.stage {
+            self.drop_call(now, &each, status, by);
+            return;
+        }
         // The agent gives up on a call as its turn is stopped, too: then
         // it was the user who stopped it.
         let stopping = (self.runs.get(&each.chat))
@@ -1220,6 +1259,69 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if let Some(ticket) = self.drop_call(now, &each, ToolStatus::Cancelled, Some(by)) {
             out.push(Directive::Policy(PolicyDirective::Withdrawn { ticket }));
         }
+    }
+
+    /// The driver stopped a call, as it was told to, before it finished:
+    /// one being stopped ends as its turn's end said. For any other, the
+    /// core has finished with it already.
+    fn stopped(&mut self, now: Now, call: CallId, out: &mut Vec<Directive<A, D>>) {
+        let Some(&Call {
+            stage: Stage::Stopping { status, by, .. },
+            ..
+        }) = self.calls.get(&call)
+        else {
+            return stale(out, call, "its stop");
+        };
+        if let Some(each) = self.calls.remove(&call) {
+            self.drop_call(now, &each, status, by);
+        }
+    }
+
+    /// When each call being stopped is due to end without the driver
+    /// saying how: [`STOPPING_TIME`] after it was told to stop.
+    pub(super) fn stopping_deadlines(&self) -> impl Iterator<Item = (Mono, CallId)> + '_ {
+        (self.calls.iter()).filter_map(|(&call, each)| match each.stage {
+            Stage::Stopping { since, .. } => Some((since.after(STOPPING_TIME), call)),
+            _ => None,
+        })
+    }
+
+    /// The driver never said how `call`, being stopped, ended, in
+    /// [`STOPPING_TIME`]: it ends as stopped all the same.
+    pub(super) fn stopping_overdue(
+        &mut self,
+        now: Now,
+        call: CallId,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
+        let Some(&Call {
+            stage: Stage::Stopping { status, by, .. },
+            ..
+        }) = self.calls.get(&call)
+        else {
+            return;
+        };
+        report(
+            out,
+            Level::Warn,
+            format!(
+                "the tools driver never said whether call {} stopped or had finished, in {}s: \
+                 it ends as stopped",
+                call.0,
+                STOPPING_TIME.as_secs()
+            ),
+        );
+        if let Some(each) = self.calls.remove(&call) {
+            self.drop_call(now, &each, status, by);
+        }
+    }
+
+    /// Whether `item` of `chat`'s is a call being stopped, which ends once
+    /// the driver says how.
+    pub(super) fn is_stopping(&self, chat: ChatId, item: ItemId) -> bool {
+        (self.calls.values()).any(|each| {
+            each.chat == chat && each.item == item && matches!(each.stage, Stage::Stopping { .. })
+        })
     }
 
     /// Ends `each` as `status`, stopped `by` someone if it was cancelled:
@@ -1256,9 +1358,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// `chat`'s turn `turn` is ending, `stopped` by the user or not: its
-    /// calls CAF serves that haven't finished are cancelled, and end
-    /// Cancelled if it was stopped, and Failed otherwise. The drivers are
-    /// told when this call into the core finishes.
+    /// calls CAF serves that haven't finished are cancelled. Those not yet
+    /// running end now, Cancelled if it was stopped, and Failed otherwise;
+    /// those running are being stopped, and end as the driver says
+    /// ([`Stage::Stopping`]). The drivers are told when this call into the
+    /// core finishes.
     pub(super) fn settle_calls(&mut self, now: Now, chat: ChatId, turn: TurnId, stopped: bool) {
         let in_turn = |item: ItemId| {
             self.turn(chat, turn)
@@ -1266,20 +1370,39 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         // A job isn't its turn's any more.
         let calls: Vec<CallId> = (self.calls.iter())
-            .filter(|(_, each)| each.chat == chat && each.job.is_none() && in_turn(each.item))
+            .filter(|(_, each)| {
+                each.chat == chat
+                    && each.job.is_none()
+                    && !matches!(each.stage, Stage::Stopping { .. })
+                    && in_turn(each.item)
+            })
             .map(|(&call, _)| call)
             .collect();
-        let status = if stopped {
-            ToolStatus::Cancelled
+        let (status, by) = if stopped {
+            (ToolStatus::Cancelled, Some(StoppedBy::User))
         } else {
-            ToolStatus::Failed
+            (ToolStatus::Failed, None)
         };
         for call in calls {
-            if let Some(each) = self.calls.remove(&call) {
-                self.owed.push(Owed::Cancel(call));
-                if let Some(ticket) = self.drop_call(now, &each, status, Some(StoppedBy::User)) {
-                    self.owed.push(Owed::Withdrawn(ticket));
-                }
+            self.owed.push(Owed::Cancel(call));
+            let Some(each) = self.calls.get_mut(&call) else {
+                continue;
+            };
+            // Only the driver knows whether it stopped, or had finished.
+            if each.stage == Stage::Running {
+                each.stage = Stage::Stopping {
+                    status,
+                    by,
+                    since: now.mono,
+                };
+                let item = each.item;
+                self.change_tool(chat, item, |tool| tool.stopped_by = by);
+                continue;
+            }
+            if let Some(each) = self.calls.remove(&call)
+                && let Some(ticket) = self.drop_call(now, &each, status, by)
+            {
+                self.owed.push(Owed::Withdrawn(ticket));
             }
         }
     }
@@ -1289,7 +1412,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// after. Those running are stopped as the turn ends.
     pub(super) fn stop_calls(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
         let calls: Vec<CallId> = (self.calls.iter())
-            .filter(|(_, each)| each.chat == chat && each.stage != Stage::Running)
+            .filter(|(_, each)| {
+                each.chat == chat && !matches!(each.stage, Stage::Running | Stage::Stopping { .. })
+            })
             .map(|(&call, _)| call)
             .collect();
         for call in calls {
@@ -1307,7 +1432,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// Stops `chat`'s jobs, as it's wound down: each is cancelled, and ends
     /// Cancelled, by the user, if they `stopped` it (they closed or
     /// deleted the chat), and Failed otherwise (it's put away, or CAF
-    /// shuts down), as calls in a turn cut off then do.
+    /// shuts down), as calls in a turn cut off then do. Its calls being
+    /// stopped, cancelled already, end now, as their turn's end said:
+    /// what the driver says of them after is ignored.
     pub(super) fn stop_jobs(
         &mut self,
         now: Now,
@@ -1316,7 +1443,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         out: &mut Vec<Directive<A, D>>,
     ) {
         let calls: Vec<CallId> = (self.calls.iter())
-            .filter(|(_, each)| each.chat == chat && each.job.is_some())
+            .filter(|(_, each)| {
+                each.chat == chat
+                    && (each.job.is_some() || matches!(each.stage, Stage::Stopping { .. }))
+            })
             .map(|(&call, _)| call)
             .collect();
         let status = if stopped {
@@ -1325,10 +1455,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             ToolStatus::Failed
         };
         for call in calls {
-            if let Some(each) = self.calls.remove(&call) {
-                out.push(Directive::Tool(ToolDirective::Cancel { call }));
-                self.drop_call(now, &each, status, Some(StoppedBy::User));
+            let Some(each) = self.calls.remove(&call) else {
+                continue;
+            };
+            if let Stage::Stopping { status, by, .. } = each.stage {
+                self.drop_call(now, &each, status, by);
+                continue;
             }
+            out.push(Directive::Tool(ToolDirective::Cancel { call }));
+            self.drop_call(now, &each, status, Some(StoppedBy::User));
         }
     }
 
@@ -1362,14 +1497,17 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
     }
 
-    /// Whether `chat` has a job running.
-    pub(super) fn has_jobs(&self, chat: ChatId) -> bool {
-        (self.calls.values()).any(|each| each.chat == chat && each.job.is_some())
+    /// Whether `chat` has a job running, or a call being stopped.
+    pub(super) fn has_calls_going(&self, chat: ChatId) -> bool {
+        (self.calls.values()).any(|each| {
+            each.chat == chat
+                && (each.job.is_some() || matches!(each.stage, Stage::Stopping { .. }))
+        })
     }
 
     /// Forgets `chat`'s calls CAF serves, as it's let go: any that
-    /// haven't finished are cancelled. Its turns have ended, so there
-    /// should be none.
+    /// haven't finished are cancelled. It's wound down, so there should
+    /// be none.
     pub(super) fn forget_calls(&mut self, chat: ChatId) {
         let calls: Vec<CallId> = (self.calls.iter())
             .filter(|(_, each)| each.chat == chat)

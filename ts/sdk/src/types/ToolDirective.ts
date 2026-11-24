@@ -27,6 +27,11 @@ import type { JsonValue } from "./serde_json/JsonValue.ts";
  *   the model's, whole.
  * - **Output is reported in batches,** at most every 100 ms or 16 KiB,
  *   and in order.
+ * - **A running call that's cancelled ends as the driver says:**
+ *   [`Stopped`](crate::event::ToolEvent::Stopped) if its work stopped
+ *   before it finished, [`Finished`](crate::event::ToolEvent::Finished)
+ *   if it had finished. The core waits 10 seconds for either, then ends
+ *   the call itself, warning that the driver never said.
  * - **A preview changes nothing.** One that fails is answered at once,
  *   saying why, and reported as [`ToolEvent::Finished`](crate::event::ToolEvent::Finished)
  *   with `done` false: the core asks no one, and sends nothing more.

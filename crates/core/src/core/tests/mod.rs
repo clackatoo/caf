@@ -24,6 +24,7 @@ mod settings;
 mod setup;
 mod shared;
 mod stop;
+mod stopping;
 mod traces;
 mod usage;
 mod woken;

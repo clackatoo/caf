@@ -860,6 +860,7 @@ pub(crate) fn every_type(s: &mut Samples) {
         &ToolEvent::<crate::chat::NoAppItems>::Detached { job: JobId(2) },
         true,
     );
+    s.written(&ToolEvent::<crate::chat::NoAppItems>::Stopped, true);
     s.both(&JobId(2));
     s.both(&Action::Stop { job: JobId(2) });
     s.both(&CafTool::TaskStop);

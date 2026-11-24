@@ -82,8 +82,11 @@ decision: Decision,
 app: NoAppItems | null, 
 /**
  * Who stopped it, for a call to a tool CAF serves that ended
- * [`Cancelled`](ToolStatus::Cancelled): `None` for any other, and for
- * a call saved before CAF kept it.
+ * [`Cancelled`](ToolStatus::Cancelled), or is being stopped: one
+ * still [`Running`](ToolStatus::Running) with it set is stopping, and
+ * keeps it if it ends Cancelled, or loses it if it had finished first
+ * and ends Done or Failed. `None` for any other, and for a call saved
+ * before CAF kept it.
  */
 stopped_by: StoppedBy | null, 
 /**
