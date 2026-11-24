@@ -1,0 +1,19 @@
+[package]
+name = "caf-relay"
+description = "CAF's MCP relay: an agent's stdio server, passed through to the CAF that started it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "caf-relay"
+path = "src/main.rs"
+# The library has the docs; the program is a thin wrapper around it.
+doc = false
+
+# std only: the relay runs inside every agent's MCP server list, and is
+# started each time a session is, so it stays small and starts at once.
+[dependencies]
