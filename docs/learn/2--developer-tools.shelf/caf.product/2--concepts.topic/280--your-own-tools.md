@@ -129,10 +129,13 @@ asked once, as the tool is registered.
 **Never block.** `title`, `preview` and `run` are called on CAF's own
 task, so each must give its answer, or its future, at once: `title` must
 be cheap, and `preview` and `run` must do their work in the future they
-give, not before. Each future runs as a task of its own, so a slow one
-holds up nothing else, but it should await what it waits for, such as
-the UI thread's answer, and not block a thread: a future blocking a
-thread can't be stopped (below).
+give, not before. Each future runs as a task of its own, on two threads
+the app's tools have to themselves, named `caf-app-tool-N`. One that
+awaits what it waits for, such as the UI thread's answer, holds nothing
+up, however long it takes. One that blocks anyway ties up one of those
+threads: it can hold up the app's other tools, but never CAF, its own
+tools or its other drivers. And a future blocking a thread can't be
+stopped (below).
 
 ## Names and schemas
 
