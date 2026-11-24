@@ -650,11 +650,8 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
             "the agent driver's biggest line must be the host's biggest message"
         );
         // First, so nothing is started if it fails.
-        let (tools, serving) = {
-            // The app's own tools: served from feature 13.
-            let (_app, tools) = std::mem::take(&mut config.tools).split();
-            ToolsDriver::start(tools, &config.host.name)?
-        };
+        let (tools, serving) =
+            ToolsDriver::start(std::mem::take(&mut config.tools), &config.host.name)?;
         let recorder = (config.record.as_ref())
             .and_then(|path| Recorder::start(path, &config.host, &config.agents));
         let (commands, inbox) = mpsc::channel(COMMANDS);
@@ -1776,7 +1773,7 @@ struct Task<A: AppItem, D: AppData> {
     setup: SetupDriver,
     storage: StorageDriver<A, D>,
     usage: UsageDriver,
-    tools: ToolsDriver,
+    tools: ToolsDriver<A>,
     /// The core has been given the usage driver's first prices.
     priced: bool,
     /// Those waiting for the first prices.
@@ -1864,7 +1861,7 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 report = self.usage.next() => self.usage_report(report),
                 report = self.tools.next() => {
                     self.give(match report {
-                        ToolsReport::Tool { call, event } => Event::Tool { call, event: retyped(event) },
+                        ToolsReport::Tool { call, event } => Event::Tool { call, event },
                         ToolsReport::Relay { chat, change } => Event::Relay { chat, change },
                     });
                     self.tools.taken();
@@ -2997,48 +2994,6 @@ fn write_lines(
         {
             fail(error);
         }
-    }
-}
-
-/// A tools driver's event, as the core of an app with items of its own
-/// takes it. The driver doesn't give the app's items yet: feature 13 makes
-/// it generic over them, and this goes.
-fn retyped<A: AppItem>(event: caf_core::event::ToolEvent) -> caf_core::event::ToolEvent<A> {
-    use caf_core::event::ToolEvent;
-    match event {
-        ToolEvent::Called {
-            chat,
-            tool,
-            input,
-            agent_call,
-            title,
-            bad_input,
-        } => ToolEvent::Called {
-            chat,
-            tool,
-            input,
-            agent_call,
-            title,
-            bad_input,
-        },
-        ToolEvent::Previewed { pieces } => ToolEvent::Previewed { pieces },
-        ToolEvent::Output { from, lines } => ToolEvent::Output { from, lines },
-        ToolEvent::Detached { job } => ToolEvent::Detached { job },
-        ToolEvent::Finished {
-            done,
-            pieces,
-            folder,
-            notice,
-            item: _,
-        } => ToolEvent::Finished {
-            done,
-            pieces,
-            folder,
-            notice,
-            item: None,
-        },
-        ToolEvent::Gone => ToolEvent::Gone,
-        other => unreachable!("a tool event this CAF doesn't know: {other:?}"),
     }
 }
 

@@ -201,7 +201,6 @@ pub struct AppTools<A: AppItem = NoAppItems> {
 struct Registered<A: AppItem> {
     /// Its spec, with its schema worked out.
     spec: ToolSpec,
-    #[allow(dead_code)] // used once served
     tool: Arc<dyn Erased<A>>,
 }
 
@@ -263,7 +262,6 @@ impl<A: AppItem> AppTools<A> {
     }
 
     /// The tool named `name`, if there's one.
-    #[allow(dead_code)] // used once served
     pub(crate) fn named(&self, name: &str) -> Option<&Arc<dyn Erased<A>>> {
         (self.tools.iter())
             .find(|known| known.spec.name == name)
@@ -272,7 +270,6 @@ impl<A: AppItem> AppTools<A> {
 
     /// The tool named `name`'s spec, its schema worked out, if there's
     /// one.
-    #[allow(dead_code)] // used once served
     pub(crate) fn spec(&self, name: &str) -> Option<&ToolSpec> {
         (self.tools.iter())
             .find(|known| known.spec.name == name)
@@ -356,6 +353,12 @@ pub struct Built<I, F, A: AppItem = NoAppItems> {
 /// A tool named `name` that runs `run`, for tools too small for a type of
 /// their own: give it a title, a description and hints with the
 /// builder's methods.
+///
+/// Rust doesn't take the app's item type from its default: a tool is
+/// best built where it's registered, as in
+/// `config.tools.app = AppTools::new().with(tool(..))?`, which says it.
+/// Built on its own, by an app with no items of its own, its closure
+/// names it: `Done::<NoAppItems>::answer(..)`.
 pub fn tool<I, F, Fut, A>(name: impl Into<String>, run: F) -> Built<I, F, A>
 where
     I: DeserializeOwned + JsonSchema + Send + 'static,
@@ -535,7 +538,6 @@ pub(crate) fn bad_input(why: &str) -> String {
 
 /// A tool with its input's type forgotten, as [`AppTools`] keeps it: its
 /// input is read again from JSON for each step, as the core gives it back.
-#[allow(dead_code)] // used once served
 pub(crate) trait Erased<A: AppItem>: Send + Sync {
     /// Reads `input`, giving the call's title: or why it doesn't fit, as
     /// serde says.

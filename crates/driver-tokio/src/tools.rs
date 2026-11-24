@@ -34,7 +34,7 @@ use caf_core::chat::{AppItem, NoAppItems};
 use caf_core::directive::{RefusedCall, ToolDirective};
 use caf_core::event::{RelayChange, Serving, ToolEvent};
 use caf_core::ids::{CallId, ChatId, JobId};
-use caf_core::mcp::{self, Answer, Connection, Key, Out, Request};
+use caf_core::mcp::{self, Answer, AppListing, Connection, Key, Out, Request};
 use caf_core::tool::{Action, CafTool, Piece, ServedTool, Text};
 use caf_tools::{Commands, Files};
 use serde::Deserialize;
@@ -45,7 +45,7 @@ use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::{Instant, Sleep};
 
-use crate::app_tools::AppTools;
+use crate::app_tools::{AppTools, Done, Erased};
 use crate::files::DiskFiles;
 use crate::pty::PtyCommands;
 use crate::runner::CafRunner;
@@ -79,32 +79,6 @@ pub struct ToolsConfig<A: AppItem = NoAppItems> {
     pub progress_every: Duration,
 }
 
-impl<A: AppItem> ToolsConfig<A> {
-    /// The app's own tools, and the rest: what the tools driver starts
-    /// with until it serves the app's tools (feature 13).
-    pub(crate) fn split(self) -> (AppTools<A>, ToolsConfig) {
-        let Self {
-            app,
-            relay,
-            runner,
-            files,
-            commands,
-            folder,
-            progress_every,
-        } = self;
-        let rest = ToolsConfig {
-            app: AppTools::new(),
-            relay,
-            runner,
-            files,
-            commands,
-            folder,
-            progress_every,
-        };
-        (app, rest)
-    }
-}
-
 impl<A: AppItem> Default for ToolsConfig<A> {
     fn default() -> Self {
         Self {
@@ -119,9 +93,10 @@ impl<A: AppItem> Default for ToolsConfig<A> {
     }
 }
 
-impl std::fmt::Debug for ToolsConfig {
+impl<A: AppItem> std::fmt::Debug for ToolsConfig<A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolsConfig")
+            .field("app", &self.app)
             .field("relay", &self.relay)
             .field("folder", &self.folder)
             .finish_non_exhaustive()
@@ -453,9 +428,9 @@ const FINISH_TIME: Duration = Duration::from_secs(1);
 
 /// What the driver reports, for the core.
 #[derive(Debug)]
-pub(crate) enum Report {
+pub(crate) enum Report<A: AppItem = NoAppItems> {
     /// [`Event::Tool`](caf_core::Event::Tool).
-    Tool { call: CallId, event: ToolEvent },
+    Tool { call: CallId, event: ToolEvent<A> },
     /// [`Event::Relay`](caf_core::Event::Relay).
     Relay { chat: ChatId, change: RelayChange },
 }
@@ -463,9 +438,15 @@ pub(crate) enum Report {
 /// A future the runner gave.
 type Running<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
+/// What a call ended with: what it did, and the app's item, which only
+/// the app's own tools give.
+type Ended<A> = (Ran, Option<A>);
+
 /// The tools driver.
-pub(crate) struct ToolsDriver {
+pub(crate) struct ToolsDriver<A: AppItem = NoAppItems> {
     runner: Box<dyn Runner>,
+    /// The app's own tools.
+    app: AppTools<A>,
     /// Where relays connect, if tools are served.
     live: Option<Live>,
     /// What each chat is served.
@@ -475,7 +456,7 @@ pub(crate) struct ToolsDriver {
     /// Each chat's bound connection.
     bound: HashMap<ChatId, u64>,
     /// Each open call.
-    calls: BTreeMap<CallId, Each>,
+    calls: BTreeMap<CallId, Each<A>>,
     /// The last call's number.
     last_call: u64,
     prints: mpsc::UnboundedSender<Print>,
@@ -483,7 +464,7 @@ pub(crate) struct ToolsDriver {
     /// Each chat's last job number.
     jobs: Jobs,
     /// Reports waiting to be handed out.
-    reports: VecDeque<Report>,
+    reports: VecDeque<Report<A>>,
     /// The answer to each call that finished, or became a job, held until
     /// the core has taken its [`ToolEvent::Finished`] or
     /// [`ToolEvent::Detached`]: so the agent can't end its turn, or stop
@@ -529,6 +510,8 @@ impl Drop for SocketFile {
 
 struct Served {
     tools: Vec<CafTool>,
+    /// The app's own tools, by name.
+    app: Vec<String>,
     instructions: String,
     /// The chat's folder.
     cwd: PathBuf,
@@ -553,19 +536,21 @@ struct Conn {
 }
 
 /// An open call.
-struct Each {
+struct Each<A: AppItem> {
     chat: ChatId,
     conn: u64,
     request: Request,
     /// The agent's own id for it.
     agent_call: Option<String>,
+    /// The app's tool it calls, if it's one of the app's.
+    app: Option<Arc<dyn Erased<A>>>,
     /// Whether the core has said to run it.
     running: bool,
     /// The job it became, once the model was answered and it went on:
     /// its request is answered, and it's no longer its connection's.
     job: Option<JobId>,
-    preview: Option<Running<Result<Vec<Piece>, Ran>>>,
-    run: Option<Running<Ran>>,
+    preview: Option<Running<Result<Vec<Piece>, Ended<A>>>>,
+    run: Option<Running<Ended<A>>>,
     /// When its progress is next sent.
     progress_at: Instant,
     /// Output printed and not yet reported.
@@ -637,12 +622,12 @@ struct Hello {
     token: String,
 }
 
-impl ToolsDriver {
+impl<A: AppItem> ToolsDriver<A> {
     /// A driver as `config` says, serving relays at `live`, if any, from
     /// the tools' `folder`.
     /// `folder` is the tools' folder, and the name of this driver's own in
     /// its `out/`.
-    fn with(config: ToolsConfig, live: Option<Live>, folder: Option<(&Path, &str)>) -> Self {
+    fn with(config: ToolsConfig<A>, live: Option<Live>, folder: Option<(&Path, &str)>) -> Self {
         let (prints, printed) = mpsc::unbounded_channel();
         let runner = match (config.runner, folder) {
             (Some(runner), _) => runner,
@@ -657,6 +642,7 @@ impl ToolsDriver {
         };
         Self {
             runner,
+            app: config.app,
             progress_every: config.progress_every.max(Duration::from_millis(1)),
             live,
             served: HashMap::new(),
@@ -684,7 +670,7 @@ impl ToolsDriver {
     ///
     /// Why it can't serve, for the app's developer.
     pub(crate) fn start(
-        mut config: ToolsConfig,
+        mut config: ToolsConfig<A>,
         app: &str,
     ) -> Result<(Self, Option<Serving>), StartError> {
         let relay = match std::mem::take(&mut config.relay) {
@@ -709,7 +695,7 @@ impl ToolsDriver {
 
     /// Serves through `relay`, unchecked.
     fn listen(
-        mut config: ToolsConfig,
+        mut config: ToolsConfig<A>,
         relay: SpawnCommand,
         app: &str,
     ) -> Result<(Self, Serving), StartError> {
@@ -745,7 +731,8 @@ impl ToolsDriver {
         private_folder(&folder).map_err(StartError::Serving)?;
         let (listener, file) = listen(&socket)?;
         let key = random_key().map_err(StartError::Serving)?;
-        let serving = Serving::new(relay, socket.clone(), Key(key));
+        let mut serving = Serving::new(relay, socket.clone(), Key(key));
+        serving.app_tools = config.app.specs();
         let (from_conns, to_driver) = mpsc::channel(64);
         let live = Live {
             listener,
@@ -769,6 +756,7 @@ impl ToolsDriver {
             ToolDirective::Serve {
                 chat,
                 tools,
+                app,
                 instructions,
                 cwd,
                 ..
@@ -777,6 +765,7 @@ impl ToolsDriver {
                     chat,
                     Served {
                         tools,
+                        app,
                         instructions,
                         cwd: PathBuf::from(cwd),
                     },
@@ -808,12 +797,22 @@ impl ToolsDriver {
                     return;
                 };
                 let runner = &mut self.runner;
-                let preview =
-                    std::panic::catch_unwind(AssertUnwindSafe(|| runner.preview(&given, action)))
-                        .unwrap_or_else(|_| {
-                            log::warn!(target: "caf", "the tool runner panicked previewing call {}", call.0);
-                            Box::pin(std::future::ready(Err(failed(PANICKED))))
-                        });
+                let input = given.input.clone();
+                let preview = std::panic::catch_unwind(AssertUnwindSafe(|| match &each.app {
+                    Some(tool) => match tool.preview(&given, &input) {
+                        Some(preview) => Box::pin(async move { preview.await.map_err(ended) })
+                            as Running<Result<Vec<Piece>, Ended<A>>>,
+                        None => Box::pin(std::future::ready(Ok(Vec::new()))),
+                    },
+                    None => {
+                        let preview = runner.preview(&given, action);
+                        Box::pin(async move { preview.await.map_err(|ran| (ran, None)) })
+                    }
+                }))
+                .unwrap_or_else(|_| {
+                    log::warn!(target: "caf", "the tool runner panicked previewing call {}", call.0);
+                    Box::pin(std::future::ready(Err((failed(PANICKED), None))))
+                });
                 each.preview = Some(preview);
             }
             ToolDirective::Run {
@@ -833,11 +832,21 @@ impl ToolsDriver {
                     return;
                 };
                 let runner = &mut self.runner;
-                let run = std::panic::catch_unwind(AssertUnwindSafe(|| runner.run(given, action)))
-                    .unwrap_or_else(|_| {
-                        log::warn!(target: "caf", "the tool runner panicked running call {}", call.0);
-                        Box::pin(std::future::ready(failed(PANICKED)))
-                    });
+                let run = std::panic::catch_unwind(AssertUnwindSafe(|| match &each.app {
+                    Some(tool) => {
+                        let input = given.input.clone();
+                        let run = tool.run(given, &input);
+                        Box::pin(async move { ended(run.await) }) as Running<Ended<A>>
+                    }
+                    None => {
+                        let run = runner.run(given, action);
+                        Box::pin(async move { (run.await, None) })
+                    }
+                }))
+                .unwrap_or_else(|_| {
+                    log::warn!(target: "caf", "the tool runner panicked running call {}", call.0);
+                    Box::pin(std::future::ready((failed(PANICKED), None)))
+                });
                 each.preview = None;
                 each.running = true;
                 each.run = Some(run);
@@ -938,17 +947,17 @@ impl ToolsDriver {
         if let Some(each) = self.calls.get_mut(&call) {
             each.running = true;
             each.preview = None;
-            each.run = Some(Box::pin(std::future::ready(ran)));
+            each.run = Some(Box::pin(std::future::ready((ran, None))));
         }
     }
 
     /// The next report, for the core. Cancel-safe: everything is kept in
     /// the driver between polls.
-    pub(crate) async fn next(&mut self) -> Report {
+    pub(crate) async fn next(&mut self) -> Report<A> {
         std::future::poll_fn(|cx| self.poll_next(cx)).await
     }
 
-    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Report> {
+    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Report<A>> {
         if let Some(report) = self.pop() {
             return Poll::Ready(report);
         }
@@ -978,7 +987,7 @@ impl ToolsDriver {
 
     /// The next report, noting a call's `Finished`, whose answer waits for
     /// it.
-    fn pop(&mut self) -> Option<Report> {
+    fn pop(&mut self) -> Option<Report<A>> {
         let report = self.reports.pop_front()?;
         if let Report::Tool {
             call,
@@ -1078,7 +1087,20 @@ impl ToolsDriver {
             }
             return;
         };
-        let mcp = Connection::new(&served.tools, &served.instructions);
+        let listings = (served.app.iter())
+            .filter_map(|name| self.app.spec(name))
+            .map(|spec| {
+                let schema = spec.schema.clone().unwrap_or_default();
+                AppListing::new(
+                    &spec.name,
+                    &spec.title,
+                    &spec.description,
+                    schema,
+                    spec.hints,
+                )
+            })
+            .collect();
+        let mcp = Connection::new(&served.tools, &served.instructions).with_app_tools(listings);
         if let Some(old) = self.bound.get(&chat).copied() {
             self.close(old, Closing::Replaced);
         }
@@ -1139,6 +1161,7 @@ impl ToolsDriver {
                             conn: no,
                             request,
                             agent_call: agent_call.clone(),
+                            app: None,
                             running: false,
                             job: None,
                             preview: None,
@@ -1159,6 +1182,12 @@ impl ToolsDriver {
                         },
                     });
                 }
+                Out::AppCall {
+                    request,
+                    name,
+                    input,
+                    agent_call,
+                } => self.app_called(no, chat, request, name, input, agent_call),
                 // A job's request was answered: it's no longer the agent's
                 // to cancel, and goes on.
                 Out::Cancelled(request) => {
@@ -1186,6 +1215,68 @@ impl ToolsDriver {
             }
         }
         self.wake_at_next();
+    }
+
+    /// The agent called the app's tool `name` on connection `no`, of
+    /// `chat`: its input is read, and the call's title worked out, before
+    /// the core hears of it.
+    fn app_called(
+        &mut self,
+        no: u64,
+        chat: ChatId,
+        request: Request,
+        name: String,
+        input: serde_json::Value,
+        agent_call: Option<String>,
+    ) {
+        let (Some(tool), Some(spec)) = (self.app.named(&name).cloned(), self.app.spec(&name))
+        else {
+            // A connection lists only tools the app has, so it never is.
+            self.answer(
+                no,
+                &request,
+                &Answer::error(format!("There's no tool named `{name}` here.")),
+            );
+            return;
+        };
+        let (title, bad_input) =
+            match std::panic::catch_unwind(AssertUnwindSafe(|| tool.title(&input))) {
+                Ok(Ok(title)) => (title, None),
+                Ok(Err(why)) => (spec.title.clone(), Some(why)),
+                Err(_) => {
+                    log::warn!(target: "caf", "the app's tool {name} panicked titling a call");
+                    (spec.title.clone(), None)
+                }
+            };
+        self.last_call += 1;
+        let call = CallId(self.last_call);
+        self.calls.insert(
+            call,
+            Each {
+                chat,
+                conn: no,
+                request,
+                agent_call: agent_call.clone(),
+                app: Some(tool),
+                running: false,
+                job: None,
+                preview: None,
+                run: None,
+                progress_at: Instant::now() + self.progress_every,
+                batch: None,
+            },
+        );
+        self.reports.push_back(Report::Tool {
+            call,
+            event: ToolEvent::Called {
+                chat,
+                tool: ServedTool::App(name),
+                input,
+                agent_call,
+                title: Some(title),
+                bad_input,
+            },
+        });
     }
 
     /// Closes a connection, ending its calls.
@@ -1335,7 +1426,7 @@ impl ToolsDriver {
                     Ok(Poll::Ready(pieces)) => previewed.push((*call, pieces)),
                     Err(_) => {
                         log::warn!(target: "caf", "the tool runner panicked previewing call {}", call.0);
-                        previewed.push((*call, Err(failed(PANICKED))));
+                        previewed.push((*call, Err((failed(PANICKED), None))));
                     }
                 }
             }
@@ -1345,7 +1436,7 @@ impl ToolsDriver {
                     Ok(Poll::Ready(done)) => ran.push((*call, done)),
                     Err(_) => {
                         log::warn!(target: "caf", "the tool runner panicked running call {}", call.0);
-                        ran.push((*call, failed(PANICKED)));
+                        ran.push((*call, (failed(PANICKED), None)));
                     }
                 }
             }
@@ -1382,7 +1473,7 @@ impl ToolsDriver {
 
     /// Reports `call`'s end, as `ran` says, and holds its answer until the
     /// core has it: unless it's a job, whose model was answered already.
-    fn finish_call(&mut self, call: CallId, each: Each, ran: Ran) {
+    fn finish_call(&mut self, call: CallId, each: Each<A>, (ran, item): Ended<A>) {
         let Each {
             conn,
             request,
@@ -1406,7 +1497,7 @@ impl ToolsDriver {
                 notice: job.map(|job| {
                     (ran.notice).unwrap_or_else(|| failed_notice(job, agent_call.as_deref()))
                 }),
-                item: None,
+                item,
             },
         });
         if job.is_none() {
@@ -1527,7 +1618,7 @@ impl ToolsDriver {
     }
 }
 
-impl Each {
+impl<A: AppItem> Each<A> {
     /// Drops its work, giving back where to answer it.
     fn stop(self) -> (u64, Request) {
         let Self {
@@ -1577,7 +1668,7 @@ impl Batch {
 }
 
 /// A batch, as reported.
-fn output(call: CallId, batch: Batch) -> Report {
+fn output<A: AppItem>(call: CallId, batch: Batch) -> Report<A> {
     Report::Tool {
         call,
         event: ToolEvent::Output {
@@ -1623,6 +1714,19 @@ fn refused(why: &RefusedCall) -> String {
         RefusedCall::BadInput(why) => format!("Refused: {why}"),
         _ => "Refused".into(),
     }
+}
+
+/// What a call to one of the app's tools ended with, as the driver keeps
+/// it.
+fn ended<A: AppItem>(done: Done<A>) -> Ended<A> {
+    let Done {
+        done,
+        answer,
+        record,
+        item,
+        ..
+    } = done;
+    (Ran::new(done, record, answer), item)
 }
 
 /// A time that never comes.
@@ -2070,7 +2174,7 @@ mod tests {
         let (runs, run) = mpsc::unbounded_channel();
         let (dropped, drop_seen) = mpsc::unbounded_channel();
         let (forgot, forgotten) = mpsc::unbounded_channel();
-        let config = ToolsConfig {
+        let config: ToolsConfig = ToolsConfig {
             runner: Some(Box::new(Scripted {
                 runs,
                 dropped,
@@ -2831,7 +2935,7 @@ mod tests {
     async fn a_socket_path_too_long_fails_naming_it() {
         let dir = Dir::new();
         let folder = dir.0.join("x".repeat(100));
-        let config = ToolsConfig {
+        let config: ToolsConfig = ToolsConfig {
             folder: Some(folder.clone()),
             ..ToolsConfig::default()
         };
@@ -2853,7 +2957,7 @@ mod tests {
         let dir = Dir::new();
         std::fs::create_dir_all(&dir.0).unwrap();
         std::fs::set_permissions(&dir.0, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let config = ToolsConfig {
+        let config: ToolsConfig = ToolsConfig {
             folder: Some(dir.0.clone()),
             ..ToolsConfig::default()
         };
@@ -2869,7 +2973,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
         let dir = Dir::new();
         let folder = dir.0.join("tools");
-        let config = ToolsConfig {
+        let config: ToolsConfig = ToolsConfig {
             folder: Some(folder.clone()),
             ..ToolsConfig::default()
         };
@@ -3131,7 +3235,7 @@ mod tests {
         ];
         for command in unsendable {
             let dir = Dir::new();
-            let config = ToolsConfig {
+            let config: ToolsConfig = ToolsConfig {
                 relay: Relay::Command(command.clone()),
                 folder: Some(dir.0.clone()),
                 ..ToolsConfig::default()
@@ -3144,7 +3248,7 @@ mod tests {
         }
         // Nor a socket whose path isn't UTF-8.
         let dir = Dir::new();
-        let config = ToolsConfig {
+        let config: ToolsConfig = ToolsConfig {
             folder: Some(dir.0.join(std::ffi::OsStr::from_bytes(b"\xff"))),
             ..ToolsConfig::default()
         };
@@ -3157,7 +3261,7 @@ mod tests {
     #[tokio::test]
     async fn two_cafs_in_one_process_have_sockets_of_their_own() {
         let dir = Dir::new();
-        let config = || ToolsConfig {
+        let config = || ToolsConfig::<NoAppItems> {
             folder: Some(dir.0.clone()),
             ..ToolsConfig::default()
         };
