@@ -182,7 +182,8 @@
 //! is `caf` unless a step says: `mcp_start` can start the same server
 //! twice, under two names, as Claude may while it opens a session again.
 //! Started again under the same name, the new server replaces the old:
-//! the old one's stdin is closed, and nothing it sends counts any more.
+//! the old one's stdin is closed, and nothing it sends counts any more;
+//! a step naming a call made to it fails, saying so.
 //! So a test that wants both, such as one of a newer connection winning,
 //! gives the second its own `as`.
 //! A call is named by `as`, or by its tool; `mcp_await`, `mcp_progress`
