@@ -31,7 +31,8 @@ tar.workspace = true
 ureq.workspace = true
 zip.workspace = true
 # net: AsyncFd for pidfds, and pipes for adapters' standard streams.
-tokio = { workspace = true, features = ["net"] }
+# rt-multi-thread: the threads the app's own tools run on.
+tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
 
 [dev-dependencies]
 # Chat ids of the tests' own.

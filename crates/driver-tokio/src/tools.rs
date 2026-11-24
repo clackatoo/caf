@@ -485,6 +485,9 @@ pub(crate) struct ToolsDriver<A: AppItem = NoAppItems> {
     /// The waits for the app's tools to stop, each giving what to send
     /// once its tool has stopped, or [`STOP_TIME`] has passed.
     stops: JoinSet<AfterStop>,
+    /// The runtime the app's tools run on, if there are any: threads of
+    /// their own, so one that blocks holds up nothing of CAF's.
+    app_runtime: Option<tokio::runtime::Runtime>,
     /// [`ToolsConfig::progress_every`].
     progress_every: Duration,
 }
@@ -586,19 +589,14 @@ struct AppTask {
     ended: Option<oneshot::Receiver<()>>,
 }
 
-/// What to send once one of the app's tools has stopped.
-enum AfterStop {
-    /// Answer a call on its connection, if it's still there.
-    Answer {
-        conn: u64,
-        request: Request,
-        answer: Answer,
-    },
-    /// Write a line to a connection already closing.
-    Write {
-        write: mpsc::Sender<Vec<u8>>,
-        bytes: Vec<u8>,
-    },
+/// What to send once one of the app's tools has stopped: its call's
+/// answer, made as it was stopped, so it's sent even if its connection
+/// closes, as when CAF shuts down, while the tool stops.
+struct AfterStop {
+    /// The call's connection's writer.
+    write: mpsc::Sender<Vec<u8>>,
+    /// The answer, as a line.
+    bytes: Vec<u8>,
 }
 
 /// A tool's future, run as a task: the future is dropped as soon as it
@@ -681,6 +679,10 @@ impl<A: AppItem> ToolsDriver<A> {
     /// its `out/`.
     fn with(config: ToolsConfig<A>, live: Option<Live>, folder: Option<(&Path, &str)>) -> Self {
         let (prints, printed) = mpsc::unbounded_channel();
+        let app_runtime = match config.app.is_empty() {
+            true => None,
+            false => app_runtime(),
+        };
         let runner = match (config.runner, folder) {
             (Some(runner), _) => runner,
             (None, Some((folder, out))) => Box::new(CafRunner::new(
@@ -711,6 +713,7 @@ impl<A: AppItem> ToolsDriver<A> {
             sleep: Box::pin(tokio::time::sleep_until(far_off())),
             writers: JoinSet::new(),
             stops: JoinSet::new(),
+            app_runtime,
         }
     }
 
@@ -850,12 +853,17 @@ impl<A: AppItem> ToolsDriver<A> {
                     return;
                 };
                 let runner = &mut self.runner;
+                let runtime = self
+                    .app_runtime
+                    .as_ref()
+                    .map(|runtime| runtime.handle().clone());
                 let input = given.input.clone();
                 let mut task = None;
                 let preview = std::panic::catch_unwind(AssertUnwindSafe(|| match &each.app {
                     Some(app) => match app.tool.preview(&given, &input) {
                         Some(preview) => {
                             let (spawned, preview) = spawn_app(
+                                runtime.as_ref(),
                                 &app.name,
                                 call,
                                 "previewing",
@@ -913,12 +921,17 @@ impl<A: AppItem> ToolsDriver<A> {
                     return;
                 };
                 let runner = &mut self.runner;
+                let runtime = self
+                    .app_runtime
+                    .as_ref()
+                    .map(|runtime| runtime.handle().clone());
                 let mut task = None;
                 let run = std::panic::catch_unwind(AssertUnwindSafe(|| match &each.app {
                     Some(app) => {
                         let input = given.input.clone();
                         let run = app.tool.run(given, &input);
                         let (spawned, run) = spawn_app(
+                            runtime.as_ref(),
                             &app.name,
                             call,
                             "running",
@@ -960,7 +973,29 @@ impl<A: AppItem> ToolsDriver<A> {
             }
             ToolDirective::Cancel { call } => {
                 self.forget(call);
-                if let Some(each) = self.calls.remove(&call) {
+                if let Some(mut each) = self.calls.remove(&call) {
+                    // One of the app's tools may have finished just now,
+                    // its end not yet taken: it ended as the core stopped
+                    // it, so the model hears what it gave.
+                    let finished = match (&each.app, &mut each.run) {
+                        (Some(_), Some(run)) => {
+                            let mut cx = Context::from_waker(std::task::Waker::noop());
+                            match run.as_mut().poll(&mut cx) {
+                                Poll::Ready(ended) => Some(ended),
+                                Poll::Pending => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(ended) = finished {
+                        each.run = None;
+                        self.finish_call(call, each, ended);
+                        if let Some(held) = self.held.remove(&call) {
+                            self.answer(held.conn, &held.request, &held.answer);
+                        }
+                        self.wake_at_next();
+                        return;
+                    }
                     // Its work stops before the model hears it did. A job's
                     // model was answered, unless that answer still waits.
                     let job = each.job.is_some();
@@ -984,20 +1019,22 @@ impl<A: AppItem> ToolsDriver<A> {
     /// for one of the app's tools, once its `task` has stopped, so its
     /// work stops before the model hears it did.
     fn answer_after(&mut self, task: Option<AppTask>, conn: u64, request: Request, answer: Answer) {
-        match task {
-            None => self.answer(conn, &request, &answer),
-            Some(task) => {
-                let stopped = task.stopped();
-                self.stops.spawn(async move {
-                    stopped.await;
-                    AfterStop::Answer {
-                        conn,
-                        request,
-                        answer,
-                    }
-                });
-            }
-        }
+        let Some(task) = task else {
+            self.answer(conn, &request, &answer);
+            return;
+        };
+        let Some(open) = self.conns.get_mut(&conn) else {
+            return;
+        };
+        let Some(bytes) = open.mcp.answer(&request, &answer) else {
+            return;
+        };
+        let write = open.write.clone();
+        let stopped = task.stopped();
+        self.stops.spawn(async move {
+            stopped.await;
+            AfterStop { write, bytes }
+        });
     }
 
     /// Tells the runner `call` won't run, or has gone.
@@ -1104,20 +1141,7 @@ impl<A: AppItem> ToolsDriver<A> {
                 self.close(no, Closing::Lost);
             }
         }
-        // Each app's tool that has stopped has its call answered now.
-        while let Poll::Ready(Some(after)) = self.stops.poll_join_next(cx) {
-            match after {
-                Ok(AfterStop::Answer {
-                    conn,
-                    request,
-                    answer,
-                }) => self.answer(conn, &request, &answer),
-                Ok(AfterStop::Write { write, bytes }) => {
-                    let _ = write.try_send(bytes);
-                }
-                Err(_) => {}
-            }
-        }
+        self.poll_stops(cx);
         if let Some(report) = self.pop() {
             return Poll::Ready(report);
         }
@@ -1125,6 +1149,10 @@ impl<A: AppItem> ToolsDriver<A> {
         self.poll_conns(cx);
         self.poll_prints(cx);
         self.poll_calls(cx);
+        // Again, after what may have stopped one of the app's tools: an
+        // empty set keeps no waker, so one spawned since the first poll
+        // must be polled now to be woken when it's done.
+        self.poll_stops(cx);
         self.poll_due(cx);
         match self.pop() {
             Some(report) => Poll::Ready(report),
@@ -1154,6 +1182,15 @@ impl<A: AppItem> ToolsDriver<A> {
         };
         if let Some(held) = self.held.remove(&call) {
             self.answer(held.conn, &held.request, &held.answer);
+        }
+    }
+
+    /// Answers the calls whose app's tools have stopped.
+    fn poll_stops(&mut self, cx: &mut Context<'_>) {
+        while let Poll::Ready(Some(after)) = self.stops.poll_join_next(cx) {
+            if let Ok(AfterStop { write, bytes }) = after {
+                let _ = write.try_send(bytes);
+            }
         }
     }
 
@@ -1473,7 +1510,7 @@ impl<A: AppItem> ToolsDriver<A> {
                             let write = conn.write.clone();
                             self.stops.spawn(async move {
                                 stopped.await;
-                                AfterStop::Write { write, bytes }
+                                AfterStop { write, bytes }
                             });
                         }
                     }
@@ -1790,9 +1827,12 @@ impl<A: AppItem> ToolsDriver<A> {
         // its own STOP_TIME, so their calls are answered once they have.
         let mut stops = std::mem::take(&mut self.stops);
         while let Some(after) = stops.join_next().await {
-            if let Ok(AfterStop::Write { write, bytes }) = after {
+            if let Ok(AfterStop { write, bytes }) = after {
                 let _ = write.try_send(bytes);
             }
+        }
+        if let Some(runtime) = self.app_runtime.take() {
+            runtime.shutdown_background();
         }
         // Some were stopped, as their relays were lost: that's no matter.
         let mut writers = std::mem::take(&mut self.writers);
@@ -1866,10 +1906,40 @@ impl<T: Send + 'static> Future for Guarded<T> {
     }
 }
 
+/// The runtime the app's tools run on: two threads of their own, named
+/// `caf-app-tool-N`. `None` if it can't be made, logged: they run on the
+/// driver's then.
+fn app_runtime() -> Option<tokio::runtime::Runtime> {
+    static THREADS: AtomicU64 = AtomicU64::new(0);
+    let made = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_name_fn(|| format!("caf-app-tool-{}", THREADS.fetch_add(1, Ordering::Relaxed)))
+        .enable_all()
+        .build();
+    match made {
+        Ok(runtime) => Some(runtime),
+        Err(error) => {
+            log::warn!(target: "caf", "the app's tools' threads couldn't be started, so they share CAF's: {error}");
+            None
+        }
+    }
+}
+
+impl<A: AppItem> Drop for ToolsDriver<A> {
+    fn drop(&mut self) {
+        // Never dropped as it is, which waits for its tasks, and panics
+        // in an async context.
+        if let Some(runtime) = self.app_runtime.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
 /// Runs `work`, one of the app's tool `name`'s, for `call`, as a task of
-/// its own: the task, and a future of what it gives, or of `panicked()`
+/// its own, on `runtime` if given: the task, and a future of what it gives, or of `panicked()`
 /// if it panicked, as `doing` it, which is logged.
 fn spawn_app<T: Send + 'static>(
+    runtime: Option<&tokio::runtime::Handle>,
     name: &str,
     call: CallId,
     doing: &'static str,
@@ -1877,10 +1947,14 @@ fn spawn_app<T: Send + 'static>(
     panicked: impl FnOnce() -> T + Send + 'static,
 ) -> (AppTask, Running<T>) {
     let (ended, ended_seen) = oneshot::channel();
-    let handle = tokio::spawn(Guarded {
+    let guarded = Guarded {
         work,
         _ended: ended,
-    });
+    };
+    let handle = match runtime {
+        Some(runtime) => runtime.spawn(guarded),
+        None => tokio::spawn(guarded),
+    };
     let task = AppTask {
         name: name.to_owned(),
         abort: handle.abort_handle(),
@@ -4225,6 +4299,15 @@ mod tests {
         ms: u64,
     }
 
+    /// Takes a while to drop: blocks its thread.
+    struct SlowDropped;
+
+    impl Drop for SlowDropped {
+        fn drop(&mut self) {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
+
     /// Panics as it's dropped.
     struct PanicsDropped;
 
@@ -4276,7 +4359,7 @@ mod tests {
             }))
         }
 
-        fn run(&self, _call: Call, input: How) -> crate::app_tools::BoxFuture<Done> {
+        fn run(&self, call: Call, input: How) -> crate::app_tools::BoxFuture<Done> {
             assert!(input.how != "run", "running");
             let (started, blocked) = (Arc::clone(&self.started), Arc::clone(&self.blocked));
             Box::pin(async move {
@@ -4290,7 +4373,14 @@ mod tests {
                         let _dropped = PanicsDropped;
                         std::future::pending().await
                     }
-                    "block" | "stuck" => {
+                    "drop_slow" => {
+                        let _dropped = SlowDropped;
+                        std::future::pending().await
+                    }
+                    "block" | "stuck" | "print_block" => {
+                        if input.how == "print_block" {
+                            call.print(0, vec!["printed".into()]);
+                        }
                         started.store(true, Ordering::SeqCst);
                         std::thread::sleep(Duration::from_millis(input.ms));
                         blocked.store(true, Ordering::SeqCst);
@@ -4517,5 +4607,131 @@ mod tests {
         assert_eq!(text_of(&answer), "Nothing to trim");
         client.nothing_waiting().await;
         h.quiet().await;
+    }
+
+    /// Runs misbehave, which prints and then blocks its thread for three
+    /// seconds, then calls trim_clip: which must be reported promptly.
+    /// Once misbehave has started blocking, if `started`.
+    async fn another_call_while_one_prints_then_blocks(started: bool) {
+        let (mut h, _go, blocking, _blocked) = misbehaving();
+        h.serve_app(CHAT, &["trim_clip", "misbehave"]);
+        let mut client = h.bound(CHAT).await;
+        let input = json!({"how": "print_block", "ms": 3000});
+        let (call, _) = call_app(&mut h, &mut client, 1, "misbehave", input.clone()).await;
+        h.apply(app_directive(call, input, true));
+        while started && !blocking.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let asked = std::time::Instant::now();
+        client.call_tool(2, "trim_clip", json!({"clip": 2})).await;
+        loop {
+            let report = h.report_within(Duration::from_secs(10)).await;
+            if matches!(&report, Report::Tool { event: ToolEvent::Called { title: Some(title), .. }, .. } if title == "Trim clip 2")
+            {
+                break;
+            }
+        }
+        let waited = asked.elapsed();
+        assert!(waited < Duration::from_secs(1), "reported after {waited:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_app_tool_that_prints_then_blocks_holds_up_no_other_call() {
+        another_call_while_one_prints_then_blocks(true).await;
+    }
+
+    // On one thread too: the app's tools have threads of their own, so
+    // CAF's is never theirs.
+    #[tokio::test]
+    async fn an_app_tool_that_prints_then_blocks_holds_up_no_other_call_on_one_thread() {
+        another_call_while_one_prints_then_blocks(false).await;
+    }
+
+    /// The driver's next report, within ten seconds.
+    async fn next_within<A: AppItem>(driver: &mut ToolsDriver<A>) -> Report<A> {
+        tokio::time::timeout(Duration::from_secs(10), driver.next())
+            .await
+            .expect("a report in time")
+    }
+
+    #[tokio::test]
+    async fn an_app_call_that_finished_as_it_was_cancelled_is_answered_with_what_it_gave() {
+        let dir = Dir::new();
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let blocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let app = AppTools::new()
+            .with(Misbehaving {
+                started,
+                blocked: Arc::clone(&blocked),
+            })
+            .unwrap();
+        let config: ToolsConfig = ToolsConfig {
+            app,
+            folder: Some(dir.0.clone()),
+            ..ToolsConfig::default()
+        };
+        let (mut driver, serving) =
+            ToolsDriver::listen(config, SpawnCommand::new("/bin/false"), "test").unwrap();
+        driver.apply(ToolDirective::Serve {
+            chat: CHAT,
+            tools: Vec::new(),
+            app: vec!["misbehave".into()],
+            cwd: "/work".into(),
+            instructions: "Use them.".into(),
+        });
+        let stream = UnixStream::connect(&serving.socket).await.unwrap();
+        let (read, write) = stream.into_split();
+        let mut client = Client {
+            read: BufReader::new(read),
+            write,
+        };
+        let token = mcp::token(&serving.key, CHAT);
+        client
+            .send(&json!({"caf_relay": 1, "chat": CHAT, "token": token}))
+            .await;
+        assert_connected(next_within(&mut driver).await, CHAT);
+        let input = json!({"how": "block", "ms": 0});
+        client.call_tool(1, "misbehave", input.clone()).await;
+        let call = match next_within(&mut driver).await {
+            Report::Tool { call, .. } => call,
+            other => panic!("expected Called, got {other:?}"),
+        };
+        driver.apply(app_directive(call, input, true));
+        // It finishes, and the driver hasn't seen it yet when it's
+        // cancelled.
+        while !blocked.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        driver.apply(ToolDirective::Cancel { call });
+        match next_within(&mut driver).await {
+            Report::Tool {
+                event: ToolEvent::Finished { done: true, .. },
+                ..
+            } => {}
+            other => panic!("expected Finished, got {other:?}"),
+        }
+        driver.taken();
+        let answer = tokio::select! {
+            answer = client.recv() => answer,
+            report = next_within(&mut driver) => panic!("unexpected report: {report:?}"),
+        };
+        assert_eq!(text_of(&answer), "unblocked");
+        driver.finish().await;
+    }
+
+    #[tokio::test]
+    async fn a_call_stopped_as_caf_shuts_down_is_answered_once_its_tool_has_stopped() {
+        let (mut h, _go, _started, _blocked) = misbehaving();
+        h.serve_app(CHAT, &["misbehave"]);
+        let mut client = h.bound(CHAT).await;
+        let input = json!({"how": "drop_slow"});
+        let (call, _) = call_app(&mut h, &mut client, 1, "misbehave", input.clone()).await;
+        h.apply(app_directive(call, input, true));
+        h.quiet().await;
+        h.apply(ToolDirective::Cancel { call });
+        h.shut_down().await;
+        let answer = client.recv().await;
+        assert_eq!(text_of(&answer), CANCELLED);
     }
 }
