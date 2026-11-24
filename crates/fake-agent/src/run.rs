@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::{BufRead, Write};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::ChildStdin;
 use std::process::{Child, Command, Stdio};
@@ -75,6 +76,7 @@ pub fn run(script: &Script, record: Option<&Path>) -> i32 {
         handlers: Vec::new(),
         holders: Vec::new(),
         servers: HashMap::new(),
+        generations: 0,
         calls: HashMap::new(),
         last_call: None,
     };
@@ -132,10 +134,12 @@ enum Heard {
     Message(Value),
     /// The client closed stdin.
     Closed,
-    /// A JSON object from an MCP server, by its connection's name.
-    Mcp(String, Value),
-    /// An MCP server closed its stdout, by its connection's name.
-    McpClosed(String),
+    /// A JSON object from an MCP server, by its connection's name and
+    /// generation.
+    Mcp(String, u64, Value),
+    /// An MCP server closed its stdout, by its connection's name and
+    /// generation.
+    McpClosed(String, u64),
 }
 
 /// The record file, shared with the reader thread.
@@ -204,12 +208,27 @@ fn read_stdin(send: Sender<Heard>, record: Record, gate: Arc<Gate>) {
 
 /// Reads an MCP server's stdout on a thread of its own. `stop_reading`
 /// is about the client's stdin, so this never stops.
+/// Its stderr is read on another, a line at a time into the record, as
+/// Claude logs its servers' stderr. Once stdout closes, the server is
+/// waited for, and how it exited recorded.
 fn read_server(
     name: String,
-    stdout: std::process::ChildStdout,
+    generation: u64,
+    mut child: Child,
     send: Sender<Heard>,
     record: Record,
 ) {
+    let stdout = child.stdout.take().expect("it's piped");
+    if let Some(stderr) = child.stderr.take() {
+        let (name, record) = (name.clone(), record.clone());
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stderr).split(b'\n') {
+                let Ok(line) = line else { return };
+                let line = String::from_utf8_lossy(&line);
+                record.write(&json!({"mcp_stderr": {"server": name, "line": line.trim_end()}}));
+            }
+        });
+    }
     std::thread::spawn(move || {
         let mut input = std::io::BufReader::new(stdout);
         let mut line = Vec::new();
@@ -226,7 +245,12 @@ fn read_server(
             match serde_json::from_slice::<Value>(text) {
                 Ok(message) if message.is_object() => {
                     record.write(&json!({"mcp_received": {"server": name, "message": message}}));
-                    if send.send(Heard::Mcp(name.clone(), message)).is_err() {
+                    // The fake gone, this thread goes too, leaving the
+                    // server to exit when its stdin closes.
+                    if send
+                        .send(Heard::Mcp(name.clone(), generation, message))
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -237,7 +261,22 @@ fn read_server(
             }
         }
         record.write(&json!({"mcp_closed": name}));
-        let _ = send.send(Heard::McpClosed(name));
+        let _ = send.send(Heard::McpClosed(name.clone(), generation));
+        // A server that closes its stdout but carries on is waited for
+        // still: this thread waits with it, and nothing else.
+        match child.wait() {
+            Ok(status) => {
+                let how = match (status.code(), status.signal()) {
+                    (Some(code), _) => json!({"server": name, "code": code}),
+                    (None, Some(signal)) => json!({"server": name, "signal": signal}),
+                    (None, None) => json!({"server": name}),
+                };
+                record.write(&json!({"mcp_exited": how}));
+            }
+            Err(err) => {
+                record.write(&json!({"mcp_exited": {"server": name, "error": err.to_string()}}))
+            }
+        }
     });
 }
 
@@ -246,10 +285,11 @@ fn read_server(
 struct Server {
     /// Its name in `mcpServers`, for the tools' names.
     name: String,
+    /// Which of the servers started under its connection's name it is:
+    /// what one started before it sends is ignored.
+    generation: u64,
     /// Its stdin, until `mcp_drop`.
     stdin: Option<ChildStdin>,
-    /// Never waited for: it exits once its stdin closes, or the fake does.
-    _child: Child,
     /// Whether it closed its stdout.
     closed: bool,
     /// The id of the fake's next request to it.
@@ -315,6 +355,8 @@ struct Fake<'s> {
     holders: Vec<Child>,
     /// The MCP servers started, by their connections' names.
     servers: HashMap<String, Server>,
+    /// How many MCP servers have been started.
+    generations: u64,
     /// The MCP calls made, by name.
     calls: HashMap<String, Call>,
     /// The name of the call last made.
@@ -604,8 +646,11 @@ impl Fake<'_> {
                 self.answers.insert(id, message);
             }
             Heard::Closed => self.closed = true,
-            Heard::Mcp(name, message) => {
-                let Some(server) = self.servers.get_mut(&name) else {
+            Heard::Mcp(name, generation, message) => {
+                let server = self.servers.get_mut(&name);
+                // From a server replaced by one started under its name
+                // since: the record shows it, and nothing else heeds it.
+                let Some(server) = server.filter(|server| server.generation == generation) else {
                     return;
                 };
                 if message.get("method").and_then(Value::as_str) == Some("notifications/progress") {
@@ -617,8 +662,9 @@ impl Fake<'_> {
                 // Anything else a server sends, the record shows, and the
                 // fake lets be.
             }
-            Heard::McpClosed(name) => {
-                if let Some(server) = self.servers.get_mut(&name) {
+            Heard::McpClosed(name, generation) => {
+                let server = self.servers.get_mut(&name);
+                if let Some(server) = server.filter(|server| server.generation == generation) {
                     server.closed = true;
                 }
             }
@@ -953,7 +999,7 @@ impl Fake<'_> {
             .envs(env.iter().map(|(name, value)| (name, value)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::piped());
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(err) => return self.fail(&format!("couldn't start the MCP server {name}: {err}")),
@@ -967,19 +1013,24 @@ impl Fake<'_> {
             "args": args,
             "env": names,
         }}));
-        let stdout = child.stdout.take().expect("it's piped");
+        self.generations += 1;
+        let generation = self.generations;
+        let stdin = child.stdin.take();
         read_server(
             label.clone(),
-            stdout,
+            generation,
+            child,
             self.heard.clone(),
             self.record.clone(),
         );
+        // One started under this name before is replaced: its stdin closes,
+        // so it exits, as Claude closes a server it's done with.
         self.servers.insert(
             label.clone(),
             Server {
                 name: name.to_owned(),
-                stdin: child.stdin.take(),
-                _child: child,
+                generation,
+                stdin,
                 closed: false,
                 next_id: 0,
                 answers: HashMap::new(),

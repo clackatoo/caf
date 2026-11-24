@@ -173,11 +173,18 @@
 //! Each server's stdout is read on a thread of its own, all the time, as
 //! stdin is. A step waiting for a server runs handlers as `wait` does, and
 //! fails if the server closes its stdout first; stdin closing ends the
-//! fake meanwhile, as it does a `wait`.
+//! fake meanwhile, as it does a `wait`. Its stderr goes to the record, a
+//! line at a time, as Claude logs its servers' stderr, and once its stdout
+//! closes it's waited for, and how it exited recorded. Writing to a server
+//! that isn't reading blocks, as a pipe does, until it reads or goes.
 //!
 //! A server's connection is named by `as`, or by the server's name, which
 //! is `caf` unless a step says: `mcp_start` can start the same server
 //! twice, under two names, as Claude may while it opens a session again.
+//! Started again under the same name, the new server replaces the old:
+//! the old one's stdin is closed, and nothing it sends counts any more.
+//! So a test that wants both, such as one of a newer connection winning,
+//! gives the second its own `as`.
 //! A call is named by `as`, or by its tool; `mcp_await`, `mcp_progress`
 //! and `mcp_cancel` take the one named `to`, or the one last made. Each
 //! connection's requests count up from 0.
@@ -267,6 +274,8 @@
 //! | `{"mcp_unreadable": {"server", "text"}}` | A line from an MCP server that isn't a JSON object |
 //! | `{"mcp_closed": SERVER}` | An MCP server closed its stdout |
 //! | `{"mcp_dropped": SERVER}` | An `mcp_drop` step |
+//! | `{"mcp_stderr": {"server", "line"}}` | A line an MCP server wrote to stderr |
+//! | `{"mcp_exited": {"server", "code" or "signal"}}` | An MCP server exited, once it closed its stdout |
 //!
 //! # Examples
 //!
