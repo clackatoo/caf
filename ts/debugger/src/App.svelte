@@ -5,7 +5,7 @@
   // Live and following, the chat view shows `/viewer`'s chats, as any
   // host's does. Looking back, or replaying, it shows the chats as they
   // were, from the inspector channel's `Past` messages, read-only.
-  import type { AgentName, Answer, Chat, ChatId, Connection, DeepReadonly, QuestionId, SettingChoice, Shelf, UserMessage } from '@clackatoo/caf'
+  import type { AgentName, Answer, CafTool, Chat, ChatId, Connection, DeepReadonly, QuestionId, SettingChoice, Shelf, UserMessage } from '@clackatoo/caf'
   import AgentsPanel, { type AgentActions } from './AgentsPanel.svelte'
   import {
     ChatList,
@@ -157,13 +157,13 @@
 
   const listActions: ListActions = {
     select: (chat: ChatId) => (selected = chat),
-    open: async (agent: AgentName, cwd: string, settings: readonly SettingChoice[] = []) => {
+    open: async (agent: AgentName, cwd: string, settings: readonly SettingChoice[] = [], tools: readonly CafTool[] = []) => {
       if (live === null) throw new Error('Not live.')
       const caf = live.caf
       // Opening can't carry settings: they're chosen once it's open, and
       // applied as its session opens.
       const { chat, failed } = await openThenChoose(
-        () => caf.open({ agent, cwd, session: { type: 'New' } }),
+        () => caf.open({ agent, cwd, session: { type: 'New' }, tools: { caf: [...tools] } }),
         (chat, choice) => caf.setSetting(chat, choice),
         settings,
       )
@@ -333,6 +333,7 @@
             {selected}
             actions={listActions}
             readOnly={!actable}
+            offersTools
           />
         </div>
         {#if saved.length > 0}

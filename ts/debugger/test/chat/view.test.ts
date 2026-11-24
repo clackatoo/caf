@@ -107,6 +107,22 @@ describe('turns', () => {
     expect(all).toContain("something this viewer doesn't know (Ghost)")
   })
 
+  it("draws CAF's notice of a background job's end in CAF's voice, not the app's, the agent's text kept as its title", () => {
+    const words = (element: Element | null) => (element?.textContent ?? '').replace(/\s+/g, ' ').trim()
+    const told = '<task-notification>Task 2 (sleep 1; echo done) completed with exit code 0. Output: /run/caf/out/1/2.txt</task-notification>'
+    const { container } = draw(
+      chat({ turns: [turn({ starter: { type: 'Notice', value: told } }), turn({ starter: { type: 'Notice', value: 'The build finished' } })] }),
+    )
+    const [job, app] = [...container.querySelectorAll('.turn')]
+    expect(words(job!.querySelector('.starter'))).toBe('CAF')
+    expect(job!.querySelector('.starter')!.classList.contains('caf')).toBe(true)
+    const said = job!.querySelector('.message.notice')!
+    expect(words(said)).toBe('Told the agent: Task 2 (sleep 1; echo done) completed with exit code 0. Output: /run/caf/out/1/2.txt')
+    expect(said.getAttribute('title')).toBe(told)
+    expect(words(app!.querySelector('.starter'))).toBe('A notice from the app')
+    expect(words(app!.querySelector('.message.notice'))).toBe('The build finished')
+  })
+
   const lives: [string, string][] = [
     ['Waiting', 'Waiting'],
     ['Running', 'Running'],
@@ -232,7 +248,7 @@ describe('items', () => {
     const tool = item(
       {
         type: 'Tool',
-        value: { title: 'cargo test', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'cargo test' }, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [{ type: 'Text', value: { text: 'ok: 3 passed', cut: null } }], app: null, stopped_by: null },
+        value: { title: 'cargo test', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'cargo test' }, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [{ type: 'Text', value: { text: 'ok: 3 passed', cut: null } }], app: null, stopped_by: null, job: null },
       },
       1500,
     )
@@ -255,7 +271,7 @@ describe('items', () => {
   it("names a tool kind and status it doesn't know", () => {
     const tool = item({
       type: 'Tool',
-      value: { title: 't', kind: { type: 'Teleport' } as never, status: { type: 'Pondering' } as never, input: null, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [], app: null, stopped_by: null },
+      value: { title: 't', kind: { type: 'Teleport' } as never, status: { type: 'Pondering' } as never, input: null, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [], app: null, stopped_by: null, job: null },
     })
     const { container } = draw(chat({ turns: [turn({ items: [tool] })] }))
     expect(container.querySelector('.tool .kind')?.textContent).toBe('Unknown kind (Teleport)')
@@ -859,7 +875,7 @@ describe('words for what comes next', () => {
 describe('a tool that ended', () => {
   it('says None for no output once it has ended, and None yet while it runs', () => {
     const tool = (status: string) =>
-      item({ type: 'Tool', value: { title: 't', kind: { type: 'Read' }, status: { type: status } as never, input: null, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [], app: null, stopped_by: null } })
+      item({ type: 'Tool', value: { title: 't', kind: { type: 'Read' }, status: { type: status } as never, input: null, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [], app: null, stopped_by: null, job: null } })
     const { container } = draw(chat({ turns: [turn({ items: [tool('Done'), tool('Failed'), tool('Running')] })] }))
     const outputs = [...container.querySelectorAll('.tool .none')].map((none) => none.textContent)
     // Each call's output, then its input.
@@ -871,7 +887,7 @@ describe("text that hides or reorders itself", () => {
   it('shows bidi controls and invisible characters in raw JSON as escapes', () => {
     const tool = item({
       type: 'Tool',
-      value: { title: 't', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'echo \u202Egnp.exe\u200B' }, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [{ type: 'Text', value: { text: 'out\u2066put', cut: null } }], app: null, stopped_by: null },
+      value: { title: 't', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'echo \u202Egnp.exe\u200B' }, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [{ type: 'Text', value: { text: 'out\u2066put', cut: null } }], app: null, stopped_by: null, job: null },
     })
     const unknown = item({ type: 'Unknown', value: { what: 'x\u202E', raw: { a: '\u202Eb' }, summary: null, cut: null } })
     const { container } = draw(chat({ turns: [turn({ items: [tool, unknown] })] }))

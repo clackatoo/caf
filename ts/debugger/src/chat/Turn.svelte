@@ -4,6 +4,7 @@
   import { attempt } from './actions.ts'
   import Item from './Item.svelte'
   import { clock, fullTime, isoTime, took } from './time.ts'
+  import { jobNotice } from './tools.ts'
   import { errorText, failureText, lifeHint, lifeLabel, remedyText, shortId, tagOf } from './words.ts'
 
   let {
@@ -39,6 +40,8 @@
     }
   })
 
+  /** For CAF's notice that a background job ended, what it said, in words: it's CAF's, not the app's. */
+  const job = $derived(turn.starter.type === 'Notice' ? jobNotice(turn.starter.value) : null)
   const time = $derived(took(turn.window))
   let sending = $state(false)
   let problem = $state<string | null>(null)
@@ -67,6 +70,8 @@
       <span class="starter agent">The agent, by itself</span>
     {:else if turn.starter.type === 'OtherChat'}
       <span class="starter other" title={turn.starter.value.from}>From chat {shortId(turn.starter.value.from)}</span>
+    {:else if turn.starter.type === 'Notice' && job !== null}
+      <span class="starter caf">CAF</span>
     {:else if turn.starter.type === 'Notice'}
       <span class="starter notice">A notice from the app</span>
     {:else if turn.starter.type === 'Caf'}
@@ -91,6 +96,8 @@
 
   {#if message !== null}
     <div class="message">{text(message)}</div>
+  {:else if turn.starter.type === 'Notice' && job !== null}
+    <div class="message notice job" title={turn.starter.value}><span class="hidden">{'Told the agent: '}</span>{job}</div>
   {:else if turn.starter.type === 'Notice'}
     <div class="message notice">{turn.starter.value}</div>
   {/if}

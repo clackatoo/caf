@@ -10,7 +10,7 @@ import { cleanup, fireEvent } from '@testing-library/svelte'
 import { afterEach, describe, expect, it } from 'vitest'
 import { apply, type Change, type Chat, type Decision, type Piece, type ToolCall, type ToolStatus } from '@clackatoo/caf'
 import { colour } from '../../src/chat/ansi.ts'
-import { bytes, cafAbout, cafAsks, decisionText, endingText, followable, imageShown, linkName } from '../../src/chat/tools.ts'
+import { bytes, cafAbout, cafAsks, decisionText, endingText, followable, imageShown, jobNotice, linkName } from '../../src/chat/tools.ts'
 import { chat, draw, item, question, turn } from './build.ts'
 
 afterEach(cleanup)
@@ -32,6 +32,7 @@ function call(fields: Partial<ToolCall> = {}): ToolCall {
     decision: { type: 'NotAsked' },
     app: null,
     stopped_by: null,
+    job: null,
     ...fields,
   }
 }
@@ -763,5 +764,84 @@ describe('a permission question about a call', () => {
     )
     expect(container.querySelectorAll('.questions .about')).toHaveLength(0)
     expect(container.querySelectorAll('.questions .question')).toHaveLength(3)
+  })
+})
+
+describe('background jobs', () => {
+  const bash = (fields: Partial<ToolCall> = {}) =>
+    call({
+      title: 'npm run dev',
+      origin: { type: 'Caf', value: { type: 'Bash' } },
+      action: { type: 'Run', value: { command: 'npm run dev', folder: '/work', background: true } },
+      decision: { type: 'Allowed', value: { type: 'User', value: { option: 'allow' } } },
+      ...fields,
+    })
+
+  it('marks a running job Background, in the accent, and says what that means', () => {
+    const { container } = drawCalls(bash({ status: { type: 'Running' }, job: 3 }))
+    const row = rowOf(container)
+    const chip = row.querySelector('summary .job')!
+    expect(text(chip)).toBe('Background')
+    expect(chip.getAttribute('title')).toMatch(/^Running in the background, as task 3/)
+    expect(TOOL_CSS).toMatch(/\.job \{[^}]*color: var\(--caf-accent\)/)
+    expect(text(row.querySelector('.background'))).toMatch(/^Running in the background, as task 3: the agent was answered/)
+  })
+
+  it('drops the mark once the job has ended, and says it ran in the background', () => {
+    for (const type of ['Done', 'Failed', 'Cancelled'] as const) {
+      const { container } = drawCalls(bash({ status: { type }, job: 3 }))
+      const row = rowOf(container)
+      expect(row.querySelector('.job')).toBeNull()
+      expect(text(row.querySelector('.background'))).toBe('Ran in the background, as task 3: the agent was told when it ended.')
+      cleanup()
+    }
+  })
+
+  it('marks no call that is not a job', () => {
+    const { container } = drawCalls(bash({ status: { type: 'Running' } }))
+    expect(rowOf(container).querySelector('.job, .background')).toBeNull()
+  })
+
+  it("draws TaskStop as a step of its own, named for stopping a task, not as a tool of no kind", () => {
+    const stop = call({
+      title: 'Stop task 3',
+      kind: { type: 'Other' },
+      origin: { type: 'Caf', value: { type: 'TaskStop' } },
+      action: { type: 'Stop', value: { job: 3 } },
+      result: [{ type: 'Text', value: { text: 'Stopped task 3', cut: null } }],
+    })
+    const { container } = drawCalls(bash({ status: { type: 'Cancelled' }, job: 3, stopped_by: { type: 'Agent' } }), stop)
+    const rows = [...container.querySelectorAll('details.tool')]
+    expect(rows).toHaveLength(2)
+    expect(text(rows[1]!.querySelector('.title'))).toBe('Stop task 3')
+    expect(rows[1]!.querySelector('.icon')!.getAttribute('title')).toBe('Stop a task')
+    expect(text(rows[1]!.querySelector('.kind'))).toBe('Stop a task')
+    expect(text(rows[1]!.querySelector('.status'))).toBe('Done')
+    expect(text(rows[1]!.querySelector('.result'))).toContain('Stopped task 3')
+  })
+})
+
+describe("CAF's notice of a job's end", () => {
+  it('is told in its own words, as one sentence', () => {
+    expect(jobNotice('<task-notification>Task 1 (cargo test) completed with exit code 0. Output: /o/1.txt</task-notification>')).toBe(
+      'Task 1 (cargo test) completed with exit code 0. Output: /o/1.txt',
+    )
+    expect(jobNotice('\n<task-notification>\nTask 4 (make)\n was stopped.\n</task-notification>\n')).toBe('Task 4 (make) was stopped.')
+  })
+
+  it("is told by its summary, or else its parts, when it's in parts, as Claude Code's are", () => {
+    expect(
+      jobNotice('<task-notification>\n<task-id>1</task-id>\n<status>failed</status>\n<summary>Task 1 failed</summary>\n</task-notification>'),
+    ).toBe('Task 1 failed')
+    expect(jobNotice('<task-notification>\n<task-id>1</task-id>\n<status>completed</status>\n<output-file>/o/1.txt</output-file>\n</task-notification>')).toBe(
+      'Task 1 completed. Output: /o/1.txt',
+    )
+    expect(jobNotice('<task-notification>\n<task-id>1</task-id>\n</task-notification>')).toBe('Task 1 ended.')
+  })
+
+  it("is null for any other notice, such as the app's", () => {
+    expect(jobNotice('The build finished')).toBeNull()
+    expect(jobNotice('Note: <task-notification>x</task-notification>')).toBeNull()
+    expect(jobNotice('<task-notification>x</task-notification> and more')).toBeNull()
   })
 })

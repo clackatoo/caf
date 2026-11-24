@@ -4,18 +4,21 @@
   // the files it's about, and what it was given, folded away. A call with
   // a diff unfolds by itself, once, as an edit is what the user most
   // wants to check, and so does a command running with output, so it can
-  // be watched as it comes.
+  // be watched as it comes. A call that went on after the agent was
+  // answered, a job, is marked Background while it runs; a TaskStop,
+  // which stops one, is a step of its own.
   import type { DeepReadonly, ToolCall, Window } from '@clackatoo/caf'
   import PieceView from './PieceView.svelte'
   import { took } from './time.ts'
   import { count } from './figures.ts'
-  import { cutText, decisionText, ended as hasEnded, locationText } from './tools.ts'
+  import { cutText, decisionText, ended as hasEnded, jobText, locationText } from './tools.ts'
   import { rawJson, unhidden } from './unhidden.ts'
   import { toolKind, toolStatus } from './words.ts'
 
   let { tool, window }: { tool: DeepReadonly<ToolCall>; window: DeepReadonly<Window> } = $props()
 
-  const kind = $derived(toolKind(tool.kind))
+  // TaskStop is of no kind of its own (Other): it's named for what it does.
+  const kind = $derived(tool.action?.type === 'Stop' ? { icon: '⏹️', name: 'Stop a task' } : toolKind(tool.kind))
   const time = $derived(took(window))
   const ended = $derived(hasEnded(tool.status))
   const decision = $derived(decisionText(tool.decision))
@@ -44,12 +47,16 @@
     <span class="icon" title={kind.name} aria-hidden="true">{kind.icon}</span>
     <span class="kind">{kind.name}</span>
     <span class="title">{tool.title}</span>
+    {#if tool.job !== null && !ended}<span class="job" title={jobText(tool.job, false)}>Background</span>{/if}
     <span class="status">{toolStatus(tool.status)}</span>
     {#if time !== null}<span class="time">{time}</span>{/if}
   </summary>
   <div class="body">
     {#if decision !== null}
       <div class="decision" data-decision={tool.decision.type}>{decision}</div>
+    {/if}
+    {#if tool.job !== null}
+      <div class="decision background">{jobText(tool.job, ended)}</div>
     {/if}
     <div class="label">{resultLabel}</div>
     {#if tool.result.length === 0}
@@ -141,6 +148,15 @@
   }
   [data-status='Asking'] {
     border-color: var(--caf-accent);
+  }
+  /* Running on, past its answer: the accent, as what's happening now. */
+  .job {
+    font-size: 0.8em;
+    padding: 0 0.45em;
+    border: 1px solid var(--caf-accent);
+    border-radius: 999px;
+    color: var(--caf-accent);
+    white-space: nowrap;
   }
   .time {
     color: var(--caf-faint);

@@ -1,13 +1,53 @@
 // What the chat view says about a tool call, and what it lets through of
 // what an agent gave: an image only as a picture, a link only to the web.
 
-import type { Action, Cut, Decision, DeepReadonly, Ending, Location, ToolCall, ToolStatus } from '@clackatoo/caf'
+import type { Action, CafTool, Cut, Decision, DeepReadonly, Ending, Location, ToolCall, ToolStatus } from '@clackatoo/caf'
 import { count } from './figures.ts'
 import { tagOf } from './words.ts'
+
+/** Every one of CAF's own tools, as caf-core's `CafTool::ALL`. */
+export const CAF_TOOLS: readonly CafTool[] = [{ type: 'Read' }, { type: 'Edit' }, { type: 'Write' }, { type: 'Bash' }, { type: 'TaskStop' }]
 
 /** Whether a call has ended: Done, Failed, Refused or Cancelled. */
 export function ended(status: DeepReadonly<ToolStatus>): boolean {
   return ['Done', 'Failed', 'Refused', 'Cancelled'].includes(status.type)
+}
+
+/**
+ * What a job is, as TaskStop names it: one running in the background,
+ * the agent answered as it went there and told when it ends, or one that
+ * ran there and has `ended`.
+ */
+export function jobText(job: number, ended: boolean): string {
+  return ended
+    ? `Ran in the background, as task ${job}: the agent was told when it ended.`
+    : `Running in the background, as task ${job}: the agent was answered and goes on, and is told when it ends.`
+}
+
+// CAF's notice of a job's end, as Claude Code words its own: the whole
+// text in one tag.
+const NOTIFICATION = /^\s*<task-notification>([\s\S]*)<\/task-notification>\s*$/
+
+/**
+ * What CAF told the agent of a background job's end, from a notice turn's
+ * text, in words for the user: null for any other notice, such as the
+ * app's. The sentence is the notice's own, or its `<summary>` if it's in
+ * parts; parts with no summary are told as task, status and output.
+ */
+export function jobNotice(text: string): string | null {
+  const inner = NOTIFICATION.exec(text)?.[1]
+  if (inner === undefined) return null
+  const part = (name: string) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(inner)?.[1]?.trim() ?? null
+  const tidy = (words: string) => words.replace(/\s+/g, ' ').trim()
+  if (!/<[a-z-]+>/.test(inner)) return tidy(inner) || 'A background task ended.'
+  const summary = part('summary')
+  if (summary !== null) return tidy(summary)
+  const id = part('task-id')
+  const status = part('status')
+  const output = part('output-file')
+  const said = [`${id === null ? 'A background task' : `Task ${id}`}${status === null ? ' ended' : ` ${status}`}.`]
+  if (output !== null) said.push(`Output: ${output}`)
+  return tidy(said.join(' '))
 }
 
 /** A size in bytes, short: `512 B`, `64 KB`, `2.4 MB`, counting 1,024 to a KB as CAF's caps do. */

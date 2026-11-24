@@ -9,6 +9,7 @@ import {
   CafError,
   type AgentName,
   type Answer,
+  type CafTool,
   type ChatId,
   type DeepReadonly,
   type QuestionId,
@@ -78,9 +79,10 @@ export interface ListActions {
    * `settings` for it, such as its model, if any are given. Opening can't
    * carry them, so the host opens it, then chooses them: before its
    * session opens, any choice is taken, and applied as it opens, before
-   * any message goes.
+   * any message goes. `tools` are CAF's own tools to ask the host to give
+   * it, which it may grant, trim or ignore: none if not given.
    */
-  open(agent: AgentName, cwd: string, settings?: readonly SettingChoice[]): Promise<unknown> | void
+  open(agent: AgentName, cwd: string, settings?: readonly SettingChoice[], tools?: readonly CafTool[]): Promise<unknown> | void
 }
 
 /** What the user can do with the list of saved chats. */

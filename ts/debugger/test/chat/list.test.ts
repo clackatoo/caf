@@ -14,13 +14,53 @@ const chats = [
   { id: two, agent: 'fake', cwd: '/home/me/lib', label: null, shelf: null, archived: null },
 ]
 
-function draw(options: { readOnly?: boolean; open?: () => Promise<unknown> } = {}) {
+function draw(options: { readOnly?: boolean; open?: () => Promise<unknown>; offersTools?: boolean } = {}) {
   const actions = { select: vi.fn(), open: vi.fn(options.open ?? (async () => {})) }
-  const view = render(ChatList, { chats, agents: ['claude', 'fake'], selected: two, actions, readOnly: options.readOnly ?? false })
+  const view = render(ChatList, {
+    chats,
+    agents: ['claude', 'fake'],
+    selected: two,
+    actions,
+    readOnly: options.readOnly ?? false,
+    offersTools: options.offersTools ?? false,
+  })
   return { ...view, actions }
 }
 
 describe('the chat list', () => {
+  it("gives a new chat all of CAF's tools where they're offered, unless unticked, and asks again each time", async () => {
+    const { actions } = draw({ offersTools: true })
+    const all = [{ type: 'Read' }, { type: 'Edit' }, { type: 'Write' }, { type: 'Bash' }, { type: 'TaskStop' }]
+    await fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    const tools = screen.getByRole('checkbox', { name: "CAF's tools" }) as HTMLInputElement
+    expect(tools.checked).toBe(true)
+    expect(tools.getAttribute('aria-describedby')).not.toBeNull()
+    expect(document.getElementById(tools.getAttribute('aria-describedby')!)?.textContent).toMatch(/Read, Edit, Write and Bash/)
+    await fireEvent.input(screen.getByRole('textbox'), { target: { value: '/home/me/new' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
+    expect(actions.open).toHaveBeenLastCalledWith('claude', '/home/me/new', [], all)
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Open' })).toBeNull())
+
+    await fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    const again = screen.getByRole('checkbox', { name: "CAF's tools" }) as HTMLInputElement
+    await fireEvent.click(again)
+    expect(again.checked).toBe(false)
+    expect(document.getElementById(again.getAttribute('aria-describedby')!)?.textContent).toMatch(/agent's own tools/)
+    await fireEvent.input(screen.getByRole('textbox'), { target: { value: '/home/me/new' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
+    expect(actions.open).toHaveBeenLastCalledWith('claude', '/home/me/new', [], [])
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Open' })).toBeNull())
+
+    await fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    expect((screen.getByRole('checkbox', { name: "CAF's tools" }) as HTMLInputElement).checked).toBe(true)
+  })
+
+  it("offers no tools where the host doesn't", async () => {
+    draw()
+    await fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    expect(screen.queryByRole('checkbox')).toBeNull()
+  })
+
   it('lists the chats, marks the one shown, and picks another', async () => {
     const { container, actions } = draw()
     const items = [...container.querySelectorAll('li button')]
@@ -61,7 +101,7 @@ describe('the chat list', () => {
     expect((screen.getByRole('button', { name: 'Open' }) as HTMLButtonElement).disabled).toBe(true)
     await fireEvent.input(folder, { target: { value: '/home/me/new' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
-    expect(actions.open).toHaveBeenCalledWith('fake', '/home/me/new', [])
+    expect(actions.open).toHaveBeenCalledWith('fake', '/home/me/new', [], [])
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Open' })).toBeNull())
   })
 
@@ -118,7 +158,7 @@ describe('the chat list', () => {
       await actions.rerender({ statuses: offering('opus', 'haiku') })
       expect(model().value).toBe('opus')
       await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
-      expect(actions.open).toHaveBeenCalledWith('claude', '/home/me/new', [])
+      expect(actions.open).toHaveBeenCalledWith('claude', '/home/me/new', [], [])
     })
 
     it("follows what the agent would use while nothing's picked", async () => {
@@ -126,7 +166,7 @@ describe('the chat list', () => {
       await actions.rerender({ statuses: offering('haiku', 'sonnet') })
       expect((screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement).value).toBe('haiku')
       await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
-      expect(actions.open).toHaveBeenCalledWith('claude', '/home/me/new', [])
+      expect(actions.open).toHaveBeenCalledWith('claude', '/home/me/new', [], [])
     })
 
     it('opens a chat with the model chosen', async () => {
@@ -140,13 +180,13 @@ describe('the chat list', () => {
       await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
       expect(actions.open).toHaveBeenCalledWith('claude', '/home/me/new', [
         { kind: { type: 'Model' }, value: { type: 'Choice', value: 'sonnet' } },
-      ])
+      ], [])
     })
 
     it("chooses nothing if the model is left as the agent's", async () => {
       const actions = await form()
       await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
-      expect(actions.open).toHaveBeenCalledWith('claude', '/home/me/new', [])
+      expect(actions.open).toHaveBeenCalledWith('claude', '/home/me/new', [], [])
     })
 
     it("offers no model for an agent whose models aren't known, and forgets one chosen for another", async () => {
@@ -155,7 +195,7 @@ describe('the chat list', () => {
       await fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: 'fake' } })
       expect(screen.queryByRole('combobox', { name: 'Model' })).toBeNull()
       await fireEvent.click(screen.getByRole('button', { name: 'Open' }))
-      expect(actions.open).toHaveBeenCalledWith('fake', '/home/me/new', [])
+      expect(actions.open).toHaveBeenCalledWith('fake', '/home/me/new', [], [])
     })
   })
 
