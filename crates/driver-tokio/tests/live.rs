@@ -1102,3 +1102,86 @@ async fn claudes_patched_adapter_passes_on_claudes_first_limits_report() {
     println!("recorded to {}", recording.display());
     drop(folders);
 }
+
+/// Allows every call: for a chat with CAF's own tools in a folder of the
+/// test's own.
+struct AllowAll;
+
+impl caf_driver_tokio::Policy for AllowAll {
+    fn decide(
+        &mut self,
+        _: caf_core::ChatId,
+        _: caf_core::directive::PermissionRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = caf_core::event::PolicyAnswer> + Send>>
+    {
+        Box::pin(std::future::ready(caf_core::event::PolicyAnswer::Allow))
+    }
+}
+
+/// Claude, given all of CAF's own tools and none of its own, reads a
+/// file with CAF's Read, changes it with CAF's Edit, which changes it on
+/// disk, and runs `echo hi` with CAF's Bash: the transcript has the
+/// edit's diff and the command's output. The relay is the fake agent's
+/// program, as it relays when asked, as an app's does.
+///
+/// ```text
+/// cargo test -p caf-driver-tokio --test live cafs_own -- --ignored
+/// ```
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a signed-in Claude, and spends usage"]
+async fn claude_reads_edits_and_runs_with_cafs_own_tools() {
+    use caf_core::tool::{CafTool, Origin, Piece, Tools};
+    use caf_driver_tokio::Relay;
+
+    let folder = std::env::temp_dir().join(format!("caf-live-cafs-tools-{}", std::process::id()));
+    let mut folders = Folders(Vec::new());
+    folders.make(&folder);
+    let notes = folder.join("notes.txt");
+    std::fs::write(&notes, "The colour is red.\n").unwrap();
+
+    let mut config = config_for(Host::new("caf-live-test", "0.0.0"), vec![claude()]);
+    if let Some(recording) = std::env::var_os("CAF_LIVE_RECORD") {
+        config.record = Some(recording.into());
+    }
+    config.policy = Box::new(AllowAll);
+    config.tools.relay = Relay::Command(SpawnCommand::new(caf_fake_agent::binary()));
+    let (caf, running) = Caf::start(config);
+
+    let chat = caf
+        .open_chat(OpenChat::new("claude", &folder).with_tools(Tools::caf(CafTool::ALL)))
+        .await
+        .unwrap();
+    let turn = ask(
+        &chat,
+        "Read notes.txt with your Read tool, then use your Edit tool to change the word red \
+         in it to blue, then run `echo hi` with your Bash tool. Then reply with just: done.",
+    )
+    .await;
+    assert_eq!(turn.life, TurnLife::Finished, "{turn:#?}");
+
+    let calls: Vec<_> = (turn.items.iter())
+        .filter_map(|item| match &item.kind {
+            ItemKind::Tool(call) => Some(call),
+            _ => None,
+        })
+        .collect();
+    let used = |tool: CafTool| (calls.iter()).any(|call| call.origin == Origin::Caf(tool));
+    for tool in [CafTool::Read, CafTool::Edit, CafTool::Bash] {
+        assert!(used(tool), "it called CAF's {}: {turn:#?}", tool.name());
+    }
+    let pieces = || calls.iter().flat_map(|call| call.result.iter());
+    assert!(
+        pieces().any(|piece| matches!(piece, Piece::Diff(_))),
+        "the edit's diff: {turn:#?}"
+    );
+    assert!(
+        pieces().any(|piece| matches!(piece, Piece::Output(output)
+            if output.lines.iter().any(|line| line.contains("hi")))),
+        "the command's output: {turn:#?}"
+    );
+    let now = std::fs::read_to_string(&notes).unwrap();
+    assert_eq!(now, "The colour is blue.\n", "the file changed on disk");
+
+    caf.shutdown().await;
+    running.await;
+}
