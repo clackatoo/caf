@@ -1,5 +1,6 @@
 //! Scripts: what the fake does, step by step.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -98,6 +99,23 @@ pub enum Step {
     SpawnHolder(SpawnHolder),
     /// Puts the steps of another script file here: an absolute path.
     Include(PathBuf),
+    /// Starts an MCP server the client named in `session/new` (or
+    /// `session/load` or `session/resume`), and does MCP's handshake with
+    /// it, as Claude starts the servers it's given.
+    McpStart(McpStart),
+    /// Asks a server for its tools, with `tools/list`, and checks their
+    /// names.
+    McpList(McpList),
+    /// Calls a server's tool, with `tools/call`, as Claude does.
+    McpCall(McpCall),
+    /// Waits for a server's answer to a call, and checks it.
+    McpAwait(McpAwait),
+    /// Waits for a server's progress on a call, and checks it.
+    McpProgress(McpProgress),
+    /// Cancels a call, with `notifications/cancelled`.
+    McpCancel(McpCancel),
+    /// Closes a server's stdin, as Claude does when it's done with it.
+    McpDrop(McpDrop),
 }
 
 /// Waits for a request or notification from the client: the first one
@@ -443,6 +461,160 @@ pub struct SpawnHolder {
     pub secs: Option<u64>,
 }
 
+/// Starts an MCP server, and does the handshake: `initialize`, its
+/// answer, then `notifications/initialized`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpStart {
+    /// The name of the message whose `mcpServers` name the server. The one
+    /// last waited for, if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// The server's `name` there. `caf`, if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    /// The name later steps call this connection by. The server's name, if
+    /// left out. Starting the same server again under another name keeps
+    /// both, as Claude may for a while when it opens a session again.
+    #[serde(default, rename = "as", skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Environment variables to set, or change, beyond the server's own,
+    /// such as a wrong `CAF_RELAY_TOKEN`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    /// Whether it first sends `server/discover`, as Claude probes a server
+    /// before `initialize`, and checks it's refused with -32601 (method
+    /// not found).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub discover: bool,
+    /// The MCP version it asks for. `2025-06-18`, if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// A pattern the answer to `initialize` must match, such as
+    /// `{"result": {"serverInfo": {"name": "caf"}}}`. Any result, if left
+    /// out; an error always fails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect: Option<Value>,
+    /// How many milliseconds to wait for each answer before the check
+    /// fails. Forever, if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+}
+
+/// Asks a server for its tools, and checks their names.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpList {
+    /// The connection, by the name `mcp_start` gave it. `caf`, if left
+    /// out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    /// The tools' names, in any order. Any tools, if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect: Option<Vec<String>>,
+    /// How many milliseconds to wait before the check fails. Forever, if
+    /// left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+}
+
+/// Calls a server's tool, as Claude does: `tools/call` with the tool's
+/// name and arguments, and in `_meta` the id of the model's tool use,
+/// `claudecode/toolUseId`, and a `progressToken`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpCall {
+    /// The connection, by the name `mcp_start` gave it. `caf`, if left
+    /// out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    /// The tool's name, as the server lists it, such as `Read`.
+    pub tool: String,
+    /// Its arguments. `{}`, if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<Value>,
+    /// The model's id for the call, sent as `claudecode/toolUseId`. Not
+    /// sent, if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    /// Whether it leaves out `progressToken`, so the server can't send
+    /// progress. The token is the request's id, as the MCP SDK makes it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub no_progress: bool,
+    /// A session to report the call in first, as Claude's adapter does: a
+    /// `tool_call`, pending, whose `toolCallId` is `tool_use_id`, its
+    /// title and `_meta.claudeCode.toolName` `mcp__<server>__<tool>`, and
+    /// its `rawInput` the arguments. Not reported, if left out; the `tool`
+    /// step reports what happens to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<String>,
+    /// The name later steps call it by. The tool's name, if left out.
+    #[serde(default, rename = "as", skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// Waits for a server's answer to a call, and checks it, or checks none
+/// comes.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpAwait {
+    /// The call's name. The one last made, if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// A pattern the whole answer must match, such as `{"result":
+    /// {"content": [{"type": "text", "text": "Done"}], "isError": false}}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect: Option<Value>,
+    /// Whether it checks that no answer comes before `timeout`, as none
+    /// should to a call cancelled.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub none: bool,
+    /// How many milliseconds to wait before the check fails, or with
+    /// `none`, passes. Forever, if left out, which `none` needs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+}
+
+/// Waits for a server's next progress on a call: a
+/// `notifications/progress` with the call's token.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpProgress {
+    /// The call's name. The one last made, if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// A pattern the whole notification must match, such as `{"params":
+    /// {"message": "Running"}}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect: Option<Value>,
+    /// How many milliseconds to wait before the check fails. Forever, if
+    /// left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+}
+
+/// Cancels a call.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpCancel {
+    /// The call's name. The one last made, if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// Why, sent as `reason`. None, if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Closes a server's stdin. The server's process isn't waited for.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpDrop {
+    /// The connection, by the name `mcp_start` gave it. `caf`, if left
+    /// out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+}
+
 /// Why a script can't be used.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScriptError {
@@ -608,6 +780,10 @@ fn check(step: &Step, in_handler: bool) -> Result<(), String> {
         | Step::WaitFile(_)
         | Step::Hang
         | Step::SpawnHolder(_)
+        | Step::McpStart(_)
+        | Step::McpList(_)
+        | Step::McpAwait(_)
+        | Step::McpProgress(_)
             if in_handler =>
         {
             Err("a handler's steps can't wait or sleep".into())
@@ -616,6 +792,16 @@ fn check(step: &Step, in_handler: bool) -> Result<(), String> {
             Err("a file to wait for must be an absolute path".into())
         }
         Step::On(_) if in_handler => Err("a handler can't add handlers".into()),
+        Step::McpAwait(McpAwait {
+            none: true,
+            timeout: None,
+            ..
+        }) => Err("checking no answer comes needs a timeout".into()),
+        Step::McpCall(McpCall {
+            report: Some(_),
+            tool_use_id: None,
+            ..
+        }) => Err("reporting a call needs its tool_use_id".into()),
         Step::On(on) => on.steps.iter().try_for_each(|step| check(step, true)),
         Step::Respond(respond) if respond.result.is_some() == respond.error.is_some() => {
             Err("an answer has either a result or an error".into())
@@ -657,7 +843,10 @@ fn check(step: &Step, in_handler: bool) -> Result<(), String> {
 mod tests {
     use serde_json::json;
 
-    use super::{LongLine, On, Respond, Script, Step, Tool, ToolContent, ToolDiff, ToolLocation};
+    use super::{
+        LongLine, McpCall, McpDrop, McpStart, On, Respond, Script, Step, Tool, ToolContent,
+        ToolDiff, ToolLocation,
+    };
 
     #[test]
     fn steps_without_settings_are_strings_or_null() {
@@ -756,6 +945,55 @@ mod tests {
             "step 1: /y.jsonl isn't included"
         );
         assert_eq!(Script::new(vec![Step::Hang]).check(), Ok(()));
+    }
+
+    #[test]
+    fn mcp_steps_read_and_write_back_the_same() {
+        let script = Script::parse(
+            r#"{"mcp_start": {"from": "session/load", "server": "caf", "as": "second", "env": {"CAF_RELAY_TOKEN": "wrong"}, "discover": true, "version": "2025-11-25", "expect": {"result": {}}, "timeout": 5000}}
+{"mcp_list": {"server": "second", "expect": ["Read"], "timeout": 5000}}
+{"mcp_call": {"server": "second", "tool": "Read", "arguments": {"path": "/a"}, "tool_use_id": "toolu_1", "no_progress": true, "report": "s1", "as": "read"}}
+{"mcp_progress": {"to": "read", "expect": {"params": {"message": "Running"}}, "timeout": 5000}}
+{"mcp_await": {"to": "read", "none": true, "timeout": 100}}
+{"mcp_cancel": {"to": "read", "reason": "Stop"}}
+{"mcp_drop": {"server": "second"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            script.steps[2],
+            Step::McpCall(McpCall {
+                server: Some("second".into()),
+                tool: "Read".into(),
+                arguments: Some(json!({"path": "/a"})),
+                tool_use_id: Some("toolu_1".into()),
+                no_progress: true,
+                report: Some("s1".into()),
+                label: Some("read".into()),
+            })
+        );
+        assert_eq!(Script::parse(&script.to_text()), Ok(script));
+        let defaults = Script::parse("{\"mcp_start\": {}}\n{\"mcp_drop\": {}}").unwrap();
+        assert_eq!(
+            defaults.steps,
+            [
+                Step::McpStart(McpStart::default()),
+                Step::McpDrop(McpDrop::default())
+            ]
+        );
+    }
+
+    #[test]
+    fn mcp_mistakes_are_refused() {
+        let wrong = |text: &str| Script::parse(text).unwrap_err().to_string();
+        assert!(wrong(r#"{"mcp_await": {"none": true}}"#).contains("needs a timeout"));
+        assert!(wrong(r#"{"mcp_call": {"tool": "Read", "report": "s1"}}"#).contains("tool_use_id"));
+        assert!(wrong(r#"{"mcp_call": {}}"#).contains("missing field `tool`"));
+        for step in ["mcp_start", "mcp_list", "mcp_await", "mcp_progress"] {
+            let text = format!("{{\"on\": {{\"do\": [{{\"{step}\": {{}}}}]}}}}");
+            assert!(wrong(&text).contains("can't wait"), "{step}");
+        }
+        let handler = r#"{"on": {"do": [{"mcp_call": {"tool": "Read"}}, {"mcp_cancel": {}}, {"mcp_drop": {}}]}}"#;
+        assert!(Script::parse(handler).is_ok());
     }
 
     #[test]

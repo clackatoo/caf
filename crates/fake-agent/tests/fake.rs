@@ -1206,3 +1206,221 @@ fn waiting_for_a_file_can_time_out() {
         [json!({"failed": format!("timed out waiting for {}", never.display())})]
     );
 }
+
+/// An MCP server for the fake to start: the fake again, following
+/// `server.jsonl` in `dir`, and recording to `server-record.jsonl`.
+fn mcp_server(dir: &Dir, script: &str) -> Value {
+    std::fs::write(dir.path("server.jsonl"), script).unwrap();
+    json!({
+        "name": "caf",
+        "command": env!("CARGO_BIN_EXE_caf-fake-agent"),
+        "args": ["--from-session"],
+        "env": [
+            {"name": caf_fake_agent::SCRIPT_VAR, "value": dir.path("server.jsonl")},
+            {"name": caf_fake_agent::RECORD_VAR, "value": dir.path("server-record.jsonl")},
+        ],
+    })
+}
+
+/// Starts the fake with `script` after [`HANDSHAKE`], and opens a session
+/// naming `server`.
+fn mcp_fake(dir: Dir, script: &str, server: &Value) -> Fake {
+    let path = dir.path("script.jsonl");
+    std::fs::write(&path, format!("{HANDSHAKE}{script}")).unwrap();
+    let mut fake = Fake::start_in(dir, &path);
+    fake.send(&request(0, "initialize", &json!({"protocolVersion": 1})));
+    assert_eq!(fake.recv()["id"], 0);
+    fake.send(&request(
+        1,
+        "session/new",
+        &json!({"cwd": "/", "mcpServers": [server]}),
+    ));
+    assert_eq!(fake.recv()["result"]["sessionId"], "s1");
+    fake
+}
+
+/// The server's record, but for its first line.
+fn server_record(fake: &Fake) -> Vec<Value> {
+    let path = fake.record.with_file_name("server-record.jsonl");
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let whole = text.rfind('\n').map_or("", |end| &text[..end]);
+    let mut record: Vec<Value> = (whole.lines())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    if !record.is_empty() {
+        record.remove(0);
+    }
+    record
+}
+
+#[test]
+fn it_calls_an_mcp_servers_tools_as_claude_does() {
+    let dir = Dir::new();
+    let server = mcp_server(
+        &dir,
+        r#"
+{"record_env": ["CAF_TEST_EXTRA"]}
+{"wait": {"method": "server/discover", "timeout": 10000}}
+{"respond": {"error": {"code": -32601, "message": "Method not found"}}}
+{"wait": {"method": "initialize", "expect": {"params": {"protocolVersion": "2025-06-18", "clientInfo": {"name": "caf-fake-agent"}}}, "timeout": 10000}}
+{"respond": {"result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "caf", "version": "1"}}}}
+{"wait": {"method": "notifications/initialized", "timeout": 10000}}
+{"wait": {"method": "tools/list", "timeout": 10000}}
+{"respond": {"result": {"tools": [{"name": "Read"}, {"name": "Bash"}]}}}
+{"wait": {"method": "tools/call", "as": "read", "expect": {"id": 3, "params": {"name": "Read", "arguments": {"path": "/a"}, "_meta": {"claudecode/toolUseId": "toolu_1", "progressToken": 3}}}, "timeout": 10000}}
+{"notify": {"method": "notifications/progress", "params": {"progressToken": 3, "progress": 1, "message": "Running"}}}
+{"respond": {"to": "read", "result": {"content": [{"type": "text", "text": "hello"}], "isError": false}}}
+{"wait": {"method": "tools/call", "as": "bash", "expect": {"params": {"name": "Bash", "arguments": {}, "_meta": {}}}, "timeout": 10000}}
+{"wait": {"method": "notifications/cancelled", "expect": {"params": {"requestId": 4, "reason": "Stop"}}, "timeout": 10000}}
+{"note": "cancelled"}
+"wait_closed"
+{"note": "dropped"}
+"#,
+    );
+    let mut fake = mcp_fake(
+        dir,
+        r#"
+{"mcp_start": {"from": "session/new", "env": {"CAF_TEST_EXTRA": "yes"}, "discover": true, "expect": {"result": {"serverInfo": {"name": "caf"}}}, "timeout": 10000}}
+{"mcp_list": {"expect": ["Read", "Bash"], "timeout": 10000}}
+{"mcp_call": {"tool": "Read", "arguments": {"path": "/a"}, "tool_use_id": "toolu_1", "report": "s1", "as": "read"}}
+{"mcp_progress": {"expect": {"params": {"message": "Running"}}, "timeout": 10000}}
+{"mcp_await": {"to": "read", "expect": {"result": {"content": [{"text": "hello"}], "isError": false}}, "timeout": 10000}}
+{"mcp_call": {"tool": "Bash", "no_progress": true, "as": "bash"}}
+{"mcp_cancel": {"reason": "Stop"}}
+{"mcp_await": {"none": true, "timeout": 200}}
+{"mcp_drop": {}}
+{"note": "done"}
+"#,
+        &server,
+    );
+    let name = "mcp__caf__Read";
+    assert_eq!(
+        fake.recv()["params"],
+        json!({"sessionId": "s1", "update": {
+            "sessionUpdate": "tool_call", "toolCallId": "toolu_1", "title": name,
+            "status": "pending", "_meta": {"claudeCode": {"toolName": name}},
+            "rawInput": {"path": "/a"},
+        }})
+    );
+    fake.wait_for_record(&json!({"note": "done"}));
+    let until = Instant::now() + SOON;
+    while !server_record(&fake).contains(&json!({"note": "dropped"})) {
+        assert!(Instant::now() < until, "{:?}", server_record(&fake));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let server = server_record(&fake);
+    assert_eq!(server[0], json!({"env": {"CAF_TEST_EXTRA": "yes"}}));
+    assert!(server.contains(&json!({"note": "cancelled"})));
+    let record = fake.record();
+    let started = record.iter().find_map(|entry| entry.get("mcp_started"));
+    assert_eq!(
+        started,
+        Some(&json!({
+            "server": "caf",
+            "command": env!("CARGO_BIN_EXE_caf-fake-agent"),
+            "args": ["--from-session"],
+            "env": ["CAF_FAKE_AGENT_RECORD", "CAF_FAKE_AGENT_SCRIPT", "CAF_TEST_EXTRA"],
+        }))
+    );
+    assert!(record.contains(&json!({"mcp_dropped": "caf"})));
+    fake.close_stdin();
+    assert_eq!(fake.exit().code(), Some(0));
+}
+
+#[test]
+fn an_mcp_servers_answers_are_checked() {
+    let handshake = r#"
+{"wait": {"method": "initialize", "timeout": 10000}}
+{"respond": {"result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "caf", "version": "1"}}}}
+{"wait": {"method": "tools/list", "timeout": 10000}}
+{"respond": {"result": {"tools": [{"name": "Read"}]}}}
+"#;
+    let check = |server: &str, script: &str| {
+        let dir = Dir::new();
+        let server = mcp_server(&dir, &format!("{handshake}{server}"));
+        let mut fake = mcp_fake(dir, script, &server);
+        assert_eq!(fake.exit().code(), Some(EXIT_CHECK_FAILED));
+        let record = fake.script_record();
+        let failed = record.iter().find_map(|entry| entry.get("failed"));
+        failed
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let start = r#"{"mcp_start": {"timeout": 10000}}"#;
+    assert_eq!(
+        check(
+            "",
+            &format!("{start}\n{}", r#"{"mcp_list": {"expect": ["Bash"]}}"#)
+        ),
+        r#"caf has the tools ["Read"], not ["Bash"]"#
+    );
+    assert_eq!(
+        check(
+            r#"{"wait": {"method": "tools/call", "timeout": 10000}}
+{"respond": {"result": {"content": [], "isError": true}}}"#,
+            &format!(
+                "{start}\n{}",
+                r#"{"mcp_list": {}}
+{"mcp_call": {"tool": "Read"}}
+{"mcp_await": {"expect": {"result": {"isError": false}}, "timeout": 10000}}"#
+            )
+        ),
+        format!(
+            "caf's answer to 2 was {}, not {}",
+            json!({"jsonrpc": "2.0", "id": 2, "result": {"content": [], "isError": true}}),
+            json!({"result": {"isError": false}})
+        )
+    );
+    assert_eq!(
+        check(
+            r#"{"wait": {"method": "tools/call", "timeout": 10000}}
+{"exit": 0}"#,
+            &format!(
+                "{start}\n{}",
+                r#"{"mcp_list": {}}
+{"mcp_call": {"tool": "Read"}}
+{"mcp_await": {"timeout": 10000}}"#
+            )
+        ),
+        "caf closed without answering 2"
+    );
+    assert_eq!(
+        check(
+            r#"{"wait": {"method": "tools/call", "timeout": 10000}}
+{"respond": {"result": {"content": []}}}"#,
+            &format!(
+                "{start}\n{}",
+                r#"{"mcp_list": {}}
+{"mcp_call": {"tool": "Read"}}
+{"mcp_await": {"none": true, "timeout": 5000}}"#
+            )
+        ),
+        format!(
+            "caf answered 2, with {}",
+            json!({"jsonrpc": "2.0", "id": 2, "result": {"content": []}})
+        )
+    );
+    assert_eq!(
+        check("", r#"{"mcp_start": {"server": "eyespy"}}"#),
+        "session/new names no MCP server eyespy"
+    );
+    assert_eq!(
+        check("", r#"{"mcp_list": {}}"#),
+        "no MCP server started called caf"
+    );
+}
+
+#[test]
+fn it_answers_cafs_relay_check() {
+    let output = Command::new(env!("CARGO_BIN_EXE_caf-fake-agent"))
+        .env(caf_relay::CHECK_VAR, "1")
+        .env_remove(caf_relay::RELAY_VAR)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim_end(),
+        caf_relay::CHECK_ANSWER
+    );
+}
