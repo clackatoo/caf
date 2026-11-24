@@ -964,7 +964,7 @@ fn a_restored_chat_is_given_its_instructions_again_as_its_session_opens() {
     let options = &sent(&out, "session/resume")["params"]["_meta"]["claudeCode"]["options"];
     assert_eq!(
         options["systemPrompt"],
-        crate::profiles::own_instructions("caf-test", &[]) + "\n\nGiven again."
+        crate::profiles::own_instructions("caf-test", &[], &[]) + "\n\nGiven again."
     );
     assert_eq!(options["tools"], json!([]));
 }
@@ -1006,7 +1006,7 @@ fn a_restored_chat_is_given_its_tools_again_as_a_new_one_is() {
     );
     assert_eq!(
         resume["params"]["_meta"]["claudeCode"]["options"]["systemPrompt"],
-        crate::profiles::own_instructions("caf-test", &[CafTool::Write])
+        crate::profiles::own_instructions("caf-test", &[CafTool::Write], &[])
     );
     // Put away, it's no longer served.
     let id = resume["id"].as_u64().expect("an id");
