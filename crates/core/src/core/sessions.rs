@@ -107,6 +107,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             Run {
                 conn,
                 shell: cwd.clone(),
+                notices_held: false,
                 cwd,
                 mcp: open.mcp_servers,
                 mcp_sent: super::state::SentServers(mcp_sent),

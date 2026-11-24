@@ -656,7 +656,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     /// It's sent as a prompt, as a message is, and waits as one does: in
     /// order, while another turn runs or the session opens. It's the
     /// app's, or CAF's, never the user's words. Notifying an archived chat
-    /// unarchives it first, as sending to it does.
+    /// unarchives it first, as sending to it does. The user's Stop holds
+    /// notices waiting rather than dropping them ([`Core::stop`]): this
+    /// one, as a message does, lets them go first.
     ///
     /// # Errors
     ///
@@ -675,8 +677,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         Ok(turn)
     }
 
-    /// Stops the chat's running turn, and drops its waiting ones, which end
-    /// as stopped.
+    /// Stops the chat's running turn, and drops its waiting messages, which
+    /// end as stopped. Its waiting notices aren't dropped, as the agent
+    /// would never hear what they say, nor sent, as it would start again
+    /// at once: they're held, and a background job's notice that comes
+    /// after joins them, until the next message or the app's next notice
+    /// ([`Core::notify`]), which they're sent just before, in order.
     ///
     /// The agent's waiting permission questions are answered "cancelled",
     /// as ACP requires, and the agent is told to stop. The turn is

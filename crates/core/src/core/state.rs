@@ -404,6 +404,10 @@ pub(super) struct Run<A: AppItem> {
     /// The folder its next command runs in: where the last one's shell
     /// ended, from its `cwd` at first. One run's.
     pub(super) shell: String,
+    /// The user's Stop held the notices waiting: none is sent, and a job's
+    /// notice joins them, until a message or the app's notice is queued,
+    /// which they then go before.
+    pub(super) notices_held: bool,
 }
 
 /// Where a chat is with its session.

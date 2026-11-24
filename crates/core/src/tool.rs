@@ -48,7 +48,9 @@
 //!   the call, nor a turn the agent started going quiet;
 //! - **it ends by itself,** Done or Failed, and its chat's agent is told
 //!   in a notice turn ([`Starter::Notice`](crate::chat::Starter::Notice)),
-//!   sent as a message is: at once if no turn runs, else after;
+//!   sent as a message is: at once if no turn runs, else after; if the
+//!   user stops the chat while it waits, it's held, and goes just before
+//!   their next message;
 //! - **or TaskStop stops it** ([`Action::Stop`]): Cancelled, stopped by
 //!   the agent. TaskStop needs no one's leave, and stops only its own
 //!   chat's jobs: any other job number is refused, "No task {id} in this
