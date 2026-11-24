@@ -418,3 +418,39 @@ fn a_chat_given_only_app_tools_is_told_its_tools_were_lost() {
         .count();
     assert_eq!(notes, 1);
 }
+
+#[test]
+fn bad_input_fails_only_a_report_its_sure_is_its_own() {
+    let mut script = running(Tools::none().and_app(["trim_clip"]));
+    // A report saying nothing yet of its input, and a call without the
+    // agent's id: it may be another call's report.
+    script.update(
+        PROC,
+        SESSION,
+        &json!({
+            "sessionUpdate": "tool_call", "toolCallId": "toolu_7", "title": "mcp__caf__trim_clip",
+            "kind": "other", "status": "pending", "rawInput": {},
+            "_meta": { "claudeCode": { "toolName": "mcp__caf__trim_clip" } },
+        }),
+    );
+    let mut call = called(
+        "trim_clip",
+        json!({ "clip": "x" }),
+        None,
+        Some("bad `clip`"),
+    );
+    if let ToolEvent::Called { agent_call, .. } = &mut call {
+        *agent_call = None;
+    }
+    script.tool(1, call);
+    let tools = tools(&script);
+    assert_eq!(tools.len(), 2, "{tools:#?}");
+    assert_eq!(tools[0]["status"], kind("Pending"), "the report is let be");
+    assert_eq!(tools[1]["status"], kind("Failed"));
+    // An app call's empty title is its tool's.
+    let out = script.tool(2, called("trim_clip", json!({ "clip": 1 }), Some(""), None));
+    assert_eq!(super::served::tools(&script)[2]["title"], "Trim a clip");
+    assert_eq!(one_told(&out)["type"], "Preview");
+    script.tool(2, ToolEvent::Previewed { pieces: Vec::new() });
+    script.stop(CHAT).0.expect("stopping");
+}
