@@ -49,7 +49,7 @@ use crate::question::{OptionId, OptionKind, Permission, PermissionOption, Questi
 use crate::time::{Now, Window};
 use crate::tool::{
     Action, AppToolSpec, CafTool, DecidedBy, Decision, Ending, Lines, MOST_LINE, MOST_OUTPUT,
-    Origin, Output, Piece, ServedTool, StoppedBy, ToolKind, output_size,
+    Origin, Output, Piece, ServedTool, StoppedBy, output_size,
 };
 
 /// The longest title CAF writes for a call, in bytes.
@@ -461,6 +461,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 None => (None, Joined::No),
             },
         };
+        // A call that fails at once takes only a report it's sure is its
+        // own, as one of CAF's own tools does: one held for now may be
+        // another call's.
+        let bad_input = bad_input.filter(|_| spec.is_some());
+        let (joins, joined) = match joined {
+            Joined::Maybe(_) if bad_input.is_some() => (None, Joined::No),
+            joined => (joins, joined),
+        };
         let action = match &tool {
             ServedTool::Caf(caf) => action_of(*caf, &input, &cwd, &shell),
             ServedTool::App(name) => Ok(Action::Tool { name: name.clone() }),
@@ -486,20 +494,19 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return refuse(out, RefusedCall::BadInput(why));
         }
         let (kept, input_cut) = crate::tool::capped_input(input.clone());
-        let (title, kind, origin) = match (&tool, &spec) {
-            (ServedTool::App(name), Some(spec)) => (
-                // The app's code worked it out, from what the model wrote.
-                agent_text(title.as_deref().unwrap_or(&spec.title), MOST_TITLE),
-                spec.hints.kind,
-                Origin::App(name.clone()),
-            ),
-            (ServedTool::Caf(caf), _) => {
-                (title_of(&action, &cwd), action.kind(), Origin::Caf(*caf))
+        let (title, kind) = match &spec {
+            // The app's code worked it out, from what the model wrote: the
+            // tool's own, if it gave none.
+            Some(spec) => {
+                let title = title.as_deref().filter(|title| !title.is_empty());
+                (
+                    agent_text(title.unwrap_or(&spec.title), MOST_TITLE),
+                    spec.hints.kind,
+                )
             }
-            (ServedTool::App(name), None) => {
-                (name.clone(), ToolKind::Other, Origin::App(name.clone()))
-            }
+            None => (title_of(&action, &cwd), action.kind()),
         };
+        let origin = served_origin(&tool);
         let mut record = Box::new(ToolCall {
             title,
             kind,
@@ -518,7 +525,6 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         });
         // What the app's tool was given isn't what it takes: it fails, and
         // the model is told why, with no one asked.
-        let bad_input = bad_input.filter(|_| spec.is_some());
         if let Some(why) = &bad_input {
             record.status = ToolStatus::Failed;
             record.decision = Decision::NotAsked;
