@@ -18,7 +18,8 @@
             "instructions": null,
             "settings": [],
             "tools": {
-              "caf": []
+              "caf": [],
+              "app": []
             }
           }
         }
