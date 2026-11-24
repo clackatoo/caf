@@ -125,10 +125,11 @@ pub fn rules(
 ///
 /// - **Noted as it happens:** CAF's steps are tapped as CAF takes them
 ///   ([`Untooled::step`]), so a chat is noted before anything can restore
-///   it. A deleted chat is forgotten, and so is any chat the store's first
-///   listing doesn't have, deleted while the debugger wasn't running: but
-///   never one noted since this debugger started, which a listing may not
-///   have yet.
+///   it. A deleted chat is forgotten, and so is any chat that was in the
+///   note as this debugger started that the store's first listing doesn't
+///   have, deleted while no debugger was running: never one noted since,
+///   by this debugger or another sharing the store, which a listing may
+///   not have yet.
 /// - **Kept in a file of the debugger's own** in the store's folder,
 ///   [`UNTOOLED_FILE`]: a JSON list of chat ids, its user's alone. A
 ///   thread of its own writes it, never CAF's, reading it again before
@@ -142,6 +143,9 @@ pub struct Untooled {
     chats: Mutex<BTreeSet<ChatId>>,
     /// The chats noted since this debugger started: never pruned.
     noted: Mutex<BTreeSet<ChatId>>,
+    /// The chats in the note as this debugger started: the only ones the
+    /// first listing may prune.
+    at_start: BTreeSet<ChatId>,
     /// Whether the store's first listing has been seen.
     listed: AtomicBool,
     /// The thread writing the file, and what it's to write, if there's a
@@ -156,8 +160,8 @@ enum Change {
     Add(ChatId),
     /// A chat deleted.
     Remove(ChatId),
-    /// Only these chats are in the store.
-    KeepOnly(BTreeSet<ChatId>),
+    /// These chats are no longer in the store.
+    Prune(BTreeSet<ChatId>),
 }
 
 impl Change {
@@ -169,7 +173,7 @@ impl Change {
             Self::Remove(chat) => {
                 chats.remove(chat);
             }
-            Self::KeepOnly(kept) => chats.retain(|chat| kept.contains(chat)),
+            Self::Prune(gone) => chats.retain(|chat| !gone.contains(chat)),
         }
     }
 }
@@ -205,6 +209,7 @@ impl Untooled {
             }
         });
         Self {
+            at_start: chats.clone(),
             chats: Mutex::new(chats),
             noted: Mutex::new(BTreeSet::new()),
             listed: AtomicBool::new(false),
@@ -243,10 +248,13 @@ impl Untooled {
                     .lock()
                     .map(|noted| noted.clone())
                     .unwrap_or_default();
-                Change::KeepOnly(
-                    (chats.iter().map(|header| header.chat))
-                        .chain(unreadable.iter().map(|(chat, _)| *chat))
-                        .chain(noted)
+                let there: BTreeSet<ChatId> = (chats.iter().map(|header| header.chat))
+                    .chain(unreadable.iter().map(|(chat, _)| *chat))
+                    .collect();
+                Change::Prune(
+                    (self.at_start.iter())
+                        .filter(|chat| !there.contains(chat) && !noted.contains(chat))
+                        .copied()
                         .collect(),
                 )
             }
@@ -918,8 +926,18 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600, "the user's alone");
 
         // The next debugger reads the note back, and restores so.
+        // A chat deleted while no debugger ran, still in the note.
+        let stale = chat(6);
+        let noted: Vec<caf_core::ChatId> =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        std::fs::write(
+            &file,
+            serde_json::to_vec(&[noted, vec![stale]].concat()).unwrap(),
+        )
+        .unwrap();
         let next = Arc::new(Untooled::in_store(&dir));
-        assert!(next.has(bare) && next.has(older) && !next.has(tooled) && !next.has(gone));
+        assert!(next.has(bare) && next.has(older) && next.has(stale));
+        assert!(!next.has(tooled) && !next.has(gone));
         let restoring = rules(&agents(), true, true, Arc::clone(&next));
         assert!(
             (restoring.restore)(bare, &shelf())
@@ -932,29 +950,35 @@ mod tests {
             Tools::caf(CafTool::ALL)
         );
 
-        // Another debugger, sharing the store, notes a chat meanwhile: the
-        // next write reads it again, and keeps it.
+        // Another debugger, sharing the store, notes a chat after this one
+        // started: the next write reads the file again, and keeps it.
         let other = chat(5);
         std::fs::write(
             &file,
-            serde_json::to_vec(&[bare, older, other, chat(6)]).unwrap(),
+            serde_json::to_vec(&[bare, older, stale, other]).unwrap(),
         )
         .unwrap();
-        // The first listing forgets what the store no longer has, an
-        // unreadable chat kept, and one noted since this debugger started,
-        // which it may not have yet; a later one changes nothing.
+        // The first listing prunes only what was in the note as this
+        // debugger started and the store no longer has: not an unreadable
+        // chat, nor one noted since, by this debugger or the other, which
+        // the listing doesn't have yet. A later listing changes nothing.
         let fresh = chat(7);
         next.step(&opened(fresh, None));
-        next.step(&listed(&[bare, other], &[older]));
+        next.step(&listed(&[bare], &[older]));
         assert!(next.has(fresh), "noted since it started: never pruned");
+        assert!(!next.has(stale), "in the note at start, and gone: pruned");
         next.step(&listed(&[], &[]));
         assert!(next.has(bare) && next.has(older));
         drop(restoring);
         let next = Arc::into_inner(next).expect("the only one");
         drop(next);
         let kept = Untooled::in_store(&dir);
-        assert!(kept.has(bare) && kept.has(older) && kept.has(other));
-        assert!(!kept.has(chat(6)), "deleted while no debugger ran: pruned");
+        assert!(kept.has(bare) && kept.has(older));
+        assert!(
+            kept.has(other),
+            "another debugger's fresh note: kept, though unlisted"
+        );
+        assert!(!kept.has(stale), "deleted while no debugger ran: pruned");
         assert!(
             kept.has(fresh),
             "noted since it started: kept in the file too"
