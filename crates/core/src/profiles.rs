@@ -1370,7 +1370,7 @@ pub(crate) struct SettingsStyle {
 /// tools does is its description's to say.
 pub(crate) fn own_instructions(host: &str, tools: &[CafTool], app: &[String]) -> String {
     let apps = app.join(", ");
-    match (tools.is_empty(), app.is_empty()) {
+    match (only_task_stop(tools, app), app.is_empty()) {
         (true, true) => format!(
             "You are working inside {host}, the app the user is talking to you in. You have no \
              tools of your own: you can't read or change files, run commands or browse the web, \
@@ -1378,9 +1378,10 @@ pub(crate) fn own_instructions(host: &str, tools: &[CafTool], app: &[String]) ->
         ),
         (true, false) => format!(
             "You are working inside {host}, the app the user is talking to you in. {host} gives \
-             you tools of its own ({apps}), asking the user's leave where they must. You have \
+             you tools of its own ({apps}){}, asking the user's leave where they must. You have \
              no other tools of your own: you can't read or change files, run commands or browse \
-             the web, except through tools {host} gives you. Answer in Markdown."
+             the web, except through tools {host} gives you. Answer in Markdown.",
+            task_stop(tools)
         ),
         (false, true) => format!(
             "You are working inside {host}, the app the user is talking to you in. {host} gives \
@@ -1404,8 +1405,8 @@ pub(crate) fn own_instructions(host: &str, tools: &[CafTool], app: &[String]) ->
 /// app's own tools named `app`, in a line, `host` being the app's name.
 pub(crate) fn served_instructions(host: &str, tools: &[CafTool], app: &[String]) -> String {
     let apps = app.join(", ");
-    match (tools.is_empty(), app.is_empty()) {
-        (true, _) => format!("{host}'s own tools ({apps})."),
+    match (only_task_stop(tools, app), app.is_empty()) {
+        (true, _) => format!("{host}'s own tools ({apps}){}.", task_stop(tools)),
         (false, true) => format!(
             "{host}'s tools to {}, in the folder you're working in.",
             tool_uses(tools)
@@ -1414,6 +1415,21 @@ pub(crate) fn served_instructions(host: &str, tools: &[CafTool], app: &[String])
             "{host}'s tools to {}, in the folder you're working in, and its own ({apps}).",
             tool_uses(tools)
         ),
+    }
+}
+
+/// Whether CAF's tools `tools` are none, or only TaskStop, served for the
+/// jobs of the app's tools `app`: the app's are then all the chat has.
+fn only_task_stop(tools: &[CafTool], app: &[String]) -> bool {
+    tools.is_empty() || (!app.is_empty() && tools == [CafTool::TaskStop])
+}
+
+/// What's said of TaskStop beside the app's tools alone, if `tools` has it.
+fn task_stop(tools: &[CafTool]) -> &'static str {
+    if tools.contains(&CafTool::TaskStop) {
+        ", and TaskStop to stop their background tasks"
+    } else {
+        ""
     }
 }
 
@@ -1427,7 +1443,9 @@ fn tool_uses(tools: &[CafTool]) -> String {
                 CafTool::Edit => "change part of a file",
                 CafTool::Write => "write whole files",
                 CafTool::Bash => "run commands",
-                CafTool::TaskStop => "stop background commands",
+                // Only Bash's jobs are commands.
+                CafTool::TaskStop if tools.contains(&CafTool::Bash) => "stop background commands",
+                CafTool::TaskStop => "stop background tasks",
             };
             format!("{does} ({})", tool.name())
         })
