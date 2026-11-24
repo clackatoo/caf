@@ -2505,6 +2505,8 @@ mod tests {
             },
         });
         let run = h.run().await;
+        // Before its answer is written, so before the write's time starts.
+        let started = Instant::now();
         run.finish
             .send(Ran::new(
                 true,
@@ -2517,7 +2519,6 @@ mod tests {
         });
         // The clock moves only once everything waits.
         tokio::time::pause();
-        let started = Instant::now();
         // Waited for longer than a line may take to write.
         let wait = WRITE_TIME * 6;
         assert_event(h.report_within(wait).await, call, |event| {
