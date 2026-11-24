@@ -1190,3 +1190,78 @@ async fn claude_reads_edits_and_runs_with_cafs_own_tools() {
     caf.shutdown().await;
     running.await;
 }
+
+/// Claude, given one of the app's own tools and none of CAF's, calls it:
+/// the call is the app's, Done, and Claude says what only the tool knew.
+///
+/// ```text
+/// cargo test -p caf-driver-tokio --test live the_apps_own -- --ignored
+/// ```
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a signed-in Claude, and spends usage"]
+async fn claude_calls_the_apps_own_tool() {
+    use caf_core::tool::{Origin, ToolStatus, Tools};
+    use caf_driver_tokio::{AppTools, Done, Relay, tool};
+
+    /// What the tool is given.
+    #[derive(serde::Deserialize, schemars::JsonSchema)]
+    struct Ask {
+        /// Who's asking.
+        who: String,
+    }
+
+    let folder = std::env::temp_dir().join(format!("caf-live-apps-tools-{}", std::process::id()));
+    let served = std::env::temp_dir().join(format!("caf-la-{}", std::process::id()));
+    let mut folders = Folders(Vec::new());
+    folders.make(&folder);
+    folders.make(&served);
+
+    let mut config = config_for(Host::new("caf-live-test", "0.0.0"), vec![claude()]);
+    if let Some(recording) = std::env::var_os("CAF_LIVE_RECORD") {
+        config.record = Some(recording.into());
+    }
+    config.policy = Box::new(AllowAll);
+    config.tools.relay = Relay::Command(SpawnCommand::new(caf_fake_agent::binary()));
+    config.tools.folder = Some(served.clone());
+    config.tools.app = AppTools::new()
+        .with(
+            tool("secret_word", |_call, input: Ask| async move {
+                Done::answer(format!("The secret word for {} is periwinkle.", input.who))
+            })
+            .called("Tell the secret word")
+            .describe("Tells whoever asks the secret word.")
+            .read_only(),
+        )
+        .unwrap();
+    let (caf, running) = Caf::start(config);
+
+    let chat = caf
+        .open_chat(
+            OpenChat::new("claude", &folder).with_tools(Tools::caf([]).and_app(["secret_word"])),
+        )
+        .await
+        .unwrap();
+    let turn = ask(
+        &chat,
+        "Call your secret_word tool, as who: \"the test\". Then reply with just the secret word.",
+    )
+    .await;
+    assert_eq!(turn.life, TurnLife::Finished, "{turn:#?}");
+
+    let call = (turn.items.iter())
+        .find_map(|item| match &item.kind {
+            ItemKind::Tool(call) if call.origin == Origin::App("secret_word".into()) => Some(call),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("it called the app's tool: {turn:#?}"));
+    assert_eq!(call.status, ToolStatus::Done, "{turn:#?}");
+    assert!(
+        format!("{:?}", turn.items)
+            .to_lowercase()
+            .contains("periwinkle"),
+        "it said the word: {turn:#?}"
+    );
+
+    caf.shutdown().await;
+    running.await;
+}
