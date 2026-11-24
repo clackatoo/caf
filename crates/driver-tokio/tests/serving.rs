@@ -640,6 +640,7 @@ async fn try_start_says_why_it_cant_serve_and_starts_nothing() {
         panic!("{error:?}");
     };
     assert!(path.starts_with(&long));
+    assert!(!long.exists(), "the folder wasn't made");
     assert!(
         error.to_string().contains(&long.display().to_string()),
         "{error}"
@@ -702,6 +703,16 @@ async fn the_newest_relay_for_a_chat_wins() {
     })
     .await;
     assert!(!has_note(&done, &Note::ToolsLost));
+    // The first call's question went with it.
+    let gone = until(&chat, &mut watch, "the first question withdrawn", |chat| {
+        chat.questions.is_empty()
+    })
+    .await;
+    let first = the_call(&gone).unwrap();
+    assert_eq!(
+        (first.status, first.stopped_by),
+        (ToolStatus::Cancelled, Some(StoppedBy::Agent))
+    );
     drop(dir);
     serving.shut_down().await;
 }

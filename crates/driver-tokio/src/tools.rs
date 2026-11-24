@@ -466,8 +466,12 @@ impl ToolsDriver {
             Some(folder) => folder,
             None => default_folder(),
         };
-        private_folder(&folder).map_err(StartError::Serving)?;
         let socket = folder.join(format!("{}-{}.sock", file_name(app), std::process::id()));
+        // Before the folder is made, so a path too long leaves nothing.
+        if socket.as_os_str().len() > SOCKET_PATH_MOST {
+            return Err(StartError::SocketPathTooLong { path: socket });
+        }
+        private_folder(&folder).map_err(StartError::Serving)?;
         let (listener, file) = listen(&socket)?;
         let key = random_key().map_err(StartError::Serving)?;
         let serving = Serving::new(relay, socket.clone(), Key(key));
@@ -1310,15 +1314,10 @@ fn file_name(app: &str) -> String {
     }
 }
 
-/// Listens on `socket`, replacing a socket left there by an earlier
-/// process with the same id.
+/// Listens on `socket`, whose path fits, replacing a socket left there by
+/// an earlier process with the same id.
 fn listen(socket: &Path) -> Result<(UnixListener, SocketFile), StartError> {
     let shown = socket.display();
-    if socket.as_os_str().len() > SOCKET_PATH_MOST {
-        return Err(StartError::SocketPathTooLong {
-            path: socket.to_owned(),
-        });
-    }
     if let Ok(meta) = std::fs::symlink_metadata(socket) {
         if !meta.file_type().is_socket() {
             return Err(StartError::Serving(format!(
@@ -2178,6 +2177,7 @@ mod tests {
         assert!(
             matches!(&why, StartError::SocketPathTooLong { path } if path.starts_with(&folder))
         );
+        assert!(!folder.exists(), "the folder wasn't made");
         let why = why.to_string();
         assert!(why.contains(&folder.display().to_string()), "{why}");
         assert!(why.contains("ToolsConfig::folder"), "{why}");
