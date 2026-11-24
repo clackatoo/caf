@@ -4,6 +4,7 @@ type: concept
 description: How CAF gives an agent its own tools, Read, Edit, Write and Bash, over MCP. The one line every app adds to its main, choosing a chat's tools, how a connection is bound to its chat and what that does and doesn't guarantee, keeping long calls alive, cancelling, losing the tools mid-session, and what isn't built yet.
 related:
   - caf/concepts/tool-calls
+  - caf/concepts/cafs-own-tools
   - caf/concepts/agents-and-profiles
   - caf/getting-started/a-chat-on-tokio
   - caf/getting-started/saving-and-restoring-chats
