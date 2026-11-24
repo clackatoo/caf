@@ -1,10 +1,11 @@
 // CAF's own tools, for real, through caf-debugger: a fake agent of the
 // test's own script is an MCP client, as Claude is, and calls CAF's
 // Read, Edit, Write, Bash and TaskStop, which read and write a folder of
-// the test's own and run real commands. The page shows each: a read, an
-// edit's diff before it's allowed, a command's output live, a progress
-// bar redrawn in place, Stop, a job in the background, CAF's notice of
-// its end, and TaskStop.
+// the test's own and run real commands, and the debugger's own
+// word_count, served beside them. The page shows each: a read, an edit's
+// diff before it's allowed, a command's output live, a progress bar
+// redrawn in place, Stop, a job in the background, CAF's notice of its
+// end, TaskStop, and a call to the app's own tool.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -35,7 +36,7 @@ function script(rounds: { message: string; steps: unknown[] }[]): string {
     { wait: { method: 'session/new' } },
     { respond: { result: { sessionId: SESSION } } },
     { mcp_start: { timeout: 20_000 } },
-    { mcp_list: { expect: ['Read', 'Edit', 'Write', 'Bash', 'TaskStop'], timeout: 20_000 } },
+    { mcp_list: { expect: ['Read', 'Edit', 'Write', 'Bash', 'TaskStop', 'word_count'], timeout: 20_000 } },
   ]
   for (const round of rounds) {
     lines.push({ wait: { method: 'session/prompt', match: prompt(round.message), as: 'prompt' } })
@@ -280,6 +281,37 @@ test.describe('background jobs', () => {
     await expect(stop.locator('.kind')).toHaveText('Stop a task')
     await expect(dev.locator('.status')).toHaveText('Cancelled')
     await expect(dev.locator('.job')).toHaveCount(0)
+  })
+})
+
+test.describe("the debugger's own tool", () => {
+  test.use({
+    setup: setup([
+      {
+        message: 'go',
+        steps: [
+          call('word_count', { text: 'one two three' }),
+          answered({ result: { isError: false, content: [{ type: 'text', text: '3 words' }] } }),
+        ],
+      },
+    ]),
+  })
+  test.setTimeout(90_000)
+
+  test("is served beside CAF's, asked about in CAF's words, and shown as the app's", async ({ page, server }) => {
+    await page.goto(server.url)
+    await openChat(page, join(server.state, 'work'))
+    await send(page, 'go')
+    const question = page.locator('.questions .question')
+    await expect(question.locator('.ask')).toHaveText("CAF The agent wants to use the app's word_count: Count the words in 13 characters")
+    await allow(page)
+    const count = step(page, 'Count the words in 13 characters')
+    await expect(count.locator('.status')).toHaveText('Done')
+    await expect(count.locator('.kind')).toHaveText('Tool')
+    await count.locator('summary').first().click()
+    await expect(count.locator('.origin')).toHaveText("The app's own tool word_count")
+    await expect(count.locator('.decision').first()).toHaveText('Allowed by you')
+    await expect(page.locator('.caf-chat .turn').last().locator('.life')).toHaveText('Finished')
   })
 })
 

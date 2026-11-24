@@ -10,7 +10,7 @@ import { cleanup, fireEvent } from '@testing-library/svelte'
 import { afterEach, describe, expect, it } from 'vitest'
 import { apply, type Change, type Chat, type Decision, type Piece, type ToolCall, type ToolStatus } from '@clackatoo/caf'
 import { colour } from '../../src/chat/ansi.ts'
-import { bytes, cafAbout, cafAsks, decisionText, endingText, followable, imageShown, jobNotice, linkName } from '../../src/chat/tools.ts'
+import { appAsks, bytes, cafAbout, cafAsks, decisionText, endingText, followable, imageShown, jobNotice, linkName, originText } from '../../src/chat/tools.ts'
 import { chat, draw, item, question, turn } from './build.ts'
 
 afterEach(cleanup)
@@ -736,6 +736,33 @@ describe('a permission question about a call', () => {
     expect(cafAsks(null, 'Claude')).toBe('Claude wants to use a tool')
   })
 
+  it('is CAF\'s own question for a call to one of the app\'s tools, naming the tool, with what it previewed', () => {
+    const tool = item({
+      type: 'Tool',
+      value: call({
+        title: 'Trim clip 3',
+        kind: { type: 'Edit' },
+        status: { type: 'Asking' },
+        decision: { type: 'Undecided' },
+        origin: { type: 'App', value: 'trim_clip' },
+        action: { type: 'Tool', value: { name: 'trim_clip' } },
+        result: [{ type: 'Text', value: { text: 'Would trim clip 3 to 2s', cut: null } }],
+      }),
+    })
+    const { container } = draw(
+      chat({
+        turns: [turn({ life: { type: 'Running' }, items: [tool] })],
+        questions: [question({ type: 'Permission', value: { tool: tool.id, title: 'Trim clip 3', options } })],
+      }),
+    )
+    const asked = container.querySelector('.questions .question') as HTMLElement
+    expect(asked.dataset.caf).toBe('true')
+    expect(text(asked.querySelector('.ask'))).toBe("CAF The agent wants to use the app's trim_clip: Trim clip 3")
+    expect(text(asked.querySelector('.about'))).toContain('Would trim clip 3 to 2s')
+    expect(asked.querySelector('.command')).toBeNull()
+    expect(appAsks('trim_clip', 'Claude')).toBe("Claude wants to use the app's trim_clip")
+  })
+
   it('stays the agent\'s question for a call to the agent\'s own tool', () => {
     const tool = item({ type: 'Tool', value: call({ status: { type: 'Asking' }, origin: { type: 'Agent', value: 'Bash' } }) })
     const { container } = draw(
@@ -764,6 +791,25 @@ describe('a permission question about a call', () => {
     )
     expect(container.querySelectorAll('.questions .about')).toHaveLength(0)
     expect(container.querySelectorAll('.questions .question')).toHaveLength(3)
+  })
+})
+
+describe('a call to one of the app\'s tools', () => {
+  it('shows its title and kind, and says whose tool it is', () => {
+    const { container } = drawCalls(
+      call({ title: 'Count the words in 13 characters', kind: { type: 'Other' }, origin: { type: 'App', value: 'word_count' }, action: { type: 'Tool', value: { name: 'word_count' } } }),
+    )
+    const row = rowOf(container)
+    expect(text(row.querySelector('.title'))).toBe('Count the words in 13 characters')
+    expect(text(row.querySelector('.kind'))).toBe('Tool')
+    expect(text(row.querySelector('.origin'))).toBe("The app's own tool word_count")
+    expect(originText({ type: 'App', value: 'word_count' })).toBe("The app's own tool word_count")
+    expect(originText({ type: 'Caf', value: { type: 'Read' } })).toBeNull()
+  })
+
+  it('says nothing of whose tool it is for any other call', () => {
+    const { container } = drawCalls(call())
+    expect(rowOf(container).querySelector('.origin')).toBeNull()
   })
 })
 

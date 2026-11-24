@@ -17,7 +17,8 @@
   import type { Answer, DeepReadonly, ItemId, Question, QuestionId, ToolCall } from '@clackatoo/caf'
   import { attempt } from './actions.ts'
   import DiffView from './DiffView.svelte'
-  import { cafAbout, cafAsks } from './tools.ts'
+  import PieceView from './PieceView.svelte'
+  import { appAsks, cafAbout, cafAsks } from './tools.ts'
   import { unhidden } from './unhidden.ts'
   import { errorText, optionTone, tagOf } from './words.ts'
 
@@ -91,26 +92,36 @@
       <div
         class="question"
         data-kind={kind.type}
-        data-caf={kind.type === 'Permission' && kind.value.tool !== null && toolOf(kind.value.tool)?.origin.type === 'Caf'}
+        data-caf={kind.type === 'Permission' && kind.value.tool !== null && ['Caf', 'App'].includes(toolOf(kind.value.tool)?.origin.type ?? '')}
       >
         {#if kind.type === 'Permission'}
           {@const tool = kind.value.tool === null ? null : toolOf(kind.value.tool)}
           {@const action = tool?.action ?? null}
           {@const diffs = tool?.result.flatMap((piece) => (piece.type === 'Diff' ? [piece.value] : [])) ?? []}
+          <!-- What one of the app's tools previewed, as it gave it. -->
+          {@const previewed = tool?.origin.type === 'App' ? tool.result : []}
           {#if tool?.origin.type === 'Caf'}
             <div class="ask"><span class="who">CAF</span> {cafAsks(action, 'The agent')}: <strong
                 >{unhidden(cafAbout(tool) ?? kind.value.title)}</strong
               ></div>
+          {:else if tool?.origin.type === 'App'}
+            <div class="ask"><span class="who">CAF</span> {appAsks(tool.origin.value, 'The agent')}: <strong
+                >{unhidden(tool.title)}</strong
+              ></div>
           {:else}
             <div class="ask">The agent asks permission: <strong>{kind.value.title}</strong></div>
           {/if}
-          {#if action?.type === 'Run' || diffs.length > 0}
+          {#if action?.type === 'Run' || diffs.length > 0 || previewed.length > 0}
             <div class="about">
               {#if action?.type === 'Run'}
                 <pre class="command">{unhidden(action.value.command)}</pre>
                 <div class="folder">In {unhidden(action.value.folder)}{action.value.background ? ', in the background' : ''}</div>
               {/if}
-              {#each diffs as diff, d (d)}<DiffView {diff} />{/each}
+              {#if previewed.length > 0}
+                {#each previewed as piece, n (n)}<PieceView {piece} running={false} />{/each}
+              {:else}
+                {#each diffs as diff, d (d)}<DiffView {diff} />{/each}
+              {/if}
             </div>
           {/if}
           <div class="options">

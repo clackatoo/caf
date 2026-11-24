@@ -1,7 +1,7 @@
 // What the chat view says about a tool call, and what it lets through of
 // what an agent gave: an image only as a picture, a link only to the web.
 
-import type { Action, CafTool, Cut, Decision, DeepReadonly, Ending, Location, ToolCall, ToolStatus } from '@clackatoo/caf'
+import type { Action, CafTool, Cut, Decision, DeepReadonly, Ending, Location, Origin, ToolCall, ToolStatus } from '@clackatoo/caf'
 import { count } from './figures.ts'
 import { tagOf } from './words.ts'
 
@@ -197,6 +197,24 @@ export function cafAsks(action: DeepReadonly<Action> | null, agent: string): str
     default:
       return `${agent} wants to use a tool`
   }
+}
+
+/**
+ * What CAF asks about a call to the app's own tool `name`, served beside
+ * CAF's: the tool by its name, as the app registered it. `agent` names
+ * the agent, such as `The agent`.
+ */
+export function appAsks(name: string, agent: string): string {
+  return `${agent} wants to use the app's ${name}`
+}
+
+/**
+ * Whose tool a call is, if that's worth saying: one of the app's own,
+ * which CAF serves for it, by its name. Null for any other: CAF's own
+ * are named by their kind, and the agent's are the agent's.
+ */
+export function originText(origin: DeepReadonly<Origin>): string | null {
+  return origin.type === 'App' ? `The app's own tool ${origin.value}` : null
 }
 
 /**
