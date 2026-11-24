@@ -330,15 +330,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         change: ToolChange,
         out: &mut Vec<Directive<A, D>>,
     ) {
-        // A tool of CAF's server that isn't CAF's own is one of the app's
-        // own, if the chat was given it: the adapter can't know which.
         let mut change = change;
-        if let Some(Origin::Server { server, tool }) = &change.origin
-            && server == crate::profiles::CAF_SERVER
-            && (self.runs.get(&chat)).is_some_and(|run| run.app_tools.contains(tool))
-        {
-            change.origin = Some(Origin::App(tool.clone()));
-        }
+        change.origin = (change.origin.take()).map(|origin| self.served_origin_in(chat, origin));
         // A report of a call CAF serves changes nothing of it.
         let served = match &change.origin {
             Some(Origin::Caf(tool)) => Some(ServedTool::Caf(*tool)),

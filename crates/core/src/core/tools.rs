@@ -49,7 +49,7 @@ use crate::question::{OptionId, OptionKind, Permission, PermissionOption, Questi
 use crate::time::{Now, Window};
 use crate::tool::{
     Action, AppToolSpec, CafTool, DecidedBy, Decision, Ending, Lines, MOST_LINE, MOST_OUTPUT,
-    Origin, Output, Piece, ServedTool, StoppedBy, output_size,
+    MOST_TOOL_NAME, Origin, Output, Piece, ServedTool, StoppedBy, output_size,
 };
 
 /// The longest title CAF writes for a call, in bytes.
@@ -214,6 +214,22 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             );
             return;
         }
+        let mut serving = serving;
+        let mut kept: Vec<AppToolSpec> = Vec::new();
+        for spec in std::mem::take(&mut serving.app_tools) {
+            match app_tool_refused(&spec.name, &kept) {
+                Some(why) => report(
+                    out,
+                    Level::Warn,
+                    format!(
+                        "ignored the app's tool {:?}: {why}",
+                        agent_text(&spec.name, MOST_TITLE)
+                    ),
+                ),
+                None => kept.push(spec),
+            }
+        }
+        serving.app_tools = kept;
         self.serving = Some(serving);
     }
 
@@ -265,6 +281,21 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return Err(Refused::UnknownTool(name.clone()));
         }
         Ok(names)
+    }
+
+    /// Whose tool a call in `chat` is, its adapter saying `origin`: a
+    /// tool of CAF's server that isn't CAF's own is one of the app's own,
+    /// if the chat was given it, as the adapter can't know which.
+    pub(super) fn served_origin_in(&self, chat: ChatId, origin: Origin) -> Origin {
+        match origin {
+            Origin::Server { server, tool }
+                if server == CAF_SERVER
+                    && (self.runs.get(&chat)).is_some_and(|run| run.app_tools.contains(&tool)) =>
+            {
+                Origin::App(tool)
+            }
+            origin => origin,
+        }
     }
 
     /// The app's own tool `name`, as the tools driver said it registered
@@ -461,14 +492,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 None => (None, Joined::No),
             },
         };
-        // A call that fails at once takes only a report it's sure is its
-        // own, as one of CAF's own tools does: one held for now may be
-        // another call's.
+        // What the app's tool was given isn't what it takes. Held only
+        // for now by a report that may be another call's, it's refused
+        // with no item of its own, as one of CAF's own tools is: the
+        // report says how it went.
         let bad_input = bad_input.filter(|_| spec.is_some());
-        let (joins, joined) = match joined {
-            Joined::Maybe(_) if bad_input.is_some() => (None, Joined::No),
-            joined => (joins, joined),
-        };
+        if let (Some(why), Joined::Maybe(_)) = (&bad_input, &joined) {
+            return refuse(out, RefusedCall::BadInput(why.clone()));
+        }
         let action = match &tool {
             ServedTool::Caf(caf) => action_of(*caf, &input, &cwd, &shell),
             ServedTool::App(name) => Ok(Action::Tool { name: name.clone() }),
@@ -1074,10 +1105,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             mut item,
         } = ended;
         if item.is_some()
-            && !matches!(
-                self.calls.get(&call).map(|each| &each.tool),
-                Some(ServedTool::App(_))
-            )
+            && let Some(each) = self.calls.get(&call)
+            && !matches!(each.tool, ServedTool::App(_))
         {
             item = None;
             report(
@@ -1354,6 +1383,26 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 self.owed.push(Owed::Cancel(call));
             }
         }
+    }
+}
+
+/// Why the app's tool `name` can't be served beside those `kept`, if it
+/// can't: as the tokio kit's `AppTools::with` checks it. A name is of
+/// `[A-Za-z0-9_-]`, 1 to [`MOST_TOOL_NAME`] bytes, and neither one of
+/// CAF's own, every one of them served or not, nor another of the app's,
+/// in any case.
+fn app_tool_refused(name: &str, kept: &[AppToolSpec]) -> Option<String> {
+    let fits = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-';
+    if name.is_empty() || name.len() > MOST_TOOL_NAME || !name.bytes().all(fits) {
+        Some(format!(
+            "a name is 1 to {MOST_TOOL_NAME} of A-Z, a-z, 0-9, _ and -"
+        ))
+    } else if (CafTool::ALL.iter()).any(|tool| tool.name().eq_ignore_ascii_case(name)) {
+        Some("it's one of CAF's own".to_owned())
+    } else if (kept.iter()).any(|spec| spec.name.eq_ignore_ascii_case(name)) {
+        Some("it's named as another of the app's".to_owned())
+    } else {
+        None
     }
 }
 
