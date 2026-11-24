@@ -414,13 +414,13 @@ impl ToolsDriver {
         };
         private_folder(&folder)?;
         let socket = folder.join(format!("{}-{}.sock", file_name(app), std::process::id()));
-        let listener = listen(&socket)?;
+        let (listener, file) = listen(&socket)?;
         let key = random_key()?;
         let serving = Serving::new(relay, socket.clone(), Key(key));
         let (from_conns, to_driver) = mpsc::channel(64);
         let live = Live {
             listener,
-            socket: SocketFile(socket),
+            socket: file,
             key,
             from_conns,
             to_driver,
@@ -497,7 +497,7 @@ impl ToolsDriver {
             ToolDirective::Cancel { call } => {
                 if let Some(each) = self.calls.remove(&call) {
                     // Its work stops before the model hears it did.
-                    let Each { conn, request, .. } = each;
+                    let (conn, request) = each.stop();
                     self.answer(conn, &request, &Answer::error(CANCELLED));
                 }
             }
@@ -714,7 +714,7 @@ impl ToolsDriver {
             };
             if closing == Closing::Ended {
                 // Its work stops before the model hears it did.
-                let Each { request, .. } = each;
+                let (_, request) = each.stop();
                 if let Some(bytes) = conn.mcp.answer(&request, &Answer::error(CANCELLED)) {
                     let _ = conn.write.send(bytes);
                 }
@@ -903,6 +903,22 @@ impl ToolsDriver {
         }
         let writers = std::mem::take(&mut self.writers);
         let _ = tokio::time::timeout(FINISH_TIME, writers.join_all()).await;
+    }
+}
+
+impl Each {
+    /// Drops its work, giving back where to answer it.
+    fn stop(self) -> (u64, Request) {
+        let Self {
+            conn,
+            request,
+            preview,
+            run,
+            ..
+        } = self;
+        drop(preview);
+        drop(run);
+        (conn, request)
     }
 }
 
@@ -1199,7 +1215,7 @@ fn file_name(app: &str) -> String {
 
 /// Listens on `socket`, replacing a socket left there by an earlier
 /// process with the same id.
-fn listen(socket: &Path) -> Result<UnixListener, String> {
+fn listen(socket: &Path) -> Result<(UnixListener, SocketFile), String> {
     let shown = socket.display();
     let length = socket.as_os_str().len();
     if length > SOCKET_PATH_MOST {
@@ -1218,14 +1234,13 @@ fn listen(socket: &Path) -> Result<UnixListener, String> {
     }
     let listener = std::os::unix::net::UnixListener::bind(socket)
         .map_err(|e| format!("CAF couldn't listen on its tools' socket, {shown}: {e}"))?;
+    // Removed if anything after fails.
+    let file = SocketFile(socket.to_owned());
     let listener = listener
         .set_nonblocking(true)
         .and_then(|()| UnixListener::from_std(listener))
-        .map_err(|e| format!("CAF couldn't listen on its tools' socket, {shown}: {e}"));
-    if listener.is_err() {
-        let _ = std::fs::remove_file(socket);
-    }
-    listener
+        .map_err(|e| format!("CAF couldn't listen on its tools' socket, {shown}: {e}"))?;
+    Ok((listener, file))
 }
 
 /// 32 bytes from the system's randomness.
@@ -1992,8 +2007,10 @@ mod tests {
         assert_eq!(progress["method"], "notifications/progress", "{progress}");
         assert_eq!(progress["params"]["progressToken"], "p2");
         assert_eq!(progress["params"]["message"], "Waiting for permission");
+        // Not before its minute is up. While the test waits for the line,
+        // the paused clock may move on to later timers, so there's no
+        // upper bound.
         assert!(started.elapsed() >= PROGRESS_EVERY - Duration::from_secs(1));
-        assert!(started.elapsed() <= PROGRESS_EVERY);
         tokio::time::resume();
         h.apply(ToolDirective::Run {
             call,
@@ -2004,10 +2021,8 @@ mod tests {
         });
         let run = h.run().await;
         tokio::time::pause();
-        let started = Instant::now();
         let progress = client.recv_untimed().await;
         assert_eq!(progress["params"]["message"], "Running", "{progress}");
-        assert!(started.elapsed() <= PROGRESS_EVERY);
         tokio::time::resume();
         // Once it's answered, no more.
         run.finish
