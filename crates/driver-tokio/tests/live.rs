@@ -1134,8 +1134,12 @@ async fn claude_reads_edits_and_runs_with_cafs_own_tools() {
     use caf_driver_tokio::Relay;
 
     let folder = std::env::temp_dir().join(format!("caf-live-cafs-tools-{}", std::process::id()));
+    // CAF's tools' socket and output files, in a folder of the test's own,
+    // never the user's runtime folder: short, as a socket's path must be.
+    let served = std::env::temp_dir().join(format!("caf-lt-{}", std::process::id()));
     let mut folders = Folders(Vec::new());
     folders.make(&folder);
+    folders.make(&served);
     let notes = folder.join("notes.txt");
     std::fs::write(&notes, "The colour is red.\n").unwrap();
 
@@ -1145,6 +1149,7 @@ async fn claude_reads_edits_and_runs_with_cafs_own_tools() {
     }
     config.policy = Box::new(AllowAll);
     config.tools.relay = Relay::Command(SpawnCommand::new(caf_fake_agent::binary()));
+    config.tools.folder = Some(served.clone());
     let (caf, running) = Caf::start(config);
 
     let chat = caf

@@ -38,7 +38,9 @@ export function jobNotice(text: string): string | null {
   const inner = NOTIFICATION.exec(text)?.[1]
   if (inner === undefined) return null
   const part = (name: string) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(inner)?.[1]?.trim() ?? null
-  const tidy = (words: string) => words.replace(/\s+/g, ' ').trim()
+  // CAF escapes &, < and > in what it says inside the tags, as XML.
+  const tidy = (words: string) =>
+    words.replace(/\s+/g, ' ').trim().replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&')
   if (!/<[a-z-]+>/.test(inner)) return tidy(inner) || 'A background task ended.'
   const summary = part('summary')
   if (summary !== null) return tidy(summary)

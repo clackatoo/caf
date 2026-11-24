@@ -839,6 +839,13 @@ describe("CAF's notice of a job's end", () => {
     expect(jobNotice('<task-notification>\n<task-id>1</task-id>\n</task-notification>')).toBe('Task 1 ended.')
   })
 
+  it('is told with what CAF escaped as XML unescaped, as the command was written', () => {
+    const told =
+      '<task-notification>\n<task-id>3</task-id>\n<status>completed</status>\n<summary>Background command "cargo build &amp;&amp; cargo test &gt; out.txt 2&gt;&amp;1 &lt; in" completed (exit code 0)</summary>\n</task-notification>'
+    expect(jobNotice(told)).toBe('Background command "cargo build && cargo test > out.txt 2>&1 < in" completed (exit code 0)')
+    expect(jobNotice('<task-notification>\n<summary>a &amp;lt; b</summary>\n</task-notification>')).toBe('a &lt; b')
+  })
+
   it("is null for any other notice, such as the app's", () => {
     expect(jobNotice('The build finished')).toBeNull()
     expect(jobNotice('Note: <task-notification>x</task-notification>')).toBeNull()
