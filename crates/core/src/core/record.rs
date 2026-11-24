@@ -70,6 +70,14 @@ impl<A: AppItem> Log<A> {
     }
 }
 
+/// Whether a turn living `life` has ended.
+fn turn_ended(life: &TurnLife) -> bool {
+    !matches!(
+        life,
+        TurnLife::Waiting | TurnLife::Running | TurnLife::Stopping
+    )
+}
+
 impl<A: AppItem, D: AppData> Core<A, D> {
     /// Applies `change` to `chat`'s record and, if it fits, adds it to
     /// the chat's list: the record is built only from the changes viewers
@@ -85,6 +93,20 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             latest: log.latest(),
             steps: Vec::new(),
         });
+        // A call ending in a turn that has ended already, as one stopped
+        // with it, or a job: the agent may have been told how it went.
+        let ends_late = match &change {
+            Change::ToolChanged { item, tool } if tool.status.ended() => (whole.turns.iter().rev())
+                .find_map(|turn| {
+                    let each = turn.items.iter().find(|each| each.id == *item)?;
+                    Some(
+                        turn_ended(&turn.life)
+                            && matches!(&each.kind, ItemKind::Tool(was) if !was.status.ended()),
+                    )
+                })
+                .unwrap_or(false),
+            _ => false,
+        };
         if let Err(mismatch) = whole.apply(&change) {
             debug_assert!(
                 false,
@@ -96,25 +118,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         // A saved chat's journal has every change, as the store's copy is
         // built from them too; a turn ending saves it at once, and so does
-        // a call ending in a turn that has ended already (one stopped with
-        // it, or a job), as the agent may have been told how it went.
+        // a call ending after its turn did.
         if let Some(kept) = self.saving.kept.get_mut(&chat) {
-            let ended = |life: &TurnLife| {
-                !matches!(
-                    life,
-                    TurnLife::Waiting | TurnLife::Running | TurnLife::Stopping
-                )
-            };
-            match &change {
-                Change::TurnLife { life, .. } if ended(life) => kept.urgent = true,
-                Change::ToolChanged { item, tool } if tool.status.ended() => {
-                    let turn = (whole.turns.iter().rev())
-                        .find(|turn| turn.items.iter().any(|each| each.id == *item));
-                    if turn.is_some_and(|turn| ended(&turn.life)) {
-                        kept.urgent = true;
-                    }
-                }
-                _ => {}
+            if ends_late || matches!(&change, Change::TurnLife { life, .. } if turn_ended(life)) {
+                kept.urgent = true;
             }
             kept.add_with(|| crate::save::Entry::Change(change.clone()));
             if let Change::OutputChanged { item, .. } = &change {

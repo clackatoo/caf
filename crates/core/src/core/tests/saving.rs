@@ -3755,3 +3755,40 @@ fn a_call_that_ends_after_its_turn_did_is_written_at_once() {
         "{append:#}"
     );
 }
+
+#[test]
+fn what_the_agent_says_late_of_a_call_that_had_ended_isnt_written_at_once() {
+    let mut script = Script::new(host());
+    script.open_saved("claude");
+    script.at(1000);
+    let snapshot = ticket(&one_storage(&script.woken()));
+    script.storage(snapshot, done(10_000));
+    let out = script.send(CHAT, "Read it").1;
+    let prompt = sent(&out, "session/prompt")["id"].as_u64().expect("an id");
+    script.update(
+        PROC,
+        SESSION,
+        &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Read", "kind": "read", "status": "completed" }),
+    );
+    script.at(2000);
+    let append = one_storage(&script.answers(PROC, prompt, &json!({ "stopReason": "end_turn" })));
+    script.storage(ticket(&append), done(10));
+
+    // What it gave back comes after: the call had ended, so it waits for
+    // the next save, as any change does.
+    script.at(3000);
+    let late = json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed", "rawOutput": "fn main() {}" });
+    let out = script.update(PROC, SESSION, &late);
+    assert!(storage(&out).is_empty(), "{out:#?}");
+    assert_eq!(
+        (script.chat(CHAT)["turns"][0]["items"]
+            .as_array()
+            .expect("items")
+            .iter())
+        .filter(|item| item["kind"]["type"] == "Tool")
+        .count(),
+        1
+    );
+    script.at(4000);
+    assert_eq!(one_storage(&script.woken())["type"], "Append");
+}
