@@ -62,7 +62,8 @@ struct Clip {
 
 /// trim_clip: previews, then trims, leaving the clip trimmed as its item.
 /// There's no clip 0: its preview fails, leaving an item all the same.
-/// Clip 7 waits until it's dropped, saying so in the test's folder; clip
+/// Clip 7 waits until it's dropped, saying when it starts and when it's
+/// dropped in the test's folder; clip
 /// 8 does too, answering early, as a job; clip 9 answers early, going on
 /// as a job, until the test's `go` file is there.
 struct Trim {
@@ -108,11 +109,13 @@ impl AppTool<Trimmed> for Trim {
             match input.clip {
                 7 => {
                     let _dropped = Dropped(work.join("dropped"));
+                    let _ = std::fs::write(work.join("started"), "");
                     std::future::pending::<()>().await;
                 }
                 8 => {
-                    call.answer_now(|job| Answer::text(format!("Trimming as job {}", job.0)));
+                    // Before it answers, so TaskStop always finds it.
                     let _dropped = Dropped(work.join("dropped"));
+                    call.answer_now(|job| Answer::text(format!("Trimming as job {}", job.0)));
                     std::future::pending::<()>().await;
                 }
                 9 => {
@@ -484,6 +487,16 @@ async fn stopping_the_turn_drops_an_app_tools_run() {
             .is_some_and(|call| call.status == ToolStatus::Running)
     })
     .await;
+    // Running, as the core has it, may be before its future is first
+    // polled, on the app's tools' own threads: so before it has anything
+    // to drop.
+    tokio::time::timeout(PATIENCE, async {
+        while !app.work.join("started").exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("its run started");
     chat.stop().await.unwrap();
     app.script_done().await;
     let done = until(&chat, &mut watch, "the call cancelled", |chat| {
