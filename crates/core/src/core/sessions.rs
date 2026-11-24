@@ -62,7 +62,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
             .ok_or(Refused::Unsendable)?;
-        let caf_tools = crate::tool::Tools::caf(open.tools.caf).caf;
+        let caf_tools = crate::tool::Tools::served(open.tools.caf);
         mcp_sent.extend(self.caf_server(chat, &caf_tools)?);
         check_instructions(open.instructions.as_deref())?;
         if !open.settings.iter().all(sendable) {
@@ -106,6 +106,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             chat,
             Run {
                 conn,
+                shell: cwd.clone(),
+                notices_held: false,
+                shell_warned: false,
                 cwd,
                 mcp: open.mcp_servers,
                 mcp_sent: super::state::SentServers(mcp_sent),
@@ -735,11 +738,22 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Stops waiting for `chat`'s session: its waiting messages end as
-    /// stopped.
+    /// stopped, and its notices are held.
     pub(super) fn stop_opening(&mut self, now: Now, chat: ChatId, out: &mut Vec<Directive<A, D>>) {
         self.abandon_open(now, chat);
+        // The user stopped it: messages waiting are stopped, and notices
+        // held, as the user's Stop does.
         for turn in self.waiting_turns(chat) {
-            self.set_life(now, chat, turn, TurnLife::Stopped);
+            let notice = matches!(
+                self.turn(chat, turn).map(|each| &each.starter),
+                Some(crate::chat::Starter::Notice(_))
+            );
+            if !notice {
+                self.set_life(now, chat, turn, TurnLife::Stopped);
+            }
+        }
+        if let Some(run) = self.runs.get_mut(&chat) {
+            run.notices_held = true;
         }
         self.set_state(
             chat,
@@ -864,7 +878,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Ends what `chat` has going: its questions, its running turn (as
-    /// `life`, telling the agent to stop), its waiting turns (as stopped)
+    /// `life`, telling the agent to stop), its waiting turns (as stopped),
+    /// its background jobs (cancelled by the user if `life` is Stopped)
     /// and any session it's opening.
     pub(super) fn wind_down(
         &mut self,
@@ -874,9 +889,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         out: &mut Vec<Directive<A, D>>,
     ) {
         self.withdraw_asks(chat, out);
+        let stopped = life == TurnLife::Stopped;
         if let Some(running) = self.give_up_prompt(now, chat) {
             if let Some(session) = self.runs.get(&chat).and_then(|run| run.session.clone()) {
-                self.notify(
+                self.send_notification(
                     running.proc,
                     "session/cancel",
                     json!({ "sessionId": session.0 }),
@@ -888,7 +904,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         for turn in self.waiting_turns(chat) {
             self.set_life(now, chat, turn, TurnLife::Stopped);
         }
+        self.release_notices(chat);
         self.end_agent_turn(now, chat);
+        self.stop_jobs(now, chat, stopped, out);
         self.abandon_open(now, chat);
     }
 
@@ -919,6 +937,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .collect();
         for conn in learning {
             self.learn_failed(conn, crate::settings::LearnFailure::ShutDown);
+        }
+        // An idle chat's jobs stop too: it stays idle.
+        let jobs: Vec<ChatId> = (self.chats.keys().copied())
+            .filter(|&chat| self.has_jobs(chat))
+            .collect();
+        for chat in jobs {
+            self.stop_jobs(now, chat, false, out);
         }
         // Closing an adapter's input ends every session it has, so they
         // aren't closed one by one first.

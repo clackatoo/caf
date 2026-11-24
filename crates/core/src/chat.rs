@@ -339,7 +339,12 @@ pub enum Starter {
         /// What it said.
         message: UserMessage,
     },
-    /// The app told the agent something. *Later.*
+    /// The app told the agent this ([`Core::notify`](crate::Core::notify)),
+    /// or CAF did, such as that a background job ended: sent as a prompt,
+    /// as a message is, but not the user's words. The user's Stop doesn't
+    /// drop one waiting, as it does a message: it's held, and sent just
+    /// before the next message or the app's next notice
+    /// ([`Core::stop`](crate::Core::stop)).
     Notice(String),
     /// CAF itself, to say something between turns, such as that a
     /// session couldn't be continued. Its items are [`Note`]s.

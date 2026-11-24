@@ -680,7 +680,7 @@ fn a_restore_finds_what_was_under_way_and_tidies_it() {
         serde_json::to_value(&changes).expect("JSON"),
         json!([
             { "type": "ItemEnded", "value": { "item": 5003, "end": end } },
-            { "type": "ToolChanged", "value": { "item": 5005, "tool": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Failed" }, "input": null, "origin": { "type": "NotRecorded" }, "action": null, "input_cut": null, "result": [], "locations": [], "locations_cut": 0, "decision": { "type": "NotRecorded" }, "app": null, "stopped_by": null } } },
+            { "type": "ToolChanged", "value": { "item": 5005, "tool": { "title": "Run `cargo test`", "kind": { "type": "Execute" }, "status": { "type": "Failed" }, "input": null, "origin": { "type": "NotRecorded" }, "action": null, "input_cut": null, "result": [], "locations": [], "locations_cut": 0, "decision": { "type": "NotRecorded" }, "app": null, "stopped_by": null, "job": null } } },
             { "type": "ItemEnded", "value": { "item": 5005, "end": end } },
             { "type": "TurnLife", "value": { "turn": 5002, "life": { "type": "CutOff" }, "end": end } },
             { "type": "TurnLife", "value": { "turn": 5006, "life": { "type": "Stopped" }, "end": end } },
@@ -989,6 +989,7 @@ fn a_restored_chat_is_given_its_tools_again_as_a_new_one_is() {
         [json!({ "tool": { "type": "Serve", "value": {
             "chat": CHAT,
             "tools": [{ "type": "Write" }],
+            "cwd": "/work",
             "instructions": "caf-test's tools to write whole files (Write), in the folder you're working in.",
         } } })]
     );
@@ -3562,6 +3563,8 @@ fn a_chatty_commands_journal_entry_stays_as_small_as_its_output() {
         ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: None,
+            notice: None,
         },
     );
 }

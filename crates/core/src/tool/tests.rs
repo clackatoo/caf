@@ -22,7 +22,7 @@ fn a_status_has_ended_once_it_cant_change() {
 #[test]
 fn cafs_tools_are_named_as_served() {
     let names: Vec<_> = CafTool::ALL.into_iter().map(CafTool::name).collect();
-    assert_eq!(names, ["Read", "Edit", "Write", "Bash"]);
+    assert_eq!(names, ["Read", "Edit", "Write", "Bash", "TaskStop"]);
     for tool in CafTool::ALL {
         assert_eq!(CafTool::named(tool.name()), Some(tool));
     }

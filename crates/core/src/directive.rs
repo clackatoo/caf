@@ -211,11 +211,37 @@ pub struct PermissionRequest {
 ///   answers isn't left hanging: the driver ends it as cancelled when its
 ///   chat's turn ends, as [`ToolDirective::Cancel`] would.
 /// - **It never runs anything the core didn't say to run,** and runs what
-///   the core says exactly: the [`Action`] given, with its paths as they
-///   are, never the model's input read again.
+///   the core says exactly: the [`Action`] given, with its paths, folder
+///   and command as they are, never read again from the model's input.
+///   What else the tool takes, which the action doesn't say (an edit's
+///   strings, a write's content, a read's `allow_large`, a command's
+///   `timeout` and `description`), comes from the `input` given with it,
+///   the model's, whole.
 /// - **Output is reported in batches,** at most every 100 ms or 16 KiB,
 ///   and in order.
-/// - **A preview changes nothing.**
+/// - **A preview changes nothing.** One that fails is answered at once,
+///   saying why, and reported as [`ToolEvent::Finished`](crate::event::ToolEvent::Finished)
+///   with `done` false: the core asks no one, and sends nothing more.
+/// - **A call that goes on after the agent is answered, as a job, is
+///   reported [`Detached`](crate::event::ToolEvent::Detached) before the
+///   answer is sent**, numbered among its chat's jobs from 1. From then
+///   it's no longer its turn's: it's not cancelled as the turn ends, and
+///   ends with its own `Finished`, whose `notice` the core sends the agent.
+///   A `Cancel` of it after stops it, and answers no one. One the core
+///   cancelled before its `Detached` came is cancelled all the same.
+/// - **A job outlives its relay's connection**: it's never reported
+///   [`Gone`](crate::event::ToolEvent::Gone), as the agent was answered
+///   and hears of its end in a notice. (One reported so anyway fails,
+///   with no notice.) A job that ends by itself always gives a `notice`.
+/// - **A TaskStop ([`Action::Stop`]) is run only for a job of its own
+///   chat's still running**: the driver stops it, reports the job's
+///   `Finished`, with no `notice`, then the TaskStop's. The job then ends
+///   Cancelled, by the agent: one whose `Finished` comes with a notice,
+///   having ended by itself first, ends as it says, and the TaskStop is
+///   answered "No task {id} in this conversation". Once a TaskStop of a
+///   job is run, the job's end with no notice is that stop's, even if
+///   the TaskStop was cancelled since, as the driver may have stopped it
+///   first.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -228,6 +254,9 @@ pub enum ToolDirective {
         call: CallId,
         /// What it does.
         action: Action,
+        /// What the model gave it, whole: for what the action doesn't
+        /// say.
+        input: serde_json::Value,
     },
     /// Run it: report its output as it comes, then
     /// [`ToolEvent::Finished`](crate::event::ToolEvent::Finished), and answer the agent with its result.
@@ -236,6 +265,9 @@ pub enum ToolDirective {
         call: CallId,
         /// What it does.
         action: Action,
+        /// What the model gave it, whole: for what the action doesn't
+        /// say.
+        input: serde_json::Value,
     },
     /// Don't run it: answer the agent that it was refused.
     Refuse {
@@ -260,6 +292,9 @@ pub enum ToolDirective {
         chat: ChatId,
         /// CAF's tools it's given, in order.
         tools: Vec<CafTool>,
+        /// The chat's folder, as the agent's told it: what the model is
+        /// told is its working directory.
+        cwd: String,
         /// What the MCP server tells the agent, in a line
         /// (`initialize`'s `instructions`).
         instructions: String,

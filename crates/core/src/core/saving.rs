@@ -1111,7 +1111,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
             .unwrap_or_default();
-        let caf_tools = crate::tool::Tools::caf(restore.tools.caf.iter().copied()).caf;
+        let caf_tools = crate::tool::Tools::served(restore.tools.caf.iter().copied());
         // Checked as the restore was asked for: nothing serves tools less.
         if let Ok(Some(caf)) = self.caf_server(id, &caf_tools) {
             mcp_sent.push(caf);
@@ -1147,6 +1147,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             id,
             Run {
                 conn,
+                shell: cwd.clone(),
+                notices_held: false,
+                shell_warned: false,
                 cwd,
                 mcp: restore.mcp_servers,
                 mcp_sent: super::state::SentServers(mcp_sent),
@@ -1696,14 +1699,20 @@ fn saved_session<A: AppItem>(run: &Run<A>) -> Option<AgentSessionId> {
         caf_tools: _,
         // Each session is told once.
         tools_lost: _,
+        // A restored chat's commands start again in its folder.
+        shell: _,
+        // A restored chat's notices waiting are stopped, held or not.
+        notices_held: _,
+        shell_warned: _,
     } = run;
     session.clone()
 }
 
 /// The changes that tidy `chat`, last saved at `at`, as a restore at
 /// `now` finds it: turns running or stopping are cut off, their
-/// unfinished tool calls failed and their items ended, at `at`; messages
-/// waiting are stopped; questions go; and it's idle, unless it was
+/// unfinished tool calls failed and their items ended, at `at`, as is a
+/// background job still running in a turn that ended; messages waiting
+/// are stopped; questions go; and it's idle, unless it was
 /// archived, which it stays: as of `now` if it was saved closed before
 /// CAF kept when.
 pub(super) fn tidy<A: AppItem>(chat: &Chat<A>, at: Wall, now: Wall) -> Vec<Change<A>> {
@@ -1712,14 +1721,15 @@ pub(super) fn tidy<A: AppItem>(chat: &Chat<A>, at: Wall, now: Wall) -> Vec<Chang
     let end = |start: Option<Wall>| End::At(start.map_or(at, |start| start.max(at)));
     for turn in &chat.turns {
         let life = match turn.life {
-            TurnLife::Running | TurnLife::Stopping => TurnLife::CutOff,
-            TurnLife::Waiting => TurnLife::Stopped,
-            _ => continue,
+            TurnLife::Running | TurnLife::Stopping => Some(TurnLife::CutOff),
+            TurnLife::Waiting => Some(TurnLife::Stopped),
+            _ => None,
         };
-        for item in turn
-            .items
-            .iter()
+        let unended = |item: &&crate::chat::Item<A>| matches!(&item.kind, ItemKind::Tool(tool) if !tool.status.ended());
+        // In a turn that ended, only a call still going: a background job.
+        for item in (turn.items.iter())
             .filter(|item| item.window.end == End::Open)
+            .filter(|item| life.is_some() || unended(item))
         {
             if let ItemKind::Tool(tool) = &item.kind
                 && !tool.status.ended()
@@ -1738,11 +1748,13 @@ pub(super) fn tidy<A: AppItem>(chat: &Chat<A>, at: Wall, now: Wall) -> Vec<Chang
                 end: end(item.window.start),
             });
         }
-        changes.push(Change::TurnLife {
-            turn: turn.id,
-            life,
-            end: end(turn.window.start),
-        });
+        if let Some(life) = life {
+            changes.push(Change::TurnLife {
+                turn: turn.id,
+                life,
+                end: end(turn.window.start),
+            });
+        }
     }
     let mut gone = BTreeSet::new();
     for question in &chat.questions {

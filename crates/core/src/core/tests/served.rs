@@ -14,10 +14,10 @@ use crate::question::{Answer, OptionId};
 use crate::tool::{CafTool, Diff, Ending, MOST_LINE, MOST_OUTPUT, Output, Piece, Text};
 
 /// The prompt's request id, as the first turn sends it.
-const PROMPT: u64 = 1002;
+pub(super) const PROMPT: u64 = 1002;
 
 /// A Claude chat with a turn running.
-fn running() -> Script {
+pub(super) fn running() -> Script {
     let mut script = Script::with_claude_serving();
     script.send(CHAT, "go").0.expect("sent");
     script
@@ -30,7 +30,7 @@ fn given(open: crate::core::OpenChat) -> crate::core::OpenChat {
 
 /// The agent calls `tool` with `input`, giving its id for the call if
 /// `agent_call`.
-fn called(tool: CafTool, input: Value, agent_call: Option<&str>) -> ToolEvent {
+pub(super) fn called(tool: CafTool, input: Value, agent_call: Option<&str>) -> ToolEvent {
     ToolEvent::Called {
         chat: CHAT,
         tool,
@@ -49,7 +49,7 @@ fn report(id: &str, tool: &str, status: &str, input: &Value) -> Value {
 }
 
 /// The tool directives in `out`, as `[type, value]`.
-fn told(out: &[Value]) -> Vec<Value> {
+pub(super) fn told(out: &[Value]) -> Vec<Value> {
     with(out, "tool")
         .into_iter()
         .map(|each| each["tool"].clone())
@@ -57,21 +57,21 @@ fn told(out: &[Value]) -> Vec<Value> {
 }
 
 /// The one tool directive in `out`.
-fn one_told(out: &[Value]) -> Value {
+pub(super) fn one_told(out: &[Value]) -> Value {
     let told = told(out);
     assert_eq!(told.len(), 1, "{out:#?}");
     told[0].clone()
 }
 
 /// The ticket of the one decision asked for in `out`.
-fn ticket(out: &[Value]) -> u64 {
+pub(super) fn ticket(out: &[Value]) -> u64 {
     let decided = with(out, "decide");
     assert_eq!(decided.len(), 1, "{out:#?}");
     decided[0]["decide"].as_u64().expect("a ticket")
 }
 
 /// The chat's tool calls.
-fn tools(script: &Script) -> Vec<Value> {
+pub(super) fn tools(script: &Script) -> Vec<Value> {
     (script.chat(CHAT)["turns"].as_array().into_iter().flatten())
         .flat_map(|turn| turn["items"].as_array().cloned().unwrap_or_default())
         .filter(|item| item["kind"]["type"] == "Tool")
@@ -85,13 +85,13 @@ fn tools(script: &Script) -> Vec<Value> {
 }
 
 /// The chat's one tool call.
-fn the_tool(script: &Script) -> Value {
+pub(super) fn the_tool(script: &Script) -> Value {
     let tools = tools(script);
     assert_eq!(tools.len(), 1, "{tools:#?}");
     tools[0].clone()
 }
 
-fn kind(name: &str) -> Value {
+pub(super) fn kind(name: &str) -> Value {
     json!({ "type": name })
 }
 
@@ -155,6 +155,8 @@ fn a_call_comes_first_makes_the_item_and_the_report_joins_it() {
         ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: None,
+            notice: None,
         },
     );
 }
@@ -323,11 +325,14 @@ fn a_call_with_no_turn_running_or_input_that_makes_no_action_is_refused() {
 fn an_edit_is_previewed_before_its_asked_about() {
     let mut script = running();
     let input = json!({ "file_path": "/work/lib.rs", "old_string": "a", "new_string": "b" });
-    let out = script.tool(1, called(CafTool::Edit, input, Some("toolu_1")));
+    let out = script.tool(1, called(CafTool::Edit, input.clone(), Some("toolu_1")));
     assert!(with(&out, "decide").is_empty(), "not yet");
+    // The driver is given the model's input whole, for the strings.
     assert_eq!(
         one_told(&out),
-        json!({ "type": "Preview", "value": { "call": 1, "action": { "type": "Edit", "value": { "path": "/work/lib.rs" } } } })
+        json!({ "type": "Preview", "value": {
+            "call": 1, "action": { "type": "Edit", "value": { "path": "/work/lib.rs" } }, "input": input,
+        } })
     );
     let diff = Diff::new("/work/lib.rs", Some("a\n"), "b\n");
     let out = script.tool(
@@ -350,7 +355,9 @@ fn an_edit_is_previewed_before_its_asked_about() {
     let out = script.policy_saying(decided, PolicyAnswer::Allow, "edits\u{202e} are fine");
     assert_eq!(
         one_told(&out),
-        json!({ "type": "Run", "value": { "call": 1, "action": { "type": "Edit", "value": { "path": "/work/lib.rs" } } } })
+        json!({ "type": "Run", "value": {
+            "call": 1, "action": { "type": "Edit", "value": { "path": "/work/lib.rs" } }, "input": input,
+        } })
     );
     assert_has(
         &the_tool(&script),
@@ -364,6 +371,8 @@ fn an_edit_is_previewed_before_its_asked_about() {
         ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: None,
+            notice: None,
         },
     );
     assert!(told(&out).is_empty());
@@ -405,6 +414,8 @@ fn the_policy_refuses_with_its_reason_and_nothing_runs() {
         ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: None,
+            notice: None,
         },
     );
     assert!(told(&out).is_empty());
@@ -484,6 +495,8 @@ fn the_user_is_asked_with_cafs_own_two_options() {
         ToolEvent::Finished {
             done: true,
             pieces: vec![Piece::Text(Text::new("127.0.0.1"))],
+            folder: None,
+            notice: None,
         },
     );
     assert_eq!(tools(&script)[0]["result"][0]["value"]["text"], "127.0.0.1");
@@ -556,6 +569,8 @@ fn a_stopped_turn_cancels_its_calls_and_a_finished_one_fails_them() {
         ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: None,
+            notice: None,
         },
     );
     assert_eq!(tools(&script)[0]["status"], kind("Cancelled"));
@@ -657,6 +672,8 @@ fn output_grows_and_a_progress_bar_rewrites_its_line() {
         ToolEvent::Finished {
             done: true,
             pieces: vec![Piece::Output(ended)],
+            folder: None,
+            notice: None,
         },
     );
     let tool = the_tool(&script);
@@ -717,6 +734,8 @@ fn output_keeps_its_end_and_splits_overlong_lines() {
         ToolEvent::Finished {
             done: false,
             pieces: vec![Piece::Text(Text::new("killed"))],
+            folder: None,
+            notice: None,
         },
     );
     assert_eq!(the_tool(&script)["status"], kind("Failed"));
@@ -885,6 +904,8 @@ fn the_agents_own_permission_request_never_changes_a_call_caf_serves() {
         ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: None,
+            notice: None,
         },
     );
 }
@@ -928,6 +949,8 @@ fn output_from_past_its_end_keeps_the_drivers_numbering() {
         ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: None,
+            notice: None,
         },
     );
 }
@@ -958,6 +981,8 @@ fn a_finished_edit_gives_its_diff_in_place_of_the_previews() {
         ToolEvent::Finished {
             done: true,
             pieces: vec![Piece::Diff(done.clone())],
+            folder: None,
+            notice: None,
         },
     );
     assert_eq!(
@@ -979,6 +1004,8 @@ fn a_finished_command_ends_its_last_output() {
                 dropped: 0,
                 ending: Some(Ending::Exited(Exit::Code(2))),
             })],
+            folder: None,
+            notice: None,
         },
     );
     let result = &the_tool(&script)["result"];
@@ -1127,6 +1154,8 @@ fn a_call_in_a_turn_the_agent_started_is_served_in_it() {
         ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: None,
+            notice: None,
         },
     );
 }

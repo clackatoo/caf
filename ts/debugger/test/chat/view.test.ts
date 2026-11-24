@@ -232,7 +232,7 @@ describe('items', () => {
     const tool = item(
       {
         type: 'Tool',
-        value: { title: 'cargo test', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'cargo test' }, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [{ type: 'Text', value: { text: 'ok: 3 passed', cut: null } }], app: null, stopped_by: null },
+        value: { title: 'cargo test', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'cargo test' }, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [{ type: 'Text', value: { text: 'ok: 3 passed', cut: null } }], app: null, stopped_by: null, job: null },
       },
       1500,
     )
@@ -255,7 +255,7 @@ describe('items', () => {
   it("names a tool kind and status it doesn't know", () => {
     const tool = item({
       type: 'Tool',
-      value: { title: 't', kind: { type: 'Teleport' } as never, status: { type: 'Pondering' } as never, input: null, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [], app: null, stopped_by: null },
+      value: { title: 't', kind: { type: 'Teleport' } as never, status: { type: 'Pondering' } as never, input: null, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [], app: null, stopped_by: null, job: null },
     })
     const { container } = draw(chat({ turns: [turn({ items: [tool] })] }))
     expect(container.querySelector('.tool .kind')?.textContent).toBe('Unknown kind (Teleport)')
@@ -859,7 +859,7 @@ describe('words for what comes next', () => {
 describe('a tool that ended', () => {
   it('says None for no output once it has ended, and None yet while it runs', () => {
     const tool = (status: string) =>
-      item({ type: 'Tool', value: { title: 't', kind: { type: 'Read' }, status: { type: status } as never, input: null, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [], app: null, stopped_by: null } })
+      item({ type: 'Tool', value: { title: 't', kind: { type: 'Read' }, status: { type: status } as never, input: null, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [], app: null, stopped_by: null, job: null } })
     const { container } = draw(chat({ turns: [turn({ items: [tool('Done'), tool('Failed'), tool('Running')] })] }))
     const outputs = [...container.querySelectorAll('.tool .none')].map((none) => none.textContent)
     // Each call's output, then its input.
@@ -871,7 +871,7 @@ describe("text that hides or reorders itself", () => {
   it('shows bidi controls and invisible characters in raw JSON as escapes', () => {
     const tool = item({
       type: 'Tool',
-      value: { title: 't', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'echo \u202Egnp.exe\u200B' }, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [{ type: 'Text', value: { text: 'out\u2066put', cut: null } }], app: null, stopped_by: null },
+      value: { title: 't', kind: { type: 'Execute' }, status: { type: 'Done' }, input: { command: 'echo \u202Egnp.exe\u200B' }, origin: { type: 'NotRecorded' }, action: null, input_cut: null, locations: [], locations_cut: 0, decision: { type: 'NotAsked' }, result: [{ type: 'Text', value: { text: 'out\u2066put', cut: null } }], app: null, stopped_by: null, job: null },
     })
     const unknown = item({ type: 'Unknown', value: { what: 'x\u202E', raw: { a: '\u202Eb' }, summary: null, cut: null } })
     const { container } = draw(chat({ turns: [turn({ items: [tool, unknown] })] }))

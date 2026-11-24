@@ -36,7 +36,7 @@ use self::state::{Ask, Conn, Ids, Pending, Proc, Run, Setup};
 use crate::agent::{AgentSpec, AgentStatus, McpServer};
 use crate::change::{Change, Mismatch, Read};
 use crate::chat::AppData;
-use crate::chat::{AppItem, Chat, NoAppData, NoAppItems, UserMessage};
+use crate::chat::{AppItem, Chat, NoAppData, NoAppItems, Starter, UserMessage};
 use crate::directive::{Directive, Level, Report};
 use crate::event::{Event, HostCommand};
 use crate::host::Host;
@@ -650,8 +650,44 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         Ok(turn)
     }
 
-    /// Stops the chat's running turn, and drops its waiting ones, which end
-    /// as stopped.
+    /// Tells the chat's agent something, as a notice turn
+    /// ([`Starter::Notice`](crate::chat::Starter::Notice)), and returns
+    /// the turn's id: such as that something the agent waits on happened.
+    /// It's sent as a prompt, as a message is, and waits as one does: in
+    /// order, while another turn runs or the session opens. It's the
+    /// app's, or CAF's, never the user's words. Notifying an archived chat
+    /// unarchives it first, as sending to it does. A notice never counts
+    /// against the host's limit on messages waiting
+    /// ([`Limits::queued_messages`](crate::host::Limits::queued_messages)),
+    /// nor does a background job's: only the user's messages do. The
+    /// user's Stop holds notices rather than dropping them
+    /// ([`Core::stop`]): this one, as a message does, lets them go first.
+    ///
+    /// # Errors
+    ///
+    /// As [`Core::send`]'s, but never [`Refused::QueueFull`]:
+    /// [`Refused::Unsupported`] for empty text.
+    pub fn notify(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        text: impl Into<String>,
+        out: &mut Vec<Directive<A, D>>,
+    ) -> Result<TurnId, Refused> {
+        let turn = TurnId(self.ids.next);
+        let text = text.into();
+        self.command(now, HostCommand::Notify { chat, turn, text }, out)?;
+        self.finish(now, out);
+        Ok(turn)
+    }
+
+    /// Stops the chat's running turn, and drops its waiting messages, which
+    /// end as stopped. Its notices aren't dropped, as the agent would
+    /// never hear what they say, nor sent, as it would start again at
+    /// once: from the Stop on, every notice, waiting then or coming after
+    /// (a background job's), is held, its session not opened for it,
+    /// until the next message or the app's next notice ([`Core::notify`]),
+    /// which they're sent just before, in order.
     ///
     /// The agent's waiting permission questions are answered "cancelled",
     /// as ACP requires, and the agent is told to stop. The turn is
@@ -1070,7 +1106,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 chat,
                 turn,
                 message,
-            } => self.send_as(now, chat, turn, message, out),
+            } => self.send_as(now, chat, turn, Starter::User(message), out),
+            HostCommand::Notify { chat, turn, text } => {
+                self.send_as(now, chat, turn, Starter::Notice(text), out)
+            }
             HostCommand::Stop { chat } => self.stop_chat(now, chat, out),
             HostCommand::Answer { question, answer } => {
                 self.answer_question(now, question, answer, out)

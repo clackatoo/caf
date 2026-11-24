@@ -1403,6 +1403,7 @@ fn tool_uses(tools: &[CafTool]) -> String {
                 CafTool::Edit => "change part of a file",
                 CafTool::Write => "write whole files",
                 CafTool::Bash => "run commands",
+                CafTool::TaskStop => "stop background commands",
             };
             format!("{does} ({})", tool.name())
         })

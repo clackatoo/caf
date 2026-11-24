@@ -521,7 +521,8 @@
                         }
                       },
                       "app": null,
-                      "stopped_by": null
+                      "stopped_by": null,
+                      "job": null
                     }
                   }
                 },
@@ -620,7 +621,8 @@
                         }
                       },
                       "app": null,
-                      "stopped_by": null
+                      "stopped_by": null,
+                      "job": null
                     }
                   }
                 },
@@ -690,7 +692,8 @@
                         }
                       },
                       "app": null,
-                      "stopped_by": null
+                      "stopped_by": null,
+                      "job": null
                     }
                   }
                 },
@@ -751,7 +754,8 @@
                         "type": "NotAsked"
                       },
                       "app": null,
-                      "stopped_by": null
+                      "stopped_by": null,
+                      "job": null
                     }
                   }
                 },
@@ -810,7 +814,8 @@
                         "type": "Undecided"
                       },
                       "app": null,
-                      "stopped_by": null
+                      "stopped_by": null,
+                      "job": null
                     }
                   }
                 },
@@ -888,7 +893,8 @@
                         }
                       },
                       "app": null,
-                      "stopped_by": null
+                      "stopped_by": null,
+                      "job": 1
                     }
                   }
                 },
@@ -949,7 +955,8 @@
                       "app": null,
                       "stopped_by": {
                         "type": "User"
-                      }
+                      },
+                      "job": null
                     }
                   }
                 },
@@ -1035,7 +1042,8 @@
                         }
                       },
                       "app": null,
-                      "stopped_by": null
+                      "stopped_by": null,
+                      "job": null
                     }
                   }
                 },
@@ -1060,12 +1068,15 @@
                         "type": "Asking"
                       },
                       "origin": {
-                        "type": "NotRecorded"
+                        "type": "Caf",
+                        "value": {
+                          "type": "TaskStop"
+                        }
                       },
                       "action": {
-                        "type": "Tool",
+                        "type": "Stop",
                         "value": {
-                          "name": "hologram"
+                          "job": 1
                         }
                       },
                       "input": {
@@ -1107,7 +1118,8 @@
                         "type": "NotRecorded"
                       },
                       "app": null,
-                      "stopped_by": null
+                      "stopped_by": null,
+                      "job": null
                     }
                   }
                 },
@@ -2691,7 +2703,8 @@
                         }
                       },
                       "app": null,
-                      "stopped_by": null
+                      "stopped_by": null,
+                      "job": 1
                     }
                   }
                 }
@@ -2778,7 +2791,8 @@
                   "app": null,
                   "stopped_by": {
                     "type": "Agent"
-                  }
+                  },
+                  "job": 1
                 }
               }
             }

@@ -152,9 +152,14 @@ mod common;
 ///    and the note that CAF's tools stopped working for a session
 ///    ([`Note::ToolsLost`](caf_core::chat::Note::ToolsLost)): additions,
 ///    read from an older version's save as none.
+/// 8. CAF's own tools' background jobs: the job a call became
+///    ([`ToolCall::job`](caf_core::tool::ToolCall::job)), TaskStop
+///    ([`CafTool::TaskStop`](caf_core::tool::CafTool::TaskStop)) and what
+///    it does ([`Action::Stop`](caf_core::tool::Action::Stop)):
+///    additions, read from an older version's save as no job.
 ///
 /// [`FailureReason::SettingNotApplied`]: caf_core::chat::FailureReason::SettingNotApplied
-pub const VERSION: u32 = 7;
+pub const VERSION: u32 = 8;
 
 /// How hard to compress.
 #[non_exhaustive]

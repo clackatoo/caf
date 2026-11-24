@@ -5,6 +5,9 @@ import type { CafTool } from "./CafTool.ts";
  * The tools CAF serves a chat ([`OpenChat::tools`](crate::OpenChat::tools)):
  * none by default. They aren't saved: the host gives them again when it
  * restores the chat ([`RestoreChat::tools`](crate::RestoreChat::tools)).
+ *
+ * A chat given Bash is served TaskStop too, just after it, as Bash's
+ * background jobs need it.
  */
 export type Tools = { 
 /**

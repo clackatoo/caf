@@ -189,6 +189,7 @@ impl Ran {
 pub struct Call {
     chat: ChatId,
     id: CallId,
+    input: serde_json::Value,
     prints: mpsc::UnboundedSender<Print>,
 }
 
@@ -203,6 +204,14 @@ impl Call {
     #[must_use]
     pub fn id(&self) -> CallId {
         self.id
+    }
+
+    /// What the model gave it, whole: for what its action doesn't say,
+    /// such as an edit's strings. Its paths, folder and command are the
+    /// action's, never read from here.
+    #[must_use]
+    pub fn input(&self) -> &serde_json::Value {
+        &self.input
     }
 
     /// A running command's output changed: the lines from `from` on, as
@@ -539,6 +548,8 @@ impl ToolsDriver {
                 chat,
                 tools,
                 instructions,
+                // For the runner, once it's CAF's own.
+                cwd: _,
             } => {
                 self.served.insert(
                     chat,
@@ -554,13 +565,18 @@ impl ToolsDriver {
                     self.close(conn, Closing::Ended);
                 }
             }
-            ToolDirective::Preview { call, action } => {
+            ToolDirective::Preview {
+                call,
+                action,
+                input,
+            } => {
                 let Some(each) = self.calls.get_mut(&call) else {
                     return;
                 };
                 let given = Call {
                     chat: each.chat,
                     id: call,
+                    input,
                     prints: self.prints.clone(),
                 };
                 let runner = &mut self.runner;
@@ -572,13 +588,18 @@ impl ToolsDriver {
                         });
                 each.preview = Some(preview);
             }
-            ToolDirective::Run { call, action } => {
+            ToolDirective::Run {
+                call,
+                action,
+                input,
+            } => {
                 let Some(each) = self.calls.get_mut(&call) else {
                     return;
                 };
                 let given = Call {
                     chat: each.chat,
                     id: call,
+                    input,
                     prints: self.prints.clone(),
                 };
                 let runner = &mut self.runner;
@@ -1029,6 +1050,8 @@ impl ToolsDriver {
                 event: ToolEvent::Finished {
                     done: ran.done,
                     pieces: ran.record,
+                    folder: None,
+                    notice: None,
                 },
             });
             self.held.insert(
@@ -1709,6 +1732,7 @@ mod tests {
             self.apply(ToolDirective::Serve {
                 chat,
                 tools: CafTool::ALL.to_vec(),
+                cwd: "/work".into(),
                 instructions: "Use them.".into(),
             });
         }
@@ -1923,6 +1947,7 @@ mod tests {
         h.apply(ToolDirective::Preview {
             call,
             action: action.clone(),
+            input: serde_json::Value::Null,
         });
         assert_event(
             h.report().await,
@@ -1932,6 +1957,7 @@ mod tests {
         h.apply(ToolDirective::Run {
             call,
             action: action.clone(),
+            input: serde_json::Value::Null,
         });
         let run = h.run().await;
         assert_eq!(
@@ -1955,7 +1981,7 @@ mod tests {
         assert_event(
             h.report().await,
             call,
-            |event| matches!(event, ToolEvent::Finished { done: true, pieces } if pieces.len() == 1),
+            |event| matches!(event, ToolEvent::Finished { done: true, pieces, .. } if pieces.len() == 1),
         );
         let answer = client.recv().await;
         assert_eq!(answer["id"], 7);
@@ -1977,6 +2003,7 @@ mod tests {
                 path: "/x".into(),
                 lines: None,
             },
+            input: serde_json::Value::Null,
         });
         let run = h.run().await;
         run.call.print(0, vec!["one".into()]);
@@ -2072,6 +2099,7 @@ mod tests {
                 path: "/x".into(),
                 lines: None,
             },
+            input: serde_json::Value::Null,
         });
         let run = h.run().await;
         h.apply(ToolDirective::Cancel { call });
@@ -2102,6 +2130,7 @@ mod tests {
                 path: "/x".into(),
                 lines: None,
             },
+            input: serde_json::Value::Null,
         });
         let run = h.run().await;
         // Both at once: whichever the driver takes first, the agent hears
@@ -2127,6 +2156,7 @@ mod tests {
                 path: "/x".into(),
                 lines: None,
             },
+            input: serde_json::Value::Null,
         });
         let _run = h.run().await;
         client
@@ -2155,6 +2185,7 @@ mod tests {
                 path: "/x".into(),
                 lines: None,
             },
+            input: serde_json::Value::Null,
         });
         let _run = h.run().await;
         drop(client);
@@ -2251,6 +2282,7 @@ mod tests {
                 path: "/x".into(),
                 lines: None,
             },
+            input: serde_json::Value::Null,
         });
         let _run = h.run().await;
         h.apply(ToolDirective::Unserve { chat: CHAT });
@@ -2294,6 +2326,7 @@ mod tests {
                 path: "/x".into(),
                 lines: None,
             },
+            input: serde_json::Value::Null,
         });
         assert_event(h.report().await, call, |event| {
             matches!(event, ToolEvent::Finished { done: false, .. })
@@ -2328,6 +2361,7 @@ mod tests {
                 path: "/x".into(),
                 lines: None,
             },
+            input: serde_json::Value::Null,
         });
         let run = h.run().await;
         tokio::time::pause();
@@ -2470,6 +2504,7 @@ mod tests {
                 path: "/x".into(),
                 lines: None,
             },
+            input: serde_json::Value::Null,
         });
         let run = h.run().await;
         run.finish
@@ -2503,6 +2538,7 @@ mod tests {
                 path: "/x".into(),
                 lines: None,
             },
+            input: serde_json::Value::Null,
         });
         let run = h.run().await;
         // Before its answer is written, so before the write's time starts.

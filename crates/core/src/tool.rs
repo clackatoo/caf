@@ -36,6 +36,31 @@
 //! and each tool says what that is (*later*, with the tools). For a tool
 //! CAF runs, both come from the same run.
 //!
+//! # Jobs
+//!
+//! A call to a tool CAF serves may go on after the model is answered, as a
+//! job, such as a command run in the background, or one that ran past its
+//! timeout ([`ToolEvent::Detached`](crate::event::ToolEvent::Detached)).
+//! It stays [`Running`](ToolStatus::Running), with its
+//! [`job`](ToolCall::job), in the turn it started in, and:
+//! - **its turn ending doesn't end it,** nor the user's Stop, which stops
+//!   the turn and not its background work, nor its agent letting go of
+//!   the call, nor a turn the agent started going quiet;
+//! - **it ends by itself,** Done or Failed, and its chat's agent is told
+//!   in a notice turn ([`Starter::Notice`](crate::chat::Starter::Notice)),
+//!   sent as a message is: at once if no turn runs, else after; from the
+//!   user's Stop on, it's held, and goes just before their next message;
+//!   it never counts against the queue of messages;
+//! - **or TaskStop stops it** ([`Action::Stop`]): Cancelled, stopped by
+//!   the agent. TaskStop needs no one's leave, and stops only its own
+//!   chat's jobs: any other job number is refused, "No task {id} in this
+//!   conversation";
+//! - **or its chat is closed or deleted** (Cancelled, stopped by the
+//!   user), **put away, or CAF shuts down** (Failed, as the calls of a
+//!   turn cut off then are), and the driver is told to stop it;
+//! - **a restored chat has none:** a job saved running fails, as a call
+//!   cut off does.
+//!
 //! # Caps
 //!
 //! Everything here is bounded, and anything cut says how much was kept of
@@ -55,6 +80,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::chat::{AppItem, NoAppItems};
 use crate::event::Exit;
+use crate::ids::JobId;
 
 /// The most of a [`Text`] kept, in bytes: its start.
 pub const MOST_TEXT: usize = 64 * 1024;
@@ -127,9 +153,20 @@ pub struct ToolCall<A: AppItem = NoAppItems> {
     /// a call saved before CAF kept it.
     #[serde(default)]
     pub stopped_by: Option<StoppedBy>,
+    /// The job it became, if it went on after the model was answered
+    /// ([`ToolEvent::Detached`](crate::event::ToolEvent::Detached)), such
+    /// as a command run in the background: it stays
+    /// [`Running`](ToolStatus::Running), past the end of its turn, until
+    /// it ends by itself or is stopped. The number names nothing after
+    /// its run. `None` for any other call, and for one saved before CAF
+    /// kept jobs.
+    #[serde(default)]
+    pub job: Option<JobId>,
 }
 
-/// Who stopped a call that ended [`Cancelled`](ToolStatus::Cancelled).
+/// Who stopped a call that ended [`Cancelled`](ToolStatus::Cancelled). A
+/// background job closed with its chat was stopped by the user, and one
+/// TaskStop stopped, by the agent.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -148,6 +185,9 @@ pub enum StoppedBy {
 /// The tools CAF serves a chat ([`OpenChat::tools`](crate::OpenChat::tools)):
 /// none by default. They aren't saved: the host gives them again when it
 /// restores the chat ([`RestoreChat::tools`](crate::RestoreChat::tools)).
+///
+/// A chat given Bash is served TaskStop too, just after it, as Bash's
+/// background jobs need it.
 #[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -179,6 +219,19 @@ impl Tools {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.caf.is_empty()
+    }
+
+    /// CAF's own tools as a chat given these is served them: each once,
+    /// in order, with TaskStop just after Bash if Bash is given and it
+    /// isn't.
+    pub(crate) fn served(tools: impl IntoIterator<Item = CafTool>) -> Vec<CafTool> {
+        let mut caf = Self::caf(tools).caf;
+        if !caf.contains(&CafTool::TaskStop)
+            && let Some(at) = caf.iter().position(|&tool| tool == CafTool::Bash)
+        {
+            caf.insert(at + 1, CafTool::TaskStop);
+        }
+        caf
     }
 }
 
@@ -214,7 +267,8 @@ pub enum ToolKind {
 /// Every call ends Done, Failed, Refused or Cancelled: when its turn ends,
 /// one still Pending, Asking or Running is Cancelled if the user stopped
 /// the turn, and Failed otherwise, and so is one a restored chat was cut
-/// off in. One the agent says failed while the user stops its turn was
+/// off in. But for a background job ([`ToolCall::job`]), which runs on
+/// past its turn: see [the jobs](crate::tool#jobs). One the agent says failed while the user stops its turn was
 /// cancelled, as an agent of ACP's first version, such as Claude's, has
 /// no other word for it. Once a call has ended it stays so, whatever the
 /// agent says of it after, though what it gave back may still come.
@@ -289,11 +343,19 @@ pub enum CafTool {
     Write,
     /// Runs a command.
     Bash,
+    /// Stops one of the chat's background jobs. Served with Bash.
+    TaskStop,
 }
 
 impl CafTool {
     /// Every one of CAF's own tools.
-    pub const ALL: [Self; 4] = [Self::Read, Self::Edit, Self::Write, Self::Bash];
+    pub const ALL: [Self; 5] = [
+        Self::Read,
+        Self::Edit,
+        Self::Write,
+        Self::Bash,
+        Self::TaskStop,
+    ];
 
     /// The tool CAF serves as `name`, such as `Read`, if it's one of its
     /// own.
@@ -310,6 +372,7 @@ impl CafTool {
             Self::Edit => "Edit",
             Self::Write => "Write",
             Self::Bash => "Bash",
+            Self::TaskStop => "TaskStop",
         }
     }
 }
@@ -345,11 +408,18 @@ pub enum Action {
     Run {
         /// The command, as the model wrote it.
         command: String,
-        /// The folder it runs in.
+        /// The folder it runs in: the chat's shell folder, where its last
+        /// command's shell ended, from the chat's folder at first.
         folder: String,
-        /// Whether it runs in the background, the call ending as it
-        /// starts.
+        /// Whether the model asked for it to run in the background: the
+        /// model is answered as it starts, and the call goes on as a job
+        /// ([`ToolCall::job`]).
         background: bool,
+    },
+    /// Stop one of the chat's background jobs.
+    Stop {
+        /// The job.
+        job: JobId,
     },
     /// Any tool that isn't CAF's own: its input is the call's
     /// [`input`](ToolCall::input).
@@ -362,14 +432,14 @@ pub enum Action {
 impl Action {
     /// The kind of tool that does it: Read is [`ToolKind::Read`], Edit and
     /// Write are [`ToolKind::Edit`], Run is [`ToolKind::Execute`], and
-    /// another tool is [`ToolKind::Other`].
+    /// Stop and another tool are [`ToolKind::Other`].
     #[must_use]
     pub fn kind(&self) -> ToolKind {
         match self {
             Self::Read { .. } => ToolKind::Read,
             Self::Edit { .. } | Self::Write { .. } => ToolKind::Edit,
             Self::Run { .. } => ToolKind::Execute,
-            Self::Tool { .. } => ToolKind::Other,
+            Self::Stop { .. } | Self::Tool { .. } => ToolKind::Other,
         }
     }
 }

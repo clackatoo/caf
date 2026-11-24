@@ -401,6 +401,16 @@ pub(super) struct Run<A: AppItem> {
     /// Its session was told its connection to CAF's tools was lost: it's
     /// told at most once a session.
     pub(super) tools_lost: bool,
+    /// The folder its next command runs in: where the last one's shell
+    /// ended, from its `cwd` at first. One run's.
+    pub(super) shell: String,
+    /// A folder the driver gave for it was ignored, and said so: it's
+    /// said once.
+    pub(super) shell_warned: bool,
+    /// The user's Stop held the notices waiting: none is sent, and a job's
+    /// notice joins them, until a message or the app's notice is queued,
+    /// which they then go before.
+    pub(super) notices_held: bool,
 }
 
 /// Where a chat is with its session.

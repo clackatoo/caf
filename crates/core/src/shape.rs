@@ -5,7 +5,7 @@
 
 use crate::directive::{RefusedCall, ToolDirective};
 use crate::event::{RelayChange, Serving, ToolEvent};
-use crate::ids::CallId;
+use crate::ids::{CallId, JobId};
 use crate::mcp::Key;
 use crate::tool::{
     Action, CafTool, Cut, DecidedBy, Decision, Diff, DiffLine, Ending, Hunk, Image, LineChange,
@@ -223,6 +223,7 @@ pub(crate) fn tool() -> ToolCall {
         }),
         app: None,
         stopped_by: None,
+        job: None,
     }
 }
 
@@ -794,6 +795,7 @@ pub(crate) fn every_type(s: &mut Samples) {
                 folder: "/home/user/project".into(),
                 background: false,
             },
+            input: json!({ "command": "ls", "timeout": 5000 }),
         },
         true,
     );
@@ -802,6 +804,7 @@ pub(crate) fn every_type(s: &mut Samples) {
         &ToolDirective::Serve {
             chat: ChatId::from_number(1),
             tools: vec![CafTool::Read, CafTool::Bash],
+            cwd: "/home/user/project".into(),
             instructions: "Read files and run commands.".into(),
         },
         true,
@@ -844,6 +847,20 @@ pub(crate) fn every_type(s: &mut Samples) {
         &ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: Some("/home/user/project/src".into()),
+            notice: Some("<task-notification>…</task-notification>".into()),
+        },
+        true,
+    );
+    s.written(&ToolEvent::Detached { job: JobId(2) }, true);
+    s.both(&JobId(2));
+    s.both(&Action::Stop { job: JobId(2) });
+    s.both(&CafTool::TaskStop);
+    s.written(
+        &HostCommand::<crate::chat::NoAppItems>::Notify {
+            chat: ChatId::from_number(1),
+            turn: TurnId(5),
+            text: "The build failed".into(),
         },
         true,
     );
@@ -1497,7 +1514,8 @@ fn enums_are_type_then_value() {
             "locations_cut": 0,
             "decision": { "type": "Allowed", "value": { "type": "User", "value": { "option": "Allow" } } },
             "app": null,
-            "stopped_by": null
+            "stopped_by": null,
+            "job": null
         } })
     );
     // Nested in an event, with std's Result and the agent's own JSON kept

@@ -60,7 +60,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Sends a notification to `proc`, if it may be written to.
-    pub(super) fn notify(
+    pub(super) fn send_notification(
         &mut self,
         proc: Ticket,
         method: &str,

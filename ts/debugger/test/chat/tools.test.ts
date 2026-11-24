@@ -32,6 +32,7 @@ function call(fields: Partial<ToolCall> = {}): ToolCall {
     decision: { type: 'NotAsked' },
     app: null,
     stopped_by: null,
+    job: null,
     ...fields,
   }
 }

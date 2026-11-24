@@ -17,20 +17,21 @@ use crate::change::Change;
 use crate::chat::AppData;
 use crate::chat::{
     AppItem, ChatState, Failure, FailureReason, ItemKind, Lost, Note, Part, Remedy, Starter,
-    ToolStatus, Turn, TurnLife, UserMessage,
+    ToolStatus, Turn, TurnLife,
 };
 use crate::directive::{Directive, Level};
 use crate::ids::{ChatId, Ticket, TurnId};
 use crate::time::{End, Now, Window};
 
 impl<A: AppItem, D: AppData> Core<A, D> {
-    /// Sends `message` in `chat` as turn `turn`.
+    /// Sends `starter`, the user's message or a notice, in `chat` as turn
+    /// `turn`.
     pub(super) fn send_as(
         &mut self,
         now: Now,
         chat: ChatId,
         turn: TurnId,
-        message: UserMessage,
+        starter: Starter,
         out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         let whole = self.chats.get(&chat).ok_or(Refused::NoSuchChat)?;
@@ -41,15 +42,24 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if !spec.profile.strips() {
             return Err(Refused::OwnTools);
         }
-        if message.parts.is_empty() {
-            return Err(Refused::Unsupported);
+        match &starter {
+            Starter::User(message) => {
+                if message.parts.is_empty() {
+                    return Err(Refused::Unsupported);
+                }
+                let command = (message.parts.iter())
+                    .any(|part| matches!(part, Part::Text(text) if is_command(text)));
+                if command && message.parts.len() > 1 {
+                    return Err(Refused::CommandNotAlone);
+                }
+            }
+            Starter::Notice(text) if !text.is_empty() => {}
+            _ => return Err(Refused::Unsupported),
         }
-        let command =
-            (message.parts.iter()).any(|part| matches!(part, Part::Text(text) if is_command(text)));
-        if command && message.parts.len() > 1 {
-            return Err(Refused::CommandNotAlone);
-        }
-        if self.waiting_turns(chat).len() >= self.host.limits.queued_messages {
+        // Only the user's messages count: a notice never fills the queue.
+        if matches!(starter, Starter::User(_))
+            && self.waiting_messages(chat) >= self.host.limits.queued_messages
+        {
             return Err(Refused::QueueFull);
         }
         // Its number is taken before anything unarchiving numbers.
@@ -61,11 +71,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         self.call_off_shutdown(now);
         self.end_agent_turn(now, chat);
+        self.release_notices(chat);
         self.add_turn(
             chat,
             Turn {
                 id: turn,
-                starter: Starter::User(message),
+                starter,
                 life: TurnLife::Waiting,
                 window: Window::open(now),
                 items: Vec::new(),
@@ -83,6 +94,64 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         self.pump(now, chat, out);
         Ok(())
+    }
+
+    /// Queues `text` in `chat` as a notice turn from CAF, such as that a
+    /// background job ended: sent as a message is, once no turn runs, or,
+    /// while the user's Stop holds notices, with them. It's
+    /// never refused for the queue being full, so it's never lost: a
+    /// chat's jobs are few, and each ends once.
+    pub(super) fn queue_notice(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        text: String,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
+        if (self.chats.get(&chat)).is_none_or(|whole| whole.state == ChatState::Closed) {
+            return;
+        }
+        self.end_agent_turn(now, chat);
+        // While the user's Stop holds notices, this one joins them.
+        let turn = TurnId(self.ids.take());
+        self.add_turn(
+            chat,
+            Turn {
+                id: turn,
+                starter: Starter::Notice(text),
+                life: TurnLife::Waiting,
+                window: Window::open(now),
+                items: Vec::new(),
+                imported: false,
+                model: None,
+                spent: None,
+            },
+        );
+        // Held, it waits for the next message, which opens the session.
+        if (self.runs.get(&chat)).is_some_and(|run| run.open == Open::Idle && !run.notices_held) {
+            self.want_open(now, chat, out);
+        }
+        self.pump(now, chat, out);
+    }
+
+    /// Lets go the notices `chat`'s Stop held, as a message or the app's
+    /// notice is queued after them: they're sent first, in order.
+    pub(super) fn release_notices(&mut self, chat: ChatId) {
+        if let Some(run) = self.runs.get_mut(&chat) {
+            run.notices_held = false;
+        }
+    }
+
+    /// How many of the user's messages wait to be sent in `chat`.
+    fn waiting_messages(&self, chat: ChatId) -> usize {
+        (self.waiting_turns(chat).into_iter())
+            .filter(|&turn| {
+                matches!(
+                    self.turn(chat, turn).map(|each| &each.starter),
+                    Some(Starter::User(_))
+                )
+            })
+            .count()
     }
 
     /// The turns of `chat` waiting to be sent, oldest first.
@@ -107,6 +176,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         else {
             return;
         };
+        if run.notices_held {
+            return;
+        }
         let (proc, session) = (*proc, session.clone());
         if !self.send_settings(now, chat, proc, &session, out) {
             return;
@@ -114,15 +186,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(turn) = self.waiting_turns(chat).first().copied() else {
             return;
         };
-        let Some(Starter::User(message)) = self.turn(chat, turn).map(|each| each.starter.clone())
-        else {
-            return;
+        let prompt: Vec<Value> = match self.turn(chat, turn).map(|each| &each.starter) {
+            Some(Starter::User(message)) => (message.parts.iter())
+                .map(|part| match part {
+                    Part::Text(text) => json!({ "type": "text", "text": text }),
+                })
+                .collect(),
+            Some(Starter::Notice(text)) => vec![json!({ "type": "text", "text": text })],
+            _ => return,
         };
-        let prompt: Vec<Value> = (message.parts.iter())
-            .map(|part| match part {
-                Part::Text(text) => json!({ "type": "text", "text": text }),
-            })
-            .collect();
         let params = json!({ "sessionId": session.0, "prompt": prompt });
         let purpose = Purpose::Prompt {
             chat,
@@ -276,7 +348,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// Ends `chat`'s turn `turn` as `life`: its words stop growing, and
     /// every tool call in it that hasn't ended does: Cancelled if the user
-    /// stopped the turn, else Failed.
+    /// stopped the turn, else Failed. But for a background job, which goes
+    /// on.
     pub(super) fn end_turn(&mut self, now: Now, chat: ChatId, turn: TurnId, life: TurnLife) {
         // Calls CAF serves are settled first.
         self.settle_calls(now, chat, turn, life == TurnLife::Stopped);
@@ -290,6 +363,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map(|item| (item.id, item.window.end == End::Open, item.kind.clone()))
             .collect();
         for (item, open, kind) in items {
+            if matches!(&kind, ItemKind::Tool(tool) if tool.job.is_some() && !tool.status.ended()) {
+                continue;
+            }
             if let ItemKind::Tool(mut tool) = kind
                 && !tool.status.ended()
             {
@@ -381,8 +457,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// `chat`'s agent-started turn has been quiet long enough: it ends,
-    /// unless a tool of it is still running or waiting to, or the agent
-    /// waits on a question.
+    /// unless a tool of it is still running or waiting to (but for a
+    /// background job), or the agent waits on a question.
     pub(super) fn quiet(&mut self, now: Now, chat: ChatId) {
         let Some(turn) = self.runs.get(&chat).and_then(|run| run.agent_turn) else {
             if let Some(run) = self.runs.get_mut(&chat) {
@@ -392,7 +468,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         let tools = (self.turn(chat, turn).into_iter())
             .flat_map(|each| each.items.iter())
-            .any(|item| matches!(&item.kind, ItemKind::Tool(tool) if !tool.status.ended()));
+            .any(|item| {
+                matches!(&item.kind, ItemKind::Tool(tool) if !tool.status.ended() && tool.job.is_none())
+            });
         let busy = tools || self.asks.values().any(|ask| ask.chat == chat);
         if busy {
             let quiet_by = now.mono.after(self.host.timers.quiet);
@@ -413,7 +491,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     ) -> Result<(), Refused> {
         let whole = self.chats.get(&chat).ok_or(Refused::NoSuchChat)?;
         let run = self.runs.get(&chat).ok_or(Refused::NoSuchChat)?;
-        let waiting = self.waiting_turns(chat);
+        // Messages waiting are stopped; notices are held, so the agent
+        // still hears what they say, with whatever's sent next.
+        let waiting: Vec<TurnId> = (self.waiting_turns(chat).into_iter())
+            .filter(|&turn| {
+                matches!(
+                    self.turn(chat, turn).map(|each| &each.starter),
+                    Some(Starter::User(_))
+                )
+            })
+            .collect();
         let opening = matches!(run.open, Open::Wanted | Open::Asked { .. })
             && whole.state != ChatState::Closed;
         let running = run
@@ -437,7 +524,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             let session = self.runs.get(&chat).and_then(|run| run.session.clone());
             match session.filter(|_| self.procs.get(&proc).is_some_and(|each| each.askable())) {
                 Some(session) => {
-                    self.notify(
+                    self.send_notification(
                         proc,
                         "session/cancel",
                         json!({ "sessionId": session.0 }),
@@ -464,6 +551,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         for turn in waiting {
             self.set_life(now, chat, turn, TurnLife::Stopped);
         }
+        // Those waiting, and any that come after, until the next message.
+        if let Some(run) = self.runs.get_mut(&chat) {
+            run.notices_held = true;
+        }
         if opening {
             self.stop_opening(now, chat, out);
         }
@@ -488,7 +579,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         run.held_until = Some(now.mono.after(IN_FLIGHT));
         if let (Open::Live { proc }, Some(session)) = (run.open, run.session.clone()) {
-            self.notify(
+            self.send_notification(
                 proc,
                 "session/cancel",
                 json!({ "sessionId": session.0 }),

@@ -151,6 +151,58 @@ by no one.
 
 Stopping a call's work drops it, so a tool still running is stopped too.
 
+**A preview that fails** (an edit to a file not read first, say) ends its
+call Failed with the reason, and no one is asked: the tool's driver has
+already given the model the reason.
+
+## Background jobs
+
+A call can carry on after the model has been answered, as a **job**: for
+example, Bash run with `run_in_background`, or a command still running when
+its timeout is reached. Its driver reports the call `Detached` before
+answering the model. It stays Running, and its `job` gives its number among
+the chat's jobs (1, 2, …), which is how the model names it. A job keeps
+running when:
+
+- its turn ends, or the user stops it (Stop stops the turn, not its
+  background work);
+- its relay goes;
+- a turn the agent started by itself goes quiet.
+
+It ends in one of these ways:
+
+| How | Ends |
+| --- | --- |
+| By itself | Done or Failed, and the agent hears of it in a **notice turn**, worded by the driver: at once, or after the turn running |
+| TaskStop, from the model | Cancelled, `stopped_by` `Agent`. TaskStop needs no permission, and stops only jobs of its own chat: for any other number, the model is told "No task {id} in this conversation" |
+| The chat closed or deleted | Cancelled, `stopped_by` `User` |
+| The chat put away, or CAF shutting down | Failed, stopped by no one |
+
+A restored chat has no jobs: one saved while running ends Failed. TaskStop
+is served with Bash automatically. A notice turn is `Starter::Notice`: the
+app can send its own with `Core::notify`, and it's queued like a message,
+but never counts against the host's limit on messages waiting
+(`queued_messages`): only the user's messages do.
+The user's Stop drops the messages still waiting, but not the notices:
+dropping a notice would mean the agent never learns that its job ended,
+and sending it at once would set the agent working again just after the
+user stopped it. So from the Stop on, every notice is **held**: those
+waiting, and any job's that comes after, without starting the agent for
+it. They're all sent just before the user's next message, or the app's
+next notice, each as its own turn, in order.
+
+Each chat also keeps a **shell folder**: where its last command's shell
+ended, starting at its folder. Its next Bash command runs there. With
+commands run side by side, the one that finishes last sets it. A job's
+end doesn't change it, a folder that isn't an absolute path of at most
+4096 bytes is ignored, and a restored chat starts again at its folder.
+
+The driver must keep a job running when its relay goes. It reports a job
+that ends by itself with a notice. When TaskStop stops a job, it reports
+the job without one, before the TaskStop's own end. If the job ended by
+itself first, it ends as it did, and TaskStop answers "No task {id} in
+this conversation".
+
 ## Losing the tools
 
 If a chat's relay goes while its session is still open, as when the
