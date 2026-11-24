@@ -221,7 +221,8 @@ async fn run(args: Args) -> Result<(), String> {
             });
             // Served through the debugger itself, run again: its `main`
             // is the relay. Its chats are given CAF's tools as New chat
-            // asks, on the disk and in CAF's own ptys.
+            // asks, on the disk and in CAF's own ptys, and with them its
+            // own word_count.
             let mut tools = ToolsConfig::default();
             tools.relay = Relay::ThisProgram;
             let live = live::start(agents, Some(recording), store, usage, tools);

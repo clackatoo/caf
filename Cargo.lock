@@ -185,6 +185,7 @@ dependencies = [
  "getrandom 0.3.4",
  "libc",
  "log",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
  "subtle",

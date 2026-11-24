@@ -19,7 +19,8 @@ use caf_core::tool::{CafTool, Tools};
 use caf_core::{ChatId, Core, Host, NoAppItems, OpenChat, Shelf};
 use caf_driver_tokio::viewer::ViewerRules;
 use caf_driver_tokio::{
-    Caf, Config, Relay, Running, Step as CafStep, Steps, ToolsConfig, UsageConfig,
+    AppTool, AppTools, Caf, Config, Done, Relay, Running, Step as CafStep, Steps, ToolsConfig,
+    UsageConfig, tool,
 };
 use caf_save::{FileStore, Store};
 use serde_json::value::RawValue;
@@ -73,15 +74,52 @@ pub fn host() -> Host {
     host
 }
 
+/// The debugger's own tool, an example of an app's: it counts the words
+/// in a text. Every chat given CAF's tools is given it too.
+pub const WORD_COUNT: &str = "word_count";
+
+/// What [`WORD_COUNT`] is given.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct Count {
+    /// The text to count the words of.
+    text: String,
+}
+
+/// The debugger's own tools: [`word_count`].
+#[must_use]
+pub fn app_tools() -> AppTools {
+    AppTools::new()
+        .with(word_count())
+        .expect("word_count is a tool CAF takes")
+}
+
+/// [`WORD_COUNT`], read-only: it answers how many runs of characters
+/// between spaces its text has.
+pub fn word_count() -> impl AppTool {
+    tool(WORD_COUNT, |_call, input: Count| async move {
+        Done::answer(match input.text.split_whitespace().count() {
+            1 => "1 word".to_owned(),
+            words => format!("{words} words"),
+        })
+    })
+    .title(|input: &Count| match input.text.chars().count() {
+        1 => "Count the words in 1 character".to_owned(),
+        characters => format!("Count the words in {characters} characters"),
+    })
+    .describe("Counts the words in a text: the runs of characters between spaces.")
+    .read_only()
+}
+
 /// What viewers may do: open a chat with any of `agents` in any absolute
 /// folder, with no MCP servers, and, if CAF's tools are `served`, those
 /// of them the viewer asks for (its open-chat form's "CAF's tools", on
-/// unless unticked), act on every chat, install agents and sign in and
-/// out of them, and read usage and set prices. If chats are `saved`, each
-/// opened is kept on [`SHELF`], and viewers may restore those kept there,
-/// with no MCP servers, and, if they're served, all of CAF's tools,
-/// unless `untooled` notes it was opened without them: what a chat was
-/// given isn't saved. Where they aren't served, chats are given none,
+/// unless unticked) with [`WORD_COUNT`] if it asks for any, act on every
+/// chat, install agents and sign in and out of them, and read usage and
+/// set prices. If chats are `saved`, each opened is kept on [`SHELF`],
+/// and viewers may restore those kept there, with no MCP servers, and, if
+/// they're served, all of CAF's tools and [`WORD_COUNT`], unless
+/// `untooled` notes it was opened without them: what a chat was given
+/// isn't saved. Where they aren't served, chats are given none,
 /// which CAF would refuse.
 #[must_use]
 pub fn rules(
@@ -103,13 +141,16 @@ pub fn rules(
         open.shelf = saved.then(shelf);
         if served {
             open.tools = request.tools.clone();
+            if !open.tools.caf.is_empty() {
+                open.tools = open.tools.and_app([WORD_COUNT]);
+            }
         }
         Some(open)
     });
     if saved {
         rules.restore = Box::new(move |chat, on| {
             let tools = if served && !untooled.has(chat) {
-                Tools::caf(CafTool::ALL)
+                Tools::caf(CafTool::ALL).and_app([WORD_COUNT])
             } else {
                 Tools::none()
             };
@@ -320,7 +361,8 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 /// Starts CAF with `agents`, recording to `record` if given, keeping chats
 /// in a file store in `store` if given, and usage in the ledger `usage`
-/// says if given, serving CAF's tools as `tools` says, and checking every
+/// says if given, serving CAF's tools as `tools` says, with the
+/// debugger's own ([`app_tools`]) beside them, and checking every
 /// step against replays of it. With a store, [`SHELF`] is listed at once. Must be called on a tokio runtime.
 #[must_use]
 pub fn start(
@@ -328,13 +370,16 @@ pub fn start(
     record: Option<PathBuf>,
     store: Option<PathBuf>,
     usage: Option<UsageConfig>,
-    tools: ToolsConfig,
+    mut tools: ToolsConfig,
 ) -> Live {
     let base = Base {
         host: host(),
         agents: agents.clone(),
     };
     let served = !matches!(tools.relay, Relay::None);
+    if served {
+        tools.app = app_tools();
+    }
     let untooled = Arc::new(match &store {
         Some(store) => Untooled::in_store(store),
         None => Untooled::default(),
@@ -668,11 +713,13 @@ mod tests {
     use serde_json::json;
     use serde_json::value::RawValue;
 
+    use std::path::Path;
     use std::sync::Arc;
 
     use super::{
-        CafTool, Raw, Shelf, Tools, UNTOOLED_FILE, Untooled, check_recording, check_steps, hidden,
-        host, rules, shelf, shown_directives, shown_event,
+        CafTool, Raw, Shelf, Tools, UNTOOLED_FILE, Untooled, WORD_COUNT, app_tools,
+        check_recording, check_steps, hidden, host, rules, shelf, shown_directives, shown_event,
+        word_count,
     };
     use crate::inspector::Check;
     use crate::replay::{Base, take, to_json};
@@ -837,7 +884,7 @@ mod tests {
     }
 
     #[test]
-    fn viewers_may_open_the_agents_on_offer_in_absolute_folders_with_cafs_tools_alone() {
+    fn viewers_may_open_the_agents_on_offer_in_absolute_folders_with_cafs_tools_and_word_count() {
         let rules = rules(&agents(), false, true, untooled());
         let open = rules.open.as_ref();
         let mut request = OpenRequest::new("fake", "/home/me/project");
@@ -847,10 +894,16 @@ mod tests {
         assert!(chat.tools.is_empty(), "none asked for");
         let all = Tools::caf(CafTool::ALL);
         let asked = request.clone().with_tools(all.clone());
-        assert_eq!(open(&asked).expect("allowed").tools, all);
+        assert_eq!(
+            open(&asked).expect("allowed").tools,
+            all.and_app([WORD_COUNT])
+        );
         let some = Tools::caf([CafTool::Read]);
         let asked = request.clone().with_tools(some.clone());
-        assert_eq!(open(&asked).expect("allowed").tools, some);
+        assert_eq!(
+            open(&asked).expect("allowed").tools,
+            some.and_app([WORD_COUNT])
+        );
         request.cwd = "project".into();
         assert!(open(&request).is_none(), "a relative folder");
         assert!(
@@ -947,7 +1000,7 @@ mod tests {
         );
         assert_eq!(
             (restoring.restore)(tooled, &shelf()).unwrap().tools,
-            Tools::caf(CafTool::ALL)
+            Tools::caf(CafTool::ALL).and_app([WORD_COUNT])
         );
 
         // Another debugger, sharing the store, notes a chat after this one
@@ -992,9 +1045,28 @@ mod tests {
         let restoring = rules(&agents(), true, true, unread);
         assert_eq!(
             (restoring.restore)(bare, &shelf()).unwrap().tools,
-            Tools::caf(CafTool::ALL)
+            Tools::caf(CafTool::ALL).and_app([WORD_COUNT])
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn word_count_counts_the_words_only_reading() {
+        let tools = app_tools();
+        let [spec] = tools.specs().try_into().unwrap();
+        assert_eq!(spec.name, WORD_COUNT);
+        assert!(spec.hints.read_only && !spec.hints.destructive && !spec.hints.open_world);
+        let tool = word_count();
+        let count = |text: &str| {
+            caf_driver_tokio::try_tool(&tool, serde_json::json!({ "text": text }), Path::new("/"))
+        };
+        let tried = count("one two  three\nfour").await;
+        assert_eq!(tried.title, "Count the words in 19 characters");
+        assert_eq!(tried.done.answer, caf_core::mcp::Answer::text("4 words"));
+        assert_eq!(
+            count("one").await.done.answer,
+            caf_core::mcp::Answer::text("1 word")
+        );
     }
 
     #[test]
@@ -1022,7 +1094,7 @@ mod tests {
         assert!(restore.mcp_servers.is_empty(), "the servers new chats have");
         assert_eq!(
             restore.tools,
-            Tools::caf(CafTool::ALL),
+            Tools::caf(CafTool::ALL).and_app([WORD_COUNT]),
             "the form's default"
         );
         let elsewhere = Shelf("another app's".into());
