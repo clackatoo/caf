@@ -1584,9 +1584,12 @@ async fn a_viewers_restore_holds_up_nothing_else_on_its_link() {
     stop(&caf, running).await;
 }
 
+/// Each chat CAF's tools were served to, with its tools.
+type ServedTo = Vec<(ChatId, Vec<CafTool>)>;
+
 /// The chats CAF's tools are served to, each time, with their tools.
 #[derive(Clone, Default)]
-struct Served(Arc<Mutex<Vec<(ChatId, Vec<CafTool>)>>>);
+struct Served(Arc<Mutex<ServedTo>>);
 
 impl Steps<NoAppItems, NoAppData> for Served {
     fn step(&mut self, step: caf_driver_tokio::Step<'_, NoAppItems, NoAppData>) {
