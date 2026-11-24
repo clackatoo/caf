@@ -32,6 +32,13 @@
 //! > files, run commands or browse the web, except through tools
 //! > framewright gives you. Answer in Markdown.
 //!
+//! For a chat given CAF's own tools ([`OpenChat::tools`](crate::OpenChat::tools)),
+//! the second sentence names them instead: "framewright gives you tools
+//! to read files (Read) and run commands (Bash), in the folder you're
+//! working in, asking the user's leave where it must. You have no other
+//! tools of your own: you can't do anything else, such as browse the web,
+//! except through other tools framewright gives you."
+//!
 //! A recipe's `install`, such as an npm lockfile, changes only with its
 //! upstream `version`. A patch fixed or added at the same version is a
 //! new patch level, and a machine with an earlier level installed makes

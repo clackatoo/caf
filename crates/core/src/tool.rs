@@ -612,6 +612,59 @@ impl Text {
     }
 }
 
+impl Image {
+    /// A picture of type `mime`, such as `image/png`, from its bytes: kept
+    /// whole, in base64, if it's at most [`MOST_IMAGE`] bytes, and only
+    /// its size otherwise.
+    #[must_use]
+    pub fn new(mime: impl Into<String>, bytes: &[u8]) -> Self {
+        Self {
+            mime: mime.into(),
+            data: (bytes.len() <= MOST_IMAGE).then(|| base64(bytes)),
+            size: bytes.len() as u64,
+        }
+    }
+
+    /// A picture of type `mime` from its bytes in base64, `data`, as an
+    /// agent sends one: kept whole if it's at most [`MOST_IMAGE`] bytes
+    /// before base64, and only its size otherwise.
+    #[must_use]
+    pub fn from_base64(mime: impl Into<String>, data: impl Into<String>) -> Self {
+        image(mime.into(), data.into())
+    }
+}
+
+impl Location {
+    /// The file at `path`, an absolute path, and the line, numbered from
+    /// 1, if it's about one.
+    #[must_use]
+    pub fn new(path: impl Into<String>, line: Option<u64>) -> Self {
+        Self {
+            path: path.into(),
+            line,
+        }
+    }
+}
+
+/// `bytes` in standard base64, with padding.
+fn base64(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut text = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (u32::from(chunk[0]) << 16)
+            | (u32::from(chunk.get(1).copied().unwrap_or(0)) << 8)
+            | u32::from(chunk.get(2).copied().unwrap_or(0));
+        for at in 0..4 {
+            if at <= chunk.len() {
+                text.push(char::from(DIGITS[(n >> (18 - 6 * at)) as usize & 63]));
+            } else {
+                text.push('=');
+            }
+        }
+    }
+    text
+}
+
 impl Diff {
     /// The change to the file at `path` from `before`, `None` if there was
     /// no file, to `after`: its hunks, with three lines either side as
