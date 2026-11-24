@@ -245,6 +245,7 @@ async fn run(args: Args) -> Result<(), String> {
             let mut app = App::new(Arc::clone(&live.book), port, token.clone());
             app.live = Some((live.caf.clone(), Arc::clone(&live.rules)));
             app.recording.clone_from(&live.recording);
+            app.tools = live.serves_tools;
             (app, Some(live))
         }
     };

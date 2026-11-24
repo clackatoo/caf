@@ -240,6 +240,7 @@ async fn the_inspector_sends_the_replay_and_answers_what_the_app_asks() {
         mode,
         file,
         run,
+        tools,
     } = next(&mut socket).await
     else {
         panic!("Hello first");
@@ -248,6 +249,7 @@ async fn the_inspector_sends_the_replay_and_answers_what_the_app_asks() {
     assert_eq!(mode, Mode::Replay);
     assert_eq!(file, Some(claude_live().display().to_string()));
     assert_eq!(run, None);
+    assert!(!tools, "a replay serves no tools");
     let ToInspector::Steps { from, steps } = next(&mut socket).await else {
         panic!("then the steps");
     };

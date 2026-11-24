@@ -80,6 +80,8 @@ pub struct App {
     pub live: Option<(Caf, Arc<ViewerRules>)>,
     /// Live, the recording.
     pub recording: Option<PathBuf>,
+    /// Whether CAF serves its own tools: false unless set, as in replay.
+    pub tools: bool,
     /// This launch's token.
     pub token: String,
     /// The origins that count as the server's own.
@@ -99,6 +101,7 @@ impl App {
             book,
             live: None,
             recording: None,
+            tools: false,
             token,
             origins: [
                 format!("http://127.0.0.1:{port}"),
@@ -347,10 +350,11 @@ async fn inspect(
         return refused;
     }
     let book = Arc::clone(&app.book);
+    let tools = app.tools;
     upgrade
         .max_message_size(INSPECTOR_MESSAGE)
         .max_frame_size(INSPECTOR_MESSAGE)
-        .on_upgrade(move |socket| Inspector::new(socket, book).run())
+        .on_upgrade(move |socket| Inspector::new(socket, book, tools).run())
 }
 
 /// One app's inspector channel.
@@ -364,6 +368,8 @@ async fn inspect(
 struct Inspector {
     socket: WebSocket,
     book: Arc<Book>,
+    /// Whether CAF serves its own tools.
+    tools: bool,
     /// How many steps it has been sent.
     sent: u64,
     /// Following live.
@@ -381,9 +387,10 @@ struct Inspector {
 struct Gone;
 
 impl Inspector {
-    fn new(socket: WebSocket, book: Arc<Book>) -> Self {
+    fn new(socket: WebSocket, book: Arc<Book>, tools: bool) -> Self {
         Self {
             socket,
+            tools,
             player: Some(Player::new(Arc::clone(&book))),
             state: Some(Player::new(Arc::clone(&book))),
             following: book.mode == Mode::Live,
@@ -449,6 +456,7 @@ impl Inspector {
             mode: self.book.mode,
             file: self.book.file.clone(),
             run: self.book.run.clone(),
+            tools: self.tools,
         };
         self.send(&hello).await?;
         self.steps().await?;

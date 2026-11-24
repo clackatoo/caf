@@ -146,7 +146,9 @@ Each agent is either:
 In the chat view, "New chat" opens a chat with any of these agents in any
 folder, given as an absolute path. The debugger gives chats no MCP servers,
 asks you about every permission request, and starts an adapter of its own for
-each chat.
+each chat. **CAF's tools**, ticked by default, gives the chat
+[CAF's own tools](~caf/concepts/cafs-own-tools), Read, Edit, Write and Bash,
+served through the debugger itself; untick it for only the agent's own.
 
 ## Choosing the model
 
@@ -216,7 +218,10 @@ chats saved there, under **Saved**, below the
 list of open chats: each with its title or first message, its agent and
 folder, when it last changed, and how many turns it has. **Restore** brings
 one back, with its record, idle until you send to it; its session then
-carries on, as the fake agent resumes sessions. Closing a chat puts it
+carries on, as the fake agent resumes sessions. It has CAF's tools again,
+unless it was opened without them: the debugger notes those in
+`caf-debugger-untooled.json` in the store's folder, as a chat's save
+doesn't say what tools it had. Closing a chat puts it
 away, closed, and it stays under Saved, to restore again. A chat another
 program has open, or the debugger can't read, says so, and is left as it
 was.

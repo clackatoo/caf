@@ -12,6 +12,7 @@
     ChatView,
     SavedList,
     UsagePage,
+    newChat,
     openThenChoose,
     restoreOnceFree,
     showsAgent,
@@ -163,7 +164,7 @@
       // Opening can't carry settings: they're chosen once it's open, and
       // applied as its session opens.
       const { chat, failed } = await openThenChoose(
-        () => caf.open({ agent, cwd, session: { type: 'New' }, tools: { caf: [...tools] } }),
+        () => caf.open(newChat(agent, cwd, tools)),
         (chat, choice) => caf.setSetting(chat, choice),
         settings,
       )
@@ -333,7 +334,7 @@
             {selected}
             actions={listActions}
             readOnly={!actable}
-            offersTools
+            offersTools={inspector.hello?.tools ?? false}
           />
         </div>
         {#if saved.length > 0}
