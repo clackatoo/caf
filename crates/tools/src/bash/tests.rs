@@ -6,6 +6,11 @@ fn lines(lines: &[&str]) -> Vec<String> {
     lines.iter().map(|line| (*line).to_owned()).collect()
 }
 
+/// The answer to `command`, which printed `text` and exited as `exit`.
+fn ran(command: &str, text: &str, exit: Option<Exit>) -> String {
+    answer(command, text, exit, false, None, None)
+}
+
 #[test]
 fn timeouts_default_and_are_capped() {
     assert_eq!(timeout(None), Duration::from_secs(120));
@@ -35,46 +40,91 @@ fn output_is_its_text_trimmed() {
 
 #[test]
 fn a_command_that_succeeded_is_answered_its_output() {
-    assert_eq!(answer("hi", Some(Exit::Code(0)), false, None, None), "hi");
-    assert_eq!(answer("hi", None, false, None, None), "hi");
+    assert_eq!(ran("echo hi", "hi", Some(Exit::Code(0))), "hi");
+    assert_eq!(ran("echo hi", "hi", None), "hi");
 }
 
 #[test]
 fn a_command_with_no_output_says_so() {
     assert_eq!(
-        answer("", Some(Exit::Code(0)), false, None, None),
+        ran("true", "", Some(Exit::Code(0))),
         "(Bash completed with no output)"
     );
     assert_eq!(
-        answer("", Some(Exit::Code(0)), false, None, Some("terminal 7")),
+        answer(
+            "true",
+            "",
+            Some(Exit::Code(0)),
+            false,
+            None,
+            Some("terminal 7")
+        ),
         "Ran in terminal 7\n(Bash completed with no output)"
     );
+    assert_eq!(ran("false", "", Some(Exit::Code(1))), "Exit code 1");
+}
+
+#[test]
+fn a_failure_says_how_it_ended_first_as_claude_code_does() {
     assert_eq!(
-        answer("", Some(Exit::Code(1)), false, None, None),
-        "Exit code 1"
+        ran("make", "oops", Some(Exit::Code(2))),
+        "Exit code 2\noops"
+    );
+    assert_eq!(
+        ran("sleep 9", "oops", Some(Exit::Signal(9))),
+        "Killed by signal 9\noops"
     );
 }
 
 #[test]
-fn a_failure_adds_how_it_ended() {
+fn searches_and_tests_that_find_nothing_havent_failed() {
+    // Exit 1 from these says "no", not "error", as Claude Code reads it.
+    for command in [
+        "grep -r foo .",
+        "rg foo",
+        "egrep x f",
+        "fgrep x f",
+        "find . -name x",
+        "diff a b",
+        "test -f x",
+        "[ -f x ]",
+        "cd src && grep foo *.rs",
+        "cat f | grep foo",
+        "true; rg x",
+    ] {
+        assert_eq!(ran(command, "out", Some(Exit::Code(1))), "out", "{command}");
+    }
+    // Exit 2 is still an error.
     assert_eq!(
-        answer("oops", Some(Exit::Code(2)), false, None, None),
-        "oops\nExit code 2"
+        ran("grep foo", "grep: x: No such file", Some(Exit::Code(2))),
+        "Exit code 2\ngrep: x: No such file"
+    );
+    // It's the last command that counts.
+    assert_eq!(
+        ran("grep foo f && make", "out", Some(Exit::Code(1))),
+        "Exit code 1\nout"
     );
     assert_eq!(
-        answer("oops", Some(Exit::Signal(9)), false, None, None),
-        "oops\nKilled by signal 9"
+        ran("mygrep foo", "out", Some(Exit::Code(1))),
+        "Exit code 1\nout"
     );
 }
 
 #[test]
-fn a_stopped_command_says_it_was_aborted() {
+fn a_stopped_command_says_it_was_aborted_after_its_output() {
     assert_eq!(
-        answer("partial", Some(Exit::Signal(15)), true, None, None),
+        answer(
+            "sleep 9",
+            "partial",
+            Some(Exit::Signal(15)),
+            true,
+            None,
+            None
+        ),
         "partial\n<error>Command was aborted before completion</error>"
     );
     assert_eq!(
-        answer("", None, true, None, None),
+        answer("sleep 9", "", None, true, None, None),
         "<error>Command was aborted before completion</error>"
     );
 }
@@ -82,25 +132,51 @@ fn a_stopped_command_says_it_was_aborted() {
 #[test]
 fn a_place_starts_the_answer() {
     assert_eq!(
-        answer("hi", Some(Exit::Code(3)), false, None, Some("terminal 7")),
-        "Ran in terminal 7\nhi\nExit code 3"
+        answer(
+            "make",
+            "hi",
+            Some(Exit::Code(3)),
+            false,
+            None,
+            Some("terminal 7")
+        ),
+        "Ran in terminal 7\nExit code 3\nhi"
     );
 }
 
 #[test]
-fn output_too_large_is_saved_and_previewed() {
+fn output_too_large_is_saved_and_previewed_as_claude_code_does() {
     let text = "x".repeat(MOST_ANSWER);
     assert!(!too_large(&text));
-    assert_eq!(answer(&text, None, false, None, None), text);
-    let text = "x".repeat(MOST_ANSWER + 1);
-    assert!(too_large(&text));
+    assert_eq!(ran("cat f", &text, None), text);
+    // Lines of 100: the preview ends at the last line end in its first
+    // 2,000 characters.
+    let line = format!("{}\n", "y".repeat(99));
+    let text = line.repeat(301);
+    let text = text.trim_end();
+    assert!(too_large(text));
     let path = Path::new("/run/caf/out/c/1.txt");
-    let got = answer(&text, Some(Exit::Code(1)), false, Some(path), None);
+    let got = answer("cat f", text, Some(Exit::Code(1)), false, Some(path), None);
     let want = format!(
-        "Output too large (29.3KB). Full output saved to: /run/caf/out/c/1.txt\n\nPreview (first 2KB):\n{}\n...\nExit code 1",
-        "x".repeat(PREVIEW)
+        "Exit code 1\n<persisted-output>\nOutput too large (29.4KB). Full output saved to: /run/caf/out/c/1.txt\n\nPreview (first 2KB):\n{}\n...\n</persisted-output>",
+        line.repeat(20).trim_end()
     );
     assert_eq!(got, want);
+}
+
+#[test]
+fn a_preview_with_no_line_end_late_enough_is_cut_at_2000_characters() {
+    let text = "é".repeat(MOST_ANSWER + 1);
+    let got = answer("cat f", &text, None, false, Some(Path::new("/o")), None);
+    let preview = got.split("Preview (first 2KB):\n").nth(1).unwrap();
+    let preview = preview.strip_suffix("\n...\n</persisted-output>").unwrap();
+    assert_eq!(preview.chars().count(), PREVIEW);
+    // A line end in the first half doesn't count.
+    let text = format!("{}\n{}", "a".repeat(900), "b".repeat(MOST_ANSWER));
+    let got = answer("cat f", &text, None, false, Some(Path::new("/o")), None);
+    let preview = got.split("Preview (first 2KB):\n").nth(1).unwrap();
+    let preview = preview.strip_suffix("\n...\n</persisted-output>").unwrap();
+    assert_eq!(preview.chars().count(), PREVIEW);
 }
 
 #[test]
@@ -109,28 +185,30 @@ fn too_large_counts_characters_not_bytes() {
     assert!(!too_large(&text), "60,000 bytes, but 30,000 characters");
     let text = "é".repeat(MOST_ANSWER + 1);
     assert!(too_large(&text));
+    // And its size is in characters, as Claude Code's is.
+    let got = answer("cat f", &text, None, false, Some(Path::new("/o")), None);
+    assert!(got.contains("Output too large (29.3KB)."), "{got}");
 }
 
 #[test]
-fn a_preview_ends_at_a_character_boundary() {
-    let text = format!("a{}", "€".repeat(MOST_ANSWER)); // 3 bytes each, after 1
-    let got = answer(&text, None, false, Some(Path::new("/o")), None);
-    let preview = got.split("Preview (first 2KB):\n").nth(1).unwrap();
-    let preview = preview.strip_suffix("\n...").unwrap();
-    assert!(preview.len() <= PREVIEW);
-    assert!(preview.len() > PREVIEW - 3);
-}
-
-#[test]
-fn output_too_large_and_unsaved_is_cut() {
-    let text = "é".repeat(MOST_ANSWER + 10);
-    let got = answer(&text, None, false, None, None);
-    let (start, note) = got.split_once('\n').unwrap();
-    assert_eq!(start.chars().count(), MOST_ANSWER);
+fn output_too_large_and_unsaved_is_cut_as_claude_code_does() {
+    let text = "a".repeat(MOST_ANSWER + 10);
+    let got = ran("cat f", &text, None);
+    let head =
+        "<truncated-output>\nOutput too large (29.3KB). It could not be saved, so only the first ";
+    assert!(got.starts_with(head), "{got}");
+    let (said, rest) = got[head.len()..].split_once(" are shown").unwrap();
     assert_eq!(
-        note,
-        "... (output too large: 58.6KB; only its start is shown)"
+        &rest[..rest.find("\n\n").unwrap()],
+        "; the rest was dropped. If the tool can page or filter its results, call it again for the part you need."
     );
+    let kept = rest[rest.find("\n\n").unwrap() + 2..]
+        .strip_suffix("\n</truncated-output>")
+        .unwrap();
+    assert!(kept.chars().all(|c| c == 'a'));
+    assert_eq!(said, format_size(kept.chars().count() as u64));
+    // All of it fits in what's answered.
+    assert!(got.chars().count() <= MOST_ANSWER);
 }
 
 #[test]
@@ -138,12 +216,15 @@ fn background_answers_read_as_claude_codes() {
     let path = Path::new("/run/caf/out/c/3.txt");
     assert_eq!(
         background(3, path),
-        "Command running in background with ID: 3. Output is being written to: /run/caf/out/c/3.txt."
+        "Command running in background with ID: 3. Output is being written to: /run/caf/out/c/3.txt. You will be notified when it completes. To check interim output, use Read on that file path."
     );
     assert_eq!(
         timed_out(Duration::from_secs(120), 3, path),
-        "Command still running after 2m; it continues in the background as job 3. Output is being written to: /run/caf/out/c/3.txt."
+        "Command did not complete within its 120s timeout and was moved to the background (ID: 3). Output is being written to: /run/caf/out/c/3.txt. You will be notified when it completes. To check interim output, use Read on that file path."
     );
+    // Rounded, and never 0s.
+    assert!(timed_out(Duration::from_millis(1499), 3, path).contains("within its 1s timeout"));
+    assert!(timed_out(Duration::from_millis(100), 3, path).contains("within its 1s timeout"));
     assert_eq!(
         too_many_jobs(),
         "Too many background tasks running (8); stop one with TaskStop first."
@@ -153,32 +234,24 @@ fn background_answers_read_as_claude_codes() {
 }
 
 #[test]
-fn durations_read_shortly() {
-    let ms = Duration::from_millis;
-    assert_eq!(format_duration(ms(0)), "0ms");
-    assert_eq!(format_duration(ms(500)), "500ms");
-    assert_eq!(format_duration(ms(1000)), "1s");
-    assert_eq!(format_duration(ms(1500)), "1.5s");
-    assert_eq!(format_duration(ms(59_999)), "60s");
-    assert_eq!(format_duration(ms(60_000)), "1m");
-    assert_eq!(format_duration(ms(150_000)), "2m 30s");
-    assert_eq!(format_duration(ms(600_000)), "10m");
-}
-
-#[test]
-fn notices_say_how_a_job_ended() {
+fn notices_read_as_claude_codes() {
     let path = Path::new("/o/2.txt");
     assert_eq!(
-        notice(2, "npm test", JobEnd::Exited(0), path),
-        "<task-notification>Task 2 (npm test) completed with exit code 0. Output: /o/2.txt</task-notification>"
+        notice(2, Some("toolu_1"), "npm test", JobEnd::Exited(0), path),
+        "<task-notification>\n<task-id>2</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<output-file>/o/2.txt</output-file>\n<status>completed</status>\n<summary>Background command \"npm test\" completed (exit code 0)</summary>\n</task-notification>"
+    );
+    // Claude Code's says completed, with the code, whatever the code.
+    assert_eq!(
+        notice(2, None, "npm test", JobEnd::Exited(1), path),
+        "<task-notification>\n<task-id>2</task-id>\n<output-file>/o/2.txt</output-file>\n<status>completed</status>\n<summary>Background command \"npm test\" completed (exit code 1)</summary>\n</task-notification>"
     );
     assert_eq!(
-        notice(2, "npm test", JobEnd::Failed, path),
-        "<task-notification>Task 2 (npm test) failed. Output: /o/2.txt</task-notification>"
+        notice(2, None, "npm test", JobEnd::Failed, path),
+        "<task-notification>\n<task-id>2</task-id>\n<output-file>/o/2.txt</output-file>\n<status>failed</status>\n<summary>Background command \"npm test\" failed</summary>\n</task-notification>"
     );
     assert_eq!(
-        notice(2, "npm test", JobEnd::Stopped, path),
-        "<task-notification>Task 2 (npm test) was stopped. Output: /o/2.txt</task-notification>"
+        notice(2, None, "npm test", JobEnd::Stopped, path),
+        "<task-notification>\n<task-id>2</task-id>\n<output-file>/o/2.txt</output-file>\n<status>killed</status>\n<summary>Background command \"npm test\" was stopped</summary>\n</task-notification>"
     );
 }
 
