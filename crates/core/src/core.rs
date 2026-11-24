@@ -36,7 +36,7 @@ use self::state::{Ask, Conn, Ids, Pending, Proc, Run, Setup};
 use crate::agent::{AgentSpec, AgentStatus, McpServer};
 use crate::change::{Change, Mismatch, Read};
 use crate::chat::AppData;
-use crate::chat::{AppItem, Chat, NoAppData, NoAppItems, UserMessage};
+use crate::chat::{AppItem, Chat, NoAppData, NoAppItems, Starter, UserMessage};
 use crate::directive::{Directive, Level, Report};
 use crate::event::{Event, HostCommand};
 use crate::host::Host;
@@ -650,6 +650,31 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         Ok(turn)
     }
 
+    /// Tells the chat's agent something, as a notice turn
+    /// ([`Starter::Notice`](crate::chat::Starter::Notice)), and returns
+    /// the turn's id: such as that something the agent waits on happened.
+    /// It's sent as a prompt, as a message is, and waits as one does: in
+    /// order, while another turn runs or the session opens. It's the
+    /// app's, or CAF's, never the user's words. Notifying an archived chat
+    /// unarchives it first, as sending to it does.
+    ///
+    /// # Errors
+    ///
+    /// As [`Core::send`]'s: [`Refused::Unsupported`] for empty text.
+    pub fn notify(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        text: impl Into<String>,
+        out: &mut Vec<Directive<A, D>>,
+    ) -> Result<TurnId, Refused> {
+        let turn = TurnId(self.ids.next);
+        let text = text.into();
+        self.command(now, HostCommand::Notify { chat, turn, text }, out)?;
+        self.finish(now, out);
+        Ok(turn)
+    }
+
     /// Stops the chat's running turn, and drops its waiting ones, which end
     /// as stopped.
     ///
@@ -1070,7 +1095,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 chat,
                 turn,
                 message,
-            } => self.send_as(now, chat, turn, message, out),
+            } => self.send_as(now, chat, turn, Starter::User(message), out),
+            HostCommand::Notify { chat, turn, text } => {
+                self.send_as(now, chat, turn, Starter::Notice(text), out)
+            }
             HostCommand::Stop { chat } => self.stop_chat(now, chat, out),
             HostCommand::Answer { question, answer } => {
                 self.answer_question(now, question, answer, out)

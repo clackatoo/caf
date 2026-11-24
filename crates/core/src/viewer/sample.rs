@@ -25,7 +25,9 @@ use crate::chat::{
 };
 use crate::core::{Refused, SessionChoice};
 use crate::event::Exit;
-use crate::ids::{AgentName, AgentSessionId, ChangeNo, ChatId, ItemId, QuestionId, Shelf, TurnId};
+use crate::ids::{
+    AgentName, AgentSessionId, ChangeNo, ChatId, ItemId, JobId, QuestionId, Shelf, TurnId,
+};
 use crate::install::SignedInAs;
 use crate::kinds::Seen;
 use crate::question::{
@@ -247,9 +249,9 @@ fn tool(kind: ToolKind, status: ToolStatus) -> ToolCall {
                 output(Some(Ending::Exited(Exit::Signal(9)))),
             ],
         ),
-        _ => (
-            Origin::NotRecorded,
-            other("hologram"),
+        ToolKind::Other => (
+            caf(CafTool::TaskStop),
+            Action::Stop { job: JobId(1) },
             Decision::NotRecorded,
             vec![
                 output(None),
@@ -282,6 +284,7 @@ fn tool(kind: ToolKind, status: ToolStatus) -> ToolCall {
         decision,
         app: None,
         stopped_by: (status == ToolStatus::Cancelled).then_some(StoppedBy::User),
+        job: (kind == ToolKind::Execute).then_some(JobId(1)),
     }
 }
 

@@ -11,7 +11,7 @@ use crate::acp::Frame;
 use crate::agent::{InstallFailure, SpawnCommand};
 use crate::chat::{AppData, AppItem, NoAppData, NoAppItems, UserMessage};
 use crate::core::OpenChat;
-use crate::ids::{AgentName, CallId, ChatId, QuestionId, Shelf, Ticket, TurnId};
+use crate::ids::{AgentName, CallId, ChatId, JobId, QuestionId, Shelf, Ticket, TurnId};
 use crate::install::{Platform, SignedInAs};
 use crate::limits::ProfileLimits;
 use crate::mcp::Key;
@@ -28,8 +28,11 @@ use crate::usage::PriceTable;
 /// CAF isn't released yet, nothing migrates an older one, and a reader
 /// refuses it. Version 3 came with archiving and the names on notes about
 /// settings; version 4 with tool calls' new shape; version 5 with serving
-/// CAF's tools ([`Event::Serving`], [`Event::Relay`], chats' tools).
-pub const RECORDING_VERSION: u32 = 5;
+/// CAF's tools ([`Event::Serving`], [`Event::Relay`], chats' tools);
+/// version 6 with CAF's own tools' jobs ([`ToolEvent::Detached`],
+/// [`HostCommand::Notify`], TaskStop, and what [`ToolEvent::Finished`]
+/// says of a shell's folder and a job's notice).
+pub const RECORDING_VERSION: u32 = 6;
 
 /// Something that happened. `A` and `D` are the app's item and data
 /// types.
@@ -188,6 +191,15 @@ pub enum HostCommand<A: AppItem = NoAppItems, D: AppData = NoAppData> {
         turn: TurnId,
         /// The message.
         message: UserMessage,
+    },
+    /// Tell the agent something, as this turn: a notice.
+    Notify {
+        /// The chat.
+        chat: ChatId,
+        /// The id the core gave the turn.
+        turn: TurnId,
+        /// What it's told.
+        text: String,
     },
     /// Stop the chat's running turn, and drop its waiting ones.
     Stop {
@@ -376,7 +388,19 @@ pub enum ToolEvent {
         /// The lines from there, worked out as its terminal shows them.
         lines: Vec<String>,
     },
-    /// It finished, and the agent was answered.
+    /// The agent was answered, and the call goes on, as job `job`: a
+    /// command run in the background, or one that ran past its timeout.
+    /// Reported before the answer is sent. It stays running, past its
+    /// turn's end and the user's Stop, until it finishes
+    /// ([`ToolEvent::Finished`]), TaskStop stops it, or its chat is let
+    /// go.
+    Detached {
+        /// Its number among its chat's jobs, from 1: never one the chat
+        /// had before in this run.
+        job: JobId,
+    },
+    /// It finished, and the agent was answered: or, for a preview, it
+    /// failed (`done` false), and the agent was answered why.
     Finished {
         /// Whether it did what it was asked.
         done: bool,
@@ -386,6 +410,17 @@ pub enum ToolEvent {
         /// the change as made, in place of the preview's diffs; without
         /// one, the preview's stay.
         pieces: Vec<Piece>,
+        /// The folder a command's shell ended in, if known: the folder
+        /// the chat's next command runs in
+        /// ([`Action::Run::folder`](crate::tool::Action::Run)). Never
+        /// taken from a job's end.
+        #[serde(default)]
+        folder: Option<String>,
+        /// For a job, what its chat's agent is told of its end, as a
+        /// notice turn ([`Starter::Notice`](crate::chat::Starter::Notice)):
+        /// none is sent without it. Ignored for any other call.
+        #[serde(default)]
+        notice: Option<String>,
     },
     /// The agent cancelled it, or its connection closed: nothing more
     /// will come of it.

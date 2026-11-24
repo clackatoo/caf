@@ -443,6 +443,19 @@ fn definition(tool: CafTool) -> Value {
             false,
             true,
         ),
+        CafTool::TaskStop => (
+            "Stop Task",
+            "\n- Stops a running background task by its ID\n- Takes a task_id parameter \
+             identifying the task to stop\n- Returns a success or failure status\n- Use this \
+             tool when you need to terminate a long-running task\n",
+            json!({
+                "task_id": text("The ID of the background task to stop"),
+                "shell_id": text("Deprecated: use task_id instead"),
+            }),
+            vec!["task_id"],
+            false,
+            false,
+        ),
     };
     json!({
         "name": tool.name(),
@@ -673,7 +686,7 @@ mod tests {
     fn tool_definitions_are_claude_codes_with_their_hints() {
         let list = tool_list(&CafTool::ALL);
         let tools = list.as_array().expect("a list");
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), CafTool::ALL.len());
         for (tool, definition) in CafTool::ALL.into_iter().zip(tools) {
             assert_eq!(definition["name"], tool.name());
             assert!(definition["title"].is_string());

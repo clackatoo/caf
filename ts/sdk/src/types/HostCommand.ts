@@ -35,7 +35,19 @@ turn: TurnId,
 /**
  * The message.
  */
-message: UserMessage, } } | { "type": "Stop", "value": { 
+message: UserMessage, } } | { "type": "Notify", "value": { 
+/**
+ * The chat.
+ */
+chat: ChatId, 
+/**
+ * The id the core gave the turn.
+ */
+turn: TurnId, 
+/**
+ * What it's told.
+ */
+text: string, } } | { "type": "Stop", "value": { 
 /**
  * The chat.
  */

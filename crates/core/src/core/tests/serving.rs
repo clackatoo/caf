@@ -73,8 +73,9 @@ fn a_chat_given_tools_gets_the_caf_server_and_says_what_its_tools_do() {
         with(&opened, "tool"),
         [json!({ "tool": { "type": "Serve", "value": {
             "chat": CHAT,
-            "tools": [{ "type": "Read" }, { "type": "Bash" }],
-            "instructions": "caf-test's tools to read files (Read) and run commands (Bash), in the folder you're working in.",
+            // TaskStop comes with Bash.
+            "tools": [{ "type": "Read" }, { "type": "Bash" }, { "type": "TaskStop" }],
+            "instructions": "caf-test's tools to read files (Read), run commands (Bash) and stop background commands (TaskStop), in the folder you're working in.",
         } } })]
     );
     let new = sent(&out, "session/new");
@@ -83,8 +84,8 @@ fn a_chat_given_tools_gets_the_caf_server_and_says_what_its_tools_do() {
     assert_eq!(
         options["systemPrompt"],
         "You are working inside caf-test, the app the user is talking to you in. caf-test gives \
-         you tools to read files (Read) and run commands (Bash), in the folder you're working \
-         in, asking the user's leave where it must. You have no other tools of your own: you \
+         you tools to read files (Read), run commands (Bash) and stop background commands \
+         (TaskStop), in the folder you're working in, asking the user's leave where it must. You have no other tools of your own: you \
          can't do anything else, such as browse the web, except through other tools caf-test \
          gives you. Answer in Markdown."
     );

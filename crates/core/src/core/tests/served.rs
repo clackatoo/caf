@@ -155,6 +155,8 @@ fn a_call_comes_first_makes_the_item_and_the_report_joins_it() {
         ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: None,
+            notice: None,
         },
     );
 }
@@ -364,6 +366,8 @@ fn an_edit_is_previewed_before_its_asked_about() {
         ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: None,
+            notice: None,
         },
     );
     assert!(told(&out).is_empty());
@@ -405,6 +409,8 @@ fn the_policy_refuses_with_its_reason_and_nothing_runs() {
         ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: None,
+            notice: None,
         },
     );
     assert!(told(&out).is_empty());
@@ -484,6 +490,8 @@ fn the_user_is_asked_with_cafs_own_two_options() {
         ToolEvent::Finished {
             done: true,
             pieces: vec![Piece::Text(Text::new("127.0.0.1"))],
+            folder: None,
+            notice: None,
         },
     );
     assert_eq!(tools(&script)[0]["result"][0]["value"]["text"], "127.0.0.1");
@@ -556,6 +564,8 @@ fn a_stopped_turn_cancels_its_calls_and_a_finished_one_fails_them() {
         ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: None,
+            notice: None,
         },
     );
     assert_eq!(tools(&script)[0]["status"], kind("Cancelled"));
@@ -657,6 +667,8 @@ fn output_grows_and_a_progress_bar_rewrites_its_line() {
         ToolEvent::Finished {
             done: true,
             pieces: vec![Piece::Output(ended)],
+            folder: None,
+            notice: None,
         },
     );
     let tool = the_tool(&script);
@@ -717,6 +729,8 @@ fn output_keeps_its_end_and_splits_overlong_lines() {
         ToolEvent::Finished {
             done: false,
             pieces: vec![Piece::Text(Text::new("killed"))],
+            folder: None,
+            notice: None,
         },
     );
     assert_eq!(the_tool(&script)["status"], kind("Failed"));
@@ -885,6 +899,8 @@ fn the_agents_own_permission_request_never_changes_a_call_caf_serves() {
         ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: None,
+            notice: None,
         },
     );
 }
@@ -928,6 +944,8 @@ fn output_from_past_its_end_keeps_the_drivers_numbering() {
         ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: None,
+            notice: None,
         },
     );
 }
@@ -958,6 +976,8 @@ fn a_finished_edit_gives_its_diff_in_place_of_the_previews() {
         ToolEvent::Finished {
             done: true,
             pieces: vec![Piece::Diff(done.clone())],
+            folder: None,
+            notice: None,
         },
     );
     assert_eq!(
@@ -979,6 +999,8 @@ fn a_finished_command_ends_its_last_output() {
                 dropped: 0,
                 ending: Some(Ending::Exited(Exit::Code(2))),
             })],
+            folder: None,
+            notice: None,
         },
     );
     let result = &the_tool(&script)["result"];
@@ -1127,6 +1149,8 @@ fn a_call_in_a_turn_the_agent_started_is_served_in_it() {
         ToolEvent::Finished {
             done: true,
             pieces: Vec::new(),
+            folder: None,
+            notice: None,
         },
     );
 }

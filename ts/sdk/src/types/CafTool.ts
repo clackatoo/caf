@@ -3,4 +3,4 @@
 /**
  * One of CAF's own tools.
  */
-export type CafTool = { "type": "Read" } | { "type": "Edit" } | { "type": "Write" } | { "type": "Bash" };
+export type CafTool = { "type": "Read" } | { "type": "Edit" } | { "type": "Write" } | { "type": "Bash" } | { "type": "TaskStop" };

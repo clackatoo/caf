@@ -353,6 +353,7 @@ kinds!(CafTool {
     "Edit" => CafTool::Edit,
     "Write" => CafTool::Write,
     "Bash" => CafTool::Bash,
+    "TaskStop" => CafTool::TaskStop,
 });
 
 kinds!(Action {
@@ -360,6 +361,7 @@ kinds!(Action {
     "Edit" => Action::Edit { .. },
     "Write" => Action::Write { .. },
     "Run" => Action::Run { .. },
+    "Stop" => Action::Stop { .. },
     "Tool" => Action::Tool { .. },
 });
 

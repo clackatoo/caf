@@ -2,6 +2,7 @@
 import type { Action } from "./Action.ts";
 import type { Cut } from "./Cut.ts";
 import type { Decision } from "./Decision.ts";
+import type { JobId } from "./JobId.ts";
 import type { Location } from "./Location.ts";
 import type { NoAppItems } from "./NoAppItems.ts";
 import type { Origin } from "./Origin.ts";
@@ -83,4 +84,14 @@ app: NoAppItems | null,
  * [`Cancelled`](ToolStatus::Cancelled): `None` for any other, and for
  * a call saved before CAF kept it.
  */
-stopped_by: StoppedBy | null, };
+stopped_by: StoppedBy | null, 
+/**
+ * The job it became, if it went on after the model was answered
+ * ([`ToolEvent::Detached`](crate::event::ToolEvent::Detached)), such
+ * as a command run in the background: it stays
+ * [`Running`](ToolStatus::Running), past the end of its turn, until
+ * it ends by itself or is stopped. The number names nothing after
+ * its run. `None` for any other call, and for one saved before CAF
+ * kept jobs.
+ */
+job: JobId | null, };

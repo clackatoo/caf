@@ -67,6 +67,7 @@ export type * from "./InstallState.ts";
 export type * from "./Item.ts";
 export type * from "./ItemId.ts";
 export type * from "./ItemKind.ts";
+export type * from "./JobId.ts";
 export type * from "./KnownSettings.ts";
 export type * from "./Launch.ts";
 export type * from "./LearnFailure.ts";

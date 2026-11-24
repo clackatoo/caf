@@ -79,8 +79,8 @@ mod tests {
     };
     use crate::host::{Grouping, Host, Limits, Shows, Timers};
     use crate::ids::{
-        AgentName, AgentSessionId, CallId, ChangeNo, ChatId, ConnectionId, ItemId, QuestionId,
-        Shelf, Ticket, TurnId,
+        AgentName, AgentSessionId, CallId, ChangeNo, ChatId, ConnectionId, ItemId, JobId,
+        QuestionId, Shelf, Ticket, TurnId,
     };
     use crate::install::{
         Artifact, Bundled, Edit, EnvValue, FilePatch, Install, LinkFrom, Needs, NpmPackage, Patch,
@@ -290,6 +290,7 @@ mod tests {
             ChatId,
             ConnectionId,
             ItemId,
+            JobId,
             QuestionId,
             Shelf,
             Ticket,

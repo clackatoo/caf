@@ -608,6 +608,7 @@ impl ToolChange {
             decision: Decision::NotAsked,
             app: None,
             stopped_by: None,
+            job: None,
         };
         self.apply(&mut tool);
         tool

@@ -1029,6 +1029,8 @@ impl ToolsDriver {
                 event: ToolEvent::Finished {
                     done: ran.done,
                     pieces: ran.record,
+                    folder: None,
+                    notice: None,
                 },
             });
             self.held.insert(
@@ -1955,7 +1957,7 @@ mod tests {
         assert_event(
             h.report().await,
             call,
-            |event| matches!(event, ToolEvent::Finished { done: true, pieces } if pieces.len() == 1),
+            |event| matches!(event, ToolEvent::Finished { done: true, pieces, .. } if pieces.len() == 1),
         );
         let answer = client.recv().await;
         assert_eq!(answer["id"], 7);

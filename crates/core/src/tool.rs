@@ -55,6 +55,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::chat::{AppItem, NoAppItems};
 use crate::event::Exit;
+use crate::ids::JobId;
 
 /// The most of a [`Text`] kept, in bytes: its start.
 pub const MOST_TEXT: usize = 64 * 1024;
@@ -127,6 +128,15 @@ pub struct ToolCall<A: AppItem = NoAppItems> {
     /// a call saved before CAF kept it.
     #[serde(default)]
     pub stopped_by: Option<StoppedBy>,
+    /// The job it became, if it went on after the model was answered
+    /// ([`ToolEvent::Detached`](crate::event::ToolEvent::Detached)), such
+    /// as a command run in the background: it stays
+    /// [`Running`](ToolStatus::Running), past the end of its turn, until
+    /// it ends by itself or is stopped. The number names nothing after
+    /// its run. `None` for any other call, and for one saved before CAF
+    /// kept jobs.
+    #[serde(default)]
+    pub job: Option<JobId>,
 }
 
 /// Who stopped a call that ended [`Cancelled`](ToolStatus::Cancelled).
@@ -148,6 +158,9 @@ pub enum StoppedBy {
 /// The tools CAF serves a chat ([`OpenChat::tools`](crate::OpenChat::tools)):
 /// none by default. They aren't saved: the host gives them again when it
 /// restores the chat ([`RestoreChat::tools`](crate::RestoreChat::tools)).
+///
+/// A chat given Bash is served TaskStop too, just after it, as Bash's
+/// background jobs need it.
 #[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -179,6 +192,19 @@ impl Tools {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.caf.is_empty()
+    }
+
+    /// CAF's own tools as a chat given these is served them: each once,
+    /// in order, with TaskStop just after Bash if Bash is given and it
+    /// isn't.
+    pub(crate) fn served(tools: impl IntoIterator<Item = CafTool>) -> Vec<CafTool> {
+        let mut caf = Self::caf(tools).caf;
+        if !caf.contains(&CafTool::TaskStop)
+            && let Some(at) = caf.iter().position(|&tool| tool == CafTool::Bash)
+        {
+            caf.insert(at + 1, CafTool::TaskStop);
+        }
+        caf
     }
 }
 
@@ -289,11 +315,19 @@ pub enum CafTool {
     Write,
     /// Runs a command.
     Bash,
+    /// Stops one of the chat's background jobs. Served with Bash.
+    TaskStop,
 }
 
 impl CafTool {
     /// Every one of CAF's own tools.
-    pub const ALL: [Self; 4] = [Self::Read, Self::Edit, Self::Write, Self::Bash];
+    pub const ALL: [Self; 5] = [
+        Self::Read,
+        Self::Edit,
+        Self::Write,
+        Self::Bash,
+        Self::TaskStop,
+    ];
 
     /// The tool CAF serves as `name`, such as `Read`, if it's one of its
     /// own.
@@ -310,6 +344,7 @@ impl CafTool {
             Self::Edit => "Edit",
             Self::Write => "Write",
             Self::Bash => "Bash",
+            Self::TaskStop => "TaskStop",
         }
     }
 }
@@ -347,9 +382,15 @@ pub enum Action {
         command: String,
         /// The folder it runs in.
         folder: String,
-        /// Whether it runs in the background, the call ending as it
-        /// starts.
+        /// Whether the model asked for it to run in the background: the
+        /// model is answered as it starts, and the call goes on as a job
+        /// ([`ToolCall::job`]).
         background: bool,
+    },
+    /// Stop one of the chat's background jobs.
+    Stop {
+        /// The job.
+        job: JobId,
     },
     /// Any tool that isn't CAF's own: its input is the call's
     /// [`input`](ToolCall::input).
@@ -362,14 +403,14 @@ pub enum Action {
 impl Action {
     /// The kind of tool that does it: Read is [`ToolKind::Read`], Edit and
     /// Write are [`ToolKind::Edit`], Run is [`ToolKind::Execute`], and
-    /// another tool is [`ToolKind::Other`].
+    /// Stop and another tool are [`ToolKind::Other`].
     #[must_use]
     pub fn kind(&self) -> ToolKind {
         match self {
             Self::Read { .. } => ToolKind::Read,
             Self::Edit { .. } | Self::Write { .. } => ToolKind::Edit,
             Self::Run { .. } => ToolKind::Execute,
-            Self::Tool { .. } => ToolKind::Other,
+            Self::Stop { .. } | Self::Tool { .. } => ToolKind::Other,
         }
     }
 }

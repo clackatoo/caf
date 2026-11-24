@@ -98,7 +98,7 @@ fn sample(version: u32) -> Sample {
     match version {
         // The same values in each: what's added since is checked by
         // reading, and by the newest sample's shapes.
-        1..=7 => Sample {
+        1..=8 => Sample {
             header: from(header(version, 9)),
             before: before(),
             records: records(version),
@@ -353,8 +353,9 @@ fn header(version: u32, turns: u64) -> Value {
 /// failed as a setting couldn't be applied; from version 4, what a turn
 /// spent and what the chat has spent; from version 5, the names of
 /// the choices in those notes and of the models a turn spent on, and the
-/// chat archived; and from version 7, calls cancelled by the user and by
-/// the agent, and the note that CAF's tools were lost.
+/// chat archived; from version 7, calls cancelled by the user and by
+/// the agent, and the note that CAF's tools were lost; and from version
+/// 8, a background job and a TaskStop.
 fn records(version: u32) -> Vec<Vec<Entry<Pin, Notes>>> {
     let change = |change: Value| json!({ "type": "Change", "value": change });
     let own_tools = change(
@@ -409,6 +410,9 @@ fn records(version: u32) -> Vec<Vec<Entry<Pin, Notes>>> {
     if version >= 7 {
         first.extend(stopped().into_iter().map(change));
     }
+    if version >= 8 {
+        first.extend(jobs().into_iter().map(change));
+    }
     from(json!([
         first,
         [
@@ -446,6 +450,25 @@ fn stopped() -> Vec<Value> {
             "turn": 8,
             "item": item(82, None, json!({ "type": "Note", "value": { "type": "ToolsLost" } })),
         }}),
+    ]
+}
+
+/// What version 8 added: a command run in the background, a job still
+/// running, and the TaskStop call that stopped another.
+fn jobs() -> Vec<Value> {
+    let mut job = tool("Execute", "Running", Value::Null);
+    job["origin"] = json!({ "type": "Caf", "value": { "type": "Bash" } });
+    job["action"] = json!({ "type": "Run", "value": {
+        "command": "cargo test", "folder": "/work", "background": true,
+    }});
+    job["job"] = json!(2);
+    let mut stop = tool("Other", "Done", Value::Null);
+    stop["origin"] = json!({ "type": "Caf", "value": { "type": "TaskStop" } });
+    stop["action"] = json!({ "type": "Stop", "value": { "job": 1 } });
+    stop["decision"] = json!({ "type": "NotAsked" });
+    vec![
+        json!({ "type": "ToolChanged", "value": { "item": 15, "tool": job } }),
+        json!({ "type": "ToolChanged", "value": { "item": 16, "tool": stop } }),
     ]
 }
 

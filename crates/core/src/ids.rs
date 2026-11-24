@@ -9,7 +9,10 @@
 //!   names one names its chat too, and a restored chat keeps its numbers:
 //!   the core counts on from past them.
 //! - **Everything else is one run's** (questions, connections, tickets,
-//!   calls, change numbers), and never saved.
+//!   calls, jobs, change numbers), and never saved, but for the number a
+//!   tool call's job had, which the record keeps
+//!   ([`ToolCall::job`](crate::tool::ToolCall::job)) and which names
+//!   nothing after its run.
 //!
 //! The core gives ids out in order, and a chat's UUID from the seed the
 //! host gives it ([`Host::seed`](crate::Host::seed)) and the time, so a
@@ -116,6 +119,14 @@ id! {
     /// number, and never gives one twice in a run. One run's, like a
     /// [`Ticket`].
     CallId
+}
+id! {
+    /// A background job: a call to a tool CAF serves that goes on after
+    /// the model was answered
+    /// ([`ToolEvent::Detached`](crate::event::ToolEvent::Detached)). The
+    /// tools driver numbers a chat's jobs, from 1, as the model names them
+    /// to stop one (TaskStop's `task_id`). One run's, like a [`CallId`].
+    JobId
 }
 id! {
     /// A change in a chat's numbered list of changes. Viewers say how far

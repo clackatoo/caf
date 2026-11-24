@@ -17,20 +17,21 @@ use crate::change::Change;
 use crate::chat::AppData;
 use crate::chat::{
     AppItem, ChatState, Failure, FailureReason, ItemKind, Lost, Note, Part, Remedy, Starter,
-    ToolStatus, Turn, TurnLife, UserMessage,
+    ToolStatus, Turn, TurnLife,
 };
 use crate::directive::{Directive, Level};
 use crate::ids::{ChatId, Ticket, TurnId};
 use crate::time::{End, Now, Window};
 
 impl<A: AppItem, D: AppData> Core<A, D> {
-    /// Sends `message` in `chat` as turn `turn`.
+    /// Sends `starter`, the user's message or a notice, in `chat` as turn
+    /// `turn`.
     pub(super) fn send_as(
         &mut self,
         now: Now,
         chat: ChatId,
         turn: TurnId,
-        message: UserMessage,
+        starter: Starter,
         out: &mut Vec<Directive<A, D>>,
     ) -> Result<(), Refused> {
         let whole = self.chats.get(&chat).ok_or(Refused::NoSuchChat)?;
@@ -41,13 +42,19 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if !spec.profile.strips() {
             return Err(Refused::OwnTools);
         }
-        if message.parts.is_empty() {
-            return Err(Refused::Unsupported);
-        }
-        let command =
-            (message.parts.iter()).any(|part| matches!(part, Part::Text(text) if is_command(text)));
-        if command && message.parts.len() > 1 {
-            return Err(Refused::CommandNotAlone);
+        match &starter {
+            Starter::User(message) => {
+                if message.parts.is_empty() {
+                    return Err(Refused::Unsupported);
+                }
+                let command = (message.parts.iter())
+                    .any(|part| matches!(part, Part::Text(text) if is_command(text)));
+                if command && message.parts.len() > 1 {
+                    return Err(Refused::CommandNotAlone);
+                }
+            }
+            Starter::Notice(text) if !text.is_empty() => {}
+            _ => return Err(Refused::Unsupported),
         }
         if self.waiting_turns(chat).len() >= self.host.limits.queued_messages {
             return Err(Refused::QueueFull);
@@ -65,7 +72,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             chat,
             Turn {
                 id: turn,
-                starter: Starter::User(message),
+                starter,
                 life: TurnLife::Waiting,
                 window: Window::open(now),
                 items: Vec::new(),
@@ -114,15 +121,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(turn) = self.waiting_turns(chat).first().copied() else {
             return;
         };
-        let Some(Starter::User(message)) = self.turn(chat, turn).map(|each| each.starter.clone())
-        else {
-            return;
+        let prompt: Vec<Value> = match self.turn(chat, turn).map(|each| &each.starter) {
+            Some(Starter::User(message)) => (message.parts.iter())
+                .map(|part| match part {
+                    Part::Text(text) => json!({ "type": "text", "text": text }),
+                })
+                .collect(),
+            Some(Starter::Notice(text)) => vec![json!({ "type": "text", "text": text })],
+            _ => return,
         };
-        let prompt: Vec<Value> = (message.parts.iter())
-            .map(|part| match part {
-                Part::Text(text) => json!({ "type": "text", "text": text }),
-            })
-            .collect();
         let params = json!({ "sessionId": session.0, "prompt": prompt });
         let purpose = Purpose::Prompt {
             chat,
@@ -437,7 +444,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             let session = self.runs.get(&chat).and_then(|run| run.session.clone());
             match session.filter(|_| self.procs.get(&proc).is_some_and(|each| each.askable())) {
                 Some(session) => {
-                    self.notify(
+                    self.send_notification(
                         proc,
                         "session/cancel",
                         json!({ "sessionId": session.0 }),
@@ -488,7 +495,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         run.held_until = Some(now.mono.after(IN_FLIGHT));
         if let (Open::Live { proc }, Some(session)) = (run.open, run.session.clone()) {
-            self.notify(
+            self.send_notification(
                 proc,
                 "session/cancel",
                 json!({ "sessionId": session.0 }),

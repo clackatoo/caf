@@ -39,7 +39,7 @@ use crate::directive::{
 };
 use crate::event::RelayChange;
 use crate::event::{PolicyAnswer, ToolEvent};
-use crate::ids::{CallId, ChatId, ItemId, QuestionId, Ticket, TurnId};
+use crate::ids::{CallId, ChatId, ItemId, JobId, QuestionId, Ticket, TurnId};
 use crate::profiles::{CAF_SERVER, served_instructions};
 use crate::question::{OptionId, OptionKind, Permission, PermissionOption, QuestionKind};
 use crate::time::{Now, Window};
@@ -278,7 +278,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             } => self.called(now, call, chat, tool, input, agent_call, out),
             ToolEvent::Previewed { pieces } => self.previewed(call, pieces, out),
             ToolEvent::Output { from, lines } => self.printed(call, from, lines, out),
-            ToolEvent::Finished { done, pieces } => self.finished(now, call, done, pieces, out),
+            ToolEvent::Detached { job } => self.detached(call, job, out),
+            ToolEvent::Finished {
+                done,
+                pieces,
+                folder,
+                notice,
+            } => self.finished(now, call, done, pieces, folder, notice, out),
             ToolEvent::Gone => self.gone(now, call, out),
         }
     }
@@ -382,6 +388,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             decision: Decision::Undecided,
             app: None,
             stopped_by: None,
+            job: None,
         });
         let item = match joins {
             Some(item) => {
@@ -839,15 +846,25 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         })
     }
 
+    /// The agent was answered, and the call goes on as job `job`.
+    fn detached(&mut self, call: CallId, job: JobId, out: &mut Vec<Directive<A, D>>) {
+        let _ = job;
+        stale(out, call, "a job");
+    }
+
     /// A call finished, and the agent was answered.
+    #[allow(clippy::too_many_arguments)] // the event, as the driver gives it
     fn finished(
         &mut self,
         now: Now,
         call: CallId,
         done: bool,
         pieces: Vec<Piece>,
+        folder: Option<String>,
+        notice: Option<String>,
         out: &mut Vec<Directive<A, D>>,
     ) {
+        let _ = (folder, notice);
         match self.calls.get(&call) {
             None => return stale(out, call, "its finish"),
             Some(each) if each.stage != Stage::Running => {
@@ -1220,7 +1237,24 @@ pub(super) fn action_of(tool: CafTool, input: &Value, cwd: &str) -> Result<Actio
                 background: flag("run_in_background")?,
             }
         }
+        CafTool::TaskStop => {
+            // Claude Code's older name for it is still taken.
+            let id = match (text("task_id")?, text("shell_id")?) {
+                (Some(id), _) | (None, Some(id)) => id,
+                (None, None) => return Err("`task_id` is missing.".to_owned()),
+            };
+            let job = (id.trim().parse::<u64>().ok())
+                .filter(|&job| job > 0)
+                .ok_or_else(|| no_task(id))?;
+            Action::Stop { job: JobId(job) }
+        }
     })
+}
+
+/// What the model is told of a TaskStop naming `id`, which isn't one of its
+/// chat's running jobs, as Claude Code says it.
+pub(super) fn no_task(id: impl std::fmt::Display) -> String {
+    format!("No task {id} in this conversation")
 }
 
 /// `path` as an absolute path, worked out against `cwd` if it's relative,
@@ -1272,6 +1306,7 @@ pub(super) fn title_of(action: &Action, cwd: &str) -> String {
                 first
             }
         }
+        Action::Stop { job } => format!("Stop task {}", job.0),
         Action::Tool { name } => name.clone(),
     };
     agent_text(&title, MOST_TITLE)
@@ -1367,6 +1402,8 @@ mod tests {
             // A value of each field's type that the parser takes: a whole
             // number its least.
             let value = |name: &str| match properties[name]["type"].as_str() {
+                // A job's number.
+                Some("string") if tool == CafTool::TaskStop => json!("1"),
                 Some("string") => json!("x"),
                 Some("integer") => properties[name]["minimum"].clone(),
                 Some("boolean") => json!(true),

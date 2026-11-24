@@ -62,7 +62,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
             .ok_or(Refused::Unsendable)?;
-        let caf_tools = crate::tool::Tools::caf(open.tools.caf).caf;
+        let caf_tools = crate::tool::Tools::served(open.tools.caf);
         mcp_sent.extend(self.caf_server(chat, &caf_tools)?);
         check_instructions(open.instructions.as_deref())?;
         if !open.settings.iter().all(sendable) {
@@ -876,7 +876,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         self.withdraw_asks(chat, out);
         if let Some(running) = self.give_up_prompt(now, chat) {
             if let Some(session) = self.runs.get(&chat).and_then(|run| run.session.clone()) {
-                self.notify(
+                self.send_notification(
                     running.proc,
                     "session/cancel",
                     json!({ "sessionId": session.0 }),
