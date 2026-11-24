@@ -9,6 +9,7 @@ mod failures;
 mod frames;
 mod guarantees;
 mod holding;
+mod jobs;
 mod limits;
 mod own_tools;
 mod patching;

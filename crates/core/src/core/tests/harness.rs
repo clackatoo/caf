@@ -77,6 +77,9 @@ pub(crate) struct Script {
     /// cancelled by the core, finished by the driver, or given up on by
     /// the agent.
     calls: BTreeMap<u64, (bool, bool)>,
+    /// The calls that became jobs: answered as they did, and stopped, not
+    /// answered, by a cancel after.
+    jobs: std::collections::BTreeSet<u64>,
 }
 
 /// The agents a test offers: Claude, as the Claude profile expects it.
@@ -153,6 +156,7 @@ impl Script {
             answers: BTreeMap::new(),
             fixtures: true,
             calls: BTreeMap::new(),
+            jobs: std::collections::BTreeSet::new(),
         }
     }
 
@@ -205,6 +209,20 @@ impl Script {
                         seen.1 = true;
                     }
                 }
+                // The driver answered the agent as it went on.
+                ToolEvent::Detached { .. } => {
+                    if self
+                        .core
+                        .calls
+                        .get(call)
+                        .is_some_and(|each| each.job.is_none())
+                        && let Some(seen) = self.calls.get_mut(&call.0)
+                        && seen.0
+                    {
+                        seen.1 = true;
+                        self.jobs.insert(call.0);
+                    }
+                }
                 _ => {}
             }
         }
@@ -248,6 +266,10 @@ impl Script {
                 continue;
             }
             let call = tool["value"]["call"].as_u64().expect("a call");
+            // A job's stopped, not answered.
+            if tool["type"] == "Cancel" && self.jobs.remove(&call) {
+                continue;
+            }
             let seen = self.calls.get_mut(&call);
             let seen = seen.unwrap_or_else(|| panic!("call {call} answered, never called"));
             assert!(
@@ -349,6 +371,23 @@ impl Script {
                 chat,
                 turn,
                 message: recorded,
+            },
+        )
+    }
+
+    /// Tells `chat`'s agent `text`, as a notice.
+    pub(crate) fn notify(
+        &mut self,
+        chat: ChatId,
+        text: &str,
+    ) -> (Result<TurnId, Refused>, Vec<Value>) {
+        let recorded = text.to_owned();
+        self.host_call(
+            |core, now, out| core.notify(now, chat, text, out),
+            |&turn| HostCommand::Notify {
+                chat,
+                turn,
+                text: recorded,
             },
         )
     }

@@ -215,7 +215,20 @@ pub struct PermissionRequest {
 ///   are, never the model's input read again.
 /// - **Output is reported in batches,** at most every 100 ms or 16 KiB,
 ///   and in order.
-/// - **A preview changes nothing.**
+/// - **A preview changes nothing.** One that fails is answered at once,
+///   saying why, and reported as [`ToolEvent::Finished`](crate::event::ToolEvent::Finished)
+///   with `done` false: the core asks no one, and sends nothing more.
+/// - **A call that goes on after the agent is answered, as a job, is
+///   reported [`Detached`](crate::event::ToolEvent::Detached) before the
+///   answer is sent**, numbered among its chat's jobs from 1. From then
+///   it's no longer its turn's: it's not cancelled as the turn ends, and
+///   ends with its own `Finished`, whose `notice` the core sends the agent.
+///   A `Cancel` of it after stops it, and answers no one. One the core
+///   cancelled before its `Detached` came is cancelled all the same.
+/// - **A TaskStop ([`Action::Stop`]) is run only for a job of its own
+///   chat's still running**: the driver stops it, reports the job's
+///   `Finished`, then the TaskStop's. The job then ends Cancelled, by the
+///   agent.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

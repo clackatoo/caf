@@ -92,6 +92,41 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         Ok(())
     }
 
+    /// Queues `text` in `chat` as a notice turn from CAF, such as that a
+    /// background job ended: sent as a message is, once no turn runs. It's
+    /// never refused for the queue being full, so it's never lost: a
+    /// chat's jobs are few, and each ends once.
+    pub(super) fn queue_notice(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        text: String,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
+        if (self.chats.get(&chat)).is_none_or(|whole| whole.state == ChatState::Closed) {
+            return;
+        }
+        self.end_agent_turn(now, chat);
+        let turn = TurnId(self.ids.take());
+        self.add_turn(
+            chat,
+            Turn {
+                id: turn,
+                starter: Starter::Notice(text),
+                life: TurnLife::Waiting,
+                window: Window::open(now),
+                items: Vec::new(),
+                imported: false,
+                model: None,
+                spent: None,
+            },
+        );
+        if (self.runs.get(&chat)).is_some_and(|run| run.open == Open::Idle) {
+            self.want_open(now, chat, out);
+        }
+        self.pump(now, chat, out);
+    }
+
     /// The turns of `chat` waiting to be sent, oldest first.
     pub(super) fn waiting_turns(&self, chat: ChatId) -> Vec<TurnId> {
         let Some(whole) = self.chats.get(&chat) else {
@@ -283,7 +318,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
 
     /// Ends `chat`'s turn `turn` as `life`: its words stop growing, and
     /// every tool call in it that hasn't ended does: Cancelled if the user
-    /// stopped the turn, else Failed.
+    /// stopped the turn, else Failed. But for a background job, which goes
+    /// on.
     pub(super) fn end_turn(&mut self, now: Now, chat: ChatId, turn: TurnId, life: TurnLife) {
         // Calls CAF serves are settled first.
         self.settle_calls(now, chat, turn, life == TurnLife::Stopped);
@@ -297,6 +333,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map(|item| (item.id, item.window.end == End::Open, item.kind.clone()))
             .collect();
         for (item, open, kind) in items {
+            if matches!(&kind, ItemKind::Tool(tool) if tool.job.is_some() && !tool.status.ended()) {
+                continue;
+            }
             if let ItemKind::Tool(mut tool) = kind
                 && !tool.status.ended()
             {
@@ -388,8 +427,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// `chat`'s agent-started turn has been quiet long enough: it ends,
-    /// unless a tool of it is still running or waiting to, or the agent
-    /// waits on a question.
+    /// unless a tool of it is still running or waiting to (but for a
+    /// background job), or the agent waits on a question.
     pub(super) fn quiet(&mut self, now: Now, chat: ChatId) {
         let Some(turn) = self.runs.get(&chat).and_then(|run| run.agent_turn) else {
             if let Some(run) = self.runs.get_mut(&chat) {
@@ -399,7 +438,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         };
         let tools = (self.turn(chat, turn).into_iter())
             .flat_map(|each| each.items.iter())
-            .any(|item| matches!(&item.kind, ItemKind::Tool(tool) if !tool.status.ended()));
+            .any(|item| {
+                matches!(&item.kind, ItemKind::Tool(tool) if !tool.status.ended() && tool.job.is_none())
+            });
         let busy = tools || self.asks.values().any(|ask| ask.chat == chat);
         if busy {
             let quiet_by = now.mono.after(self.host.timers.quiet);

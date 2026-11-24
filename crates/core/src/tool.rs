@@ -36,6 +36,29 @@
 //! and each tool says what that is (*later*, with the tools). For a tool
 //! CAF runs, both come from the same run.
 //!
+//! # Jobs
+//!
+//! A call to a tool CAF serves may go on after the model is answered, as a
+//! job, such as a command run in the background, or one that ran past its
+//! timeout ([`ToolEvent::Detached`](crate::event::ToolEvent::Detached)).
+//! It stays [`Running`](ToolStatus::Running), with its
+//! [`job`](ToolCall::job), in the turn it started in, and:
+//! - **its turn ending doesn't end it,** nor the user's Stop, which stops
+//!   the turn and not its background work, nor its agent letting go of
+//!   the call, nor a turn the agent started going quiet;
+//! - **it ends by itself,** Done or Failed, and its chat's agent is told
+//!   in a notice turn ([`Starter::Notice`](crate::chat::Starter::Notice)),
+//!   sent as a message is: at once if no turn runs, else after;
+//! - **or TaskStop stops it** ([`Action::Stop`]): Cancelled, stopped by
+//!   the agent. TaskStop needs no one's leave, and stops only its own
+//!   chat's jobs: any other job number is refused, "No task {id} in this
+//!   conversation";
+//! - **or its chat is closed or deleted** (Cancelled, stopped by the
+//!   user), **put away, or CAF shuts down** (Failed, as the calls of a
+//!   turn cut off then are), and the driver is told to stop it;
+//! - **a restored chat has none:** a job saved running fails, as a call
+//!   cut off does.
+//!
 //! # Caps
 //!
 //! Everything here is bounded, and anything cut says how much was kept of
@@ -139,7 +162,9 @@ pub struct ToolCall<A: AppItem = NoAppItems> {
     pub job: Option<JobId>,
 }
 
-/// Who stopped a call that ended [`Cancelled`](ToolStatus::Cancelled).
+/// Who stopped a call that ended [`Cancelled`](ToolStatus::Cancelled). A
+/// background job closed with its chat was stopped by the user, and one
+/// TaskStop stopped, by the agent.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -240,7 +265,8 @@ pub enum ToolKind {
 /// Every call ends Done, Failed, Refused or Cancelled: when its turn ends,
 /// one still Pending, Asking or Running is Cancelled if the user stopped
 /// the turn, and Failed otherwise, and so is one a restored chat was cut
-/// off in. One the agent says failed while the user stops its turn was
+/// off in. But for a background job ([`ToolCall::job`]), which runs on
+/// past its turn: see [the jobs](crate::tool#jobs). One the agent says failed while the user stops its turn was
 /// cancelled, as an agent of ACP's first version, such as Claude's, has
 /// no other word for it. Once a call has ended it stays so, whatever the
 /// agent says of it after, though what it gave back may still come.

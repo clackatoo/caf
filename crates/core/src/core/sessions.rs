@@ -106,6 +106,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             chat,
             Run {
                 conn,
+                shell: cwd.clone(),
                 cwd,
                 mcp: open.mcp_servers,
                 mcp_sent: super::state::SentServers(mcp_sent),
@@ -864,7 +865,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Ends what `chat` has going: its questions, its running turn (as
-    /// `life`, telling the agent to stop), its waiting turns (as stopped)
+    /// `life`, telling the agent to stop), its waiting turns (as stopped),
+    /// its background jobs (cancelled by the user if `life` is Stopped)
     /// and any session it's opening.
     pub(super) fn wind_down(
         &mut self,
@@ -874,6 +876,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         out: &mut Vec<Directive<A, D>>,
     ) {
         self.withdraw_asks(chat, out);
+        let stopped = life == TurnLife::Stopped;
         if let Some(running) = self.give_up_prompt(now, chat) {
             if let Some(session) = self.runs.get(&chat).and_then(|run| run.session.clone()) {
                 self.send_notification(
@@ -889,6 +892,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             self.set_life(now, chat, turn, TurnLife::Stopped);
         }
         self.end_agent_turn(now, chat);
+        self.stop_jobs(now, chat, stopped, out);
         self.abandon_open(now, chat);
     }
 
@@ -919,6 +923,13 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .collect();
         for conn in learning {
             self.learn_failed(conn, crate::settings::LearnFailure::ShutDown);
+        }
+        // An idle chat's jobs stop too: it stays idle.
+        let jobs: Vec<ChatId> = (self.chats.keys().copied())
+            .filter(|&chat| self.has_jobs(chat))
+            .collect();
+        for chat in jobs {
+            self.stop_jobs(now, chat, false, out);
         }
         // Closing an adapter's input ends every session it has, so they
         // aren't closed one by one first.

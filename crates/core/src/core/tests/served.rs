@@ -14,10 +14,10 @@ use crate::question::{Answer, OptionId};
 use crate::tool::{CafTool, Diff, Ending, MOST_LINE, MOST_OUTPUT, Output, Piece, Text};
 
 /// The prompt's request id, as the first turn sends it.
-const PROMPT: u64 = 1002;
+pub(super) const PROMPT: u64 = 1002;
 
 /// A Claude chat with a turn running.
-fn running() -> Script {
+pub(super) fn running() -> Script {
     let mut script = Script::with_claude_serving();
     script.send(CHAT, "go").0.expect("sent");
     script
@@ -30,7 +30,7 @@ fn given(open: crate::core::OpenChat) -> crate::core::OpenChat {
 
 /// The agent calls `tool` with `input`, giving its id for the call if
 /// `agent_call`.
-fn called(tool: CafTool, input: Value, agent_call: Option<&str>) -> ToolEvent {
+pub(super) fn called(tool: CafTool, input: Value, agent_call: Option<&str>) -> ToolEvent {
     ToolEvent::Called {
         chat: CHAT,
         tool,
@@ -49,7 +49,7 @@ fn report(id: &str, tool: &str, status: &str, input: &Value) -> Value {
 }
 
 /// The tool directives in `out`, as `[type, value]`.
-fn told(out: &[Value]) -> Vec<Value> {
+pub(super) fn told(out: &[Value]) -> Vec<Value> {
     with(out, "tool")
         .into_iter()
         .map(|each| each["tool"].clone())
@@ -57,21 +57,21 @@ fn told(out: &[Value]) -> Vec<Value> {
 }
 
 /// The one tool directive in `out`.
-fn one_told(out: &[Value]) -> Value {
+pub(super) fn one_told(out: &[Value]) -> Value {
     let told = told(out);
     assert_eq!(told.len(), 1, "{out:#?}");
     told[0].clone()
 }
 
 /// The ticket of the one decision asked for in `out`.
-fn ticket(out: &[Value]) -> u64 {
+pub(super) fn ticket(out: &[Value]) -> u64 {
     let decided = with(out, "decide");
     assert_eq!(decided.len(), 1, "{out:#?}");
     decided[0]["decide"].as_u64().expect("a ticket")
 }
 
 /// The chat's tool calls.
-fn tools(script: &Script) -> Vec<Value> {
+pub(super) fn tools(script: &Script) -> Vec<Value> {
     (script.chat(CHAT)["turns"].as_array().into_iter().flatten())
         .flat_map(|turn| turn["items"].as_array().cloned().unwrap_or_default())
         .filter(|item| item["kind"]["type"] == "Tool")
@@ -85,13 +85,13 @@ fn tools(script: &Script) -> Vec<Value> {
 }
 
 /// The chat's one tool call.
-fn the_tool(script: &Script) -> Value {
+pub(super) fn the_tool(script: &Script) -> Value {
     let tools = tools(script);
     assert_eq!(tools.len(), 1, "{tools:#?}");
     tools[0].clone()
 }
 
-fn kind(name: &str) -> Value {
+pub(super) fn kind(name: &str) -> Value {
     json!({ "type": name })
 }
 

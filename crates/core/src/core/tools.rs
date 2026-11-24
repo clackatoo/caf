@@ -7,7 +7,11 @@
 //! anyone's asked; then the policy is asked, and the user if it says so
 //! (Asking); then it's run (Running), or refused (Refused). Its output
 //! comes in as it runs, and it ends Done or Failed, or Cancelled if its
-//! turn is stopped or the agent cancels it.
+//! turn is stopped or the agent cancels it. A preview that fails ends it
+//! Failed, asking no one. A call the driver detaches is a job: it runs on
+//! past its turn, and its end is told the agent in a notice turn
+//! ([`crate::tool`]'s jobs). A TaskStop of the chat's own job runs
+//! unasked.
 //!
 //! Every call the driver reports is answered exactly once, with one of
 //! [`ToolDirective::Run`], [`ToolDirective::Refuse`] or
@@ -70,6 +74,10 @@ pub(super) struct Call {
     pub(super) stage: Stage,
     /// What of its output is kept, if it's running a command.
     pub(super) printed: Printed,
+    /// The job it became, once the model was answered and it went on.
+    pub(super) job: Option<JobId>,
+    /// A TaskStop of its job ran: it ends Cancelled, by the agent.
+    pub(super) stopped: bool,
 }
 
 /// Where a call CAF serves is.
@@ -326,7 +334,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         if !run.caf_tools.contains(&tool) {
             return refuse(out, RefusedCall::NotGiven);
         }
-        let cwd = run.cwd.clone();
+        let (cwd, shell) = (run.cwd.clone(), run.shell.clone());
         // A report held only for now by a call that came without the
         // agent's id is this call's, as it names it: let go.
         if let Some(id) = &agent_call
@@ -363,7 +371,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 None => (None, Joined::No),
             },
         };
-        let action = match action_of(tool, &input, &cwd) {
+        let action = match action_of(tool, &input, &cwd, &shell) {
             Ok(action) => action,
             Err(why) => {
                 // The agent's report of it is all there is: it failed.
@@ -373,6 +381,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 return refuse(out, RefusedCall::BadInput(why));
             }
         };
+        // TaskStop stops only a job of its own chat's, still running.
+        if let Action::Stop { job } = action
+            && self.job_call(chat, job).is_none()
+        {
+            let why = no_task(job.0);
+            if let (Some(item), Joined::Yes) = (joins, &joined) {
+                self.fail_report(now, chat, item, tool, &why);
+            }
+            return refuse(out, RefusedCall::BadInput(why));
+        }
         let (kept, input_cut) = crate::tool::capped_input(input);
         let record = Box::new(ToolCall {
             title: title_of(&action, &cwd),
@@ -418,14 +436,25 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 action: action.clone(),
                 stage: Stage::Previewing,
                 printed: Printed::default(),
+                job: None,
+                stopped: false,
             },
         );
         match action {
             Action::Edit { .. } | Action::Write { .. } => {
                 out.push(Directive::Tool(ToolDirective::Preview { call, action }));
             }
+            // It stops only what its own chat started: no one's asked.
+            Action::Stop { .. } => self.run_call(call, Decision::NotAsked, out),
             _ => self.decide(call, out),
         }
+    }
+
+    /// The call that's `chat`'s job `job`, if it's still running.
+    fn job_call(&self, chat: ChatId, job: JobId) -> Option<CallId> {
+        (self.calls.iter())
+            .find(|(_, each)| each.chat == chat && each.job == Some(job))
+            .map(|(&call, _)| call)
     }
 
     /// The item the agent's report `id` made, in `chat`, if it's one
@@ -669,7 +698,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             reason: reason.map(|reason| agent_text(reason, MOST_TITLE)),
         };
         match answer {
-            PolicyAnswer::Allow => self.run_call(call, by, out),
+            PolicyAnswer::Allow => self.run_call(call, Decision::Allowed(by), out),
             PolicyAnswer::AskUser if self.host.shows.permission_questions => {
                 let (chat, item) = (each.chat, each.item);
                 let title = match self.item(chat, item).map(|each| &each.kind) {
@@ -720,15 +749,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             option: label.to_owned(),
         };
         match option.0.as_str() {
-            id if id == ALLOW.0 => self.run_call(call, by(ALLOW), out),
+            id if id == ALLOW.0 => self.run_call(call, Decision::Allowed(by(ALLOW)), out),
             id if id == REFUSE.0 => self.refuse_call(now, call, by(REFUSE), out),
             _ => return Some(false),
         }
         Some(true)
     }
 
-    /// Runs `call`, allowed by `by`.
-    fn run_call(&mut self, call: CallId, by: DecidedBy, out: &mut Vec<Directive<A, D>>) {
+    /// Runs `call`, as `decision` says it may.
+    fn run_call(&mut self, call: CallId, decision: Decision, out: &mut Vec<Directive<A, D>>) {
         let Some(each) = self.calls.get_mut(&call) else {
             return;
         };
@@ -739,9 +768,16 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             self.unask(chat, question);
         }
         let runs_command = matches!(action, Action::Run { .. });
+        // The job a TaskStop stops ends as the agent's doing.
+        if let Action::Stop { job } = action
+            && let Some(target) = self.job_call(chat, job)
+            && let Some(each) = self.calls.get_mut(&target)
+        {
+            each.stopped = true;
+        }
         self.change_tool(chat, item, |tool| {
             tool.status = ToolStatus::Running;
-            tool.decision = Decision::Allowed(by);
+            tool.decision = decision;
             if runs_command {
                 tool.result.push(Piece::Output(Output {
                     lines: Vec::new(),
@@ -846,10 +882,30 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         })
     }
 
-    /// The agent was answered, and the call goes on as job `job`.
+    /// The agent was answered, and the call goes on as job `job`: it's
+    /// no longer its turn's, and runs on until it finishes or is stopped.
     fn detached(&mut self, call: CallId, job: JobId, out: &mut Vec<Directive<A, D>>) {
-        let _ = job;
-        stale(out, call, "a job");
+        let Some(each) = self.calls.get(&call) else {
+            return stale(out, call, "a job");
+        };
+        if each.stage != Stage::Running || each.job.is_some() {
+            return stale(out, call, "a job before it ran, or a second");
+        }
+        let (chat, item) = (each.chat, each.item);
+        if self.job_call(chat, job).is_some() {
+            return report(
+                out,
+                Level::Warn,
+                format!(
+                    "ignored call {} becoming job {}, which its chat has already",
+                    call.0, job.0
+                ),
+            );
+        }
+        if let Some(each) = self.calls.get_mut(&call) {
+            each.job = Some(job);
+        }
+        self.change_tool(chat, item, |tool| tool.job = Some(job));
     }
 
     /// A call finished, and the agent was answered.
@@ -864,9 +920,19 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         notice: Option<String>,
         out: &mut Vec<Directive<A, D>>,
     ) {
-        let _ = (folder, notice);
         match self.calls.get(&call) {
             None => return stale(out, call, "its finish"),
+            // Its preview failed: the driver answered the agent why, and
+            // no one's asked.
+            Some(each) if each.stage == Stage::Previewing && !done => {
+                let (chat, item) = (each.chat, each.item);
+                self.calls.remove(&call);
+                self.change_tool(chat, item, |tool| {
+                    tool.status = ToolStatus::Failed;
+                    tool.result.extend(pieces);
+                });
+                return self.end_item(now, chat, item);
+            }
             Some(each) if each.stage != Stage::Running => {
                 return stale(out, call, "a finish before it ran");
             }
@@ -875,12 +941,31 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let Some(each) = self.calls.remove(&call) else {
             return;
         };
+        // A command's shell ended here, so the next starts here: but not a
+        // job's, which ran beside the others.
+        if let (Some(folder), Action::Run { .. }, None) = (folder, &each.action, each.job) {
+            if folder.starts_with('/') {
+                if let Some(run) = self.runs.get_mut(&each.chat) {
+                    run.shell = folder;
+                }
+            } else {
+                report(
+                    out,
+                    Level::Warn,
+                    format!("ignored call {}'s folder, which isn't absolute", call.0),
+                );
+            }
+        }
+        let stopped = each.job.is_some() && each.stopped;
         self.change_tool(each.chat, each.item, |tool| {
-            tool.status = if done {
+            tool.status = if stopped {
+                ToolStatus::Cancelled
+            } else if done {
                 ToolStatus::Done
             } else {
                 ToolStatus::Failed
             };
+            tool.stopped_by = stopped.then_some(StoppedBy::Agent);
             // A diff it gives is the change as made, in place of the
             // preview's.
             if pieces.iter().any(|piece| matches!(piece, Piece::Diff(_))) {
@@ -902,12 +987,25 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             }
         });
         self.end_item(now, each.chat, each.item);
+        // A job's end is news to the agent, which was answered long ago.
+        if each.job.is_some()
+            && let Some(text) = notice
+        {
+            self.queue_notice(now, each.chat, text, out);
+        }
     }
 
-    /// The agent cancelled a call, or its connection closed.
+    /// The agent cancelled a call, or its connection closed. A job goes
+    /// on: the agent was answered, and hears of its end in a notice, not
+    /// over that connection.
     fn gone(&mut self, now: Now, call: CallId, out: &mut Vec<Directive<A, D>>) {
+        match self.calls.get(&call) {
+            None => return stale(out, call, "its going"),
+            Some(each) if each.job.is_some() => return stale(out, call, "a job's going"),
+            Some(_) => {}
+        }
         let Some(each) = self.calls.remove(&call) else {
-            return stale(out, call, "its going");
+            return;
         };
         // The agent gives up on a call as its turn is stopped, too: then
         // it was the user who stopped it.
@@ -966,8 +1064,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             self.turn(chat, turn)
                 .is_some_and(|each| each.items.iter().any(|kept| kept.id == item))
         };
+        // A job isn't its turn's any more.
         let calls: Vec<CallId> = (self.calls.iter())
-            .filter(|(_, each)| each.chat == chat && in_turn(each.item))
+            .filter(|(_, each)| each.chat == chat && each.job.is_none() && in_turn(each.item))
             .map(|(&call, _)| call)
             .collect();
         let status = if stopped {
@@ -1003,6 +1102,39 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 }
             }
         }
+    }
+
+    /// Stops `chat`'s jobs, as it's wound down: each is cancelled, and ends
+    /// Cancelled, by the user, if they `stopped` it (they closed or
+    /// deleted the chat), and Failed otherwise (it's put away, or CAF
+    /// shuts down), as calls in a turn cut off then do.
+    pub(super) fn stop_jobs(
+        &mut self,
+        now: Now,
+        chat: ChatId,
+        stopped: bool,
+        out: &mut Vec<Directive<A, D>>,
+    ) {
+        let calls: Vec<CallId> = (self.calls.iter())
+            .filter(|(_, each)| each.chat == chat && each.job.is_some())
+            .map(|(&call, _)| call)
+            .collect();
+        let status = if stopped {
+            ToolStatus::Cancelled
+        } else {
+            ToolStatus::Failed
+        };
+        for call in calls {
+            if let Some(each) = self.calls.remove(&call) {
+                out.push(Directive::Tool(ToolDirective::Cancel { call }));
+                self.drop_call(now, &each, status, Some(StoppedBy::User));
+            }
+        }
+    }
+
+    /// Whether `chat` has a job running.
+    pub(super) fn has_jobs(&self, chat: ChatId) -> bool {
+        (self.calls.values()).any(|each| each.chat == chat && each.job.is_some())
     }
 
     /// Forgets `chat`'s calls CAF serves, as it's let go: any that
@@ -1148,8 +1280,14 @@ fn split_line(mut line: String, into: &mut Vec<String>) {
 
 /// What a call to `tool` given `input` does, read as Claude Code's own
 /// tools take theirs (the model is trained on them), its paths worked
-/// out against `cwd`: or why it doesn't make an action, for the model.
-pub(super) fn action_of(tool: CafTool, input: &Value, cwd: &str) -> Result<Action, String> {
+/// out against `cwd`, and a command run in `shell`, the folder the last
+/// one's shell ended in: or why it doesn't make an action, for the model.
+pub(super) fn action_of(
+    tool: CafTool,
+    input: &Value,
+    cwd: &str,
+    shell: &str,
+) -> Result<Action, String> {
     let Some(fields) = input.as_object() else {
         return Err("The input must be an object.".to_owned());
     };
@@ -1233,7 +1371,7 @@ pub(super) fn action_of(tool: CafTool, input: &Value, cwd: &str) -> Result<Actio
             text("description")?;
             Action::Run {
                 command: command.to_owned(),
-                folder: cwd.to_owned(),
+                folder: shell.to_owned(),
                 background: flag("run_in_background")?,
             }
         }
@@ -1342,7 +1480,7 @@ mod tests {
 
     #[test]
     fn claude_codes_inputs_read_as_actions() {
-        let read = |input| action_of(CafTool::Read, &input, "/work");
+        let read = |input| action_of(CafTool::Read, &input, "/work", "/work");
         assert_eq!(
             read(json!({ "file_path": "src/a.rs", "offset": 10, "limit": 5 })),
             Ok(Action::Read {
@@ -1368,6 +1506,7 @@ mod tests {
             action_of(
                 CafTool::Edit,
                 &json!({ "file_path": "/x", "old_string": "a" }),
+                "/w",
                 "/w"
             )
             .is_err()
@@ -1376,15 +1515,42 @@ mod tests {
             action_of(
                 CafTool::Bash,
                 &json!({ "command": "cargo test", "run_in_background": true, "timeout": 1000 }),
-                "/work"
+                "/work",
+                "/work/sub"
             ),
+            // A command runs where the last one's shell ended.
             Ok(Action::Run {
                 command: "cargo test".to_owned(),
-                folder: "/work".to_owned(),
+                folder: "/work/sub".to_owned(),
                 background: true,
             })
         );
-        assert!(action_of(CafTool::Bash, &json!({ "command": "  " }), "/w").is_err());
+        // Files are found from the chat's folder all the same.
+        assert_eq!(
+            action_of(
+                CafTool::Write,
+                &json!({ "file_path": "a", "content": "" }),
+                "/work",
+                "/x"
+            ),
+            Ok(Action::Write {
+                path: "/work/a".to_owned()
+            })
+        );
+        let stop = |input| action_of(CafTool::TaskStop, &input, "/w", "/w");
+        let job = |job| Ok(Action::Stop { job: JobId(job) });
+        assert_eq!(stop(json!({ "task_id": "3" })), job(3));
+        assert_eq!(stop(json!({ "shell_id": " 4 " })), job(4));
+        assert_eq!(
+            stop(json!({ "task_id": "b2x" })),
+            Err("No task b2x in this conversation".to_owned())
+        );
+        assert_eq!(
+            stop(json!({ "task_id": "0" })),
+            Err("No task 0 in this conversation".to_owned())
+        );
+        assert!(stop(json!({})).is_err());
+        assert!(action_of(CafTool::Bash, &json!({ "command": "  " }), "/w", "/w").is_err());
     }
 
     #[test]
@@ -1416,7 +1582,7 @@ mod tests {
                     .collect()
             };
             assert!(
-                action_of(tool, &only(&required), "/w").is_ok(),
+                action_of(tool, &only(&required), "/w", "/w").is_ok(),
                 "{tool:?} takes its required fields alone"
             );
             for missing in &required {
@@ -1426,20 +1592,20 @@ mod tests {
                     .filter(|name| name != missing)
                     .collect();
                 assert!(
-                    action_of(tool, &only(&fewer), "/w").is_err(),
+                    action_of(tool, &only(&fewer), "/w", "/w").is_err(),
                     "{tool:?} needs {missing}"
                 );
             }
             let all: Vec<&str> = properties.keys().map(String::as_str).collect();
             assert!(
-                action_of(tool, &only(&all), "/w").is_ok(),
+                action_of(tool, &only(&all), "/w", "/w").is_ok(),
                 "{tool:?} takes every field of its schema, of its type"
             );
             for name in &all {
                 let mut wrong = only(&all);
                 wrong[*name] = json!({});
                 assert!(
-                    action_of(tool, &wrong, "/w").is_err(),
+                    action_of(tool, &wrong, "/w", "/w").is_err(),
                     "{tool:?}.{name} is typed"
                 );
                 // A whole number is whole, and no less than its least.
@@ -1448,7 +1614,7 @@ mod tests {
                         let mut wrong = only(&all);
                         wrong[*name] = bad.clone();
                         assert!(
-                            action_of(tool, &wrong, "/w").is_err(),
+                            action_of(tool, &wrong, "/w", "/w").is_err(),
                             "{tool:?}.{name} refuses {bad}"
                         );
                     }
@@ -1460,7 +1626,7 @@ mod tests {
             let mut more = only(&required);
             more["dangerouslyDisableSandbox"] = json!(true);
             assert!(
-                action_of(tool, &more, "/w").is_ok(),
+                action_of(tool, &more, "/w", "/w").is_ok(),
                 "{tool:?} lets more be"
             );
         }
