@@ -23,17 +23,18 @@ mod state;
 mod text;
 
 pub use backend::{
-    BoxFuture, CommandSpec, Commands, Ended, FileError, FileText, Files, Output, Running, Version,
+    BoxFuture, CommandSpec, Commands, Ended, FileError, FileRead, FileText, Files, Output, Running,
+    Version,
 };
 pub use bash::{
     DEFAULT_TIMEOUT, JobEnd, MOST_ANSWER, MOST_JOBS, MOST_TIMEOUT, PREVIEW, answer, background,
     format_duration, job_stopped, no_job, notice, output_text, timed_out, timeout, too_large,
     too_many_jobs,
 };
-pub use edit::{EditError, Edited, MOST_EDIT, created, edit, updated, write};
+pub use edit::{EditError, Edited, MOST_EDIT, edit, write};
 pub use read::{
-    DEFAULT_LIMIT, FileTool, ImageRead, MOST_TOKENS, MOST_TOKENS_LARGE, Reading, TextRead,
-    file_error, missing, read,
+    DEFAULT_LIMIT, FileTool, ImageRead, MOST_TOKENS, MOST_TOKENS_LARGE, MOST_WHOLE, Reading,
+    TextRead, file_error, missing, read,
 };
 pub use screen::{COLUMNS, ROWS, Redraw, Screen, strip_sgr};
 pub use state::{Check, NOT_READ, ReadState, STALE};

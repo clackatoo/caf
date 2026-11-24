@@ -8,8 +8,8 @@ use super::*;
 const PATH: &str = "/w/a.txt";
 
 /// The file `bytes` at version 1, and a state in which it was read whole.
-fn read(bytes: &[u8]) -> (FileText, ReadState) {
-    let file = FileText::read(bytes.to_vec(), Version::new("1"));
+fn read(bytes: &[u8]) -> (FileRead, ReadState) {
+    let file = FileRead::new(bytes.to_vec(), Version::new("1"));
     let mut state = ReadState::new();
     state.record(PATH.into(), Version::new("1"), bytes, false);
     (file, state)
@@ -74,10 +74,16 @@ fn a_missing_string_is_refused_naming_it() {
 #[test]
 fn several_matches_need_replace_all() {
     let error = edited(b"x x x", "x", "y", false).unwrap_err();
-    assert_eq!(error, EditError::Several { count: 3 });
+    assert_eq!(
+        error,
+        EditError::Several {
+            count: 3,
+            old_string: "x".into()
+        }
+    );
     assert_eq!(
         error.to_string(),
-        "Found 3 matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance."
+        "Found 3 matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: x"
     );
     assert_eq!(edited(b"x x x", "x", "y", true).unwrap(), b"y y y");
     // Matches don't overlap.
@@ -132,24 +138,31 @@ fn a_missing_file_needs_an_empty_old_string() {
 }
 
 #[test]
-fn a_file_not_read_whole_isnt_edited() {
-    let file = FileText::read(b"abc".to_vec(), Version::new("1"));
-    let mut state = ReadState::new();
+fn a_file_never_read_isnt_edited() {
+    let file = FileRead::new(b"abc".to_vec(), Version::new("1"));
+    let state = ReadState::new();
     let error = edit(Path::new(PATH), Some(&file), &state, "b", "B", false).unwrap_err();
     assert_eq!(error, EditError::NotRead);
     assert_eq!(
         error.to_string(),
         "File has not been read yet. Read it first before writing to it."
     );
-    state.record(PATH.into(), Version::new("1"), b"abc", true);
-    let error = edit(Path::new(PATH), Some(&file), &state, "b", "B", false).unwrap_err();
-    assert_eq!(error, EditError::NotRead);
 }
 
 #[test]
-fn a_file_changed_since_it_was_read_isnt_edited() {
+fn a_file_read_in_part_is_edited() {
+    // As Claude Code allows: a file too big to read whole can be edited.
+    let file = FileRead::new(b"abc".to_vec(), Version::new("1"));
+    let mut state = ReadState::new();
+    state.record(PATH.into(), Version::new("1"), b"abc", true);
+    let edit = edit(Path::new(PATH), Some(&file), &state, "b", "B", false).unwrap();
+    assert_eq!(edit.bytes, b"aBc");
+}
+
+#[test]
+fn a_file_changed_since_it_was_read_isnt_edited_if_the_edit_no_longer_applies() {
     let (_, state) = read(b"abc");
-    let now = FileText::read(b"abcd".to_vec(), Version::new("2"));
+    let now = FileRead::new(b"axc".to_vec(), Version::new("2"));
     let error = edit(Path::new(PATH), Some(&now), &state, "b", "B", false).unwrap_err();
     assert_eq!(error, EditError::Stale);
     assert_eq!(
@@ -161,7 +174,7 @@ fn a_file_changed_since_it_was_read_isnt_edited() {
 #[test]
 fn unchanged_bytes_at_a_new_version_are_written_expecting_it() {
     let (_, state) = read(b"abc");
-    let now = FileText::read(b"abc".to_vec(), Version::new("2"));
+    let now = FileRead::new(b"abc".to_vec(), Version::new("2"));
     let edit = edit(Path::new(PATH), Some(&now), &state, "b", "B", false).unwrap();
     assert_eq!(edit.expected, Some(Version::new("2")));
 }
@@ -169,7 +182,7 @@ fn unchanged_bytes_at_a_new_version_are_written_expecting_it() {
 #[test]
 fn checks_come_in_claude_codes_order() {
     // Not read, and the string's missing: not read.
-    let file = FileText::read(b"abc".to_vec(), Version::new("1"));
+    let file = FileRead::new(b"abc".to_vec(), Version::new("1"));
     let none = ReadState::new();
     assert_eq!(
         edit(Path::new(PATH), Some(&file), &none, "zzz", "y", false),
@@ -194,7 +207,7 @@ fn files_over_16_mib_arent_edited() {
     );
     assert_eq!(
         error.to_string(),
-        "File is too large to edit (16MB). Maximum editable file size is 16 MiB."
+        "File is too large to edit (16MB). Maximum editable file size is 16MB."
     );
 }
 
@@ -242,16 +255,17 @@ fn a_crlf_file_keeps_its_endings() {
 }
 
 #[test]
-fn a_crlf_file_with_a_few_lf_lines_matches_them_as_written() {
+fn a_crlf_file_with_a_few_lf_lines_matches_them_too() {
+    // The lines put in end as most of the file's do.
     let file = b"a\r\nb\r\nc\r\nd\ne\n";
-    assert_eq!(ok(file, "d\ne", "D\nE"), "a\r\nb\r\nc\r\nD\nE\n");
+    assert_eq!(ok(file, "d\ne", "D\nE"), "a\r\nb\r\nc\r\nD\r\nE\n");
 }
 
 #[test]
 fn an_lf_file_is_left_lf() {
     assert_eq!(ok(b"a\nb\n", "a", "x\ny"), "x\ny\nb\n");
-    // A model's \r\n in an LF file is written as given.
-    assert_eq!(ok(b"a\nb\n", "a", "x\r\ny"), "x\r\ny\nb\n");
+    // A model's \r\n in an LF file ends as the file's lines do.
+    assert_eq!(ok(b"a\nb\n", "a", "x\r\ny"), "x\ny\nb\n");
 }
 
 #[test]
@@ -280,7 +294,13 @@ fn curly_quotes_match_many_times_with_multibyte_text() {
         String::from_utf8(edited(file.as_bytes(), "\"a\"", "\"b\"", true).unwrap()).unwrap();
     assert_eq!(after, "é“b” — ü“b” — “b”");
     let error = edited(file.as_bytes(), "\"a\"", "b", false).unwrap_err();
-    assert_eq!(error, EditError::Several { count: 3 });
+    assert_eq!(
+        error,
+        EditError::Several {
+            count: 3,
+            old_string: "\"a\"".into()
+        }
+    );
 }
 
 #[test]
@@ -345,19 +365,17 @@ fn write_overwrites_a_file_read_whole() {
 
 #[test]
 fn write_overwrites_only_a_file_read_whole_and_unchanged() {
-    let file = FileText::read(b"old".to_vec(), Version::new("1"));
+    let file = FileRead::new(b"old".to_vec(), Version::new("1"));
     let mut state = ReadState::new();
     assert_eq!(
         write(Path::new(PATH), Some(&file), &state, "new"),
         Err(EditError::NotRead)
     );
+    // A read in part is a read.
     state.record(PATH.into(), Version::new("1"), b"old", true);
-    assert_eq!(
-        write(Path::new(PATH), Some(&file), &state, "new"),
-        Err(EditError::NotRead)
-    );
+    assert!(write(Path::new(PATH), Some(&file), &state, "new").is_ok());
     state.record(PATH.into(), Version::new("1"), b"old", false);
-    let now = FileText::read(b"older".to_vec(), Version::new("2"));
+    let now = FileRead::new(b"older".to_vec(), Version::new("2"));
     assert_eq!(
         write(Path::new(PATH), Some(&now), &state, "new"),
         Err(EditError::Stale)
@@ -372,15 +390,110 @@ fn write_overwrites_binary_files() {
     let _ = edit.diff(PATH);
 }
 
+/// What Claude Code adds to a change's answer: the model needn't read
+/// the file back.
+const CURRENT: &str = " (file state is current in your context — no need to Read it back)";
+
 #[test]
 fn answers_read_as_claude_codes() {
+    let path = Path::new("/w/a.rs");
+    let (file, state) = read(b"x y x");
+    let one = edit(Path::new(PATH), Some(&file), &state, "y", "z", false).unwrap();
     assert_eq!(
-        updated(Path::new("/w/a.rs")),
-        "The file /w/a.rs has been updated successfully."
+        one.answer(path),
+        format!("The file /w/a.rs has been updated successfully.{CURRENT}")
     );
+    let all = edit(Path::new(PATH), Some(&file), &state, "x", "z", true).unwrap();
     assert_eq!(
-        created(Path::new("/w/a.rs")),
-        "File created successfully at: /w/a.rs"
+        all.answer(path),
+        format!(
+            "The file /w/a.rs has been updated. All occurrences were successfully replaced.{CURRENT}"
+        )
+    );
+    let made = write(Path::new(PATH), None, &state, "new").unwrap();
+    assert_eq!(
+        made.answer(path),
+        format!("File created successfully at: /w/a.rs{CURRENT}")
+    );
+    let over = write(Path::new(PATH), Some(&file), &state, "new").unwrap();
+    assert_eq!(
+        over.answer(path),
+        format!("The file /w/a.rs has been updated successfully.{CURRENT}")
+    );
+    // Edit making a file with an empty old_string says it updated it, as
+    // Claude Code's does.
+    let made = edit(Path::new(PATH), None, &state, "", "new", false).unwrap();
+    assert_eq!(
+        made.answer(path),
+        format!("The file /w/a.rs has been updated successfully.{CURRENT}")
+    );
+}
+
+#[test]
+fn an_edit_that_still_applies_to_a_changed_file_is_made_and_says_so() {
+    // As Claude Code 2.1.310 does: the change was elsewhere in the file.
+    let (_, state) = read(b"abc\n");
+    let now = FileRead::new(b"abc\nmore\n".to_vec(), Version::new("2"));
+    let made = edit(Path::new(PATH), Some(&now), &state, "b", "B", false).unwrap();
+    assert_eq!(made.bytes, b"aBc\nmore\n");
+    assert_eq!(made.expected, Some(Version::new("2")));
+    assert_eq!(
+        made.answer(Path::new("/w/a.rs")),
+        "The file /w/a.rs has been updated successfully. (note: the file had been modified on disk since you last read it — the edit applied cleanly, but the file contains other changes not in your context. Read it before edits that depend on surrounding content.)"
+    );
+    // Write has no such leniency.
+    assert_eq!(
+        write(Path::new(PATH), Some(&now), &state, "x"),
+        Err(EditError::Stale)
+    );
+    // Nor does an edit that's ambiguous in the file as it is now.
+    let now = FileRead::new(b"abc\nb\n".to_vec(), Version::new("2"));
+    assert_eq!(
+        edit(Path::new(PATH), Some(&now), &state, "b", "B", false),
+        Err(EditError::Stale)
+    );
+}
+
+#[test]
+fn an_empty_file_never_read_can_be_filled() {
+    // Claude Code checks an empty old_string before whether it was read.
+    let file = FileRead::new(Vec::new(), Version::new("1"));
+    let edit = edit(
+        Path::new(PATH),
+        Some(&file),
+        &ReadState::new(),
+        "",
+        "x",
+        false,
+    )
+    .unwrap();
+    assert_eq!(edit.bytes, b"x");
+    assert_eq!(edit.expected, Some(Version::new("1")));
+}
+
+#[test]
+fn edits_span_mixed_line_endings() {
+    // Read hides \r, so the model can't write it: a match ignores it.
+    assert_eq!(ok(b"a\nb\nc\r\nd\n", "c\nd", "X"), "a\nb\nX\n");
+    assert_eq!(
+        ok(b"a\r\nb\r\nc\nd\r\n", "b\nc\nd", "B\nC"),
+        "a\r\nB\r\nC\r\n"
+    );
+    // Many matches, each mapped back over the \r it skipped.
+    assert_eq!(
+        edited(b"x\r\ny\nx\r\ny\n", "x\ny", "z", true).unwrap(),
+        b"z\nz\n"
+    );
+    // A lone \r isn't an ending, and stays.
+    assert_eq!(ok(b"a\rb\nc\n", "a\rb", "q"), "q\nc\n");
+}
+
+#[test]
+fn line_endings_and_curly_quotes_together() {
+    let file = "say “hi”\r\nnow\r\n";
+    assert_eq!(
+        ok(file.as_bytes(), "say \"hi\"\nnow", "say \"yo\"\nthen"),
+        "say “yo”\r\nthen\r\n"
     );
 }
 

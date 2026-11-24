@@ -13,6 +13,16 @@ pub const DEFAULT_LIMIT: u64 = 2000;
 pub const MOST_TOKENS: u64 = 25_000;
 /// The most tokens a read given `allow_large` gives.
 pub const MOST_TOKENS_LARGE: u64 = 100_000;
+/// The biggest file read whole, with no offset or limit, in bytes, unless
+/// it's given `allow_large`.
+pub const MOST_WHOLE: u64 = 256 * 1024;
+
+/// What Claude Code adds to a refusal for size that `allow_large` would
+/// lift.
+const ALLOW_LARGE: &str = " To read it anyway, up to what still fits in your context, call Read again with allow_large: true \u{2014} only if you genuinely need all of it or the user asked for the whole file.";
+
+/// What Claude Code says after a refusal for size.
+const IN_PARTS: &str = "Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file.";
 
 /// What a read of a file comes to.
 #[non_exhaustive]
@@ -39,8 +49,8 @@ pub struct TextRead {
     pub text: String,
     /// The first line read, numbered from 1.
     pub first: u64,
-    /// Whether it left out any of the file: it may not be edited until
-    /// it's read whole.
+    /// Whether it left out any of the file: for the read state, which
+    /// then can't vouch for the bytes it didn't see (see `ReadState`).
     pub partial: bool,
 }
 
@@ -59,9 +69,13 @@ pub struct ImageRead {
 /// - Its lines are split at `\n`, and a `\r` before it, or at the very
 ///   end, is dropped. A last line ending in `\n` is followed by none.
 /// - A UTF-8 byte order mark is skipped.
+/// - Read whole, with neither `offset` nor `limit`, a file over
+///   [`MOST_WHOLE`] is refused, as Claude Code refuses it, unless it's
+///   given `allow_large`.
 /// - Over [`MOST_TOKENS`], estimated as a quarter of the bytes of the
 ///   lines read, it's refused, as Claude Code refuses it, unless
-///   `allow_large` raises that to [`MOST_TOKENS_LARGE`].
+///   `allow_large` raises that to [`MOST_TOKENS_LARGE`]. A refusal says
+///   `allow_large` would lift it.
 /// - A `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp` whose first bytes are a
 ///   picture's is read as one, up to [`MOST_IMAGE`]. A `.pdf` is refused,
 ///   as is anything that isn't UTF-8 text (see Claude Code's words for
@@ -95,10 +109,18 @@ pub fn read(
     let Some(decoded) = decode(bytes) else {
         let ext = ext.map(|ext| format!(".{ext} ")).unwrap_or_default();
         return Reading::Refused(format!(
-            "This tool cannot read binary files. The file appears to be a binary {ext}file."
+            "This tool cannot read binary files. The file appears to be a binary {ext}file. Use a skill for this file type if one is available, or a shell command or script that can read the format."
         ));
     };
     let text = decoded.text;
+    let size = bytes.len() as u64;
+    if offset.is_none() && limit.is_none() && !allow_large && size > MOST_WHOLE {
+        return Reading::Refused(format!(
+            "File content ({}) exceeds maximum allowed size ({}). {IN_PARTS}{ALLOW_LARGE}",
+            format_size(size),
+            format_size(MOST_WHOLE)
+        ));
+    }
     let first = offset.unwrap_or(1).max(1);
     let limit = limit.unwrap_or(DEFAULT_LIMIT).max(1);
     if text.is_empty() {
@@ -136,8 +158,9 @@ pub fn read(
         MOST_TOKENS
     };
     if tokens > most {
+        let hint = if allow_large { "" } else { ALLOW_LARGE };
         return Reading::Refused(format!(
-            "File content ({tokens} tokens) exceeds maximum allowed tokens ({most}). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file."
+            "File content ({tokens} tokens) exceeds maximum allowed tokens ({most}). {IN_PARTS}{hint}"
         ));
     }
     let mut answer = String::with_capacity(size + read.len() * 8);

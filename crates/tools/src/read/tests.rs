@@ -133,7 +133,7 @@ fn too_many_tokens_is_refused_as_claude_code_does() {
     };
     assert_eq!(
         why,
-        "File content (25025 tokens) exceeds maximum allowed tokens (25000). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file."
+        "File content (25025 tokens) exceeds maximum allowed tokens (25000). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file. To read it anyway, up to what still fits in your context, call Read again with allow_large: true \u{2014} only if you genuinely need all of it or the user asked for the whole file."
     );
     // Part of it is fine.
     assert!(matches!(
@@ -143,6 +143,39 @@ fn too_many_tokens_is_refused_as_claude_code_does() {
     // As is all of it, given allow_large.
     assert!(matches!(
         read(Path::new("big"), file.as_bytes(), None, None, true),
+        Reading::Text(_)
+    ));
+}
+
+#[test]
+fn a_file_over_256_kb_read_whole_is_refused_as_claude_code_does() {
+    let file = "x\n".repeat(150_000); // 300,000 bytes, few tokens a line
+    let why = match read(Path::new("big"), file.as_bytes(), None, None, false) {
+        Reading::Refused(why) => why,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        why,
+        "File content (293KB) exceeds maximum allowed size (256KB). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file. To read it anyway, up to what still fits in your context, call Read again with allow_large: true \u{2014} only if you genuinely need all of it or the user asked for the whole file."
+    );
+    // In part, it's read.
+    assert!(matches!(
+        read(Path::new("big"), file.as_bytes(), Some(1), Some(10), false),
+        Reading::Text(_)
+    ));
+    assert!(matches!(
+        read(Path::new("big"), file.as_bytes(), Some(5), None, false),
+        Reading::Text(_)
+    ));
+    // Given allow_large, only the token cap counts.
+    assert!(matches!(
+        read(Path::new("big"), file.as_bytes(), None, None, true),
+        Reading::Text(_)
+    ));
+    // Exactly 256KB is fine.
+    let file = "x\n".repeat(131_072);
+    assert!(matches!(
+        read(Path::new("a"), file.as_bytes(), None, None, false),
         Reading::Text(_)
     ));
 }
@@ -174,15 +207,15 @@ fn exactly_the_cap_is_fine() {
 fn binary_files_are_refused_naming_their_extension() {
     assert_eq!(
         refused("prog.BIN", b"\x7fELF\0\0"),
-        "This tool cannot read binary files. The file appears to be a binary .bin file."
+        "This tool cannot read binary files. The file appears to be a binary .bin file. Use a skill for this file type if one is available, or a shell command or script that can read the format."
     );
     assert_eq!(
         refused("prog", b"\0"),
-        "This tool cannot read binary files. The file appears to be a binary file."
+        "This tool cannot read binary files. The file appears to be a binary file. Use a skill for this file type if one is available, or a shell command or script that can read the format."
     );
     assert_eq!(
         refused("notes.txt", b"\xFF\xFEh\0i\0"),
-        "This tool cannot read binary files. The file appears to be a binary .txt file."
+        "This tool cannot read binary files. The file appears to be a binary .txt file. Use a skill for this file type if one is available, or a shell command or script that can read the format."
     );
     assert!(refused("latin.txt", b"caf\xE9").starts_with("This tool cannot read binary"));
 }
@@ -296,7 +329,7 @@ fn file_errors_read_as_claude_code_words_them() {
     );
     assert_eq!(
         say(FileError::TooBig { size: 17 << 20 }, FileTool::Edit),
-        "File is too large to edit (17MB). Maximum editable file size is 16 MiB."
+        "File is too large to edit (17MB). Maximum editable file size is 16MB."
     );
     assert_eq!(
         say(FileError::Changed, FileTool::Write),

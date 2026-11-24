@@ -20,51 +20,57 @@ pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 pub trait Files: Send + Sync + 'static {
     /// The file's text and its version, as it is now (an editor's buffer,
     /// unsaved edits included).
-    fn read(&self, path: &Path) -> BoxFuture<Result<FileText, FileError>>;
+    fn read(&self, path: &Path) -> BoxFuture<Result<FileRead, FileError>>;
 
     /// Replace the file's text, if its version is still `expected` (`None`
     /// for a file that mustn't exist yet). An editor makes this one undoable
     /// change. Returns the new version.
     ///
-    /// A file whose version isn't `expected` any more is
-    /// [`FileError::Changed`], and isn't written.
+    /// A file whose version isn't `expected` any more, or that's there
+    /// when `expected` is `None`, is [`FileError::Changed`], and isn't
+    /// written. The text and version are the future's own, so nothing is
+    /// copied.
     fn write(
         &self,
         path: &Path,
-        text: &FileText,
-        expected: Option<&Version>,
+        text: FileText,
+        expected: Option<Version>,
         call: CallId,
     ) -> BoxFuture<Result<Version, FileError>>;
 }
 
-/// A file's raw bytes, and its version. CAF decodes them itself, and keeps
-/// a byte order mark and the line endings as they are.
+/// A file as it was read: its raw bytes, and its version. CAF decodes them
+/// itself, and keeps a byte order mark and the line endings as they are.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileRead {
+    /// The bytes.
+    pub bytes: Vec<u8>,
+    /// Its version, which a change to it is written expecting.
+    pub version: Version,
+}
+
+impl FileRead {
+    /// A file of `bytes`, at `version`.
+    #[must_use]
+    pub fn new(bytes: Vec<u8>, version: Version) -> Self {
+        Self { bytes, version }
+    }
+}
+
+/// A file's new raw bytes, to write.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileText {
     /// The bytes.
     pub bytes: Vec<u8>,
-    /// Its version, as it was read: none for text about to be written.
-    pub version: Option<Version>,
 }
 
 impl FileText {
-    /// Text of these bytes, of no version yet: what's written.
+    /// Text of these bytes.
     #[must_use]
     pub fn new(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes,
-            version: None,
-        }
-    }
-
-    /// Text of these bytes as read, at `version`.
-    #[must_use]
-    pub fn read(bytes: Vec<u8>, version: Version) -> Self {
-        Self {
-            bytes,
-            version: Some(version),
-        }
+        Self { bytes }
     }
 }
 
@@ -209,5 +215,74 @@ impl Ended {
     #[must_use]
     pub fn new(exit: Option<Exit>, folder: Option<PathBuf>) -> Self {
         Self { exit, folder }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    /// One file's bytes and version, if it's there.
+    type File = Option<(Vec<u8>, Version)>;
+
+    /// Files in memory: what an editor's backend looks like.
+    #[derive(Default)]
+    struct Memory(std::sync::Arc<Mutex<File>>);
+
+    impl Files for Memory {
+        fn read(&self, _path: &Path) -> BoxFuture<Result<FileRead, FileError>> {
+            let file = self.0.lock().unwrap().clone();
+            Box::pin(async move {
+                let (bytes, version) = file.ok_or(FileError::NotFound)?;
+                Ok(FileRead::new(bytes, version))
+            })
+        }
+
+        fn write(
+            &self,
+            _path: &Path,
+            text: FileText,
+            expected: Option<Version>,
+            _call: CallId,
+        ) -> BoxFuture<Result<Version, FileError>> {
+            // The text and version are the future's own: nothing copied.
+            let file = self.0.clone();
+            Box::pin(async move {
+                let mut file = file.lock().unwrap();
+                if file.as_ref().map(|(_, version)| version.clone()) != expected {
+                    return Err(FileError::Changed);
+                }
+                let version = Version::new(format!("{}", text.bytes.len()));
+                *file = Some((text.bytes, version.clone()));
+                Ok(version)
+            })
+        }
+    }
+
+    /// Runs `future`, which never waits.
+    fn now<T>(future: BoxFuture<T>) -> T {
+        let mut future = future;
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        match future.as_mut().poll(&mut context) {
+            std::task::Poll::Ready(value) => value,
+            std::task::Poll::Pending => panic!("it waited"),
+        }
+    }
+
+    #[test]
+    fn a_backend_owns_what_it_writes_and_every_read_has_a_version() {
+        let files = Memory::default();
+        let path = Path::new("/a");
+        assert_eq!(now(files.read(path)), Err(FileError::NotFound));
+        let made = now(files.write(path, FileText::new(b"hi".to_vec()), None, CallId(1)));
+        let version = made.unwrap();
+        let read = now(files.read(path)).unwrap();
+        assert_eq!(read.bytes, b"hi");
+        assert_eq!(read.version, version);
+        // Expecting no file, of one that's there.
+        let again = now(files.write(path, FileText::new(Vec::new()), None, CallId(2)));
+        assert_eq!(again, Err(FileError::Changed));
     }
 }

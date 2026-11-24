@@ -1,16 +1,21 @@
 //! Read state: which files a chat's model has read, and as they were, so
 //! that it never changes one it hasn't seen, or has seen only as it was
 //! before someone else changed it.
+//!
+//! As Claude Code's: a read of any part of a file counts, so a file too big
+//! to read whole can still be changed. Whether it was read whole matters
+//! only when its version moved since: then its bytes being the same as
+//! those read lets it be changed only if they were all read.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::backend::{FileText, Version};
+use crate::backend::{FileRead, Version};
 
-/// What the model is answered when it changes a file it hasn't read
-/// whole, as Claude Code says it.
+/// What the model is answered when it changes a file it hasn't read, as
+/// Claude Code says it.
 pub const NOT_READ: &str = "File has not been read yet. Read it first before writing to it.";
 /// What the model is answered when it changes a file that changed since
 /// it read it, as Claude Code says it.
@@ -35,9 +40,9 @@ struct Seen {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Check {
-    /// It was read whole, and hasn't changed since.
+    /// It was read, and hasn't changed since.
     Fresh,
-    /// It wasn't read, or only part of it: [`NOT_READ`].
+    /// It wasn't read: [`NOT_READ`].
     NotRead,
     /// It changed since it was read: [`STALE`].
     Stale,
@@ -89,22 +94,18 @@ impl ReadState {
     }
 
     /// Whether the file at `path` may be changed, as it is now, `current`:
-    /// only if it was read whole, and either its version or its bytes are
-    /// the same as then.
+    /// only if it was read, whole or in part, and either its version is the
+    /// same as then, or it was read whole and its bytes are.
     ///
     /// If only its bytes are, it's [`Check::Fresh`], but its version has
     /// moved on: the change must be written expecting `current`'s, not the
     /// one read.
     #[must_use]
-    pub fn check(&self, path: &Path, current: &FileText) -> Check {
+    pub fn check(&self, path: &Path, current: &FileRead) -> Check {
         let Some(seen) = self.seen.get(path) else {
             return Check::NotRead;
         };
-        if seen.partial {
-            Check::NotRead
-        } else if current.version.as_ref() == Some(&seen.version)
-            || hash(&current.bytes) == seen.hash
-        {
+        if current.version == seen.version || (!seen.partial && hash(&current.bytes) == seen.hash) {
             Check::Fresh
         } else {
             Check::Stale
@@ -126,8 +127,8 @@ fn hash(bytes: &[u8]) -> [u8; 32] {
 mod tests {
     use super::*;
 
-    fn file(bytes: &[u8], version: &str) -> FileText {
-        FileText::read(bytes.to_vec(), Version::new(version))
+    fn file(bytes: &[u8], version: &str) -> FileRead {
+        FileRead::new(bytes.to_vec(), Version::new(version))
     }
 
     #[test]
@@ -153,13 +154,19 @@ mod tests {
     }
 
     #[test]
-    fn a_file_read_in_part_may_not_be() {
+    fn a_file_read_in_part_may_be_changed_as_claude_code_allows() {
+        // A file too big to read whole can still be edited.
         let mut state = ReadState::new();
         state.record("/a".into(), Version::new("1"), b"x", true);
-        assert_eq!(
-            state.check(Path::new("/a"), &file(b"x", "1")),
-            Check::NotRead
-        );
+        assert_eq!(state.check(Path::new("/a"), &file(b"x", "1")), Check::Fresh);
+    }
+
+    #[test]
+    fn a_file_read_in_part_whose_version_moved_is_stale_even_if_its_bytes_didnt() {
+        // Only a whole read saw all the bytes the hash vouches for.
+        let mut state = ReadState::new();
+        state.record("/a".into(), Version::new("1"), b"x", true);
+        assert_eq!(state.check(Path::new("/a"), &file(b"x", "2")), Check::Stale);
     }
 
     #[test]
@@ -188,20 +195,6 @@ mod tests {
     }
 
     #[test]
-    fn text_of_no_version_is_judged_by_its_bytes() {
-        let mut state = ReadState::new();
-        state.record("/a".into(), Version::new("1"), b"x", false);
-        assert_eq!(
-            state.check(Path::new("/a"), &FileText::new(b"x".to_vec())),
-            Check::Fresh
-        );
-        assert_eq!(
-            state.check(Path::new("/a"), &FileText::new(b"y".to_vec())),
-            Check::Stale
-        );
-    }
-
-    #[test]
     fn the_bom_counts_as_a_change() {
         let mut state = ReadState::new();
         state.record("/a".into(), Version::new("1"), b"x", false);
@@ -216,16 +209,14 @@ mod tests {
         let mut state = ReadState::new();
         state.record("/a".into(), Version::new("1"), b"x", false);
         state.record("/a".into(), Version::new("2"), b"x", true);
-        assert_eq!(state.check(Path::new("/a"), &file(b"x", "2")), Check::Fresh);
-        // But of a file that changed, it's partial.
-        state.record("/a".into(), Version::new("3"), b"y", true);
-        assert_eq!(
-            state.check(Path::new("/a"), &file(b"y", "3")),
-            Check::NotRead
-        );
+        // Still whole: a later touch with the same bytes is fresh.
+        assert_eq!(state.check(Path::new("/a"), &file(b"x", "3")), Check::Fresh);
+        // A partial read of a file that changed is partial.
+        state.record("/a".into(), Version::new("4"), b"y", true);
+        assert_eq!(state.check(Path::new("/a"), &file(b"y", "5")), Check::Stale);
         // And a whole read makes it whole again.
-        state.record("/a".into(), Version::new("3"), b"y", false);
-        assert_eq!(state.check(Path::new("/a"), &file(b"y", "3")), Check::Fresh);
+        state.record("/a".into(), Version::new("4"), b"y", false);
+        assert_eq!(state.check(Path::new("/a"), &file(b"y", "5")), Check::Fresh);
     }
 
     #[test]
