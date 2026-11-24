@@ -5,8 +5,9 @@ use std::fs::File;
 use std::io::{BufRead, Write};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
 use std::path::Path;
+use std::process::ChildStdin;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -14,9 +15,13 @@ use serde_json::{Value, json};
 
 use crate::pattern::matches;
 use crate::script::{
-    Await, LongLine, On, Output, Respond, Script, SpawnHolder, Step, Tool, ToolContent, Wait,
+    Await, LongLine, McpAwait, McpCall, McpProgress, McpStart, On, Output, Respond, Script,
+    SpawnHolder, Step, Tool, ToolContent, Wait,
 };
 use crate::{EXIT_BAD_SCRIPT, EXIT_CHECK_FAILED};
+
+/// The MCP server, and connection, a step means if it doesn't say.
+const CAF: &str = "caf";
 
 /// How much of a long line is written at a time.
 const CHUNK: usize = 1 << 20;
@@ -46,10 +51,13 @@ pub fn run(script: &Script, record: Option<&Path>) -> i32 {
     // else in this program writes to them, so these become their only
     // owners.
     let (out, err) = unsafe { (File::from_raw_fd(1), File::from_raw_fd(2)) };
+    let (heard, inbox) = mpsc::channel();
+    read_stdin(heard.clone(), record.clone(), gate.clone());
     let mut fake = Fake {
         out: Some(out),
         err: Some(err),
-        inbox: read_stdin(record.clone(), gate.clone()),
+        inbox,
+        heard,
         gate,
         record,
         main: &script.steps,
@@ -66,6 +74,9 @@ pub fn run(script: &Script, record: Option<&Path>) -> i32 {
         next_id: 0,
         handlers: Vec::new(),
         holders: Vec::new(),
+        servers: HashMap::new(),
+        calls: HashMap::new(),
+        last_call: None,
     };
     match fake.main() {
         Ok(()) => 0,
@@ -121,6 +132,10 @@ enum Heard {
     Message(Value),
     /// The client closed stdin.
     Closed,
+    /// A JSON object from an MCP server, by its connection's name.
+    Mcp(String, Value),
+    /// An MCP server closed its stdout, by its connection's name.
+    McpClosed(String),
 }
 
 /// The record file, shared with the reader thread.
@@ -157,8 +172,7 @@ impl Record {
 /// Reads stdin on a thread of its own, so the fake never stops reading
 /// while it writes, and both pipes can't fill at once, unless the script
 /// stops it.
-fn read_stdin(record: Record, gate: Arc<Gate>) -> Receiver<Heard> {
-    let (send, inbox) = mpsc::channel();
+fn read_stdin(send: Sender<Heard>, record: Record, gate: Arc<Gate>) {
     std::thread::spawn(move || {
         let mut input = std::io::stdin().lock();
         let mut line = Vec::new();
@@ -186,7 +200,72 @@ fn read_stdin(record: Record, gate: Arc<Gate>) -> Receiver<Heard> {
         record.write(&json!({"closed": "stdin"}));
         let _ = send.send(Heard::Closed);
     });
-    inbox
+}
+
+/// Reads an MCP server's stdout on a thread of its own. `stop_reading`
+/// is about the client's stdin, so this never stops.
+fn read_server(
+    name: String,
+    stdout: std::process::ChildStdout,
+    send: Sender<Heard>,
+    record: Record,
+) {
+    std::thread::spawn(move || {
+        let mut input = std::io::BufReader::new(stdout);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            match input.read_until(b'\n', &mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let text = line.trim_ascii();
+            if text.is_empty() {
+                continue;
+            }
+            match serde_json::from_slice::<Value>(text) {
+                Ok(message) if message.is_object() => {
+                    record.write(&json!({"mcp_received": {"server": name, "message": message}}));
+                    if send.send(Heard::Mcp(name.clone(), message)).is_err() {
+                        return;
+                    }
+                }
+                _ => record.write(&json!({"mcp_unreadable": {
+                    "server": name,
+                    "text": String::from_utf8_lossy(text),
+                }})),
+            }
+        }
+        record.write(&json!({"mcp_closed": name}));
+        let _ = send.send(Heard::McpClosed(name));
+    });
+}
+
+/// An MCP server the fake started, as Claude starts the servers it's
+/// given.
+struct Server {
+    /// Its name in `mcpServers`, for the tools' names.
+    name: String,
+    /// Its stdin, until `mcp_drop`.
+    stdin: Option<ChildStdin>,
+    /// Never waited for: it exits once its stdin closes, or the fake does.
+    _child: Child,
+    /// Whether it closed its stdout.
+    closed: bool,
+    /// The id of the fake's next request to it.
+    next_id: u64,
+    /// Its answers not yet awaited, by id.
+    answers: HashMap<String, Value>,
+    /// Its progress notifications not yet waited for, in order.
+    progress: VecDeque<Value>,
+}
+
+/// A call the fake made: its connection, its request's id, and its
+/// progress token, if it gave one.
+struct Call {
+    server: String,
+    id: Value,
+    token: Option<Value>,
 }
 
 /// A handler, and whether it's done.
@@ -201,6 +280,8 @@ struct Fake<'s> {
     /// Stderr, until the script closes it.
     err: Option<File>,
     inbox: Receiver<Heard>,
+    /// The inbox's sender, for MCP servers' readers.
+    heard: Sender<Heard>,
     gate: Arc<Gate>,
     record: Record,
     /// The script's own steps, not its handlers'.
@@ -232,6 +313,12 @@ struct Fake<'s> {
     /// Processes holding the pipes. Never waited for: they're meant to
     /// outlive the fake.
     holders: Vec<Child>,
+    /// The MCP servers started, by their connections' names.
+    servers: HashMap<String, Server>,
+    /// The MCP calls made, by name.
+    calls: HashMap<String, Call>,
+    /// The name of the call last made.
+    last_call: Option<String>,
 }
 
 /// An id as a key: its JSON.
@@ -401,6 +488,56 @@ impl Fake<'_> {
                 self.hear(None);
             },
             Step::SpawnHolder(holder) => self.spawn_holder(holder),
+            Step::McpStart(start) => self.mcp_start(start),
+            Step::McpList(list) => {
+                let server = list.server.as_deref().unwrap_or(CAF);
+                let id = self.mcp_request(server, "tools/list", json!({}))?;
+                let answer = self.mcp_answer(server, &id, deadline(list.timeout))?;
+                let Some(tools) = answer.pointer("/result/tools").and_then(Value::as_array) else {
+                    return self.fail(&format!("{server} answered tools/list with {answer}"));
+                };
+                let mut names: Vec<&str> = (tools.iter())
+                    .map(|tool| tool.get("name").and_then(Value::as_str).unwrap_or_default())
+                    .collect();
+                names.sort_unstable();
+                if let Some(expect) = &list.expect {
+                    let mut want: Vec<&str> = expect.iter().map(String::as_str).collect();
+                    want.sort_unstable();
+                    if names != want {
+                        return self
+                            .fail(&format!("{server} has the tools {names:?}, not {want:?}"));
+                    }
+                }
+                Ok(())
+            }
+            Step::McpCall(call) => self.mcp_call(call),
+            Step::McpAwait(wait) => self.mcp_await(wait),
+            Step::McpProgress(wait) => self.mcp_progress(wait),
+            Step::McpCancel(cancel) => {
+                let (server, id) = {
+                    let call = self.call(cancel.to.as_ref())?;
+                    (call.server.clone(), call.id.clone())
+                };
+                let mut params = json!({"requestId": id});
+                if let Some(reason) = &cancel.reason {
+                    params["reason"] = json!(reason);
+                }
+                self.mcp_send(
+                    &server,
+                    &json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": params}),
+                )
+            }
+            Step::McpDrop(drop) => {
+                let server = drop.server.as_deref().unwrap_or(CAF);
+                match self.servers.get_mut(server) {
+                    Some(found) => {
+                        found.stdin = None;
+                        self.record.write(&json!({"mcp_dropped": server}));
+                        Ok(())
+                    }
+                    None => self.fail(&format!("no MCP server started called {server}")),
+                }
+            }
             Step::Include(path) => self.fail(&format!(
                 "{} wasn't included when the script was read",
                 path.display()
@@ -467,6 +604,24 @@ impl Fake<'_> {
                 self.answers.insert(id, message);
             }
             Heard::Closed => self.closed = true,
+            Heard::Mcp(name, message) => {
+                let Some(server) = self.servers.get_mut(&name) else {
+                    return;
+                };
+                if message.get("method").and_then(Value::as_str) == Some("notifications/progress") {
+                    server.progress.push_back(message);
+                } else if message.get("method").is_none() {
+                    let id = message.get("id").map_or_else(|| "null".into(), key);
+                    server.answers.insert(id, message);
+                }
+                // Anything else a server sends, the record shows, and the
+                // fake lets be.
+            }
+            Heard::McpClosed(name) => {
+                if let Some(server) = self.servers.get_mut(&name) {
+                    server.closed = true;
+                }
+            }
         }
     }
 
@@ -731,6 +886,324 @@ impl Fake<'_> {
             }
         }
         Ok(())
+    }
+
+    /// Starts an MCP server named in a message's `mcpServers`, and does
+    /// the handshake.
+    fn mcp_start(&mut self, start: &McpStart) -> Result<(), End> {
+        let name = start.server.as_deref().unwrap_or(CAF);
+        let label = start.label.clone().unwrap_or_else(|| name.to_owned());
+        let message = match &start.from {
+            Some(from) => self.received.get(from),
+            None => self.last_received.as_ref(),
+        };
+        let Some(message) = message else {
+            return self.fail(&format!(
+                "nothing waited for called {}",
+                start.from.as_deref().unwrap_or("anything")
+            ));
+        };
+        let entry = (message
+            .pointer("/params/mcpServers")
+            .and_then(Value::as_array))
+        .and_then(|servers| servers.iter().find(|server| server["name"] == name))
+        .cloned();
+        let Some(entry) = entry else {
+            return self.fail(&format!(
+                "{} names no MCP server {name}",
+                self::method(message)
+            ));
+        };
+        let Some(program) = entry.get("command").and_then(Value::as_str) else {
+            return self.fail(&format!("the MCP server {name} isn't a command: {entry}"));
+        };
+        let strings = |at: &str| -> Vec<&Value> {
+            entry
+                .get(at)
+                .and_then(Value::as_array)
+                .map(|items| items.iter().collect())
+                .unwrap_or_default()
+        };
+        let args: Vec<String> = strings("args")
+            .into_iter()
+            .map(|arg| arg.as_str().map_or_else(|| arg.to_string(), str::to_owned))
+            .collect();
+        let mut env: Vec<(String, String)> = strings("env")
+            .into_iter()
+            .filter_map(|var| {
+                Some((
+                    var.get("name")?.as_str()?.to_owned(),
+                    var.get("value")?.as_str()?.to_owned(),
+                ))
+            })
+            .collect();
+        env.extend(
+            start
+                .env
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone())),
+        );
+        let mut command = Command::new(program);
+        // Not told the fake's own script, so a server that's the fake
+        // again, without a script of its own, can't run this one.
+        command
+            .args(&args)
+            .env_remove(crate::SCRIPT_VAR)
+            .env_remove(crate::RECORD_VAR)
+            .envs(env.iter().map(|(name, value)| (name, value)))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit());
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(err) => return self.fail(&format!("couldn't start the MCP server {name}: {err}")),
+        };
+        let mut names: Vec<&str> = env.iter().map(|(name, _)| name.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        self.record.write(&json!({"mcp_started": {
+            "server": label,
+            "command": program,
+            "args": args,
+            "env": names,
+        }}));
+        let stdout = child.stdout.take().expect("it's piped");
+        read_server(
+            label.clone(),
+            stdout,
+            self.heard.clone(),
+            self.record.clone(),
+        );
+        self.servers.insert(
+            label.clone(),
+            Server {
+                name: name.to_owned(),
+                stdin: child.stdin.take(),
+                _child: child,
+                closed: false,
+                next_id: 0,
+                answers: HashMap::new(),
+                progress: VecDeque::new(),
+            },
+        );
+        if start.discover {
+            let id = self.mcp_request(&label, "server/discover", json!({}))?;
+            let answer = self.mcp_answer(&label, &id, deadline(start.timeout))?;
+            if !matches(&json!({"error": {"code": -32601}}), &answer) {
+                return self.fail(&format!(
+                    "{label} answered server/discover with {answer}, not -32601"
+                ));
+            }
+        }
+        let id = self.mcp_request(
+            &label,
+            "initialize",
+            json!({
+                "protocolVersion": start.version.as_deref().unwrap_or("2025-06-18"),
+                "capabilities": {},
+                "clientInfo": {"name": "caf-fake-agent", "version": env!("CARGO_PKG_VERSION")},
+            }),
+        )?;
+        let answer = self.mcp_answer(&label, &id, deadline(start.timeout))?;
+        if answer.get("result").is_none() {
+            return self.fail(&format!("{label} answered initialize with {answer}"));
+        }
+        if let Some(expect) = &start.expect
+            && !matches(expect, &answer)
+        {
+            return self.fail(&format!(
+                "{label} answered initialize with {answer}, not {expect}"
+            ));
+        }
+        self.mcp_send(
+            &label,
+            &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        )
+    }
+
+    fn mcp_call(&mut self, call: &McpCall) -> Result<(), End> {
+        let server = call.server.as_deref().unwrap_or(CAF);
+        let Some(found) = self.servers.get(server) else {
+            return self.fail(&format!("no MCP server started called {server}"));
+        };
+        let qualified = format!("mcp__{}__{}", found.name, call.tool);
+        // The id the request will have, as the MCP SDK makes its token.
+        let token = (!call.no_progress).then(|| json!(found.next_id));
+        let arguments = call.arguments.clone().unwrap_or_else(|| json!({}));
+        if let (Some(session), Some(tool_use_id)) = (&call.report, &call.tool_use_id) {
+            let report = Tool {
+                session: session.clone(),
+                id: tool_use_id.clone(),
+                title: Some(qualified.clone()),
+                status: Some("pending".into()),
+                tool_name: Some(qualified),
+                raw_input: Some(arguments.clone()),
+                ..Tool::default()
+            };
+            self.update(session, &tool_update(&report))?;
+        }
+        let mut meta = serde_json::Map::new();
+        if let Some(tool_use_id) = &call.tool_use_id {
+            meta.insert("claudecode/toolUseId".into(), json!(tool_use_id));
+        }
+        if let Some(token) = &token {
+            meta.insert("progressToken".into(), token.clone());
+        }
+        let id = self.mcp_request(
+            server,
+            "tools/call",
+            json!({"name": call.tool, "arguments": arguments, "_meta": meta}),
+        )?;
+        let label = call.label.clone().unwrap_or_else(|| call.tool.clone());
+        self.calls.insert(
+            label.clone(),
+            Call {
+                server: server.to_owned(),
+                id,
+                token,
+            },
+        );
+        self.last_call = Some(label);
+        Ok(())
+    }
+
+    fn mcp_await(&mut self, wait: &McpAwait) -> Result<(), End> {
+        let (server, id) = {
+            let call = self.call(wait.to.as_ref())?;
+            (call.server.clone(), call.id.clone())
+        };
+        let until = deadline(wait.timeout);
+        if !wait.none {
+            let answer = self.mcp_answer(&server, &id, until)?;
+            return match &wait.expect {
+                Some(expect) if !matches(expect, &answer) => self.fail(&format!(
+                    "{server}'s answer to {id} was {answer}, not {expect}"
+                )),
+                _ => Ok(()),
+            };
+        }
+        loop {
+            self.handle()?;
+            if let Some(answer) = self.server(&server)?.answers.remove(&key(&id)) {
+                return self.fail(&format!("{server} answered {id}, with {answer}"));
+            }
+            if self.server(&server)?.closed || past(until) {
+                return Ok(());
+            }
+            if self.closed {
+                return self.ended(&format!("checking {server} doesn't answer {id}"));
+            }
+            self.hear(until);
+        }
+    }
+
+    fn mcp_progress(&mut self, wait: &McpProgress) -> Result<(), End> {
+        let (server, id, token) = {
+            let call = self.call(wait.to.as_ref())?;
+            (call.server.clone(), call.id.clone(), call.token.clone())
+        };
+        let Some(token) = token else {
+            return self.fail(&format!("the call {id} to {server} asked for no progress"));
+        };
+        let until = deadline(wait.timeout);
+        loop {
+            self.handle()?;
+            let progress = &mut self.server(&server)?.progress;
+            let found = (progress.iter())
+                .position(|message| message.pointer("/params/progressToken") == Some(&token));
+            if let Some(found) = found {
+                let message = progress.remove(found).expect("it's there");
+                return match &wait.expect {
+                    Some(expect) if !matches(expect, &message) => self.fail(&format!(
+                        "{server}'s progress on {id} was {message}, not {expect}"
+                    )),
+                    _ => Ok(()),
+                };
+            }
+            if self.server(&server)?.closed {
+                return self.fail(&format!("{server} closed, with no progress on {id}"));
+            }
+            if self.closed {
+                return self.ended(&format!("waiting for {server}'s progress on {id}"));
+            }
+            if past(until) || !self.hear(until) {
+                return self.fail(&format!(
+                    "timed out waiting for {server}'s progress on {id}"
+                ));
+            }
+        }
+    }
+
+    /// A call the fake made: the one named, or the last.
+    fn call(&mut self, label: Option<&String>) -> Result<&Call, End> {
+        let label = label.or(self.last_call.as_ref()).cloned();
+        match label {
+            Some(label) if self.calls.contains_key(&label) => Ok(&self.calls[&label]),
+            label => self.fail(&format!(
+                "no MCP call made called {}",
+                label.as_deref().unwrap_or("anything")
+            )),
+        }
+    }
+
+    /// A server the fake started, by its connection's name.
+    fn server(&mut self, name: &str) -> Result<&mut Server, End> {
+        if self.servers.contains_key(name) {
+            Ok(self.servers.get_mut(name).expect("it's there"))
+        } else {
+            self.fail(&format!("no MCP server started called {name}"))
+        }
+    }
+
+    /// Sends a server a request, and gives its id.
+    fn mcp_request(&mut self, server: &str, method: &str, params: Value) -> Result<Value, End> {
+        let found = self.server(server)?;
+        let id = json!(found.next_id);
+        found.next_id += 1;
+        self.mcp_send(
+            server,
+            &json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
+        )?;
+        Ok(id)
+    }
+
+    /// Waits until `until` for a server's answer to one of the fake's
+    /// requests.
+    fn mcp_answer(
+        &mut self,
+        server: &str,
+        id: &Value,
+        until: Option<Instant>,
+    ) -> Result<Value, End> {
+        loop {
+            self.handle()?;
+            if let Some(answer) = self.server(server)?.answers.remove(&key(id)) {
+                return Ok(answer);
+            }
+            if self.server(server)?.closed {
+                return self.fail(&format!("{server} closed without answering {id}"));
+            }
+            if self.closed {
+                return self.ended(&format!("waiting for {server}'s answer to {id}"));
+            }
+            if past(until) || !self.hear(until) {
+                return self.fail(&format!("timed out waiting for {server}'s answer to {id}"));
+            }
+        }
+    }
+
+    /// Writes a message to a server's stdin.
+    fn mcp_send(&mut self, server: &str, message: &Value) -> Result<(), End> {
+        let mut line = serde_json::to_vec(message).expect("JSON is always JSON");
+        line.push(b'\n');
+        let written = match &mut self.server(server)?.stdin {
+            Some(stdin) => stdin.write_all(&line).map_err(|err| err.to_string()),
+            None => Err("its stdin is closed".into()),
+        };
+        match written {
+            Ok(()) => Ok(()),
+            Err(why) => self.fail(&format!("couldn't write to {server}: {why}")),
+        }
     }
 
     fn send(&mut self, message: &Value) -> Result<(), End> {

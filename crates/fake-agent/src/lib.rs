@@ -80,6 +80,13 @@
 //! | `"hang"` | Does nothing more, ever, but run handlers |
 //! | `{"spawn_holder": {"pid_file", "secs"}}` | Starts a process holding stdout and stderr, before any `close_stdout`, until its pid file goes ([`SpawnHolder`]) |
 //! | `{"include": PATH}` | Puts another script's steps here, or a handler's |
+//! | `{"mcp_start": {"from", "server", "as", "env", "discover", "version", "expect", "timeout"}}` | Starts an MCP server the client named, and does the handshake ([`McpStart`]) |
+//! | `{"mcp_list": {"server", "expect", "timeout"}}` | Asks a server for its tools, and checks their names ([`McpList`]) |
+//! | `{"mcp_call": {"server", "tool", "arguments", "tool_use_id", "no_progress", "report", "as"}}` | Calls a server's tool ([`McpCall`]) |
+//! | `{"mcp_await": {"to", "expect", "none", "timeout"}}` | Waits for a call's answer, and checks it, or checks none comes ([`McpAwait`]) |
+//! | `{"mcp_progress": {"to", "expect", "timeout"}}` | Waits for a call's progress ([`McpProgress`]) |
+//! | `{"mcp_cancel": {"to", "reason"}}` | Cancels a call ([`McpCancel`]) |
+//! | `{"mcp_drop": {"server"}}` | Closes a server's stdin ([`McpDrop`]) |
 //!
 //! Settings left out take their defaults, but a step that has settings
 //! still needs its object: `{"cancel_request": {}}`, not
@@ -150,6 +157,66 @@
 //! before an `await` takes it, the second replaces the first, and only
 //! the record shows both.
 //!
+//! ## MCP servers
+//!
+//! The fake is an MCP client too, as Claude is. Claude starts each server
+//! a session names, and calls its tools as the model asks; the fake does
+//! when the script says. `mcp_start` starts a stdio server named in the
+//! `mcpServers` of a `session/new`, `session/load` or `session/resume`
+//! waited for: its command, with its arguments, and the fake's own
+//! environment with the server's `env` added, then the script's `env`.
+//! Then it does MCP's handshake: `initialize`, then
+//! `notifications/initialized`. With `discover`, it first sends
+//! `server/discover`, as Claude probes a server, and checks that's
+//! refused with -32601.
+//!
+//! Each server's stdout is read on a thread of its own, all the time, as
+//! stdin is. A step waiting for a server runs handlers as `wait` does, and
+//! fails if the server closes its stdout first; stdin closing ends the
+//! fake meanwhile, as it does a `wait`.
+//!
+//! A server's connection is named by `as`, or by the server's name, which
+//! is `caf` unless a step says: `mcp_start` can start the same server
+//! twice, under two names, as Claude may while it opens a session again.
+//! A call is named by `as`, or by its tool; `mcp_await`, `mcp_progress`
+//! and `mcp_cancel` take the one named `to`, or the one last made. Each
+//! connection's requests count up from 0.
+//!
+//! `mcp_call` sends `tools/call` as Claude does: the tool's name and
+//! arguments, and in `_meta` the model's id for the call,
+//! `claudecode/toolUseId`, if it has a `tool_use_id`, and a
+//! `progressToken`, the request's id, unless `no_progress`. With
+//! `report`, it first reports the call in that session as Claude's adapter
+//! does, so CAF can join the two: a `tool_call`, pending, whose
+//! `toolCallId` is the `tool_use_id`, and whose title and
+//! `_meta.claudeCode.toolName` are `mcp__caf__Read` for `caf`'s `Read`.
+//!
+//! `mcp_await` with `none` checks no answer comes in its `timeout`, as
+//! none should once a call is cancelled; the server closing passes it
+//! too. `mcp_drop` closes a server's stdin, as Claude does when a session
+//! ends, and doesn't wait for it to go. Anything else a server sends is
+//! in the record, and otherwise let be.
+//!
+//! Calling CAF's `Read`, and stopping a `Bash` the user never allowed:
+//!
+//! ```text
+//! {"wait": {"method": "session/new"}}
+//! {"respond": {"result": {"sessionId": "s1"}}}
+//! {"mcp_start": {"discover": true, "expect": {"result": {"serverInfo": {"name": "caf"}}}, "timeout": 10000}}
+//! {"mcp_list": {"expect": ["Read", "Bash"], "timeout": 10000}}
+//! {"wait": {"method": "session/prompt", "as": "prompt"}}
+//! {"mcp_call": {"tool": "Read", "arguments": {"path": "/work/a.rs"}, "tool_use_id": "toolu_1", "report": "s1"}}
+//! {"mcp_await": {"expect": {"result": {"isError": false}}, "timeout": 10000}}
+//! {"mcp_call": {"tool": "Bash", "arguments": {"command": "ls"}, "tool_use_id": "toolu_2", "report": "s1"}}
+//! {"mcp_cancel": {}}
+//! {"mcp_await": {"none": true, "timeout": 500}}
+//! {"respond": {"to": "prompt", "result": {"stopReason": "end_turn"}}}
+//! ```
+//!
+//! A fake started as an MCP server, by a test's session naming it with
+//! [`SCRIPT_VAR`] in its `env`, follows a script as it does as an
+//! adapter: MCP is JSON-RPC by lines too.
+//!
 //! ## The end
 //!
 //! - **The script ends:** the fake reads on, running handlers, until
@@ -189,6 +256,11 @@
 //! | `{"failed": WHY}` | A check failed |
 //! | `{"ended": WHY}` | Stdin closed while the script waited |
 //! | `{"gone": WHY}` | Stdout couldn't be written |
+//! | `{"mcp_started": {"server", "command", "args", "env"}}` | An MCP server started: its connection's name, its command and arguments, and the names of the environment variables it was given |
+//! | `{"mcp_received": {"server", "message"}}` | A message from an MCP server |
+//! | `{"mcp_unreadable": {"server", "text"}}` | A line from an MCP server that isn't a JSON object |
+//! | `{"mcp_closed": SERVER}` | An MCP server closed its stdout |
+//! | `{"mcp_dropped": SERVER}` | An `mcp_drop` step |
 //!
 //! # Examples
 //!
@@ -329,9 +401,10 @@ pub use auth::{AUTH_EMAIL, AUTH_SECRET, Auth, auth};
 pub use binary::binary;
 pub use run::run;
 pub use script::{
-    Await, CancelRequest, Chunk, LongLine, Notify, On, Output, Request, Respond, RpcError, Script,
-    ScriptError, SpawnHolder, Step, Tool, ToolContent, ToolDiff, ToolImage, ToolLink, ToolLocation,
-    Update, Wait, WaitFile,
+    Await, CancelRequest, Chunk, LongLine, McpAwait, McpCall, McpCancel, McpDrop, McpList,
+    McpProgress, McpStart, Notify, On, Output, Request, Respond, RpcError, Script, ScriptError,
+    SpawnHolder, Step, Tool, ToolContent, ToolDiff, ToolImage, ToolLink, ToolLocation, Update,
+    Wait, WaitFile,
 };
 
 /// The environment variable that names the program for [`binary`] to
