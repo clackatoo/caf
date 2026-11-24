@@ -15,7 +15,9 @@ use caf_core::time::Now;
 use caf_core::tool::{CafTool, Tools};
 use caf_core::{Core, Host, NoAppItems, OpenChat, Shelf};
 use caf_driver_tokio::viewer::ViewerRules;
-use caf_driver_tokio::{Caf, Config, Running, Step as CafStep, Steps, ToolsConfig, UsageConfig};
+use caf_driver_tokio::{
+    Caf, Config, Relay, Running, Step as CafStep, Steps, ToolsConfig, UsageConfig,
+};
 use caf_save::{FileStore, Store};
 use serde_json::value::RawValue;
 use tokio::sync::mpsc;
@@ -67,15 +69,16 @@ pub fn host() -> Host {
 }
 
 /// What viewers may do: open a chat with any of `agents` in any absolute
-/// folder, with no MCP servers, and those of CAF's own tools the viewer
-/// asks for (its open-chat form's "CAF's tools", on unless unticked),
-/// act on every chat, install agents and sign in and out of them, and
-/// read usage and set prices. If chats are `saved`, each opened is kept
-/// on [`SHELF`], and viewers may restore those kept there, with no MCP
-/// servers and all of CAF's tools: what a chat was given isn't saved, and
-/// all is what the form gives by default.
+/// folder, with no MCP servers, and, if CAF's tools are `served`, those
+/// of them the viewer asks for (its open-chat form's "CAF's tools", on
+/// unless unticked), act on every chat, install agents and sign in and
+/// out of them, and read usage and set prices. If chats are `saved`, each
+/// opened is kept on [`SHELF`], and viewers may restore those kept there,
+/// with no MCP servers, and all of CAF's tools if they're served: what a
+/// chat was given isn't saved, and all is what the form gives by default.
+/// Where they aren't served, chats are given none, which CAF would refuse.
 #[must_use]
-pub fn rules(agents: &[AgentSpec], saved: bool) -> ViewerRules {
+pub fn rules(agents: &[AgentSpec], saved: bool, served: bool) -> ViewerRules {
     let names: Vec<_> = agents.iter().map(|agent| agent.name.clone()).collect();
     let mut rules = ViewerRules::default();
     rules.agents = true;
@@ -87,13 +90,19 @@ pub fn rules(agents: &[AgentSpec], saved: bool) -> ViewerRules {
         let mut open = OpenChat::new(request.agent.0.clone(), request.cwd.clone());
         open.session = request.session.clone();
         open.shelf = saved.then(shelf);
-        open.tools = request.tools.clone();
+        if served {
+            open.tools = request.tools.clone();
+        }
         Some(open)
     });
     if saved {
-        rules.restore = Box::new(|chat, on| {
-            (on.0 == SHELF)
-                .then(|| RestoreChat::new(chat, shelf()).with_tools(Tools::caf(CafTool::ALL)))
+        let tools = if served {
+            Tools::caf(CafTool::ALL)
+        } else {
+            Tools::none()
+        };
+        rules.restore = Box::new(move |chat, on| {
+            (on.0 == SHELF).then(|| RestoreChat::new(chat, shelf()).with_tools(tools.clone()))
         });
     }
     rules
@@ -115,7 +124,8 @@ pub fn start(
         host: host(),
         agents: agents.clone(),
     };
-    let rules = Arc::new(rules(&agents, store.is_some()));
+    let served = !matches!(tools.relay, Relay::None);
+    let rules = Arc::new(rules(&agents, store.is_some(), served));
     let mut config = Config::new(base.host.clone(), agents);
     config.record.clone_from(&record);
     config.store = (store.as_ref()).map(|root| Box::new(FileStore::new(root)) as Box<dyn Store>);
@@ -583,17 +593,17 @@ mod tests {
 
     #[test]
     fn viewers_may_install_agents_and_sign_in_and_out() {
-        assert!(rules(&agents(), false).agents);
+        assert!(rules(&agents(), false, true).agents);
     }
 
     #[test]
     fn viewers_may_read_usage_and_set_prices() {
-        assert!(rules(&agents(), false).usage);
+        assert!(rules(&agents(), false, true).usage);
     }
 
     #[test]
     fn viewers_may_open_the_agents_on_offer_in_absolute_folders_with_cafs_tools_alone() {
-        let rules = rules(&agents(), false);
+        let rules = rules(&agents(), false, true);
         let open = rules.open.as_ref();
         let mut request = OpenRequest::new("fake", "/home/me/project");
         let chat = open(&request).expect("allowed");
@@ -615,8 +625,22 @@ mod tests {
     }
 
     #[test]
+    fn where_cafs_tools_arent_served_no_chat_is_given_them() {
+        let rules = rules(&agents(), true, false);
+        let asked = OpenRequest::new("fake", "/home/me").with_tools(Tools::caf(CafTool::ALL));
+        assert!((rules.open)(&asked).expect("allowed").tools.is_empty());
+        let id = caf_core::ChatId::from_number(1000);
+        assert!(
+            (rules.restore)(id, &shelf())
+                .expect("allowed")
+                .tools
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn saved_chats_are_kept_on_the_debuggers_shelf_and_only_those_restored() {
-        let rules = rules(&agents(), true);
+        let rules = rules(&agents(), true, true);
         let chat = (rules.open)(&OpenRequest::new("fake", "/home/me/project")).expect("allowed");
         assert_eq!(chat.shelf, Some(shelf()));
         let id = caf_core::ChatId::from_number(1000);
@@ -630,7 +654,7 @@ mod tests {
         );
         let elsewhere = Shelf("another app's".into());
         assert!((rules.restore)(id, &elsewhere).is_none());
-        let unsaved = super::rules(&agents(), false);
+        let unsaved = super::rules(&agents(), false, true);
         assert_eq!(
             (unsaved.open)(&OpenRequest::new("fake", "/home/me"))
                 .unwrap()
