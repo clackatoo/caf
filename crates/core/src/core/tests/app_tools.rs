@@ -107,10 +107,12 @@ fn a_chat_given_only_app_tools_is_served_them_and_told_of_them() {
         with(&opened, "tool"),
         [json!({ "tool": { "type": "Serve", "value": {
             "chat": CHAT,
-            "tools": [],
+            // TaskStop comes with the app's tools, which may answer early
+            // as background jobs.
+            "tools": [{ "type": "TaskStop" }],
             "app": ["trim_clip", "word_count"],
             "cwd": "/work",
-            "instructions": "caf-test's own tools (trim_clip, word_count).",
+            "instructions": "caf-test's own tools (trim_clip, word_count), and TaskStop to stop their background tasks.",
         } } })]
     );
     let new = sent(&out, "session/new");
@@ -118,9 +120,10 @@ fn a_chat_given_only_app_tools_is_served_them_and_told_of_them() {
     assert_eq!(
         new["params"]["_meta"]["claudeCode"]["options"]["systemPrompt"],
         "You are working inside caf-test, the app the user is talking to you in. caf-test gives \
-         you tools of its own (trim_clip, word_count), asking the user's leave where they must. \
-         You have no other tools of your own: you can't read or change files, run commands or \
-         browse the web, except through tools caf-test gives you. Answer in Markdown."
+         you tools of its own (trim_clip, word_count), and TaskStop to stop their background \
+         tasks, asking the user's leave where they must. You have no other tools of your own: \
+         you can't read or change files, run commands or browse the web, except through tools \
+         caf-test gives you. Answer in Markdown."
     );
 }
 
@@ -134,14 +137,14 @@ fn cafs_tools_and_the_apps_are_named_together() {
     );
     assert_eq!(
         one_told(&opened)["value"]["instructions"],
-        "caf-test's tools to read files (Read), in the folder you're working in, and its own \
-         (word_count, trim_clip)."
+        "caf-test's tools to read files (Read) and stop background tasks (TaskStop), in the \
+         folder you're working in, and its own (word_count, trim_clip)."
     );
     assert_eq!(
         sent(&out, "session/new")["params"]["_meta"]["claudeCode"]["options"]["systemPrompt"],
         "You are working inside caf-test, the app the user is talking to you in. caf-test gives \
-         you tools to read files (Read), in the folder you're working in, and tools of its own \
-         (word_count, trim_clip), asking the user's leave where they must. You have no other \
+         you tools to read files (Read) and stop background tasks (TaskStop), in the folder \
+         you're working in, and tools of its own (word_count, trim_clip), asking the user's leave where they must. You have no other \
          tools of your own: you can't do anything else, such as browse the web, except through \
          other tools caf-test gives you. Answer in Markdown."
     );
@@ -731,4 +734,87 @@ fn an_app_call_the_policy_asks_the_user_about_runs_when_they_allow_it() {
         &json!({ "status": kind("Running"), "decision": { "type": "Allowed", "value": { "type": "User", "value": { "option": "Allow" } } } }),
     );
     script.tool(1, finished(true, "1", None));
+}
+
+#[test]
+fn task_stop_is_served_with_the_apps_tools_and_stops_their_jobs() {
+    use crate::ids::JobId;
+    // Read alone isn't served TaskStop; with an app tool it is, after
+    // CAF's others, once, however it's given.
+    let serve = |tools: Tools| {
+        let mut script = Script::new(host());
+        script.serving();
+        let (opened, out) = open_given(&mut script, tools);
+        let new = sent(&out, "session/new")["id"].as_u64().expect("an id");
+        script.answers(
+            PROC,
+            new,
+            &json!({ "modes": default_modes(), "sessionId": SESSION }),
+        );
+        one_told(&opened)["value"]["tools"].clone()
+    };
+    assert_eq!(serve(Tools::caf([CafTool::Read])), json!([kind("Read")]));
+    assert_eq!(
+        serve(Tools::caf([CafTool::Read]).and_app(["trim_clip"])),
+        json!([kind("Read"), kind("TaskStop")])
+    );
+    assert_eq!(
+        serve(Tools::caf([CafTool::TaskStop, CafTool::Read]).and_app(["trim_clip"])),
+        json!([kind("TaskStop"), kind("Read")])
+    );
+    assert_eq!(
+        serve(Tools::caf([CafTool::Bash, CafTool::Read]).and_app(["trim_clip"])),
+        json!([kind("Bash"), kind("TaskStop"), kind("Read")])
+    );
+
+    // A chat without Bash stops the app's job with TaskStop.
+    let mut script = running(Tools::caf([CafTool::Read]).and_app(["word_count"]));
+    let out = script.tool(
+        1,
+        called("word_count", json!({ "text": "a" }), Some("Count"), None),
+    );
+    script.policy(ticket(&out), PolicyAnswer::Allow);
+    script.tool(1, ToolEvent::Detached { job: JobId(1) });
+    let stop = |call: &str| ToolEvent::Called {
+        chat: CHAT,
+        tool: ServedTool::Caf(CafTool::TaskStop),
+        input: json!({ "task_id": call }),
+        agent_call: None,
+        title: None,
+        bad_input: None,
+    };
+    let out = script.tool(2, stop("1"));
+    // Run at once, no one asked: the driver stops the job.
+    assert_eq!(
+        one_told(&out),
+        json!({ "type": "Run", "value": {
+            "call": 2,
+            "action": { "type": "Stop", "value": { "job": 1 } },
+            "input": { "task_id": "1" },
+        } })
+    );
+    // The job ends once, stopped by the agent, and nothing's told of it.
+    let out = script.tool(1, finished(false, "stopped", None));
+    assert!(sent_prompts(&out).is_empty(), "no notice");
+    script.tool(2, finished(true, "Stopped", None));
+    let calls = tools(&script);
+    assert_has(
+        &calls[0],
+        &json!({ "status": kind("Cancelled"), "stopped_by": { "type": "Agent" }, "job": 1 }),
+    );
+    assert_eq!(calls[1]["status"], kind("Done"));
+    // Ended, it's no job: a second TaskStop of it is refused.
+    let out = script.tool(3, stop("1"));
+    assert_eq!(
+        one_told(&out),
+        json!({ "type": "Refuse", "value": { "call": 3, "why": { "type": "BadInput", "value": "No task 1 in this conversation" } } })
+    );
+}
+
+/// The prompts written to the agent in `out`.
+fn sent_prompts(out: &[Value]) -> Vec<Value> {
+    (super::harness::writes(out).into_iter())
+        .map(|(_, message)| message)
+        .filter(|message| message["method"] == "session/prompt")
+        .collect()
 }

@@ -62,8 +62,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             .map(mcp_server)
             .collect::<Option<Vec<_>>>()
             .ok_or(Refused::Unsendable)?;
-        let caf_tools = crate::tool::Tools::served(open.tools.caf);
         let app_tools = self.app_tools_given(open.tools.app)?;
+        let caf_tools = crate::tool::Tools::served(open.tools.caf, !app_tools.is_empty());
         mcp_sent.extend(self.caf_server(chat, &caf_tools, &app_tools)?);
         check_instructions(open.instructions.as_deref())?;
         if !open.settings.iter().all(sendable) {

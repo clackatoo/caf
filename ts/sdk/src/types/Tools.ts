@@ -7,7 +7,8 @@ import type { CafTool } from "./CafTool.ts";
  * restores the chat ([`RestoreChat::tools`](crate::RestoreChat::tools)).
  *
  * A chat given Bash is served TaskStop too, just after it, as Bash's
- * background jobs need it.
+ * background jobs need it; and so is one given any of the app's tools,
+ * which may answer early and go on as jobs, after CAF's others.
  */
 export type Tools = { 
 /**
