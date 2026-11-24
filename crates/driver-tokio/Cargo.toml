@@ -13,6 +13,8 @@ caf-core.workspace = true
 # The relay's variables and check.
 caf-relay.workspace = true
 caf-save.workspace = true
+# CAF's own tools' rules, which the runner carries out.
+caf-tools.workspace = true
 caf-usage.workspace = true
 flate2.workspace = true
 libc.workspace = true
