@@ -1070,9 +1070,13 @@ impl ToolsDriver {
                         },
                     });
                 }
+                // A job's request was answered: it's no longer the agent's
+                // to cancel, and goes on.
                 Out::Cancelled(request) => {
                     let found = (self.calls.iter())
-                        .find(|(_, each)| each.conn == no && each.request == request)
+                        .find(|(_, each)| {
+                            each.conn == no && each.request == request && each.job.is_none()
+                        })
                         .map(|(call, _)| *call);
                     if let Some(call) = found {
                         self.calls.remove(&call);
@@ -3177,6 +3181,12 @@ mod tests {
             matches!(event, ToolEvent::Detached { job: JobId(1) })
         });
         assert_eq!(client.recv().await["id"], 1);
+        // The agent cancelling its answered request leaves it running.
+        client
+            .send(&json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 1}}))
+            .await;
+        client.nothing_waiting().await;
+        h.quiet().await;
         // Its relay goes: the job doesn't.
         drop(client);
         match h.report().await {
