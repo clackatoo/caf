@@ -199,6 +199,10 @@ pub struct Ran {
     /// path: where the chat's next command runs.
     pub folder: Option<String>,
     /// For a job, what the agent is told of its end, in a notice turn.
+    /// A job that ends by itself must have one: a job's end without one
+    /// is what TaskStop stopping it looks like
+    /// ([`Action::Stop`]), so one ending just as it's stopped is told
+    /// apart.
     pub notice: Option<String>,
 }
 
