@@ -3000,6 +3000,48 @@ fn write_lines(
     }
 }
 
+/// A tools driver's event, as the core of an app with items of its own
+/// takes it. The driver doesn't give the app's items yet: feature 13 makes
+/// it generic over them, and this goes.
+fn retyped<A: AppItem>(event: caf_core::event::ToolEvent) -> caf_core::event::ToolEvent<A> {
+    use caf_core::event::ToolEvent;
+    match event {
+        ToolEvent::Called {
+            chat,
+            tool,
+            input,
+            agent_call,
+            title,
+            bad_input,
+        } => ToolEvent::Called {
+            chat,
+            tool,
+            input,
+            agent_call,
+            title,
+            bad_input,
+        },
+        ToolEvent::Previewed { pieces } => ToolEvent::Previewed { pieces },
+        ToolEvent::Output { from, lines } => ToolEvent::Output { from, lines },
+        ToolEvent::Detached { job } => ToolEvent::Detached { job },
+        ToolEvent::Finished {
+            done,
+            pieces,
+            folder,
+            notice,
+            item: _,
+        } => ToolEvent::Finished {
+            done,
+            pieces,
+            folder,
+            notice,
+            item: None,
+        },
+        ToolEvent::Gone => ToolEvent::Gone,
+        other => unreachable!("a tool event this CAF doesn't know: {other:?}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc;
@@ -3330,47 +3372,5 @@ mod tests {
         assert_eq!(kept, 0, "nothing is kept for a watch once it's dropped");
         caf.shutdown().await;
         running.await;
-    }
-}
-
-/// A tools driver's event, as the core of an app with items of its own
-/// takes it. The driver doesn't give the app's items yet: feature 13 makes
-/// it generic over them, and this goes.
-fn retyped<A: AppItem>(event: caf_core::event::ToolEvent) -> caf_core::event::ToolEvent<A> {
-    use caf_core::event::ToolEvent;
-    match event {
-        ToolEvent::Called {
-            chat,
-            tool,
-            input,
-            agent_call,
-            title,
-            bad_input,
-        } => ToolEvent::Called {
-            chat,
-            tool,
-            input,
-            agent_call,
-            title,
-            bad_input,
-        },
-        ToolEvent::Previewed { pieces } => ToolEvent::Previewed { pieces },
-        ToolEvent::Output { from, lines } => ToolEvent::Output { from, lines },
-        ToolEvent::Detached { job } => ToolEvent::Detached { job },
-        ToolEvent::Finished {
-            done,
-            pieces,
-            folder,
-            notice,
-            item: _,
-        } => ToolEvent::Finished {
-            done,
-            pieces,
-            folder,
-            notice,
-            item: None,
-        },
-        ToolEvent::Gone => ToolEvent::Gone,
-        other => unreachable!("a tool event this CAF doesn't know: {other:?}"),
     }
 }

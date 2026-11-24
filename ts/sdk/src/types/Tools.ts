@@ -21,4 +21,4 @@ caf: Array<CafTool>,
  * chat is refused ([`Refused::UnknownTool`](crate::Refused::UnknownTool)).
  * Recordings made before it was added read as none.
  */
-app: Array<string>, };
+app?: Array<string>, };

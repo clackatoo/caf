@@ -35,7 +35,7 @@
 //! .describe("Trims a clip to a length in seconds.")
 //! .destructive();
 //!
-//! config.tools.app = AppTools::new().add(trim)?;
+//! config.tools.app = AppTools::new().with(trim)?;
 //! ```
 
 use std::collections::BTreeMap;
@@ -192,7 +192,7 @@ impl<A: AppItem> AppTools<A> {
     /// [`ToolError`] if its name isn't one a model can call, is taken
     /// (by another of the app's or, in any case, by one of CAF's own), or
     /// its schema isn't an object's.
-    pub fn add(self, tool: impl AppTool<A>) -> Result<Self, ToolError> {
+    pub fn with(self, tool: impl AppTool<A>) -> Result<Self, ToolError> {
         let _ = tool;
         todo!()
     }
@@ -234,12 +234,15 @@ impl std::fmt::Display for ToolError {
 
 impl std::error::Error for ToolError {}
 
+/// How a [`Built`] tool titles a call, from its input.
+type Titler<I> = Box<dyn Fn(&I) -> String + Send + Sync>;
+
 /// A tool [`tool`] built from a closure.
 #[allow(dead_code)] // filled in by feature 13's build
 pub struct Built<I, F, A: AppItem = NoAppItems> {
     spec: ToolSpec,
     run: F,
-    title: Option<Box<dyn Fn(&I) -> String + Send + Sync>>,
+    title: Option<Titler<I>>,
     item: std::marker::PhantomData<fn() -> A>,
 }
 

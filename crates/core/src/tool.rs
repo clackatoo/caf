@@ -256,6 +256,7 @@ pub struct Tools {
     /// chat is refused ([`Refused::UnknownTool`](crate::Refused::UnknownTool)).
     /// Recordings made before it was added read as none.
     #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(as = "Option<Vec<String>>", optional))]
     pub app: Vec<String>,
 }
 
