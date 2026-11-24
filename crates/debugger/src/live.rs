@@ -140,8 +140,10 @@ pub fn rules(
         let mut open = OpenChat::new(request.agent.0.clone(), request.cwd.clone());
         open.session = request.session.clone();
         open.shelf = saved.then(shelf);
+        // CAF's tools the viewer asks for, and word_count with them: never
+        // the app's tools it names, which are the debugger's to give.
         if served {
-            open.tools = request.tools.clone();
+            open.tools = Tools::caf(request.tools.caf.iter().copied());
             if !open.tools.caf.is_empty() {
                 open.tools = open.tools.and_app([WORD_COUNT]);
             }
@@ -882,6 +884,29 @@ mod tests {
     #[test]
     fn viewers_may_read_usage_and_set_prices() {
         assert!(rules(&agents(), false, true, untooled()).usage);
+    }
+
+    #[test]
+    fn a_viewer_naming_the_apps_tools_gets_only_word_count_and_only_with_cafs() {
+        let untooled = untooled();
+        let rules = rules(&agents(), false, true, Arc::clone(&untooled));
+        let request = OpenRequest::new("fake", "/home/me/project");
+        let named = request
+            .clone()
+            .with_tools(Tools::caf([CafTool::Read]).and_app(["rm_rf", WORD_COUNT]));
+        assert_eq!(
+            (rules.open)(&named).expect("allowed").tools,
+            Tools::caf([CafTool::Read]).and_app([WORD_COUNT])
+        );
+        // Asking for the app's tools alone is asking for none.
+        let alone = request.with_tools(Tools::none().and_app([WORD_COUNT]));
+        let open = (rules.open)(&alone).expect("allowed");
+        assert!(open.tools.is_empty(), "{:?}", open.tools);
+        let chat = caf_core::ChatId::from_number(7);
+        untooled.step(&caf_core::event::Event::Host(
+            caf_core::event::HostCommand::OpenChat { chat, open },
+        ));
+        assert!(untooled.has(chat), "noted as opened without tools");
     }
 
     #[test]
