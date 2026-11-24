@@ -4,11 +4,12 @@
 //! sample values are other tests' too.
 
 use crate::directive::{RefusedCall, ToolDirective};
-use crate::event::ToolEvent;
+use crate::event::{RelayChange, Serving, ToolEvent};
 use crate::ids::CallId;
+use crate::mcp::Key;
 use crate::tool::{
     Action, CafTool, Cut, DecidedBy, Decision, Diff, DiffLine, Ending, Hunk, Image, LineChange,
-    Lines, Link, Location, Origin, Output, Piece, Text,
+    Lines, Link, Location, Origin, Output, Piece, StoppedBy, Text, Tools,
 };
 use std::fmt::Debug;
 
@@ -221,6 +222,7 @@ pub(crate) fn tool() -> ToolCall {
             option: "Allow".into(),
         }),
         app: None,
+        stopped_by: None,
     }
 }
 
@@ -796,6 +798,35 @@ pub(crate) fn every_type(s: &mut Samples) {
         true,
     );
     s.both(&RefusedCall::BadInput("no path".into()));
+    s.written(
+        &ToolDirective::Serve {
+            chat: ChatId::from_number(1),
+            tools: vec![CafTool::Read, CafTool::Bash],
+            instructions: "Read files and run commands.".into(),
+        },
+        true,
+    );
+    s.written(
+        &ToolDirective::Unserve {
+            chat: ChatId::from_number(1),
+        },
+        true,
+    );
+    s.both(&StoppedBy::Agent);
+    s.both(&Tools::caf([CafTool::Edit]));
+    let mut relay = command();
+    relay.env.clear();
+    let serving = Serving::new(relay, "/run/user/1000/caf/app-1.sock", Key([7; 32]));
+    s.both(&serving);
+    s.written(&Event::<crate::chat::NoAppItems>::Serving(serving), true);
+    s.written(
+        &Event::<crate::chat::NoAppItems>::Relay {
+            chat: ChatId::from_number(1),
+            change: RelayChange::Lost,
+        },
+        true,
+    );
+    s.both(&RelayChange::Connected);
     s.both(&CallId(4));
     s.written(
         &Event::<crate::chat::NoAppItems>::Tool {
@@ -826,6 +857,7 @@ pub(crate) fn every_type(s: &mut Samples) {
     });
     s.both(&Compacted {});
     s.both(&Note::SessionGone);
+    s.both(&Note::ToolsLost);
     s.both(&Unknown {
         what: "hologram".into(),
         raw: json!({ "sessionUpdate": "hologram" }),
@@ -977,9 +1009,11 @@ pub(crate) fn every_type(s: &mut Samples) {
         name: "tools".into(),
         command: command(),
     }];
+    open.tools = Tools::caf([CafTool::Read, CafTool::Write]);
     s.both(&open);
     s.both(&SessionChoice::New);
     s.both(&Refused::QueueFull);
+    s.both(&Refused::ToolsNotServed);
     s.both(&ConnectionInfo {
         id: ConnectionId(2),
         agent: AgentName("claude".into()),
@@ -1110,6 +1144,10 @@ pub(crate) fn every_type(s: &mut Samples) {
         ChatId::from_number(1),
         Shelf("work".into()),
     ));
+    s.both(
+        &RestoreChat::new(ChatId::from_number(1), Shelf("work".into()))
+            .with_tools(Tools::caf(CafTool::ALL)),
+    );
     s.both(&SavedChat {
         shelf: Shelf("work".into()),
         header: header(),
@@ -1458,7 +1496,8 @@ fn enums_are_type_then_value() {
             "locations": [{ "path": "/home/user/project/lib.rs", "line": null }],
             "locations_cut": 0,
             "decision": { "type": "Allowed", "value": { "type": "User", "value": { "option": "Allow" } } },
-            "app": null
+            "app": null,
+            "stopped_by": null
         } })
     );
     // Nested in an event, with std's Result and the agent's own JSON kept
@@ -1682,6 +1721,7 @@ fn recordings_from_before_saving_still_read() {
     assert_eq!(open.shelf, None);
     assert_eq!(open.instructions, None);
     assert!(open.settings.is_empty());
+    assert_eq!(open.tools, Tools::none());
     // An agent from before the host could choose its settings.
     let line = r#"{"name":"claude","launch":{"type":"Installed"},"profile":{"type":"Builtin","value":{"type":"ClaudeAgentAcp"}}}"#;
     let agent: AgentSpec = serde_json::from_str(line).expect("an old agent reads");

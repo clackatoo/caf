@@ -4,6 +4,7 @@ import type { McpServer } from "./McpServer.ts";
 import type { SessionChoice } from "./SessionChoice.ts";
 import type { SettingChoice } from "./SettingChoice.ts";
 import type { Shelf } from "./Shelf.ts";
+import type { Tools } from "./Tools.ts";
 
 /**
  * What to open a chat with.
@@ -52,4 +53,13 @@ instructions: string | null,
  * host's defaults, then the agent's own. Recordings made before it
  * was added read as empty.
  */
-settings: Array<SettingChoice>, };
+settings: Array<SettingChoice>, 
+/**
+ * CAF's own tools to give it, which CAF serves itself, as the MCP
+ * server `caf`. None (the default) gives none. A chat given some is
+ * refused while nothing serves them ([`Refused::ToolsNotServed`]).
+ * Not saved: the host gives them again when it restores the chat
+ * ([`RestoreChat::tools`](crate::save::RestoreChat::tools)).
+ * Recordings made before it was added read as none.
+ */
+tools: Tools, };

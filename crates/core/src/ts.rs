@@ -74,7 +74,8 @@ mod tests {
         ViewerDirective,
     };
     use crate::event::{
-        AgentEvent, Event, Exit, HostCommand, PolicyAnswer, SetupEvent, StorageEvent, ToolEvent,
+        AgentEvent, Event, Exit, HostCommand, PolicyAnswer, RelayChange, Serving, SetupEvent,
+        StorageEvent, ToolEvent,
     };
     use crate::host::{Grouping, Host, Limits, Shows, Timers};
     use crate::ids::{
@@ -102,7 +103,8 @@ mod tests {
     use crate::time::{End, Mono, Now, Wall, Window};
     use crate::tool::{
         Action, CafTool, Cut, DecidedBy, Decision, Diff, DiffLine, Ending, Hunk, Image, LineChange,
-        Lines, Link, Location, Origin, Output, Piece, Text, ToolCall, ToolKind, ToolStatus,
+        Lines, Link, Location, Origin, Output, Piece, StoppedBy, Text, ToolCall, ToolKind,
+        ToolStatus, Tools,
     };
     use crate::usage::{
         BadQuery, Bucket, ChatCounts, Estimate, LedgerLine, ModelPrice, ModelTokens, PriceLayer,
@@ -198,10 +200,12 @@ mod tests {
             Origin,
             Output,
             Piece,
+            StoppedBy,
             Text,
             ToolCall,
             ToolKind,
             ToolStatus,
+            Tools,
             // settings
             Choice,
             KnownSettings,
@@ -247,6 +251,8 @@ mod tests {
             Exit,
             HostCommand,
             PolicyAnswer,
+            RelayChange,
+            Serving,
             SetupEvent,
             StorageEvent,
             ToolEvent,

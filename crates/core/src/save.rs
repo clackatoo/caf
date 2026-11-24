@@ -57,6 +57,7 @@ use crate::change::Change;
 use crate::chat::{AppData, AppItem, Chat, NoAppData, NoAppItems};
 use crate::ids::{AgentName, AgentSessionId, ChatId, Shelf};
 use crate::time::Wall;
+use crate::tool::Tools;
 
 /// What's saved of a chat, whole: a snapshot.
 #[non_exhaustive]
@@ -153,6 +154,11 @@ pub struct RestoreChat {
     /// [`OpenChat::instructions`](crate::OpenChat::instructions): given
     /// again, as it isn't saved.
     pub instructions: Option<String>,
+    /// CAF's own tools to give it, as
+    /// [`OpenChat::tools`](crate::OpenChat::tools): given again, as they
+    /// aren't saved. Recordings made before it was added read as none.
+    #[serde(default)]
+    pub tools: Tools,
 }
 
 impl RestoreChat {
@@ -164,7 +170,15 @@ impl RestoreChat {
             shelf,
             mcp_servers: Vec::new(),
             instructions: None,
+            tools: Tools::none(),
         }
+    }
+
+    /// The same, given `tools`.
+    #[must_use]
+    pub fn with_tools(mut self, tools: Tools) -> Self {
+        self.tools = tools;
+        self
     }
 }
 

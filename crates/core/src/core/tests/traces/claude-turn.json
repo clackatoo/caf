@@ -16,7 +16,10 @@
             "mcp_servers": [],
             "shelf": null,
             "instructions": null,
-            "settings": []
+            "settings": [],
+            "tools": {
+              "caf": []
+            }
           }
         }
       }
