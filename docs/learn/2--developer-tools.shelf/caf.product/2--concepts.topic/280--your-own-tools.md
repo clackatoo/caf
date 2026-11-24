@@ -34,7 +34,7 @@ struct Trim {
     seconds: f64,
 }
 
-let trim = tool("trim_clip", |call, input: Trim| async move {
+let trim = tool("trim_clip", |_call, input: Trim| async move {
     // Ask the app's UI thread to do it, through a handle the closure
     // captured, and await its answer: never block on it.
     Done::answer(format!("Trimmed clip {} to {}s", input.clip, input.seconds))
@@ -141,7 +141,7 @@ a `ToolError`:
 
 | `ToolError` | Its name or schema |
 | --- | --- |
-| `BadName` | Has a character other than `A-Z`, `a-z`, `0-9`, `_` and `-`, or is empty, or longer than 54 bytes: Claude names a tool `mcp__caf__` and its name, and a whole name may be at most 64. |
+| `BadName` | Has a character other than `A-Z`, `a-z`, `0-9`, `_` and `-`, or is empty, or longer than 54 bytes: Claude names a tool `mcp__caf__` and its name, and Claude's API takes names of at most 64 bytes. |
 | `Taken` | Is another of the app's tools', in any case: `trim` and `Trim` can't both be. |
 | `Cafs` | Is one of CAF's own, in any case: no tool may be called `read` or `TaskStop`. |
 | `BadSchema` | Isn't an object's. |
@@ -169,11 +169,12 @@ calls are:
 | `kind` | The kind of tool its calls are, for icons and counting. |
 
 Each is off by default, and the kind is Other. The policy is given them
-with every call to a tool CAF serves (`PermissionRequest::hints`): an
-app's tool's from its spec, and CAF's own from `CafTool::hints`, so a
-policy can allow every read-only call without knowing the tools by name.
-A call the agent reports itself, to a tool CAF doesn't serve, has none.
-The agent is given them too, as MCP's annotations.
+with every call to a tool CAF serves that it asks about
+(`PermissionRequest::hints`): an app's tool's from its spec, and CAF's
+own from `CafTool::hints`, so a policy can allow every read-only call
+without knowing the tools by name. A call the agent reports itself, to a
+tool CAF doesn't serve, has none. The agent is given them too, all but
+the kind, as MCP's annotations.
 
 ## Giving a chat its tools
 
@@ -203,8 +204,10 @@ never runs.
 
 1. **Its input is read** with serde, and its title worked out with
    `title`, before CAF records the call: so the transcript never shows a
-   call without its title. Its origin is `Origin::App` with the tool's
-   name, its action `Action::Tool`, its kind its hints'.
+   call without its title. A call whose input doesn't fit, or whose
+   `title` is empty, gets the tool's own title (`called`, or
+   `ToolSpec::title`). Its origin is `Origin::App` with the tool's name,
+   its action `Action::Tool`, its kind its hints'.
 2. **It's previewed,** if the tool previews (`ToolSpec::previews`), before
    anyone's asked: what it would do, such as the change it would make,
    which the question shows. A preview that fails, as `Err(Done)`, ends the
@@ -219,7 +222,7 @@ never runs.
    what it recorded.
 
 `Call` also gives the chat's folder (`cwd`), the input as the model wrote
-it, and the agent's own id for the call.
+it (`input`), and the agent's own id for the call (`agent_call`).
 
 | `Done` | Is |
 | --- | --- |
@@ -234,14 +237,15 @@ asks no one, as there's nothing to ask about. The model is told what serde
 said, so it can call again: *Refused: invalid type: string "three",
 expected u64*.
 
-**Stopping** a call drops its future: the user stopped the turn, closed
-the chat, or the policy or the user refused it, or the agent gave up on
-it. A tool stops its work when its future is dropped. CAF aborts the
-future's task first, and tells the model the call was stopped only once
-the future has been dropped, so the model never hears it was while the
-work goes on. A tool that doesn't stop within five seconds, such as one
-blocking its thread, has its call answered all the same, and CAF logs
-that the app's tool didn't stop.
+**Stopping** a call drops its future: the user stopped the turn, or
+closed the chat; the policy or the user refused it; the agent gave up on
+it; or the chat was put away, or CAF shut down. A tool stops its work
+when its future is dropped. CAF aborts the future's task first, and tells
+the model the call was stopped or refused only once the future has been
+dropped, so the model never hears it was while the work goes on. A tool
+that doesn't stop within five seconds, such as one blocking its thread,
+has its call answered all the same, and CAF logs that the app's tool
+didn't stop.
 
 **A panic** in `title` titles the call as the tool is; one in `preview`
 or `run`, in their futures, or as a future is dropped, ends the call
@@ -257,9 +261,13 @@ number, and the run's future carries on as that job:
 ```rust
 let render = tool("render", |mut call: Call, input: Render| async move {
     call.answer_now(|job| Answer::text(format!("Rendering, as task {}", job.0)));
-    let file = render(input).await;
+    let file = render_scene(&input.scene).await;
     Done::answer(format!("Rendered {file}"))
-});
+})
+.called("Render a scene")
+.title(|input: &Render| format!("Render the {}", input.scene));
+
+config.tools.app = AppTools::new().with(render)?;
 ```
 
 The job ends as any does (see
@@ -267,9 +275,9 @@ The job ends as any does (see
 given any of the app's tools is served TaskStop too, so the agent can
 stop it, and a job's call is cancelled when its chat is closed. TaskStop
 is answered once the job's future has been dropped, or five seconds have
-passed, as any stopped call is. When it ends by itself, the model never heard the `Done`'s
-answer, so CAF tells the agent in a notice, laid out as its own are, with
-the answer as its result:
+passed, as any stopped call is. When it ends by itself, the model never
+heard the `Done`'s answer, so CAF tells the agent in a notice, laid out
+as its own are, with the answer as its result:
 
 ```text
 <task-notification>
@@ -281,12 +289,15 @@ the answer as its result:
 </task-notification>
 ```
 
-The task's id is the job's number, the summary names the call by its
+The task's id is the job's number, and `<tool-use-id>` is there only if
+the agent gave an id for the call. The summary names the call by its
 title, and the status is `failed`, as the summary says, for a `Done` that
-failed. The result's text is the answer's, with `&`, `<` and `>` written as
-`&amp;`, `&lt;` and `&gt;`, as is everything in a notice. A result longer
-than an answer may be, 30,000 characters, is cut there, and ends saying
-so: *[Cut here: the first 30000 of its 45210 characters were kept]*.
+failed. The result is the answer's text parts, joined by newlines:
+pictures are dropped, and an answer with no text has no `<result>`. Its
+`&`, `<` and `>` are written as `&amp;`, `&lt;` and `&gt;`, as is
+everything in a notice. A result longer than an answer may be, 30,000
+characters, is cut there, and ends saying so: *[Cut here: the first
+30000 of its 45210 characters were kept]*.
 
 ## The app's own item on a call
 
@@ -294,7 +305,8 @@ A call may leave the app's own item on its record: `Done::with_item`. It
 arrives with the call's end, and becomes `ToolCall::app`, which the app's
 own view draws, such as the edit a trim made, with a button to undo it.
 It's set once, as the call ends: no updates while it runs. A preview
-that fails ends the call, so the item its `Done` has is the call's. The model never sees it: it's told the `Done`'s answer.
+that fails ends the call, so the item its `Done` has is the call's. The
+model never sees it: it's told the `Done`'s answer.
 Only the app's own tools may leave one: an item on a call to one of CAF's
 is dropped, with a warning in the log.
 
@@ -324,7 +336,7 @@ async fn trimming_answers_and_leaves_the_edit() {
 | `title` | The call's title. |
 | `preview` | What it previewed, if it previews. |
 | `done` | What it ended with, or the answer CAF would give if its input didn't fit. |
-| `printed` | The output it printed as it ran, as lines: as CAF keeps none of what a preview prints. |
+| `printed` | The lines it printed as it ran; not what it printed previewing, which CAF doesn't keep. |
 | `answered_now` | What the model was answered early, if it went on as a job. |
 
 The debugger has a tool of its own, `word_count`, given to every chat

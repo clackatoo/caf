@@ -148,7 +148,7 @@ folder, given as an absolute path. The debugger gives chats no MCP servers,
 asks you about every permission request, and starts an adapter of its own for
 each chat. **CAF's tools**, ticked by default, gives the chat
 [CAF's own tools](~caf/concepts/cafs-own-tools), Read, Edit, Write and Bash,
-served through the debugger itself; untick it for only the agent's own.
+and TaskStop with Bash, served through the debugger itself; untick it for only the agent's own.
 With them comes the debugger's own tool, `word_count`, which counts the
 words in a text and only reads: a small example of
 [an app's own tools](~caf/concepts/your-own-tools), in

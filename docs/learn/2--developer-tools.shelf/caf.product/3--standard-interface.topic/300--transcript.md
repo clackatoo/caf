@@ -180,7 +180,8 @@ it, and any other in full:
 
 For one of the app's own tools (see
 [Your own tools](~caf/concepts/your-own-tools)), the app's code writes it,
-from the call's input: *Trim clip 3*. Its icon is its kind's, as the tool
+from the call's input: *Trim clip 3*. A call whose input doesn't fit, or
+whose title the app left empty, has the tool's own title: *Trim a clip*. Its icon is its kind's, as the tool
 says, and opened, it says first, muted, whose tool it is: *The app's own
 tool trim_clip*.
 
