@@ -230,7 +230,9 @@ mod usage;
 pub mod viewer;
 
 pub use agent::{AgentDriver, AgentLimits};
-pub use app_tools::{AppTool, AppTools, Built, Done, ToolError, ToolSpec, Tried, tool, try_tool};
+pub use app_tools::{
+    AppTool, AppTools, BoxFuture, Built, Done, ToolError, ToolSpec, Tried, tool, try_tool,
+};
 pub use caf::{
     AgentsWatch, Caf, ChatHandle, ChatsWatch, Config, Error, Running, SavedWatch, Update,
     UsageConfig, Watch,
