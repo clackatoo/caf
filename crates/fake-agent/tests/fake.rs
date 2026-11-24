@@ -1355,22 +1355,33 @@ fn an_mcp_servers_answers_are_checked() {
         ),
         r#"caf has the tools ["Read"], not ["Bash"]"#
     );
+    // The answers in these are JSON, whose keys the fake may write in
+    // either order, as serde_json's features say: so they're read back.
+    let answer = |failed: String, before: &str, after: &str| {
+        let rest = failed
+            .strip_prefix(before)
+            .unwrap_or_else(|| panic!("{failed}"));
+        let answer = rest
+            .strip_suffix(after)
+            .unwrap_or_else(|| panic!("{failed}"));
+        serde_json::from_str::<Value>(answer).unwrap()
+    };
     assert_eq!(
-        check(
-            r#"{"wait": {"method": "tools/call", "timeout": 10000}}
+        answer(
+            check(
+                r#"{"wait": {"method": "tools/call", "timeout": 10000}}
 {"respond": {"result": {"content": [], "isError": true}}}"#,
-            &format!(
-                "{start}\n{}",
-                r#"{"mcp_list": {}}
+                &format!(
+                    "{start}\n{}",
+                    r#"{"mcp_list": {}}
 {"mcp_call": {"tool": "Read"}}
 {"mcp_await": {"expect": {"result": {"isError": false}}, "timeout": 10000}}"#
-            )
+                )
+            ),
+            "caf's answer to 2 was ",
+            r#", not {"result":{"isError":false}}"#
         ),
-        format!(
-            "caf's answer to 2 was {}, not {}",
-            json!({"jsonrpc": "2.0", "id": 2, "result": {"content": [], "isError": true}}),
-            json!({"result": {"isError": false}})
-        )
+        json!({"jsonrpc": "2.0", "id": 2, "result": {"content": [], "isError": true}})
     );
     assert_eq!(
         check(
@@ -1386,20 +1397,21 @@ fn an_mcp_servers_answers_are_checked() {
         "caf closed without answering 2"
     );
     assert_eq!(
-        check(
-            r#"{"wait": {"method": "tools/call", "timeout": 10000}}
+        answer(
+            check(
+                r#"{"wait": {"method": "tools/call", "timeout": 10000}}
 {"respond": {"result": {"content": []}}}"#,
-            &format!(
-                "{start}\n{}",
-                r#"{"mcp_list": {}}
+                &format!(
+                    "{start}\n{}",
+                    r#"{"mcp_list": {}}
 {"mcp_call": {"tool": "Read"}}
 {"mcp_await": {"none": true, "timeout": 5000}}"#
-            )
+                )
+            ),
+            "caf answered 2, with ",
+            ""
         ),
-        format!(
-            "caf answered 2, with {}",
-            json!({"jsonrpc": "2.0", "id": 2, "result": {"content": []}})
-        )
+        json!({"jsonrpc": "2.0", "id": 2, "result": {"content": []}})
     );
     assert_eq!(
         check("", r#"{"mcp_start": {"server": "eyespy"}}"#),
