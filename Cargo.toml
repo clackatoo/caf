@@ -12,6 +12,7 @@ repository = "https://github.com/clackatoo/caf"
 
 [workspace.dependencies]
 caf-core = { path = "crates/core" }
+caf-relay = { path = "crates/relay" }
 caf-save = { path = "crates/save" }
 caf-usage = { path = "crates/usage" }
 # ACP's types only: CAF frames and routes the messages itself. The same
