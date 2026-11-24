@@ -78,6 +78,23 @@ describe('a call\'s status', () => {
     })
   }
 
+  it('says a running call being stopped is "Stopping…", muted, its output no longer live', () => {
+    const output: Piece = { type: 'Output', value: { lines: ['waiting'], dropped: 0, ending: null } }
+    const { container } = drawCalls(call({ status: { type: 'Running' }, stopped_by: { type: 'User' }, result: [output] }))
+    const row = rowOf(container)
+    expect(row.dataset.status).toBe('Running')
+    expect(row.dataset.stopping).toBe('true')
+    expect(text(row.querySelector('.status'))).toBe('Stopping…')
+    expect(TOOL_CSS).toMatch(/\[data-stopping\] \.status \{\s*color: var\(--caf-muted\)/)
+    expect(row.querySelector('[aria-label="Still running"]')).toBeNull()
+    // One running that no one stopped is live.
+    const running = drawCalls(call({ status: { type: 'Running' }, result: [output] }))
+    const live = rowOf(running.container)
+    expect(live.dataset.stopping).toBeUndefined()
+    expect(text(live.querySelector('.status'))).toBe('Running')
+    expect(live.querySelector('[aria-label="Still running"]')).not.toBeNull()
+  })
+
   it('draws the call waiting for the user with an edge in the accent', () => {
     const { container } = drawCalls(call({ status: { type: 'Asking' } }))
     expect(rowOf(container).dataset.status).toBe('Asking')

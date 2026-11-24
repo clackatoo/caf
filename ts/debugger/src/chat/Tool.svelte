@@ -6,12 +6,13 @@
   // wants to check, and so does a command running with output, so it can
   // be watched as it comes. A call that went on after the agent was
   // answered, a job, is marked Background while it runs; a TaskStop,
-  // which stops one, is a step of its own.
+  // which stops one, is a step of its own. A call being stopped says
+  // Stopping…, its output no longer live, until it's said how it ended.
   import type { DeepReadonly, ToolCall, Window } from '@clackatoo/caf'
   import PieceView from './PieceView.svelte'
   import { took } from './time.ts'
   import { count } from './figures.ts'
-  import { cutText, decisionText, ended as hasEnded, jobText, locationText, originText } from './tools.ts'
+  import { cutText, decisionText, ended as hasEnded, jobText, locationText, originText, stopping as isStopping } from './tools.ts'
   import { rawJson, unhidden } from './unhidden.ts'
   import { toolKind, toolStatus } from './words.ts'
 
@@ -21,6 +22,7 @@
   const kind = $derived(tool.action?.type === 'Stop' ? { icon: '⏹️', name: 'Stop a task' } : toolKind(tool.kind))
   const time = $derived(took(window))
   const ended = $derived(hasEnded(tool.status))
+  const stopping = $derived(isStopping(tool))
   const job = $derived(jobText(tool))
   const decision = $derived(decisionText(tool.decision))
   const origin = $derived(originText(tool.origin))
@@ -44,13 +46,13 @@
   })
 </script>
 
-<details class="tool" data-status={tool.status.type} bind:open>
+<details class="tool" data-status={tool.status.type} data-stopping={stopping || undefined} bind:open>
   <summary>
     <span class="icon" title={kind.name} aria-hidden="true">{kind.icon}</span>
     <span class="kind">{kind.name}</span>
     <span class="title">{tool.title}</span>
     {#if tool.job !== null && !ended}<span class="job" title={job}>Background</span>{/if}
-    <span class="status">{toolStatus(tool.status)}</span>
+    <span class="status">{stopping ? 'Stopping…' : toolStatus(tool.status)}</span>
     {#if time !== null}<span class="time">{time}</span>{/if}
   </summary>
   <div class="body">
@@ -68,7 +70,7 @@
       <div class="none">{ended ? 'None' : 'None yet'}</div>
     {:else}
       <div class="result">
-        {#each tool.result as piece, n (n)}<PieceView {piece} running={!ended} />{/each}
+        {#each tool.result as piece, n (n)}<PieceView {piece} running={!ended && !stopping} />{/each}
       </div>
     {/if}
     {#if tool.locations.length > 0}
@@ -150,6 +152,10 @@
   [data-status='Failed'] .status,
   [data-status='Refused'] .status {
     color: var(--caf-error);
+  }
+  /* Being stopped: muted, as what was stopped is. */
+  [data-stopping] .status {
+    color: var(--caf-muted);
   }
   [data-status='Asking'] {
     border-color: var(--caf-accent);
