@@ -55,9 +55,11 @@ instructions: string | null,
  */
 settings: Array<SettingChoice>, 
 /**
- * CAF's own tools to give it, which CAF serves itself, as the MCP
+ * The tools CAF serves to give it, its own and the app's, as the MCP
  * server `caf`. None (the default) gives none. A chat given some is
- * refused while nothing serves them ([`Refused::ToolsNotServed`]).
+ * refused while nothing serves them ([`Refused::ToolsNotServed`]),
+ * and one given an app's tool the app didn't register is refused
+ * ([`Refused::UnknownTool`]).
  * Not saved: the host gives them again when it restores the chat
  * ([`RestoreChat::tools`](crate::save::RestoreChat::tools)).
  * Recordings made before it was added read as none.

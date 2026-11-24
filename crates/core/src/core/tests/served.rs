@@ -130,6 +130,8 @@ fn a_call_comes_first_makes_the_item_and_the_report_joins_it() {
             "origin": { "type": "Caf", "value": { "type": "Read" } },
             "action": { "type": "Read", "value": { "path": "/work/src/main.rs", "lines": { "first": 3, "last": 4 } } },
             "input": input.to_string(),
+            // CAF's own tools say what they are too.
+            "hints": { "read_only": true, "destructive": false, "open_world": false, "kind": { "type": "Read" } },
         })]
     );
     let tool = the_tool(&script);

@@ -76,7 +76,8 @@ locations_cut: number,
 decision: Decision, 
 /**
  * The app's own item for this call, such as the map move one of its
- * tools made. *Later*, with the app's tools.
+ * tools made: set once, as a call to one of the app's own tools ends,
+ * and only on such a call. The model never sees it.
  */
 app: NoAppItems | null, 
 /**
