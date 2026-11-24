@@ -818,3 +818,27 @@ fn sent_prompts(out: &[Value]) -> Vec<Value> {
         .filter(|message| message["method"] == "session/prompt")
         .collect()
 }
+
+#[test]
+fn task_stop_beside_bash_and_the_apps_tools_stops_background_tasks() {
+    let mut script = Script::new(host());
+    script.serving();
+    let (opened, out) = open_given(
+        &mut script,
+        Tools::caf([CafTool::Bash]).and_app(["word_count"]),
+    );
+    assert_eq!(
+        one_told(&opened)["value"]["instructions"],
+        "caf-test's tools to run commands (Bash) and stop background tasks (TaskStop), in the \
+         folder you're working in, and its own (word_count)."
+    );
+    let prompt =
+        sent(&out, "session/new")["params"]["_meta"]["claudeCode"]["options"]["systemPrompt"]
+            .as_str()
+            .expect("a prompt")
+            .to_owned();
+    assert!(
+        prompt.contains("run commands (Bash) and stop background tasks (TaskStop)"),
+        "{prompt}"
+    );
+}
