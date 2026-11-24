@@ -1822,10 +1822,13 @@ impl<A: AppItem, D: AppData> Task<A, D> {
                 (ticket, event) = self.setup.next() => self.give(Event::Setup { ticket, event }),
                 (ticket, event) = self.storage.next() => self.stored(ticket, event),
                 report = self.usage.next() => self.usage_report(report),
-                report = self.tools.next() => self.give(match report {
-                    ToolsReport::Tool { call, event } => Event::Tool { call, event },
-                    ToolsReport::Relay { chat, change } => Event::Relay { chat, change },
-                }),
+                report = self.tools.next() => {
+                    self.give(match report {
+                        ToolsReport::Tool { call, event } => Event::Tool { call, event },
+                        ToolsReport::Relay { chat, change } => Event::Relay { chat, change },
+                    });
+                    self.tools.taken();
+                }
                 () = self.timers.woken() => self.give(Event::Woken),
                 Some(decided) = self.deciding.join_next_with_id() => self.decided(decided),
             }
