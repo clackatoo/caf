@@ -121,8 +121,10 @@ pub fn rules(
 /// one is given none again: what a chat was given isn't in its save, and
 /// a restore is decided before the chat is read. Kept in a file of the
 /// debugger's own in the store's folder, [`UNTOOLED_FILE`], a JSON list
-/// of chat ids, written whole and renamed into place; or only in memory,
-/// for chats that aren't saved.
+/// of chat ids, its user's alone, written whole and renamed into place;
+/// or only in memory, for chats that aren't saved. A note that's missing
+/// or can't be read notes none, so every chat is restored with CAF's
+/// tools, the default.
 #[derive(Debug, Default)]
 pub struct Untooled {
     /// The file, if it's kept in one.
@@ -184,7 +186,7 @@ impl Untooled {
         let partial = file.with_extension(format!("json.{}", std::process::id()));
         let written = serde_json::to_vec(&*chats)
             .map_err(std::io::Error::other)
-            .and_then(|bytes| std::fs::write(&partial, bytes))
+            .and_then(|bytes| write_private(&partial, &bytes))
             .and_then(|()| std::fs::rename(&partial, file));
         if let Err(error) = written {
             log::warn!(
@@ -216,6 +218,22 @@ impl Untooled {
             self.note(chat);
         }
     }
+}
+
+/// Writes `bytes` to a file at `path` that only its user may read or
+/// write, made so, or emptied and made so if it's there.
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 /// Starts CAF with `agents`, recording to `record` if given, keeping chats
@@ -775,7 +793,19 @@ mod tests {
         untooled.note_opened(&serde_json::value::to_raw_value(&event).unwrap());
         assert!(untooled.has(bare) && untooled.has(older) && !untooled.has(tooled));
 
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(dir.join(UNTOOLED_FILE))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "the user's alone");
+        }
         // The next debugger reads the note back, and restores so.
+        assert!(
+            !Untooled::in_store(&dir.join("elsewhere")).has(bare),
+            "no note: all tools"
+        );
         let next = Arc::new(Untooled::in_store(&dir));
         assert!(next.has(bare) && !next.has(tooled));
         let rules = rules(&agents(), true, true, next);
@@ -785,9 +815,15 @@ mod tests {
             Tools::caf(CafTool::ALL)
         );
 
-        // A note that can't be read is noted afresh.
+        // A note that can't be read notes none: all tools.
         std::fs::write(dir.join(UNTOOLED_FILE), "not json").unwrap();
-        assert!(!Untooled::in_store(&dir).has(bare));
+        let unread = Arc::new(Untooled::in_store(&dir));
+        assert!(!unread.has(bare));
+        let rules = super::rules(&agents(), true, true, unread);
+        assert_eq!(
+            (rules.restore)(bare, &shelf()).unwrap().tools,
+            Tools::caf(CafTool::ALL)
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
