@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::future::Future;
 use std::io::{Seek as _, SeekFrom, Write as _};
-use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -16,11 +16,11 @@ use caf_core::ids::{CallId, ChatId};
 use caf_core::mcp::{Answer, AnswerPart};
 use caf_core::tool::{Action, Ending, Image, Lines, Output as OutputPiece, Piece, Text};
 use caf_tools::{
-    CommandSpec, Commands, EditError, Edited, FileError, FileRead, FileTool, Files, JobEnd,
-    MOST_ANSWER, MOST_JOBS, ReadState, Reading, Screen, Version,
+    CommandSpec, Commands, EditError, Edited, FileError, FileRead, FileText, FileTool, Files,
+    JobEnd, MOST_ANSWER, MOST_JOBS, ReadState, Reading, Screen, Version,
 };
 use serde_json::Value;
-use tokio::sync::mpsc;
+use sha2::{Digest as _, Sha256};
 use tokio::time::Instant;
 
 use crate::tools::{Call, Preview, Ran, Runner};
@@ -30,19 +30,32 @@ use crate::tools::{Call, Preview, Ran, Runner};
 const MOST_KEPT: usize = 256 * 1024;
 /// How often a job's output file is brought up to date, at most.
 const FLUSH_EVERY: Duration = Duration::from_millis(250);
+/// The most of a command's output kept in its file: past this, the file
+/// says the rest wasn't kept.
+pub(crate) const MOST_SAVED: u64 = 64 * 1024 * 1024;
+/// The line a file of output ends with once it's full.
+const NOT_KEPT: &str = "[output beyond 64 MiB not kept]\n";
+/// What the model and the record are told of a call whose run panicked.
+const PANICKED: &str = "CAF's tool failed unexpectedly";
 
 /// Runs CAF's own tools, as `caf_tools` says they behave, reading and
 /// writing files through [`Files`] and running commands through
 /// [`Commands`].
 ///
+/// - **Each call runs on a task of its own,** and its heaviest work
+///   (reading a file whole, working out an edit) on a blocking thread, so
+///   none of it holds up CAF's core.
 /// - **Read state is each chat's**, and this run's: a file must be read
-///   before it's changed, and not have changed since.
+///   before it's changed, and not have changed since. Files are known by
+///   their real path, symlinks and all.
 /// - **An edit is worked out as it's previewed,** against the file's
 ///   version then, and written expecting that version: a change between
 ///   the preview and the run makes it stale.
 /// - **Output too large to answer whole,** and a job's, goes to a file
-///   in `out/<chat>/` of the tools' folder, only the user's, removed when
-///   the chat is let go, or the runner is.
+///   in `out/<process>/<chat>/` of the tools' folder, only the user's, at
+///   most [`MOST_SAVED`], removed when the chat is let go, or the runner
+///   is; and those a process that's gone left are removed as the next
+///   starts.
 pub(crate) struct CafRunner {
     files: Arc<dyn Files>,
     commands: Arc<dyn Commands>,
@@ -51,7 +64,7 @@ pub(crate) struct CafRunner {
 
 /// What the runner keeps, shared with its calls' futures.
 struct Shared {
-    /// `out/` in the tools' folder.
+    /// This process's folder in `out/` of the tools' folder.
     out: PathBuf,
     chats: HashMap<ChatId, ChatState>,
     /// The chats' output folders made.
@@ -70,13 +83,20 @@ struct ChatState {
 
 impl CafRunner {
     /// A runner through `files` and `commands`, its output files in
-    /// `out`.
-    pub(crate) fn new(files: Arc<dyn Files>, commands: Arc<dyn Commands>, out: PathBuf) -> Self {
+    /// `out`, a folder of `outs` that's this process's alone, named for
+    /// it: those of processes that are gone are removed.
+    pub(crate) fn new(
+        files: Arc<dyn Files>,
+        commands: Arc<dyn Commands>,
+        outs: &Path,
+        out: &str,
+    ) -> Self {
+        sweep(outs);
         Self {
             files,
             commands,
             shared: Arc::new(Mutex::new(Shared {
-                out,
+                out: outs.join(out),
                 chats: HashMap::new(),
                 made: HashSet::new(),
             })),
@@ -84,14 +104,39 @@ impl CafRunner {
     }
 }
 
+/// Removes the folders in `outs` of processes that are gone: each named
+/// for its process's id, and more after a `-`.
+fn sweep(outs: &Path) {
+    let Ok(entries) = std::fs::read_dir(outs) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = (name.to_str())
+            .and_then(|name| name.split('-').next())
+            .and_then(|pid| pid.parse::<libc::pid_t>().ok())
+            .filter(|&pid| pid > 0)
+        else {
+            continue;
+        };
+        #[allow(unsafe_code)]
+        // SAFETY: signal 0 only asks whether the process is there.
+        let gone = unsafe { libc::kill(pid, 0) } != 0
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+        if gone {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 impl Drop for CafRunner {
     fn drop(&mut self) {
         let shared = lock(&self.shared);
-        for chat in &shared.made {
-            let _ = std::fs::remove_dir_all(chat_folder(&shared.out, *chat));
-        }
+        let _ = std::fs::remove_dir_all(&shared.out);
         // Only if nothing else's is in it.
-        let _ = std::fs::remove_dir(&shared.out);
+        if let Some(outs) = shared.out.parent() {
+            let _ = std::fs::remove_dir(outs);
+        }
     }
 }
 
@@ -106,54 +151,115 @@ fn chat_folder(out: &Path, chat: ChatId) -> PathBuf {
 /// A future of a call's.
 type Boxed<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
+/// `future`, run on a task of its own: stopped when what's given back is
+/// dropped.
+fn on_a_task<T: Send + 'static>(
+    future: impl Future<Output = T> + Send + 'static,
+    panicked: impl FnOnce() -> T + Send + 'static,
+) -> Boxed<T> {
+    let task = tokio::spawn(future);
+    let stop = AbortOnDrop(task.abort_handle());
+    Box::pin(async move {
+        let _stop = stop;
+        match task.await {
+            Ok(done) => done,
+            Err(_) => {
+                log::warn!(target: "caf", "one of CAF's tools panicked");
+                panicked()
+            }
+        }
+    })
+}
+
+/// Stops a task when it's dropped.
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// `work`, on a blocking thread.
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    match tokio::task::spawn_blocking(work).await {
+        Ok(done) => done,
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    }
+}
+
+/// The path `path` is known by in read state: its real one, its folder's
+/// symlinks followed, or as it's given if there's no such folder.
+fn known_as(path: &Path) -> PathBuf {
+    if let Ok(real) = std::fs::canonicalize(path) {
+        return real;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => std::fs::canonicalize(parent)
+            .map_or_else(|_| path.to_owned(), |parent| parent.join(name)),
+        _ => path.to_owned(),
+    }
+}
+
 impl Runner for CafRunner {
     fn preview(&mut self, call: &Call, action: Action) -> Preview {
         let files = Arc::clone(&self.files);
         let shared = Arc::clone(&self.shared);
         let (chat, id, cwd) = (call.chat(), call.id(), call.cwd().to_owned());
         let input = call.input().clone();
-        Box::pin(async move {
-            let (path, tool) = match &action {
-                Action::Edit { path } => (PathBuf::from(path), FileTool::Edit),
-                Action::Write { path } => (PathBuf::from(path), FileTool::Write),
-                _ => return Ok(Vec::new()),
-            };
-            let file = current(files.as_ref(), &path, tool, &cwd).await?;
-            let edited = change(&shared, chat, &path, file.as_ref(), tool, &input)
+        on_a_task(
+            async move {
+                let (path, tool) = match &action {
+                    Action::Edit { path } => (PathBuf::from(path), FileTool::Edit),
+                    Action::Write { path } => (PathBuf::from(path), FileTool::Write),
+                    _ => return Ok(Vec::new()),
+                };
+                let file = current(files.as_ref(), &path, tool, &cwd).await?;
+                let (edited, diff) = blocking({
+                    let shared = Arc::clone(&shared);
+                    move || {
+                        let edited = change(&shared, chat, &path, file.as_ref(), tool, &input)?;
+                        let diff = edited.diff(path.to_string_lossy());
+                        Ok::<_, EditError>((edited, diff))
+                    }
+                })
+                .await
                 .map_err(|error| Ran::failed(error.message(&cwd)))?;
-            let mut shared = lock(&shared);
-            let state = shared.chats.entry(chat).or_default();
-            state.previewed.insert(id, edited.expected.clone());
-            Ok(vec![Piece::Diff(edited.diff(path.to_string_lossy()))])
-        })
+                let mut shared = lock(&shared);
+                let state = shared.chats.entry(chat).or_default();
+                state.previewed.insert(id, edited.expected.clone());
+                Ok(vec![Piece::Diff(diff)])
+            },
+            || Err(Ran::failed(PANICKED)),
+        )
     }
 
     fn run(&mut self, call: Call, action: Action) -> Boxed<Ran> {
         let files = Arc::clone(&self.files);
         let shared = Arc::clone(&self.shared);
+        let panicked = || Ran::failed(PANICKED);
         match action {
-            Action::Read { path, lines } => Box::pin(read(files, shared, call, path.into(), lines)),
-            Action::Edit { path } => Box::pin(change_file(
-                files,
-                shared,
-                call,
-                path.into(),
-                FileTool::Edit,
-            )),
-            Action::Write { path } => Box::pin(change_file(
-                files,
-                shared,
-                call,
-                path.into(),
-                FileTool::Write,
-            )),
+            Action::Read { path, lines } => {
+                on_a_task(read(files, shared, call, path.into(), lines), panicked)
+            }
+            Action::Edit { path } => on_a_task(
+                change_file(files, shared, call, path.into(), FileTool::Edit),
+                panicked,
+            ),
+            Action::Write { path } => on_a_task(
+                change_file(files, shared, call, path.into(), FileTool::Write),
+                panicked,
+            ),
             Action::Run {
                 command,
                 folder,
                 background,
             } => {
                 let commands = Arc::clone(&self.commands);
-                Box::pin(bash(commands, shared, call, command, folder, background))
+                on_a_task(
+                    bash(commands, shared, call, command, folder, background),
+                    panicked,
+                )
             }
             // TaskStop is the driver's, and no other tool is CAF's.
             _ => Box::pin(std::future::ready(Ran::failed(
@@ -162,11 +268,26 @@ impl Runner for CafRunner {
         }
     }
 
+    fn forget(&mut self, call: CallId) {
+        for state in lock(&self.shared).chats.values_mut() {
+            state.previewed.remove(&call);
+        }
+    }
+
     fn let_go(&mut self, chat: ChatId) {
-        let mut shared = lock(&self.shared);
-        shared.chats.remove(&chat);
-        if shared.made.remove(&chat) {
-            let _ = std::fs::remove_dir_all(chat_folder(&shared.out, chat));
+        let folder = {
+            let mut shared = lock(&self.shared);
+            shared.chats.remove(&chat);
+            shared
+                .made
+                .remove(&chat)
+                .then(|| chat_folder(&shared.out, chat))
+        };
+        // Not on CAF's own task.
+        if let Some(folder) = folder {
+            tokio::task::spawn_blocking(move || {
+                let _ = std::fs::remove_dir_all(folder);
+            });
         }
     }
 }
@@ -189,7 +310,7 @@ async fn current(
 }
 
 /// The change `tool` makes, as `input` asks, to the file at `path`, as
-/// it is: `file`.
+/// it is: `file`. On a blocking thread: it's the heavy part.
 fn change(
     shared: &Mutex<Shared>,
     chat: ChatId,
@@ -204,19 +325,20 @@ fn change(
             .unwrap_or("")
             .to_owned()
     };
-    let mut shared = lock(shared);
-    let state = &shared.chats.entry(chat).or_default().read;
+    let known = known_as(path);
+    // A copy, so the change is worked out without the runner held.
+    let state = lock(shared).chats.entry(chat).or_default().read.clone();
     if tool == FileTool::Write {
-        return caf_tools::write(path, file, state, &text(&["content"]));
+        return caf_tools::write(&known, file, &state, &text(&["content"]));
     }
     let replace_all = input
         .get("replace_all")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     caf_tools::edit(
-        path,
+        &known,
         file,
-        state,
+        &state,
         &text(&["old_string", "old_str"]),
         &text(&["new_string", "new_str"]),
         replace_all,
@@ -231,46 +353,53 @@ async fn read(
     path: PathBuf,
     lines: Option<Lines>,
 ) -> Ran {
-    let cwd = call.cwd();
+    let cwd = call.cwd().to_owned();
     let file = match files.read(&path).await {
         Ok(file) => file,
         Err(error) => {
-            return Ran::failed(caf_tools::file_error(&error, FileTool::Read, &path, cwd));
+            return Ran::failed(caf_tools::file_error(&error, FileTool::Read, &path, &cwd));
         }
     };
     let offset = lines.map(|lines| lines.first);
     let limit = lines.and_then(|lines| lines.last.map(|last| last.saturating_sub(lines.first) + 1));
     let allow_large = (call.input().get("allow_large")).and_then(Value::as_bool) == Some(true);
-    match caf_tools::read(&path, &file.bytes, offset, limit, allow_large) {
-        Reading::Text(text) => {
-            let mut shared = lock(&shared);
-            let state = shared.chats.entry(call.chat()).or_default();
-            state
-                .read
-                .record(path, file.version, &file.bytes, text.partial);
-            Ran::new(
-                true,
-                vec![Piece::Text(Text::new(text.text))],
-                Answer::text(text.answer),
-            )
-        }
-        Reading::Image(image) => {
-            let piece = Image::new(image.mime, &file.bytes);
-            let answer = match &piece.data {
-                Some(data) => Answer::new(
-                    vec![AnswerPart::Image {
-                        mime: image.mime.to_owned(),
-                        data: data.clone(),
-                    }],
-                    false,
-                ),
-                None => Answer::error("This image is too large to read."),
-            };
-            Ran::new(piece.data.is_some(), vec![Piece::Image(piece)], answer)
-        }
-        Reading::Refused(why) => Ran::failed(why),
-        _ => Ran::failed("CAF can't read this file"),
-    }
+    let chat = call.chat();
+    blocking(
+        move || match caf_tools::read(&path, &file.bytes, offset, limit, allow_large) {
+            Reading::Text(text) => {
+                let known = known_as(&path);
+                let mut file = file;
+                if file.sha256.is_none() {
+                    file = file.clone().with_sha256(Sha256::digest(&file.bytes).into());
+                }
+                let mut shared = lock(&shared);
+                let state = shared.chats.entry(chat).or_default();
+                state.read.record_read(known, &file, text.partial);
+                Ran::new(
+                    true,
+                    vec![Piece::Text(Text::new(text.text))],
+                    Answer::text(text.answer),
+                )
+            }
+            Reading::Image(image) => {
+                let piece = Image::new(image.mime, &file.bytes);
+                let answer = match &piece.data {
+                    Some(data) => Answer::new(
+                        vec![AnswerPart::Image {
+                            mime: image.mime.to_owned(),
+                            data: data.clone(),
+                        }],
+                        false,
+                    ),
+                    None => Answer::error("This image is too large to read."),
+                };
+                Ran::new(piece.data.is_some(), vec![Piece::Image(piece)], answer)
+            }
+            Reading::Refused(why) => Ran::failed(why),
+            _ => Ran::failed("CAF can't read this file"),
+        },
+    )
+    .await
 }
 
 /// Edit and Write: the change previewed, written expecting the version
@@ -298,25 +427,37 @@ async fn change_file(
     {
         return Ran::failed(caf_tools::STALE);
     }
-    let edited = match change(&shared, chat, &path, file.as_ref(), tool, call.input()) {
-        Ok(edited) => edited,
+    let input = call.input().clone();
+    let worked_out = blocking({
+        let (shared, path) = (Arc::clone(&shared), path.clone());
+        move || {
+            let edited = change(&shared, chat, &path, file.as_ref(), tool, &input)?;
+            let diff = edited.diff(path.to_string_lossy());
+            let answer = edited.answer(&path);
+            Ok::<_, EditError>((edited, diff, answer))
+        }
+    })
+    .await;
+    let (edited, diff, answer) = match worked_out {
+        Ok(worked_out) => worked_out,
         Err(error) => return Ran::failed(error.message(&cwd)),
     };
-    let written = files
-        .write(&path, edited.text(), edited.expected.clone(), id)
-        .await;
+    let expected = edited.expected.clone();
+    let bytes = edited.bytes;
+    let (sha256, bytes): ([u8; 32], Vec<u8>) =
+        blocking(move || (Sha256::digest(&bytes).into(), bytes)).await;
+    let written = files.write(&path, FileText::new(bytes), expected, id).await;
     match written {
         Ok(version) => {
-            let mut shared = lock(&shared);
-            let state = shared.chats.entry(chat).or_default();
-            state
-                .read
-                .record(path.clone(), version, &edited.bytes, false);
-            Ran::new(
-                true,
-                vec![Piece::Diff(edited.diff(path.to_string_lossy()))],
-                Answer::text(edited.answer(&path)),
-            )
+            // What it wrote is what it's seen.
+            blocking(move || {
+                let known = known_as(&path);
+                let mut shared = lock(&shared);
+                let state = shared.chats.entry(chat).or_default();
+                state.read.record_sha256(known, version, sha256, false);
+            })
+            .await;
+            Ran::new(true, vec![Piece::Diff(diff)], Answer::text(answer))
         }
         Err(error) => Ran::failed(caf_tools::file_error(&error, tool, &path, &cwd)),
     }
@@ -361,11 +502,18 @@ fn output_file(
 ) -> Result<(PathBuf, File), String> {
     let mut shared = lock(shared);
     let folder = chat_folder(&shared.out, chat);
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&folder)
-        .map_err(|error| format!("{}: {error}", folder.display()))?;
+    let made = (|| {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&folder)?;
+        // Made before, it may not have been the user's alone.
+        for each in [&shared.out, &folder] {
+            std::fs::set_permissions(each, std::fs::Permissions::from_mode(0o700))?;
+        }
+        Ok::<_, std::io::Error>(())
+    })();
+    made.map_err(|error| format!("{}: {error}", folder.display()))?;
     shared.made.insert(chat);
     let path = folder.join(format!("{}.txt", call.0));
     let file = std::fs::OpenOptions::new()
@@ -407,6 +555,10 @@ struct Log {
     /// Whether the lines kept have changed since they were last written.
     dirty: bool,
     flushed: Instant,
+    /// The most its file keeps, and whether it's full: then nothing more
+    /// is written to it.
+    most: u64,
+    full: bool,
 }
 
 impl Drop for Log {
@@ -419,7 +571,7 @@ impl Drop for Log {
 }
 
 impl Log {
-    fn new(make: MakeFile) -> Self {
+    fn new(make: MakeFile, most: u64) -> Self {
         Self {
             screen: Screen::new(),
             lines: Vec::new(),
@@ -432,6 +584,8 @@ impl Log {
             started: false,
             dirty: false,
             flushed: Instant::now(),
+            most,
+            full: false,
         }
     }
 
@@ -479,10 +633,31 @@ impl Log {
         let moved: Vec<String> = self.lines.drain(..n).collect();
         self.from += n as u64;
         let text = self.plain(&moved);
-        if let Some((_, file, written)) = &mut self.file {
+        let (most, full) = (self.most, &mut self.full);
+        if let Some((_, file, written)) = &mut self.file
+            && !*full
+        {
             let _ = file.seek(SeekFrom::Start(*written));
-            if file.write_all(text.as_bytes()).is_ok() {
-                *written += text.len() as u64;
+            let fits = *written + text.len() as u64 <= most;
+            // As much as fits, in whole lines, then a line saying so.
+            let kept = if fits {
+                text.as_str()
+            } else {
+                let room = usize::try_from(most - *written).unwrap_or(usize::MAX);
+                let mut end = text.len().min(room);
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                text[..end].rfind('\n').map_or("", |at| &text[..=at])
+            };
+            if file.write_all(kept.as_bytes()).is_ok() {
+                *written += kept.len() as u64;
+            }
+            if !fits {
+                *full = true;
+                if file.write_all(NOT_KEPT.as_bytes()).is_ok() {
+                    *written += NOT_KEPT.len() as u64;
+                }
             }
             let _ = file.set_len(*written);
         }
@@ -528,6 +703,10 @@ impl Log {
         let tail: String = (self.lines.iter())
             .map(|line| caf_tools::strip_sgr(line) + "\n")
             .collect();
+        // Full, or would be: what's still drawn waits to be settled.
+        if self.full || *written + tail.len() as u64 > self.most {
+            return;
+        }
         let _ = file.seek(SeekFrom::Start(*written));
         let _ = file.write_all(tail.as_bytes());
         let _ = file.set_len(*written + tail.len() as u64);
@@ -576,24 +755,27 @@ async fn bash(
             None => return Ran::failed(caf_tools::too_many_jobs()),
         }
     }
-    let (out, mut printed) = mpsc::unbounded_channel();
-    let spec = CommandSpec::new(command.clone(), folder, call.id());
-    let started = commands
-        .start(
-            spec,
-            Box::new(move |output| {
-                let _ = out.send(output);
-            }),
-        )
-        .await;
-    let mut running = match started {
+    // A folder gone since the last command ended there: it starts again
+    // in the chat's, and the model's told.
+    let mut folder = PathBuf::from(folder);
+    let mut reset = None;
+    if !folder.is_dir() {
+        reset = Some(format!(
+            "The shell's folder, {}, no longer exists, so this ran in {} instead.",
+            folder.display(),
+            call.cwd().display()
+        ));
+        folder = call.cwd().to_owned();
+    }
+    let spec = CommandSpec::new(command.clone(), &folder, call.id());
+    let mut running = match commands.start(spec).await {
         Ok(running) => running,
         Err(why) => return Ran::failed(why),
     };
     let place = running.place();
     let id = call.id();
     let made = Arc::clone(&shared);
-    let mut log = Log::new(Box::new(move || output_file(&made, chat, id)));
+    let mut log = Log::new(Box::new(move || output_file(&made, chat, id)), MOST_SAVED);
     let mut job = None;
     if background {
         match log.keep_in_file() {
@@ -609,17 +791,18 @@ async fn bash(
         }
     }
     let mut stopped = false;
-    let mut ended = running.wait();
     let timed_out = tokio::time::sleep(timeout);
     tokio::pin!(timed_out);
-    let ended = loop {
+    let mut output = running.output();
+    loop {
         tokio::select! {
-            output = printed.recv() => match output {
-                Some(output) => print(&call, &mut log, output),
-                // Its backend let go of its output.
-                None => break (&mut ended).await,
+            printed = &mut output => match printed {
+                Some(printed) => {
+                    print(&call, &mut log, printed);
+                    output = running.output();
+                }
+                None => break,
             },
-            ended = &mut ended => break ended,
             // A job's file grows as it runs.
             () = tokio::time::sleep_until(log.flushed + FLUSH_EVERY), if job.is_some() && log.dirty => {
                 log.flush();
@@ -642,11 +825,8 @@ async fn bash(
                 }
             }
         }
-    };
-    // What it printed as it ended.
-    while let Ok(output) = printed.try_recv() {
-        print(&call, &mut log, output);
     }
+    let ended = running.wait().await;
     if let Some(redraw) = log.screen.finish() {
         log.redraw(redraw.from, &redraw.lines);
         call.print(redraw.from, redraw.lines);
@@ -666,7 +846,7 @@ async fn bash(
         let notice = caf_tools::notice(job.0, call.agent_call(), &description, end, &path);
         return Ran::new(done, record, Answer::text("")).with_notice(notice);
     }
-    let mut answer = caf_tools::answer_of(
+    let answered = caf_tools::answer_of(
         &command,
         &text,
         chars,
@@ -675,6 +855,10 @@ async fn bash(
         saved.as_deref(),
         place.as_deref(),
     );
+    let mut answer = match &reset {
+        Some(reset) => format!("{reset}\n{answered}"),
+        None => answered,
+    };
     if stopped {
         answer.push_str(&format!(
             "\nCommand reached its {}s timeout and was stopped, as it couldn't be moved to the background: {}",
@@ -687,10 +871,10 @@ async fn bash(
         record,
         Answer::new(vec![AnswerPart::Text(answer)], !done),
     );
-    if let Some(folder) = ended
-        .folder
-        .and_then(|folder| folder.to_str().map(str::to_owned))
-    {
+    // Where it ended, or where it started if that's not known: so a
+    // folder that's gone isn't tried again.
+    let ended_in = ended.folder.or_else(|| reset.is_some().then_some(folder));
+    if let Some(folder) = ended_in.and_then(|folder| folder.to_str().map(str::to_owned)) {
         ran = ran.with_folder(folder);
     }
     ran
@@ -710,3 +894,6 @@ fn print(call: &Call, log: &mut Log, output: caf_tools::Output) {
     log.redraw(from, &lines);
     call.print(from, lines);
 }
+
+#[cfg(test)]
+mod tests;

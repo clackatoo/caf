@@ -129,14 +129,21 @@ impl Own {
     /// Every output file saved, with what's in it.
     fn saved(&self) -> Vec<(PathBuf, String)> {
         let mut saved = Vec::new();
-        for chat in std::fs::read_dir(self.out())
-            .into_iter()
-            .flatten()
-            .flatten()
-        {
-            for file in std::fs::read_dir(chat.path()).unwrap().flatten() {
-                let text = std::fs::read_to_string(file.path()).unwrap();
-                saved.push((file.path(), text));
+        let within = |folder: &Path| {
+            std::fs::read_dir(folder)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|entry| entry.path())
+                .collect::<Vec<_>>()
+        };
+        // Each process's folder, then each chat's.
+        for process in within(&self.out()) {
+            for chat in within(&process) {
+                for file in within(&chat) {
+                    let text = std::fs::read_to_string(&file).unwrap_or_default();
+                    saved.push((file, text));
+                }
             }
         }
         saved
@@ -638,5 +645,32 @@ async fn a_progress_bar_is_recorded_as_its_last_drawing() {
         .unwrap();
     // Its colours are kept for the user; the model has none.
     assert_eq!(output.lines, ["start", "\u{1b}[0;32m100%\u{1b}[0m"]);
+    own.shut_down().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shell_folder_thats_gone_starts_again_in_the_chats() {
+    let own = serve(|work| {
+        let gone = path_of(work, "gone");
+        let here = work.display().to_string();
+        [
+            call("Bash", "b1", json!({"command": "mkdir gone && cd gone"}), says("(Bash completed with no output)", false)).to_vec(),
+            // Its shell ends in a folder that's no longer there.
+            call("Bash", "b2", json!({"command": "rmdir \"$PWD\""}), says("(Bash completed with no output)", false)).to_vec(),
+            call(
+                "Bash",
+                "b3",
+                json!({"command": "pwd"}),
+                says(&format!("The shell's folder, {gone}, no longer exists, so this ran in {here} instead.\n{here}"), false),
+            )
+            .to_vec(),
+            // And it goes on there.
+            call("Bash", "b4", json!({"command": "pwd"}), says(&here, false)).to_vec(),
+            vec![end_turn()],
+        ]
+        .concat()
+    });
+    let _chat = own.chat().await;
+    own.script_done().await;
     own.shut_down().await;
 }

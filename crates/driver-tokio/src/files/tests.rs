@@ -37,8 +37,14 @@ impl Drop for Dir {
     }
 }
 
+/// One for all the tests, as an app has one.
+fn disk() -> &'static DiskFiles {
+    static DISK: std::sync::OnceLock<DiskFiles> = std::sync::OnceLock::new();
+    DISK.get_or_init(DiskFiles::default)
+}
+
 async fn read_at(path: &Path) -> Result<FileRead, FileError> {
-    DiskFiles.read(path).await
+    disk().read(path).await
 }
 
 async fn write_at(
@@ -46,7 +52,7 @@ async fn write_at(
     bytes: &[u8],
     expected: Option<Version>,
 ) -> Result<Version, FileError> {
-    DiskFiles
+    disk()
         .write(path, FileText::new(bytes.to_vec()), expected, CallId(1))
         .await
 }
@@ -233,4 +239,88 @@ fn errors_say_what_they_mean_for_a_tool() {
     assert_eq!(of(libc::ENOENT), FileError::NotFound);
     assert!(matches!(of(libc::EACCES), FileError::Denied(why) if why.starts_with("/x: ")));
     assert!(matches!(of(libc::EIO), FileError::Other(_)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn of_writes_expecting_the_same_version_only_one_is_made() {
+    // Each would replace the file: only one may, the rest find it changed.
+    let dir = Dir::new();
+    let path = dir.path("a.txt");
+    for _ in 0..20 {
+        std::fs::write(&path, b"start").unwrap();
+        let read = read_at(&path).await.unwrap();
+        let writes: Vec<_> = (0..8)
+            .map(|n| {
+                let (path, version) = (path.clone(), read.version.clone());
+                tokio::spawn(async move {
+                    write_at(&path, format!("write {n}").as_bytes(), Some(version)).await
+                })
+            })
+            .collect();
+        let mut made = Vec::new();
+        for (n, write) in writes.into_iter().enumerate() {
+            if write.await.unwrap().is_ok() {
+                made.push(n);
+            }
+        }
+        assert_eq!(made.len(), 1, "{made:?}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            format!("write {}", made[0])
+        );
+    }
+}
+
+/// Whether the tests run as root, which permissions don't hold back.
+fn root() -> bool {
+    rustix::process::geteuid().is_root()
+}
+
+#[tokio::test]
+async fn a_file_in_a_folder_it_cant_write_to_is_written_in_place() {
+    if root() {
+        return;
+    }
+    let dir = Dir::new();
+    let folder = dir.path("locked");
+    std::fs::create_dir(&folder).unwrap();
+    let path = folder.join("a.txt");
+    std::fs::write(&path, b"one").unwrap();
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let read = read_at(&path).await.unwrap();
+    let written = write_at(&path, b"two", Some(read.version)).await;
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    written.unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"two");
+}
+
+#[tokio::test]
+async fn a_file_with_the_longest_name_is_written() {
+    let dir = Dir::new();
+    let path = dir.path(&"n".repeat(250));
+    std::fs::write(&path, b"one").unwrap();
+    let read = read_at(&path).await.unwrap();
+    write_at(&path, b"two", Some(read.version)).await.unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"two");
+    assert_eq!(dir.names().len(), 1);
+}
+
+#[test]
+fn where_nothing_else_can_make_a_file_it_is_made_where_it_goes_only_if_its_not_there() {
+    let dir = Dir::new();
+    let path = dir.path("made.txt");
+    let version = create_in_place(&path, b"one").unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"one");
+    assert_eq!(read(&path).unwrap().version, version);
+    assert_eq!(create_in_place(&path, b"two"), Err(FileError::Changed));
+    assert_eq!(std::fs::read(&path).unwrap(), b"one");
+}
+
+#[tokio::test]
+async fn a_read_gives_its_bytes_sha256() {
+    let dir = Dir::new();
+    let path = dir.path("a.txt");
+    std::fs::write(&path, b"x").unwrap();
+    let read = read_at(&path).await.unwrap();
+    assert_eq!(read.sha256, Some(Sha256::digest(b"x").into()));
 }

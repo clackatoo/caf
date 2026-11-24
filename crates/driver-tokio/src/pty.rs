@@ -7,6 +7,7 @@ use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::time::Duration;
 
 use caf_core::event::Exit;
@@ -21,9 +22,14 @@ use crate::agent::{PIDFD_SIGNAL_PROCESS_GROUP, pidfd_send_signal};
 
 /// How long a stopped command has after SIGTERM before SIGKILL.
 pub const STOP_GRACE: Duration = Duration::from_secs(3);
-/// How long the pty is read after its command ended, for what's still
-/// on its way, if something it left running holds it open.
+/// How long the pty is read after its command ended, once nothing more
+/// comes, if something it left running holds it open...
 const DRAIN: Duration = Duration::from_millis(500);
+/// ...and at most, after it ended.
+const DRAIN_MOST: Duration = Duration::from_secs(5);
+/// How many reads of the pty may wait to be taken: past them, it isn't
+/// read, so a command printing faster than CAF takes it is held back.
+const WAITING: usize = 4;
 /// The most read of the pipe the shell's folder comes through.
 const MOST_FOLDER: usize = 64 * 1024;
 /// How much of the pty is read at once.
@@ -46,6 +52,15 @@ const WRAPPER: &str = "trap '{ pwd -P >&3; } 2>/dev/null' EXIT\neval \"shift; $1
 /// - **Its environment** is the app's, with `TERM=xterm-256color`,
 ///   `PAGER=cat` and `GIT_PAGER=cat`, without `CLAUDECODE` or any
 ///   `CAF_RELAY*`, and with the spec's own variables.
+/// - **Its input is `/dev/null`:** a command that waits for input, such
+///   as a password prompt or `cat` with no file, finds none at once,
+///   rather than waiting out its timeout.
+/// - **It starts clean:** the signals a terminal's job control uses are
+///   back to their defaults, whatever the app ignores, and no file the app
+///   has open is passed on to it.
+/// - **Its output is read only as fast as it's taken**
+///   ([`caf_tools::Running::output`]), as a terminal nobody reads holds a
+///   command back.
 /// - **The folder its shell ended in** comes back in [`Ended`].
 /// - **Stopping** sends SIGTERM to its group, then SIGKILL after
 ///   [`STOP_GRACE`] to what's left, through its pidfd (on Linux 6.9 or
@@ -57,13 +72,8 @@ const WRAPPER: &str = "trap '{ pwd -P >&3; } 2>/dev/null' EXIT\neval \"shift; $1
 pub struct PtyCommands;
 
 impl Commands for PtyCommands {
-    fn start(
-        &self,
-        spec: CommandSpec,
-        out: Box<dyn FnMut(Output) + Send>,
-    ) -> BoxFuture<Result<Box<dyn caf_tools::Running>, String>> {
-        let started =
-            start(&spec, out).map(|running| Box::new(running) as Box<dyn caf_tools::Running>);
+    fn start(&self, spec: CommandSpec) -> BoxFuture<Result<Box<dyn caf_tools::Running>, String>> {
+        let started = start(&spec).map(|running| Box::new(running) as Box<dyn caf_tools::Running>);
         Box::pin(std::future::ready(started))
     }
 }
@@ -79,9 +89,15 @@ enum Control {
 struct PtyRunning {
     control: mpsc::UnboundedSender<Control>,
     ended: watch::Receiver<Option<Ended>>,
+    output: Arc<tokio::sync::Mutex<mpsc::Receiver<Output>>>,
 }
 
 impl caf_tools::Running for PtyRunning {
+    fn output(&mut self) -> BoxFuture<Option<Output>> {
+        let output = Arc::clone(&self.output);
+        Box::pin(async move { output.lock().await.recv().await })
+    }
+
     fn wait(&mut self) -> BoxFuture<Ended> {
         let mut ended = self.ended.clone();
         Box::pin(async move {
@@ -121,8 +137,8 @@ fn lost() -> Ended {
     Ended::new(None, None)
 }
 
-/// Starts `spec`'s command in a pty, its output going to `out`.
-fn start(spec: &CommandSpec, out: Box<dyn FnMut(Output) + Send>) -> Result<PtyRunning, String> {
+/// Starts `spec`'s command in a pty.
+fn start(spec: &CommandSpec) -> Result<PtyRunning, String> {
     let (master, slave) =
         open_pty().map_err(said("CAF couldn't open a terminal for the command"))?;
     let (folder_read, folder_write) = rustix::pipe::pipe_with(
@@ -133,7 +149,10 @@ fn start(spec: &CommandSpec, out: Box<dyn FnMut(Output) + Send>) -> Result<PtyRu
     rustix::fs::fcntl_setfl(&folder_write, rustix::fs::OFlags::empty())
         .map_err(|errno| said("CAF couldn't open a pipe for the command")(errno.into()))?;
     let mut command = shell_command(spec, std::env::vars_os());
-    let streams = (|| Ok::<_, io::Error>((slave.try_clone()?, slave.try_clone()?, slave)))();
+    let streams = (|| {
+        let stdin = std::fs::File::open("/dev/null")?;
+        Ok::<_, io::Error>((stdin, slave.try_clone()?, slave))
+    })();
     let (stdin, stdout, stderr) = streams.map_err(said("CAF couldn't start the command"))?;
     command
         .stdin(Stdio::from(stdin))
@@ -199,6 +218,7 @@ fn start(spec: &CommandSpec, out: Box<dyn FnMut(Output) + Send>) -> Result<PtyRu
     let (master, folder) = watched.map_err(said("CAF couldn't watch the command"))?;
     let (control, controls) = mpsc::unbounded_channel();
     let (ended_tx, ended) = watch::channel(None);
+    let (out, output) = mpsc::channel(WAITING);
     tokio::spawn(watch_command(Watched {
         leader,
         master: Some(master),
@@ -207,7 +227,11 @@ fn start(spec: &CommandSpec, out: Box<dyn FnMut(Output) + Send>) -> Result<PtyRu
         controls,
         ended: ended_tx,
     }));
-    Ok(PtyRunning { control, ended })
+    Ok(PtyRunning {
+        control,
+        ended,
+        output: Arc::new(tokio::sync::Mutex::new(output)),
+    })
 }
 
 /// What's said of `error`, as `what` failed.
@@ -247,9 +271,14 @@ fn open_pty() -> io::Result<(OwnedFd, OwnedFd)> {
     Ok((master, slave))
 }
 
+/// `close_range`'s flag to mark the fds close-on-exec rather than close
+/// them, from `linux/close_range.h`.
+const CLOSE_RANGE_CLOEXEC: libc::c_uint = 1 << 2;
+
 /// In the child, before it runs the shell: a session of its own, whose
-/// controlling terminal is the pty on its standard streams, and the
-/// folder's pipe as fd 3.
+/// controlling terminal is the pty on its output, the folder's pipe as
+/// fd 3, job control's signals at their defaults, and every other fd the
+/// app had closed as it runs the shell.
 fn child_setup(folder_fd: i32) -> io::Result<()> {
     #[allow(unsafe_code)]
     // SAFETY: plain system calls on numbers, async-signal-safe.
@@ -257,7 +286,8 @@ fn child_setup(folder_fd: i32) -> io::Result<()> {
         if libc::setsid() < 0 {
             return Err(io::Error::last_os_error());
         }
-        if libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
+        // Its input is /dev/null: the terminal is its output's.
+        if libc::ioctl(1, libc::TIOCSCTTY, 0) < 0 {
             return Err(io::Error::last_os_error());
         }
         if folder_fd == 3 {
@@ -268,6 +298,22 @@ fn child_setup(folder_fd: i32) -> io::Result<()> {
         } else if libc::dup2(folder_fd, 3) < 0 {
             return Err(io::Error::last_os_error());
         }
+        // An app run under nohup, say, ignores some: its commands mustn't.
+        for signal in [
+            libc::SIGHUP,
+            libc::SIGINT,
+            libc::SIGQUIT,
+            libc::SIGTERM,
+            libc::SIGTSTP,
+            libc::SIGTTIN,
+            libc::SIGTTOU,
+        ] {
+            libc::signal(signal, libc::SIG_DFL);
+        }
+        // Marked, not closed: std's own pipe must last until the exec,
+        // to say if it failed. Linux 5.11 and later; before, the app's fds
+        // are as it left them.
+        libc::syscall(libc::SYS_close_range, 4u32, u32::MAX, CLOSE_RANGE_CLOEXEC);
     }
     Ok(())
 }
@@ -406,40 +452,61 @@ struct Watched {
     leader: Leader,
     master: Option<AsyncFd<OwnedFd>>,
     folder: Option<AsyncFd<OwnedFd>>,
-    out: Box<dyn FnMut(Output) + Send>,
+    out: mpsc::Sender<Output>,
     controls: mpsc::UnboundedReceiver<Control>,
     ended: watch::Sender<Option<Ended>>,
 }
 
-/// Watches a command until it's done: reads its pty and its folder's
-/// pipe, signals it as it's told, reaps it, and says how it ended.
+/// Watches a command until it's done: reads its pty as fast as its output
+/// is taken, and its folder's pipe, signals it as it's told, reaps it,
+/// and says how it ended.
 async fn watch_command(mut watched: Watched) {
     let mut status: Option<Option<WaitIdStatus>> = None;
     let mut folder = Vec::new();
     let mut buffer = vec![0u8; READ_SIZE];
+    // What was read of the pty, waiting to be taken.
+    let mut pending: Option<Vec<u8>> = None;
     // When the group is killed, once it's stopping.
     let mut kill_at: Option<Instant> = None;
     let mut killed = false;
-    // When the pty stops being read, once the command has ended.
+    // Once it has ended: when the pty is given up on if nothing more
+    // comes, and at the latest.
     let mut drain_until: Option<Instant> = None;
+    let mut drain_most: Option<Instant> = None;
     let mut controls_open = true;
     loop {
-        if status.is_some() && watched.folder.is_none() {
-            // Stopping: until everything in its group has gone.
+        if status.is_some() {
+            // Stopped, what's left of its output is no one's: nothing
+            // waits for it to be taken.
+            if kill_at.is_some() {
+                watched.master = None;
+                pending = None;
+            }
             let group_done = kill_at.is_none() || !watched.leader.group_alive();
-            if (watched.master.is_none() || drain_until.is_some_and(|at| at <= Instant::now()))
+            if watched.master.is_none()
+                && pending.is_none()
+                && watched.folder.is_none()
                 && group_done
             {
                 break;
             }
         }
         let pidfd = watched.leader.pidfd.as_ref();
+        let drain_at = match (drain_until, drain_most) {
+            (Some(until), Some(most)) => Some(until.min(most)),
+            _ => None,
+        };
         tokio::select! {
-            read = readable(watched.master.as_ref()) => {
+            read = readable(watched.master.as_ref()), if pending.is_none() => {
                 match read {
                     Ok(mut guard) => match rustix::io::read(guard.get_inner(), &mut buffer) {
                         Ok(0) => watched.master = None,
-                        Ok(n) => (watched.out)(Output::Bytes(buffer[..n].to_vec())),
+                        Ok(n) => {
+                            pending = Some(buffer[..n].to_vec());
+                            if drain_until.is_some() {
+                                drain_until = Some(Instant::now() + DRAIN);
+                            }
+                        }
                         Err(rustix::io::Errno::AGAIN) => guard.clear_ready(),
                         Err(rustix::io::Errno::INTR) => {}
                         // EIO: nothing holds the pty open any more.
@@ -448,19 +515,24 @@ async fn watch_command(mut watched: Watched) {
                     Err(_) => watched.master = None,
                 }
             }
+            permit = watched.out.reserve(), if pending.is_some() => match permit {
+                Ok(permit) => {
+                    if let Some(bytes) = pending.take() {
+                        permit.send(Output::Bytes(bytes));
+                    }
+                }
+                // Nobody takes its output any more.
+                Err(_) => {
+                    pending = None;
+                    watched.master = None;
+                }
+            },
             read = readable(watched.folder.as_ref()) => {
-                let mut chunk = [0u8; 4096];
                 match read {
-                    Ok(mut guard) => match rustix::io::read(guard.get_inner(), &mut chunk) {
-                        Ok(0) => watched.folder = None,
-                        Ok(n) => {
-                            if folder.len() < MOST_FOLDER {
-                                folder.extend_from_slice(&chunk[..n]);
-                            }
-                        }
-                        Err(rustix::io::Errno::AGAIN) => guard.clear_ready(),
-                        Err(rustix::io::Errno::INTR) => {}
-                        Err(_) => watched.folder = None,
+                    Ok(mut guard) => match read_folder(guard.get_inner(), &mut folder) {
+                        Some(true) => watched.folder = None,
+                        Some(false) => {}
+                        None => guard.clear_ready(),
                     },
                     Err(_) => watched.folder = None,
                 }
@@ -470,7 +542,15 @@ async fn watch_command(mut watched: Watched) {
                     Ok(waited) => {
                         status = Some(waited);
                         watched.leader.pidfd = None;
-                        drain_until = Some(Instant::now() + DRAIN);
+                        let now = Instant::now();
+                        drain_until = Some(now + DRAIN);
+                        drain_most = Some(now + DRAIN_MOST);
+                        // The shell's trap wrote its folder before it
+                        // exited: what's in the pipe is all there is, and
+                        // anything it left running may hold it open.
+                        if let Some(pipe) = watched.folder.take() {
+                            while read_folder(pipe.get_ref(), &mut folder) == Some(false) {}
+                        }
                     }
                     // It can't be watched, as the runtime is going: the
                     // leader kills and reaps it as it's dropped.
@@ -497,7 +577,9 @@ async fn watch_command(mut watched: Watched) {
                     let _ = pidfd_send_signal(pidfd.get_ref().as_fd(), libc::SIGKILL, 0);
                 }
             }
-            () = sleep_until(drain_until), if watched.master.is_some() => {
+            // Ended, the pty is given up on once it's quiet, or at the
+            // latest: what's waiting to be taken is taken first.
+            () = sleep_until(drain_at), if watched.master.is_some() && pending.is_none() => {
                 watched.master = None;
             }
             // Stopping, it's looked at again shortly for what's left of
@@ -519,6 +601,27 @@ async fn watch_command(mut watched: Watched) {
         .filter(|text| text.starts_with('/') && !text.contains('\n'))
         .map(PathBuf::from);
     let _ = watched.ended.send(Some(Ended::new(exit, folder)));
+    // Its output ends after how it ended is known.
+    drop(watched.out);
+}
+
+/// Reads the folder's pipe, `fd`, into `folder`, up to [`MOST_FOLDER`]:
+/// `Some(true)` at its end, `Some(false)` if there may be more, `None` if
+/// there's nothing yet.
+fn read_folder(fd: &OwnedFd, folder: &mut Vec<u8>) -> Option<bool> {
+    let mut chunk = [0u8; 4096];
+    match rustix::io::read(fd, &mut chunk) {
+        Ok(0) => Some(true),
+        Ok(n) => {
+            if folder.len() < MOST_FOLDER {
+                folder.extend_from_slice(&chunk[..n]);
+            }
+            Some(false)
+        }
+        Err(rustix::io::Errno::AGAIN) => None,
+        Err(rustix::io::Errno::INTR) => Some(false),
+        Err(_) => Some(true),
+    }
 }
 
 /// Resolves when `fd` may be read, or never if there's none.

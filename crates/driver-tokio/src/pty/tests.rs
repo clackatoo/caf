@@ -32,19 +32,11 @@ impl Drop for Dir {
     }
 }
 
-/// What a command printed, as it comes.
+/// What a command printed, as it's taken.
 #[derive(Clone, Default)]
 struct Printed(Arc<Mutex<Vec<u8>>>);
 
 impl Printed {
-    fn out(&self) -> Box<dyn FnMut(Output) + Send> {
-        let printed = self.0.clone();
-        Box::new(move |output| match output {
-            Output::Bytes(bytes) => printed.lock().unwrap().extend_from_slice(&bytes),
-            other => panic!("the pty gives bytes, not {other:?}"),
-        })
-    }
-
     fn text(&self) -> String {
         String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
     }
@@ -64,22 +56,70 @@ impl Printed {
     }
 }
 
-async fn start_in(command: &str, folder: &Path) -> (Box<dyn caf_tools::Running>, Printed) {
+/// A command started for a test, its output taken as it comes by a task
+/// of its own, which doesn't keep it: dropped, it's stopped.
+struct Run {
+    running: Arc<tokio::sync::Mutex<Box<dyn caf_tools::Running>>>,
+    pump: tokio::task::JoinHandle<()>,
+}
+
+impl Run {
+    async fn wait(&self) -> Ended {
+        let wait = self.running.lock().await.wait();
+        wait.await
+    }
+
+    async fn stop(&self) {
+        let stop = self.running.lock().await.stop();
+        stop.await;
+    }
+
+    async fn interrupt(&self) {
+        self.running.lock().await.interrupt();
+    }
+
+    /// Its end, once all its output is taken.
+    async fn finish(self) -> Ended {
+        let pump = self.pump;
+        tokio::time::timeout(PATIENCE, pump)
+            .await
+            .expect("its output ended in time")
+            .unwrap();
+        let wait = self.running.lock().await.wait();
+        tokio::time::timeout(PATIENCE, wait)
+            .await
+            .expect("it ended in time")
+    }
+}
+
+async fn start_in(command: &str, folder: &Path) -> (Run, Printed) {
     let printed = Printed::default();
     let spec = CommandSpec::new(command, folder, CallId(1));
-    let running = PtyCommands
-        .start(spec, printed.out())
-        .await
-        .expect("it starts");
-    (running, printed)
+    let running = PtyCommands.start(spec).await.expect("it starts");
+    let running = Arc::new(tokio::sync::Mutex::new(running));
+    let weak = Arc::downgrade(&running);
+    let into = printed.0.clone();
+    let pump = tokio::spawn(async move {
+        loop {
+            let Some(running) = weak.upgrade() else {
+                return;
+            };
+            let next = running.lock().await.output();
+            drop(running);
+            match next.await {
+                Some(Output::Bytes(bytes)) => into.lock().unwrap().extend_from_slice(&bytes),
+                Some(other) => panic!("the pty gives bytes, not {other:?}"),
+                None => return,
+            }
+        }
+    });
+    (Run { running, pump }, printed)
 }
 
 /// Runs `command` in `folder` to its end.
 async fn run_in(command: &str, folder: &Path) -> (Ended, String) {
-    let (mut running, printed) = start_in(command, folder).await;
-    let ended = tokio::time::timeout(PATIENCE, running.wait())
-        .await
-        .expect("it ended in time");
+    let (run, printed) = start_in(command, folder).await;
+    let ended = run.finish().await;
     (ended, printed.text())
 }
 
@@ -143,7 +183,7 @@ async fn a_folder_that_isnt_there_is_said_so() {
     let dir = Dir::new();
     let spec = CommandSpec::new("true", dir.0.join("none"), CallId(1));
     let error = PtyCommands
-        .start(spec, Printed::default().out())
+        .start(spec)
         .await
         .err()
         .expect("it doesn't start");
@@ -152,13 +192,19 @@ async fn a_folder_that_isnt_there_is_said_so() {
 
 #[tokio::test]
 async fn it_runs_in_a_terminal_the_size_of_the_screen() {
-    let (_, text) = run("test -t 0 && test -t 1 && echo tty; stty size").await;
+    // Its output is the terminal; its input isn't.
+    let (_, text) = run("test ! -t 0 && test -t 1 && echo tty; stty size </dev/tty").await;
     assert_eq!(text, "tty\r\n24 200\r\n");
     // Its own session and group, which the terminal is the controlling
-    // one of.
-    let (ended, _) =
-        run("test \"$(ps -o sid= -p $$)\" -eq $$ && test \"$(ps -o pgid= -p $$)\" -eq $$").await;
-    assert_eq!(ended.exit, Some(Exit::Code(0)));
+    // one of: from /proc, as any ps may not say.
+    let (ended, text) = run(
+        "read -r _ _ _ _ pgrp sid _ < /proc/$$/stat; test $pgrp -eq $$ && test $sid -eq $$ && echo own",
+    )
+    .await;
+    assert_eq!(
+        (ended.exit, text.as_str()),
+        (Some(Exit::Code(0)), "own\r\n")
+    );
 }
 
 #[tokio::test]
@@ -184,7 +230,7 @@ async fn stopping_a_command_stops_everything_it_started() {
     // it.
     let command = "sleep 1000 & echo $!; (trap '' TERM HUP; exec sleep 1001) & echo $!; wait";
     let dir = Dir::new();
-    let (mut running, printed) = start_in(command, &dir.0).await;
+    let (running, printed) = start_in(command, &dir.0).await;
     let first = printed.pid().await;
     // Both are started.
     tokio::time::timeout(PATIENCE, async {
@@ -225,14 +271,16 @@ async fn dropping_a_command_stops_it_without_waiting() {
 async fn a_command_that_leaves_something_behind_still_ends() {
     // Its terminal's hangup ends what it left, or the drain gives up on
     // it: either way, the command's end isn't held up.
-    let (ended, _) = run("sleep 1000 &").await;
+    let (ended, text) = run("echo $$; sleep 1000 &").await;
+    // Nothing it left outlives the test.
+    kill_group_of(text.trim().parse().unwrap());
     assert_eq!(ended.exit, Some(Exit::Code(0)));
 }
 
 #[tokio::test]
 async fn an_interrupt_goes_to_the_commands_group() {
     let dir = Dir::new();
-    let (mut running, printed) = start_in("echo started; sleep 1000", &dir.0).await;
+    let (running, printed) = start_in("echo started; sleep 1000", &dir.0).await;
     tokio::time::timeout(PATIENCE, async {
         while !printed.text().contains("started") {
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -240,7 +288,7 @@ async fn an_interrupt_goes_to_the_commands_group() {
     })
     .await
     .unwrap();
-    running.interrupt();
+    running.interrupt().await;
     let ended = tokio::time::timeout(PATIENCE, running.wait())
         .await
         .unwrap();
@@ -287,4 +335,95 @@ fn its_environment_is_the_apps_with_terminal_and_pager_set_and_caf_and_claude_co
     let none = [(OsString::from("PATH"), OsString::from("/nowhere"))];
     let command = shell_command(&spec, none.into_iter());
     assert_eq!(command.get_program(), "/bin/sh");
+}
+
+/// Kills process group `pgid`, whatever's left in it.
+fn kill_group_of(pgid: u32) {
+    super::kill_group(pgid, libc::SIGKILL);
+}
+
+#[tokio::test]
+async fn a_background_subshell_doesnt_hold_the_command_open() {
+    // The subshell never execs, so it has the shell's copy of the folder's
+    // pipe; and it ignores the hangup the shell's end sends.
+    let dir = Dir::new();
+    let (running, printed) =
+        start_in("echo $$; (trap '' HUP; sleep 1000; true) & echo bg", &dir.0).await;
+    let leader = printed.pid().await;
+    let ended = tokio::time::timeout(PATIENCE, running.wait()).await;
+    kill_group_of(leader);
+    let ended = ended.expect("it ended with the shell, not the subshell");
+    assert_eq!(ended.exit, Some(Exit::Code(0)));
+    assert_eq!(ended.folder.as_deref(), Some(dir.0.as_path()));
+}
+
+#[tokio::test]
+async fn a_command_reading_its_input_finds_none_at_once() {
+    let (ended, text) = tokio::time::timeout(PATIENCE, run("cat; read line || echo none"))
+        .await
+        .expect("it didn't wait for input");
+    assert_eq!(ended.exit, Some(Exit::Code(0)));
+    assert_eq!(text, "none\r\n");
+}
+
+#[tokio::test]
+async fn signals_the_app_ignores_arent_ignored_by_its_commands() {
+    // SIGTTIN: ignoring it does nothing to the tests around this one.
+    #[allow(unsafe_code)]
+    // SAFETY: setting a signal's disposition to ignored.
+    let before = unsafe { libc::signal(libc::SIGTTIN, libc::SIG_IGN) };
+    let (_, text) = run("grep SigIgn /proc/self/status").await;
+    #[allow(unsafe_code)]
+    // SAFETY: putting it back.
+    unsafe {
+        libc::signal(libc::SIGTTIN, before);
+    }
+    let mask = text.trim().rsplit('\t').next().unwrap().trim();
+    let ignored = u64::from_str_radix(mask, 16).unwrap();
+    assert_eq!(ignored & (1 << (libc::SIGTTIN - 1)), 0, "{text}");
+}
+
+#[tokio::test]
+async fn a_command_is_held_back_while_its_output_isnt_taken() {
+    let dir = Dir::new();
+    let spec = CommandSpec::new(
+        "echo $$; head -c 50000000 /dev/zero | tr '\\0' x",
+        &dir.0,
+        CallId(1),
+    );
+    let mut running = PtyCommands.start(spec).await.expect("it starts");
+    let mut taken = Vec::new();
+    // Its id, from the first of its output.
+    let leader: libc::pid_t = loop {
+        match tokio::time::timeout(PATIENCE, running.output())
+            .await
+            .unwrap()
+        {
+            Some(Output::Bytes(bytes)) => taken.extend_from_slice(&bytes),
+            other => panic!("{other:?}"),
+        }
+        if let Some(line) = String::from_utf8_lossy(&taken).lines().next()
+            && taken.contains(&b'\n')
+        {
+            break line.trim().parse().unwrap();
+        }
+    };
+    // Untaken, it can't print it all, so it's still there.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    #[allow(unsafe_code)]
+    // SAFETY: signal 0 only asks whether it's there.
+    let alive = unsafe { libc::kill(leader, 0) } == 0;
+    assert!(alive, "it ran on with nobody taking its output");
+    let mut count = taken.len();
+    while let Some(output) = tokio::time::timeout(PATIENCE, running.output())
+        .await
+        .unwrap()
+    {
+        if let Output::Bytes(bytes) = output {
+            count += bytes.len();
+        }
+    }
+    let ended = running.wait().await;
+    assert_eq!(ended.exit, Some(Exit::Code(0)));
+    assert!(count > 50_000_000, "{count}");
 }

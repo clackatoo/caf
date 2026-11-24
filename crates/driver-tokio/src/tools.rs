@@ -79,7 +79,7 @@ impl Default for ToolsConfig {
         Self {
             relay: Relay::None,
             runner: None,
-            files: Arc::new(DiskFiles),
+            files: Arc::new(DiskFiles::default()),
             commands: Arc::new(PtyCommands),
             folder: None,
             progress_every: PROGRESS_EVERY,
@@ -176,6 +176,11 @@ pub trait Runner: Send + 'static {
     /// keeps for it can go. Its calls have all been dropped already.
     fn let_go(&mut self, chat: ChatId) {
         let _ = chat;
+    }
+    /// Call `call` won't be run, or has gone, whether it was previewed or
+    /// not: whatever the runner keeps for it can go.
+    fn forget(&mut self, call: CallId) {
+        let _ = call;
     }
 }
 
@@ -581,14 +586,17 @@ struct Hello {
 impl ToolsDriver {
     /// A driver as `config` says, serving relays at `live`, if any, from
     /// the tools' `folder`.
-    fn with(config: ToolsConfig, live: Option<Live>, folder: Option<&Path>) -> Self {
+    /// `folder` is the tools' folder, and the name of this driver's own in
+    /// its `out/`.
+    fn with(config: ToolsConfig, live: Option<Live>, folder: Option<(&Path, &str)>) -> Self {
         let (prints, printed) = mpsc::unbounded_channel();
         let runner = match (config.runner, folder) {
             (Some(runner), _) => runner,
-            (None, Some(folder)) => Box::new(CafRunner::new(
+            (None, Some((folder, out))) => Box::new(CafRunner::new(
                 config.files,
                 config.commands,
-                folder.join("out"),
+                &folder.join("out"),
+                out,
             )),
             // Nothing is served, so nothing is run.
             (None, None) => Box::new(NotBuilt),
@@ -658,6 +666,12 @@ impl ToolsDriver {
         // A second CAF in the same process gets a name of its own.
         static STARTED: AtomicU64 = AtomicU64::new(0);
         let nth = STARTED.fetch_add(1, Ordering::Relaxed);
+        // Its output files' folder is named for this process too: one
+        // that's gone left its for the next to remove.
+        let out = match nth {
+            0 => std::process::id().to_string(),
+            nth => format!("{}-{nth}", std::process::id()),
+        };
         let name = match nth {
             0 => format!("{}-{}.sock", file_name(app), std::process::id()),
             nth => format!("{}-{}-{nth}.sock", file_name(app), std::process::id()),
@@ -689,7 +703,10 @@ impl ToolsDriver {
             last_conn: 0,
             accept_again: None,
         };
-        Ok((Self::with(config, Some(live), Some(&folder)), serving))
+        Ok((
+            Self::with(config, Some(live), Some((&folder, &out))),
+            serving,
+        ))
     }
 
     /// Carries out the core's directive.
@@ -771,11 +788,13 @@ impl ToolsDriver {
                 each.run = Some(run);
             }
             ToolDirective::Refuse { call, why } => {
+                self.forget(call);
                 if let Some(each) = self.calls.remove(&call) {
                     self.answer(each.conn, &each.request, &Answer::error(refused(&why)));
                 }
             }
             ToolDirective::Cancel { call } => {
+                self.forget(call);
                 if let Some(each) = self.calls.remove(&call) {
                     // Its work stops before the model hears it did. A job's
                     // model was answered, unless that answer still waits.
@@ -794,6 +813,14 @@ impl ToolsDriver {
             _ => {}
         }
         self.wake_at_next();
+    }
+
+    /// Tells the runner `call` won't run, or has gone.
+    fn forget(&mut self, call: CallId) {
+        let runner = &mut self.runner;
+        if std::panic::catch_unwind(AssertUnwindSafe(|| runner.forget(call))).is_err() {
+            log::warn!(target: "caf", "the tool runner panicked forgetting call {}", call.0);
+        }
     }
 
     /// The call `call` is, for the runner: `None` if it's gone.
@@ -1084,6 +1111,7 @@ impl ToolsDriver {
                         .map(|(call, _)| *call);
                     if let Some(call) = found {
                         self.calls.remove(&call);
+                        self.forget(call);
                         self.reports.push_back(Report::Tool {
                             call,
                             event: ToolEvent::Gone,
@@ -1122,6 +1150,7 @@ impl ToolsDriver {
             .map(|(call, _)| *call)
             .collect();
         for call in ended {
+            self.forget(call);
             let Some(each) = self.calls.remove(&call) else {
                 continue;
             };
@@ -1885,6 +1914,7 @@ mod tests {
     struct Scripted {
         runs: mpsc::UnboundedSender<Run>,
         dropped: mpsc::UnboundedSender<CallId>,
+        forgot: mpsc::UnboundedSender<CallId>,
         panics: bool,
     }
 
@@ -1904,6 +1934,10 @@ mod tests {
                 _ => Ok(vec![Piece::Text(Text::new("preview"))]),
             };
             Box::pin(std::future::ready(previewed))
+        }
+
+        fn forget(&mut self, call: CallId) {
+            let _ = self.forgot.send(call);
         }
 
         fn run(&mut self, call: Call, action: Action) -> Pin<Box<dyn Future<Output = Ran> + Send>> {
@@ -1940,6 +1974,7 @@ mod tests {
         reports: mpsc::UnboundedReceiver<Report>,
         runs: mpsc::UnboundedReceiver<Run>,
         dropped: mpsc::UnboundedReceiver<CallId>,
+        forgot: mpsc::UnboundedReceiver<CallId>,
         serving: Serving,
         finished: Option<tokio::task::JoinHandle<()>>,
         _dir: Dir,
@@ -1963,10 +1998,12 @@ mod tests {
         let dir = Dir::new();
         let (runs, run) = mpsc::unbounded_channel();
         let (dropped, drop_seen) = mpsc::unbounded_channel();
+        let (forgot, forgotten) = mpsc::unbounded_channel();
         let config = ToolsConfig {
             runner: Some(Box::new(Scripted {
                 runs,
                 dropped,
+                forgot,
                 panics,
             })),
             folder: Some(dir.0.clone()),
@@ -2002,6 +2039,7 @@ mod tests {
             reports,
             runs: run,
             dropped: drop_seen,
+            forgot: forgotten,
             serving,
             finished: Some(finished),
             _dir: dir,
@@ -3307,5 +3345,25 @@ mod tests {
             matches!(event, ToolEvent::Finished { done: false, notice: Some(notice), .. }
                 if notice.contains("<task-id>1</task-id>") && notice.contains("failed"))
         });
+    }
+
+    #[tokio::test]
+    async fn the_runner_forgets_a_call_refused_or_cancelled() {
+        let mut h = harness();
+        h.serve(CHAT);
+        let mut client = h.bound(CHAT).await;
+        let refused = h.called(&mut client, 1, false).await;
+        h.apply(ToolDirective::Refuse {
+            call: refused,
+            why: RefusedCall::NotAllowed,
+        });
+        let cancelled = h.called(&mut client, 2, false).await;
+        h.apply(ToolDirective::Cancel { call: cancelled });
+        for expected in [refused, cancelled] {
+            let forgot = tokio::time::timeout(Duration::from_secs(10), h.forgot.recv())
+                .await
+                .unwrap();
+            assert_eq!(forgot, Some(expected));
+        }
     }
 }
