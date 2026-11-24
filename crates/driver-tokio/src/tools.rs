@@ -46,6 +46,7 @@ use tokio::time::{Instant, Sleep};
 
 use crate::files::DiskFiles;
 use crate::pty::PtyCommands;
+use crate::runner::CafRunner;
 
 /// How the app serves CAF's tools: [`Config::tools`](crate::Config::tools).
 #[non_exhaustive]
@@ -246,6 +247,7 @@ impl Ran {
 pub struct Call {
     chat: ChatId,
     id: CallId,
+    cwd: PathBuf,
     input: serde_json::Value,
     agent_call: Option<String>,
     prints: mpsc::UnboundedSender<Print>,
@@ -268,6 +270,13 @@ impl Call {
     #[must_use]
     pub fn id(&self) -> CallId {
         self.id
+    }
+
+    /// The chat's folder: what the model is told is its working
+    /// directory.
+    #[must_use]
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
     }
 
     /// What the model gave it, whole: for what its action doesn't say,
@@ -458,6 +467,8 @@ impl Drop for SocketFile {
 struct Served {
     tools: Vec<CafTool>,
     instructions: String,
+    /// The chat's folder.
+    cwd: PathBuf,
 }
 
 /// A finished call's answer, waiting for the core to take its `Finished`.
@@ -564,10 +575,22 @@ struct Hello {
 }
 
 impl ToolsDriver {
-    fn with(config: ToolsConfig, live: Option<Live>) -> Self {
+    /// A driver as `config` says, serving relays at `live`, if any, from
+    /// the tools' `folder`.
+    fn with(config: ToolsConfig, live: Option<Live>, folder: Option<&Path>) -> Self {
         let (prints, printed) = mpsc::unbounded_channel();
+        let runner = match (config.runner, folder) {
+            (Some(runner), _) => runner,
+            (None, Some(folder)) => Box::new(CafRunner::new(
+                config.files,
+                config.commands,
+                folder.join("out"),
+            )),
+            // Nothing is served, so nothing is run.
+            (None, None) => Box::new(NotBuilt),
+        };
         Self {
-            runner: config.runner.unwrap_or_else(|| Box::new(NotBuilt)),
+            runner,
             progress_every: config.progress_every.max(Duration::from_millis(1)),
             live,
             served: HashMap::new(),
@@ -599,7 +622,7 @@ impl ToolsDriver {
         app: &str,
     ) -> Result<(Self, Option<Serving>), StartError> {
         let relay = match std::mem::take(&mut config.relay) {
-            Relay::None => return Ok((Self::with(config, None), None)),
+            Relay::None => return Ok((Self::with(config, None, None), None)),
             Relay::ThisProgram => {
                 let program = std::env::current_exe()
                     .map_err(|e| StartError::Serving(format!("it can't find this program: {e}")))?;
@@ -662,7 +685,7 @@ impl ToolsDriver {
             last_conn: 0,
             accept_again: None,
         };
-        Ok((Self::with(config, Some(live)), serving))
+        Ok((Self::with(config, Some(live), Some(&folder)), serving))
     }
 
     /// Carries out the core's directive.
@@ -672,14 +695,14 @@ impl ToolsDriver {
                 chat,
                 tools,
                 instructions,
-                // For the runner, once it's CAF's own.
-                cwd: _,
+                cwd,
             } => {
                 self.served.insert(
                     chat,
                     Served {
                         tools,
                         instructions,
+                        cwd: PathBuf::from(cwd),
                     },
                 );
             }
@@ -772,9 +795,12 @@ impl ToolsDriver {
     /// The call `call` is, for the runner: `None` if it's gone.
     fn call_for(&self, call: CallId, input: serde_json::Value) -> Option<Call> {
         let each = self.calls.get(&call)?;
+        let cwd =
+            (self.served.get(&each.chat)).map_or_else(PathBuf::new, |served| served.cwd.clone());
         Some(Call {
             chat: each.chat,
             id: call,
+            cwd,
             input,
             agent_call: each.agent_call.clone(),
             prints: self.prints.clone(),
