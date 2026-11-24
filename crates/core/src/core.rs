@@ -319,6 +319,9 @@ pub enum Refused {
     /// ([`Event::Serving`](crate::Event::Serving)), as one that serves
     /// none never does.
     ToolsNotServed,
+    /// It's given an app's tool, by this name, that the app didn't
+    /// register ([`Serving::app_tools`](crate::event::Serving::app_tools)).
+    UnknownTool(String),
 }
 
 /// What the host can see of a connection: one adapter process.

@@ -154,6 +154,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             ticket,
             chat,
             request: PermissionRequest {
+                hints: None,
                 item: tool,
                 title,
                 origin,

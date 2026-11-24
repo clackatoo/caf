@@ -49,7 +49,7 @@ use crate::question::{OptionId, OptionKind, Permission, PermissionOption, Questi
 use crate::time::{Now, Window};
 use crate::tool::{
     Action, CafTool, DecidedBy, Decision, Ending, Lines, MOST_LINE, MOST_OUTPUT, Origin, Output,
-    Piece, StoppedBy, output_size,
+    Piece, ServedTool, StoppedBy, output_size,
 };
 
 /// The longest title CAF writes for a call, in bytes.
@@ -282,16 +282,19 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         &mut self,
         now: Now,
         call: CallId,
-        event: ToolEvent,
+        event: ToolEvent<A>,
         out: &mut Vec<Directive<A, D>>,
     ) {
         match event {
             ToolEvent::Called {
                 chat,
-                tool,
+                tool: ServedTool::Caf(tool),
                 input,
                 agent_call,
+                ..
             } => self.called(now, call, chat, tool, input, agent_call, out),
+            // The app's own tools: feature 13.
+            ToolEvent::Called { .. } => todo!(),
             ToolEvent::Previewed { pieces } => self.previewed(call, pieces, out),
             ToolEvent::Output { from, lines } => self.printed(call, from, lines, out),
             ToolEvent::Detached { job } => self.detached(call, job, out),
@@ -300,6 +303,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
                 pieces,
                 folder,
                 notice,
+                // The app's item on the call: feature 13.
+                item: _,
             } => self.finished(now, call, done, pieces, folder, notice, out),
             ToolEvent::Gone => self.gone(now, call, out),
         }
@@ -671,6 +676,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return;
         };
         let request = PermissionRequest {
+            // The tool's hints: feature 13.
+            hints: None,
             item: Some(item),
             title: tool.title.clone(),
             origin: tool.origin.clone(),

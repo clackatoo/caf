@@ -55,7 +55,8 @@
               {
                 "type": "TaskStop"
               }
-            ]
+            ],
+            "app": []
           }
         }
       }
@@ -72,7 +73,8 @@
             "value": "s1"
           },
           "tools": {
-            "caf": []
+            "caf": [],
+            "app": []
           }
         }
       }
@@ -4887,6 +4889,19 @@
           "type": "Refused",
           "value": {
             "type": "ToolsNotServed"
+          }
+        }
+      }
+    },
+    {
+      "type": "Done",
+      "value": {
+        "request": 34,
+        "outcome": {
+          "type": "Refused",
+          "value": {
+            "type": "UnknownTool",
+            "value": "trim_clip"
           }
         }
       }

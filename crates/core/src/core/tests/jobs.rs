@@ -11,7 +11,7 @@ use super::{CHAT, PROC, SESSION};
 use crate::core::Refused;
 use crate::event::{Exit, PolicyAnswer, ToolEvent};
 use crate::ids::JobId;
-use crate::tool::{CafTool, Ending, Output, Piece, Text};
+use crate::tool::{CafTool, Ending, Output, Piece, ServedTool, Text};
 
 /// What the agent is told of job 1's end, in these tests.
 const NOTICE: &str = "<task-notification>\n<task-id>1</task-id>\n</task-notification>";
@@ -46,6 +46,7 @@ fn finished(
         pieces,
         folder: folder.map(str::to_owned),
         notice: notice.map(str::to_owned),
+        item: None,
     }
 }
 
@@ -314,9 +315,11 @@ fn task_stop_never_stops_another_chats_job() {
         2,
         ToolEvent::Called {
             chat: other,
-            tool: CafTool::TaskStop,
+            tool: ServedTool::Caf(CafTool::TaskStop),
             input: json!({ "task_id": "1" }),
             agent_call: None,
+            title: None,
+            bad_input: None,
         },
     );
     assert_eq!(one_told(&out)["type"], "Refuse");

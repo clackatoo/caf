@@ -19,7 +19,7 @@ use crate::question::Answer;
 use crate::save::{CannotRestore, Header, RestoreChat, Saved};
 use crate::settings::SettingChoice;
 use crate::time::Wall;
-use crate::tool::{CafTool, Piece};
+use crate::tool::{AppToolSpec, Piece, ServedTool};
 use crate::usage::PriceTable;
 
 /// The version of a recording of a run's events (the tokio kit's
@@ -31,8 +31,10 @@ use crate::usage::PriceTable;
 /// CAF's tools ([`Event::Serving`], [`Event::Relay`], chats' tools);
 /// version 6 with CAF's own tools' jobs ([`ToolEvent::Detached`],
 /// [`HostCommand::Notify`], TaskStop, and what [`ToolEvent::Finished`]
-/// says of a shell's folder and a job's notice).
-pub const RECORDING_VERSION: u32 = 6;
+/// says of a shell's folder and a job's notice); version 7 with the app's
+/// own tools ([`ServedTool`], [`Serving::app_tools`], and a call's title,
+/// bad input and app item).
+pub const RECORDING_VERSION: u32 = 7;
 
 /// Something that happened. `A` and `D` are the app's item and data
 /// types.
@@ -78,7 +80,7 @@ pub enum Event<A: AppItem = NoAppItems, D: AppData = NoAppData> {
         /// The call.
         call: CallId,
         /// What happened.
-        event: ToolEvent,
+        event: ToolEvent<A>,
     },
     /// The storage driver's report.
     Storage {
@@ -138,6 +140,11 @@ pub struct Serving {
     /// as all zeros.
     #[cfg_attr(feature = "ts", ts(type = "string"))]
     pub key: Key,
+    /// The app's own tools, as registered (`ToolsConfig::app` in the
+    /// tokio kit), in order: which a chat may be given, and what the core
+    /// knows of each. Recordings made before it was added read as none.
+    #[serde(default)]
+    pub app_tools: Vec<AppToolSpec>,
 }
 
 impl Serving {
@@ -148,6 +155,7 @@ impl Serving {
             relay,
             socket: socket.into(),
             key,
+            app_tools: Vec::new(),
         }
     }
 }
@@ -354,8 +362,10 @@ pub enum Exit {
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(concrete(A = NoAppItems), bound = "A: ts_rs::TS"))]
 #[serde(tag = "type", content = "value")]
-pub enum ToolEvent {
+#[serde(bound = "A: AppItem")]
+pub enum ToolEvent<A: AppItem = NoAppItems> {
     /// The agent called a tool CAF serves. The core refuses it, unless
     /// its chat is running a turn and was given the tool, and it reads as
     /// an action; otherwise it joins the agent's report of the call, or
@@ -364,14 +374,26 @@ pub enum ToolEvent {
         /// The chat, as the connection it came on belongs to: never from
         /// the call itself.
         chat: ChatId,
-        /// The tool.
-        tool: CafTool,
+        /// The tool: CAF's own, or the app's.
+        tool: ServedTool,
         /// What it was given, as the model wrote it.
         input: serde_json::Value,
         /// The agent's id for the call, if it sent one with it, such as
         /// Claude's `_meta["claudecode/toolUseId"]`: what joins it to the
         /// agent's report of it.
         agent_call: Option<String>,
+        /// The call's title, for the app's own tools, worked out by the
+        /// tool from its input, as the core can't read it: `None` for
+        /// CAF's own, whose titles the core works out itself.
+        #[serde(default)]
+        title: Option<String>,
+        /// Why the input isn't what the app's tool takes (serde's own
+        /// words), if it isn't: the call is refused as
+        /// [`RefusedCall::BadInput`](crate::directive::RefusedCall::BadInput)
+        /// with it, asking no one. Always `None` for CAF's own tools,
+        /// whose input the core reads itself.
+        #[serde(default)]
+        bad_input: Option<String>,
     },
     /// What [`ToolDirective::Preview`](crate::directive::ToolDirective::Preview)
     /// worked out: put on the call before it's asked about.
@@ -424,6 +446,13 @@ pub enum ToolEvent {
         /// none is sent without it. Ignored for any other call.
         #[serde(default)]
         notice: Option<String>,
+        /// The app's own item for the call
+        /// ([`ToolCall::app`](crate::tool::ToolCall::app)), from one of
+        /// the app's own tools only: one for any other call is ignored,
+        /// with a warning. Recordings made before it was added read as
+        /// none.
+        #[serde(default = "Option::default")]
+        item: Option<A>,
     },
     /// The agent cancelled it, or its connection closed: nothing more
     /// will come of it. Never for a job, which outlives its connection: one

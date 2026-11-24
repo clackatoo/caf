@@ -9,7 +9,7 @@ use super::{CHAT, KEY, PROC, SESSION, claude_init, default_modes};
 use crate::core::{OpenChat, Refused};
 use crate::event::{Event, RelayChange, ToolEvent};
 use crate::ids::ChatId;
-use crate::tool::{CafTool, Tools};
+use crate::tool::{CafTool, ServedTool, Tools};
 
 /// The MCP server `caf` as it's sent for `chat`.
 pub(super) fn caf_server(chat: ChatId) -> Value {
@@ -146,9 +146,11 @@ fn a_call_to_a_tool_the_chat_wasnt_given_is_refused() {
     script.send(CHAT, "go").0.expect("sent");
     let call = |tool, input| ToolEvent::Called {
         chat: CHAT,
-        tool,
+        tool: ServedTool::Caf(tool),
         input,
         agent_call: None,
+        title: None,
+        bad_input: None,
     };
     let out = script.tool(1, call(CafTool::Bash, json!({ "command": "ls" })));
     assert_eq!(

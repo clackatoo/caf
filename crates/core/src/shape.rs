@@ -9,7 +9,7 @@ use crate::ids::{CallId, JobId};
 use crate::mcp::Key;
 use crate::tool::{
     Action, CafTool, Cut, DecidedBy, Decision, Diff, DiffLine, Ending, Hunk, Image, LineChange,
-    Lines, Link, Location, Origin, Output, Piece, StoppedBy, Text, Tools,
+    Lines, Link, Location, Origin, Output, Piece, ServedTool, StoppedBy, Text, Tools,
 };
 use std::fmt::Debug;
 
@@ -836,23 +836,29 @@ pub(crate) fn every_type(s: &mut Samples) {
             call: CallId(4),
             event: ToolEvent::Called {
                 chat: ChatId::from_number(1),
-                tool: CafTool::Bash,
+                tool: ServedTool::Caf(CafTool::Bash),
                 input: json!({ "command": "ls" }),
                 agent_call: Some("toolu_01".into()),
+                title: None,
+                bad_input: None,
             },
         },
         true,
     );
     s.written(
-        &ToolEvent::Finished {
+        &ToolEvent::<crate::chat::NoAppItems>::Finished {
             done: true,
             pieces: Vec::new(),
             folder: Some("/home/user/project/src".into()),
             notice: Some("<task-notification>…</task-notification>".into()),
+            item: None,
         },
         true,
     );
-    s.written(&ToolEvent::Detached { job: JobId(2) }, true);
+    s.written(
+        &ToolEvent::<crate::chat::NoAppItems>::Detached { job: JobId(2) },
+        true,
+    );
     s.both(&JobId(2));
     s.both(&Action::Stop { job: JobId(2) });
     s.both(&CafTool::TaskStop);
@@ -1031,6 +1037,15 @@ pub(crate) fn every_type(s: &mut Samples) {
     s.both(&SessionChoice::New);
     s.both(&Refused::QueueFull);
     s.both(&Refused::ToolsNotServed);
+    s.both(&Refused::UnknownTool("trim_clip".into()));
+    s.both(&CafTool::Edit.hints());
+    s.both(&ServedTool::App("trim_clip".into()));
+    s.both(&crate::tool::AppToolSpec {
+        name: "trim_clip".into(),
+        title: "Trim a clip".into(),
+        hints: CafTool::Edit.hints(),
+        previews: true,
+    });
     s.both(&ConnectionInfo {
         id: ConnectionId(2),
         agent: AgentName("claude".into()),
@@ -1255,6 +1270,7 @@ pub(crate) fn every_type(s: &mut Samples) {
             ticket: Ticket(5),
             chat: ChatId::from_number(1),
             request: PermissionRequest {
+                hints: Some(CafTool::Bash.hints()),
                 item: Some(ItemId(7)),
                 title: "Run ls".into(),
                 origin: Origin::Caf(CafTool::Bash),
@@ -1269,6 +1285,7 @@ pub(crate) fn every_type(s: &mut Samples) {
         true,
     );
     s.both(&PermissionRequest {
+        hints: None,
         item: None,
         title: "Run ls".into(),
         origin: Origin::NotRecorded,

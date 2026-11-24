@@ -30,11 +30,12 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use caf_core::agent::{EnvChange, SpawnCommand};
+use caf_core::chat::{AppItem, NoAppItems};
 use caf_core::directive::{RefusedCall, ToolDirective};
 use caf_core::event::{RelayChange, Serving, ToolEvent};
 use caf_core::ids::{CallId, ChatId, JobId};
 use caf_core::mcp::{self, Answer, Connection, Key, Out, Request};
-use caf_core::tool::{Action, CafTool, Piece, Text};
+use caf_core::tool::{Action, CafTool, Piece, ServedTool, Text};
 use caf_tools::{Commands, Files};
 use serde::Deserialize;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
@@ -44,13 +45,17 @@ use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::{Instant, Sleep};
 
+use crate::app_tools::AppTools;
 use crate::files::DiskFiles;
 use crate::pty::PtyCommands;
 use crate::runner::CafRunner;
 
-/// How the app serves CAF's tools: [`Config::tools`](crate::Config::tools).
+/// How the app serves CAF's tools, and its own: [`Config::tools`](crate::Config::tools).
 #[non_exhaustive]
-pub struct ToolsConfig {
+pub struct ToolsConfig<A: AppItem = NoAppItems> {
+    /// The app's own tools ([`AppTools`]): none by default. A chat is
+    /// given them by name ([`Tools::app`](caf_core::tool::Tools::app)).
+    pub app: AppTools<A>,
     /// The program an agent starts to reach CAF's tools. [`Relay::None`]
     /// by default: no tools are served.
     pub relay: Relay,
@@ -74,9 +79,36 @@ pub struct ToolsConfig {
     pub progress_every: Duration,
 }
 
-impl Default for ToolsConfig {
+impl<A: AppItem> ToolsConfig<A> {
+    /// The app's own tools, and the rest: what the tools driver starts
+    /// with until it serves the app's tools (feature 13).
+    pub(crate) fn split(self) -> (AppTools<A>, ToolsConfig) {
+        let Self {
+            app,
+            relay,
+            runner,
+            files,
+            commands,
+            folder,
+            progress_every,
+        } = self;
+        let rest = ToolsConfig {
+            app: AppTools::new(),
+            relay,
+            runner,
+            files,
+            commands,
+            folder,
+            progress_every,
+        };
+        (app, rest)
+    }
+}
+
+impl<A: AppItem> Default for ToolsConfig<A> {
     fn default() -> Self {
         Self {
+            app: AppTools::new(),
             relay: Relay::None,
             runner: None,
             files: Arc::new(DiskFiles),
@@ -869,6 +901,7 @@ impl ToolsDriver {
                             pieces: Vec::new(),
                             folder: None,
                             notice: None,
+                            item: None,
                         },
                     });
                     Ran::new(
@@ -1095,9 +1128,11 @@ impl ToolsDriver {
                         call,
                         event: ToolEvent::Called {
                             chat,
-                            tool,
+                            tool: ServedTool::Caf(tool),
                             input,
                             agent_call,
+                            title: None,
+                            bad_input: None,
                         },
                     });
                 }
@@ -1348,6 +1383,7 @@ impl ToolsDriver {
                 notice: job.map(|job| {
                     (ran.notice).unwrap_or_else(|| failed_notice(job, agent_call.as_deref()))
                 }),
+                item: None,
             },
         });
         if job.is_none() {
@@ -2166,7 +2202,7 @@ mod tests {
                     call,
                     event: ToolEvent::Called { chat, tool, .. },
                 } => {
-                    assert_eq!((chat, tool), (CHAT, CafTool::Read));
+                    assert_eq!((chat, tool), (CHAT, ServedTool::Caf(CafTool::Read)));
                     call
                 }
                 other => panic!("expected Called, got {other:?}"),
@@ -2282,9 +2318,11 @@ mod tests {
                 event:
                     ToolEvent::Called {
                         chat,
-                        tool,
+                        tool: ServedTool::Caf(tool),
                         input,
                         agent_call,
+                        title: None,
+                        bad_input: None,
                     },
             } => {
                 assert_eq!((chat, tool), (CHAT, CafTool::Read));

@@ -3402,7 +3402,7 @@ fn a_chat_let_go_behind_a_move_and_called_back_is_let_go_then_written_whole_afte
 #[test]
 fn a_served_command_is_journaled_squashed_and_comes_back_cut_off() {
     use crate::event::{PolicyAnswer, ToolEvent};
-    use crate::tool::CafTool;
+    use crate::tool::{CafTool, ServedTool};
 
     let mut script = Script::new(host());
     let mut store = Store::default();
@@ -3417,9 +3417,11 @@ fn a_served_command_is_journaled_squashed_and_comes_back_cut_off() {
         1,
         ToolEvent::Called {
             chat: CHAT,
-            tool: CafTool::Bash,
+            tool: ServedTool::Caf(CafTool::Bash),
             input: json!({ "command": "cargo build" }),
             agent_call: None,
+            title: None,
+            bad_input: None,
         },
     );
     let decide = with(&out, "decide")[0]["decide"]
@@ -3506,7 +3508,7 @@ fn a_served_command_is_journaled_squashed_and_comes_back_cut_off() {
 #[test]
 fn a_chatty_commands_journal_entry_stays_as_small_as_its_output() {
     use crate::event::{PolicyAnswer, ToolEvent};
-    use crate::tool::{CafTool, MOST_OUTPUT};
+    use crate::tool::{CafTool, MOST_OUTPUT, ServedTool};
 
     let mut script = Script::new(host());
     let mut store = Store::default();
@@ -3521,9 +3523,11 @@ fn a_chatty_commands_journal_entry_stays_as_small_as_its_output() {
         1,
         ToolEvent::Called {
             chat: CHAT,
-            tool: CafTool::Bash,
+            tool: ServedTool::Caf(CafTool::Bash),
             input: json!({ "command": "yes" }),
             agent_call: None,
+            title: None,
+            bad_input: None,
         },
     );
     let decide = with(&out, "decide")[0]["decide"]
@@ -3565,6 +3569,7 @@ fn a_chatty_commands_journal_entry_stays_as_small_as_its_output() {
             pieces: Vec::new(),
             folder: None,
             notice: None,
+            item: None,
         },
     );
 }

@@ -102,9 +102,9 @@ mod tests {
     use crate::shape::{Samples, every_type, traces};
     use crate::time::{End, Mono, Now, Wall, Window};
     use crate::tool::{
-        Action, CafTool, Cut, DecidedBy, Decision, Diff, DiffLine, Ending, Hunk, Image, LineChange,
-        Lines, Link, Location, Origin, Output, Piece, StoppedBy, Text, ToolCall, ToolKind,
-        ToolStatus, Tools,
+        Action, AppToolSpec, CafTool, Cut, DecidedBy, Decision, Diff, DiffLine, Ending, Hints,
+        Hunk, Image, LineChange, Lines, Link, Location, Origin, Output, Piece, ServedTool,
+        StoppedBy, Text, ToolCall, ToolKind, ToolStatus, Tools,
     };
     use crate::usage::{
         BadQuery, Bucket, ChatCounts, Estimate, LedgerLine, ModelPrice, ModelTokens, PriceLayer,
@@ -201,6 +201,9 @@ mod tests {
             Output,
             Piece,
             StoppedBy,
+            Hints,
+            AppToolSpec,
+            ServedTool,
             Text,
             ToolCall,
             ToolKind,
