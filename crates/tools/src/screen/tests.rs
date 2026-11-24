@@ -258,11 +258,67 @@ fn a_reset_clears_the_window() {
 fn a_long_line_isnt_wrapped_short_of_16_kib() {
     let long = "x".repeat(5000);
     assert_eq!(lines(long.as_bytes()), [long]);
-    let longer = "y".repeat(MOST_CELLS + 10);
+    let longer = "y".repeat(MOST_LINE + 10);
     let out = lines(longer.as_bytes());
     assert_eq!(out.len(), 2);
-    assert_eq!(out[0].len(), MOST_CELLS);
+    assert_eq!(out[0].len(), MOST_LINE);
     assert_eq!(out[1].len(), 10);
+}
+
+#[test]
+fn a_long_line_is_broken_by_its_bytes() {
+    // Two bytes a character: half as many to a line.
+    let out = lines("é".repeat(MOST_LINE).as_bytes());
+    assert_eq!(out.len(), 2);
+    assert!(out.iter().all(|line| line.len() == MOST_LINE));
+}
+
+#[test]
+fn a_long_coloured_line_is_broken_into_lines_each_coloured_on_its_own() {
+    // Every character a colour of its own, as a rainbow prints it.
+    let mut input = String::new();
+    for n in 0..MOST_LINE {
+        input.push_str(&format!("\x1b[38;5;{}mx", n % 256));
+    }
+    let out = lines(input.as_bytes());
+    assert!(out.len() > 1);
+    for line in &out {
+        assert!(line.len() <= MOST_LINE, "{} bytes", line.len());
+        assert!(line.starts_with("\x1b[0;"));
+        assert!(line.ends_with("\x1b[0m"));
+    }
+    let text: String = out.iter().map(|line| strip_sgr(line)).collect();
+    assert_eq!(text, "x".repeat(MOST_LINE));
+}
+
+#[test]
+fn reverse_index_at_the_top_scrolls_down() {
+    assert_eq!(lines(b"top\x1b[H\x1bMnew\n"), ["new", "top"]);
+    // The bottom line goes.
+    let mut input = Vec::new();
+    for n in 0..ROWS {
+        input.extend_from_slice(format!("{n}\r\n").as_bytes());
+    }
+    input.extend_from_slice(b"\x1b[H\x1bMx");
+    let out = lines(&input);
+    assert_eq!(out[1], "x");
+    assert_eq!(out[2], "1");
+    assert_eq!(out.len(), ROWS + 1);
+}
+
+#[test]
+fn finishing_gives_a_last_character_cut_short() {
+    let mut screen = Screen::new();
+    let mut all = Vec::new();
+    apply(&mut all, screen.feed(b"ok\xE2\x82").unwrap());
+    assert_eq!(all, ["ok"]);
+    apply(&mut all, screen.finish().unwrap());
+    assert_eq!(all, ["ok\u{FFFD}"]);
+    assert_eq!(screen.finish(), None);
+    // Nothing cut short, nothing to give.
+    let mut screen = Screen::new();
+    screen.feed(b"ok");
+    assert_eq!(screen.finish(), None);
 }
 
 #[test]
@@ -309,7 +365,27 @@ fn strip_sgr_leaves_the_text() {
     assert_eq!(strip_sgr("\x1b[0;38;2;1;2;3mé\x1b[0m"), "é");
     assert_eq!(strip_sgr("no codes"), "no codes");
     assert_eq!(strip_sgr("\x1b[1"), "", "cut short");
-    assert_eq!(strip_sgr("a\x1bb"), "ab");
+    assert_eq!(strip_sgr("a\x1bb"), "a", "ESC b is a sequence of its own");
+}
+
+#[test]
+fn strip_sgr_drops_every_kind_of_escape() {
+    // OSC 8 links, ended by ST or BEL, as an app's own terminal might keep.
+    assert_eq!(
+        strip_sgr("\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\ done"),
+        "link done"
+    );
+    assert_eq!(strip_sgr("\x1b]0;title\x07text"), "text");
+    // DCS, SOS, PM and APC strings.
+    assert_eq!(strip_sgr("a\x1bP1$r\x1b\\b"), "ab");
+    assert_eq!(
+        strip_sgr("a\x1b_x\x1b\\b\x1b^y\x1b\\c\x1bXz\x1b\\d"),
+        "abcd"
+    );
+    // A charset, with its intermediate.
+    assert_eq!(strip_sgr("\x1b(Bplain"), "plain");
+    // An OSC never ended takes the rest.
+    assert_eq!(strip_sgr("a\x1b]0;title"), "a");
 }
 
 fn config() -> ProptestConfig {
@@ -361,13 +437,17 @@ proptest! {
             }
             // Bounded: the window, and its lines.
             prop_assert!(screen.grid.rows.len() <= ROWS);
-            prop_assert!(screen.grid.rows.iter().all(|row| row.len() <= MOST_CELLS));
+            for row in &screen.grid.rows {
+                prop_assert_eq!(row.cost, render(&row.cells).len(), "a row's cost is its bytes");
+                prop_assert!(row.cost <= MOST_LINE);
+            }
             prop_assert!(screen.grid.scrolled.is_empty());
             prop_assert!(screen.grid.row < ROWS);
         }
         // The same lines, however the input is split.
         prop_assert_eq!(&all, &lines(&input));
         for line in &all {
+            prop_assert!(line.len() <= MOST_LINE, "{} bytes", line.len());
             // Every line is on its own: it ends in the default style.
             if let Some(last) = line.rfind('\x1b') {
                 prop_assert!(line[last..].starts_with("\x1b[0m"), "{line:?}");
@@ -398,8 +478,8 @@ fn a_huge_output_with_no_line_ends_stays_bounded() {
             lines = redraw.from + redraw.lines.len() as u64;
         }
         assert!(screen.grid.rows.len() <= ROWS);
-        assert!(screen.grid.rows.iter().all(|row| row.len() <= MOST_CELLS));
+        assert!(screen.grid.rows.iter().all(|row| row.cost <= MOST_LINE));
     }
     // 4 MiB of x, in lines of 16 KiB.
-    assert_eq!(lines, 4 * 1024 * 1024 / MOST_CELLS as u64);
+    assert_eq!(lines, 4 * 1024 * 1024 / MOST_LINE as u64);
 }

@@ -13,9 +13,6 @@ pub const ROWS: usize = 24;
 /// The screen's width, in columns, that a command is told. Lines aren't
 /// wrapped at it: a longer line stays one line.
 pub const COLUMNS: usize = 200;
-/// The most characters a line holds: past this, it goes on on the next
-/// line, as if it wrapped.
-const MOST_CELLS: usize = MOST_LINE;
 
 /// A change to the lines a [`Screen`] has given: the lines from `from`
 /// on are now `lines`, and there are none after them. A line before
@@ -41,7 +38,9 @@ pub struct Redraw {
 /// - **A line feed starts a new line at its start,** as a pty's output
 ///   does, its `\n` made `\r\n`.
 /// - **Lines aren't wrapped,** at [`COLUMNS`] or anywhere short of
-///   16 KiB of characters.
+///   [`MOST_LINE`] bytes, colour codes included: a longer line goes on on
+///   the next, as if it wrapped, so that each line the record keeps
+///   colours itself.
 /// - **Anything else is dropped:** titles and other OSC strings, DCS,
 ///   modes, mouse reports.
 ///
@@ -99,6 +98,16 @@ impl Screen {
         self.carry.extend_from_slice(&bytes[whole..]);
         self.grid.redraw()
     }
+
+    /// The output has ended: gives back the last change, if a character
+    /// was cut short at its end, which shows as `U+FFFD`.
+    pub fn finish(&mut self) -> Option<Redraw> {
+        let carry = std::mem::take(&mut self.carry);
+        for c in String::from_utf8_lossy(&carry).chars() {
+            self.grid.put(c);
+        }
+        self.grid.redraw()
+    }
 }
 
 /// How many bytes at the end of `bytes` are the start of a UTF-8
@@ -120,8 +129,10 @@ fn split_char(bytes: &[u8]) -> usize {
     0
 }
 
-/// `line` without its SGR codes, or any other control sequence: what the
-/// model reads of a line a [`Screen`] gave.
+/// `line` without its SGR codes, or any other escape sequence: CSI, the
+/// strings of OSC, DCS, SOS, PM and APC, ended by BEL or ST, and the rest:
+/// what the model reads of a line a [`Screen`] gave, or an app's own
+/// terminal did.
 #[must_use]
 pub fn strip_sgr(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
@@ -131,14 +142,37 @@ pub fn strip_sgr(line: &str) -> String {
             out.push(c);
             continue;
         }
-        if chars.peek() == Some(&'[') {
-            chars.next();
+        match chars.next() {
             // Parameters and intermediates, up to the final byte.
-            for c in chars.by_ref() {
-                if ('\x40'..='\x7e').contains(&c) {
-                    break;
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if ('\x40'..='\x7e').contains(&c) {
+                        break;
+                    }
                 }
             }
+            // A string, up to BEL or ST (`ESC \`).
+            Some(']' | 'P' | 'X' | '^' | '_') => {
+                while let Some(c) = chars.next() {
+                    if c == '\x07' {
+                        break;
+                    }
+                    if c == '\x1b' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            // Intermediates, then the final byte.
+            Some('\x20'..='\x2f') => {
+                for c in chars.by_ref() {
+                    if !('\x20'..='\x2f').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            // A sequence of one character.
+            _ => {}
         }
     }
     out
@@ -183,6 +217,24 @@ const FLAGS: [(u8, u8); 8] = [
 ];
 
 impl Style {
+    /// How long its [`sgr`](Self::sgr) code is.
+    fn sgr_len(self) -> usize {
+        let digits = |n: u8| match n {
+            0..10 => 1,
+            10..100 => 2,
+            _ => 3,
+        };
+        let color = |color: Color, bright: usize| match color {
+            Color::Default => 0,
+            Color::Indexed(0..8) => 3,
+            Color::Indexed(8..16) => bright,
+            Color::Indexed(n) => 6 + digits(n),
+            Color::Rgb(r, g, b) => 8 + digits(r) + digits(g) + digits(b),
+        };
+        let flags = self.flags.count_ones() as usize;
+        "\x1b[0".len() + 2 * flags + color(self.fg, 3) + color(self.bg, 4) + 1
+    }
+
     /// The SGR code that sets it, from the default.
     fn sgr(self, out: &mut String) {
         use std::fmt::Write as _;
@@ -290,11 +342,104 @@ const BLANK: Cell = Cell {
     },
 };
 
+/// One row of the screen, and what it costs rendered.
+#[derive(Clone, Debug, Default)]
+struct Row {
+    cells: Vec<Cell>,
+    /// Its bytes rendered, colour codes and all: kept as it changes, so
+    /// a line never grows past [`MOST_LINE`] of them.
+    cost: usize,
+}
+
+impl Row {
+    /// Works its cost out again, after a change of many cells.
+    fn recount(&mut self) {
+        let mut cost = 0;
+        let mut style = Style::default();
+        for cell in &self.cells {
+            cost += code_len(style, cell.style) + cell.c.len_utf8();
+            style = cell.style;
+        }
+        self.cost = cost + reset_len(style);
+    }
+
+    /// Its cost with `cell` at `col`, at most its length.
+    fn cost_with(&self, col: usize, cell: Cell) -> usize {
+        let before = col
+            .checked_sub(1)
+            .map_or_else(Style::default, |at| self.cells[at].style);
+        let new = code_len(before, cell.style) + cell.c.len_utf8();
+        match self.cells.get(col) {
+            None => self.cost - reset_len(before) + new + reset_len(cell.style),
+            Some(old) => {
+                let after = |style| {
+                    self.cells
+                        .get(col + 1)
+                        .map_or_else(|| reset_len(style), |next| code_len(style, next.style))
+                };
+                self.cost - (code_len(before, old.style) + old.c.len_utf8() + after(old.style))
+                    + new
+                    + after(cell.style)
+            }
+        }
+    }
+
+    /// Puts `cell` at `col`, at most its length.
+    fn set(&mut self, col: usize, cell: Cell) {
+        self.cost = self.cost_with(col, cell);
+        if col == self.cells.len() {
+            self.cells.push(cell);
+        } else {
+            self.cells[col] = cell;
+        }
+    }
+
+    /// Drops cells from its end until it costs at most [`MOST_LINE`].
+    fn fit(&mut self) {
+        if self.cost <= MOST_LINE {
+            return;
+        }
+        let (mut cost, mut style, mut keep) = (0, Style::default(), 0);
+        for (at, cell) in self.cells.iter().enumerate() {
+            let next = cost + code_len(style, cell.style) + cell.c.len_utf8();
+            if next + reset_len(cell.style) > MOST_LINE {
+                break;
+            }
+            (cost, style, keep) = (next, cell.style, at + 1);
+        }
+        self.cells.truncate(keep);
+        self.recount();
+    }
+}
+
+/// What the code from `before` to `style` costs, rendered.
+fn code_len(before: Style, style: Style) -> usize {
+    if before == style {
+        0
+    } else if style == Style::default() {
+        RESET.len()
+    } else {
+        style.sgr_len()
+    }
+}
+
+/// What the reset at the end of a line ending in `style` costs.
+fn reset_len(style: Style) -> usize {
+    if style == Style::default() {
+        0
+    } else {
+        RESET.len()
+    }
+}
+
+/// The code back to the default style.
+const RESET: &str = "\x1b[0m";
+
 /// The screen's state, which the parser changes.
 struct Grid {
     /// The window's rows, the first of them line `top`. Rows past the
     /// last are empty.
-    rows: VecDeque<Vec<Cell>>,
+    rows: VecDeque<Row>,
     /// The number of the window's first line.
     top: u64,
     /// The cursor's row, in the window, and column.
@@ -335,27 +480,47 @@ impl Grid {
     }
 
     /// The cursor's row, made if it isn't yet.
-    fn current(&mut self) -> &mut Vec<Cell> {
+    fn current(&mut self) -> &mut Row {
         while self.rows.len() <= self.row {
-            self.rows.push_back(Vec::new());
+            self.rows.push_back(Row::default());
         }
         &mut self.rows[self.row]
     }
 
+    /// Puts `c` at the cursor, going on on the next line if the line would
+    /// cost more than [`MOST_LINE`]. Rewriting a line so it would drops
+    /// what's after the cursor.
     fn put(&mut self, c: char) {
-        if self.col >= MOST_CELLS {
-            self.line_feed();
-        }
-        let (col, style) = (self.col, self.style);
-        let line = self.current();
-        if line.len() < col {
-            line.resize(col, BLANK);
-        }
-        let cell = Cell { c, style };
-        if col == line.len() {
-            line.push(cell);
-        } else {
-            line[col] = cell;
+        let cell = Cell {
+            c,
+            style: self.style,
+        };
+        loop {
+            let col = self.col;
+            let row = self.current();
+            let len = row.cells.len();
+            if len < col {
+                row.cells.resize(col, BLANK);
+                row.recount();
+                if row.cost > MOST_LINE {
+                    row.cells.truncate(len);
+                    row.recount();
+                    self.line_feed();
+                    continue;
+                }
+            }
+            if col < row.cells.len() && row.cost_with(col, cell) > MOST_LINE {
+                row.cells.truncate(col);
+                row.recount();
+                self.touch(self.row);
+                continue;
+            }
+            if row.cost_with(col, cell) > MOST_LINE {
+                self.line_feed();
+                continue;
+            }
+            row.set(col, cell);
+            break;
         }
         self.col += 1;
         self.touch(self.row);
@@ -382,7 +547,7 @@ impl Grid {
             if self.scrolled.is_empty() {
                 self.scrolled_from = number;
             }
-            self.scrolled.push(render(&line));
+            self.scrolled.push(render(&line.cells));
         }
     }
 
@@ -392,14 +557,15 @@ impl Grid {
             return;
         };
         match mode {
-            0 => line.truncate(col),
+            0 => line.cells.truncate(col),
             1 => {
-                let end = (col + 1).min(line.len());
-                line[..end].fill(BLANK);
+                let end = (col + 1).min(line.cells.len());
+                line.cells[..end].fill(BLANK);
             }
-            2 => line.clear(),
+            2 => line.cells.clear(),
             _ => return,
         }
+        line.recount();
         self.touch(self.row);
     }
 
@@ -412,7 +578,7 @@ impl Grid {
             }
             1 => {
                 for row in 0..self.row.min(self.rows.len()) {
-                    self.rows[row].clear();
+                    self.rows[row] = Row::default();
                 }
                 self.erase_in_line(1);
                 self.touch(0);
@@ -426,7 +592,7 @@ impl Grid {
     }
 
     fn move_to_col(&mut self, col: usize) {
-        self.col = col.min(MOST_CELLS - 1);
+        self.col = col.min(MOST_LINE - 1);
     }
 
     fn move_to_row(&mut self, row: usize) {
@@ -435,7 +601,7 @@ impl Grid {
 
     /// What's changed since lines were last given, if anything.
     fn redraw(&mut self) -> Option<Redraw> {
-        let content = self.rows.iter().rposition(|row| !row.is_empty());
+        let content = self.rows.iter().rposition(|row| !row.cells.is_empty());
         let end = self.top + content.map_or(0, |at| at as u64 + 1);
         let from = self.dirty.min(self.given).min(end);
         let scrolled = std::mem::take(&mut self.scrolled);
@@ -451,7 +617,7 @@ impl Grid {
         }
         let start = usize::try_from(from.saturating_sub(self.top)).unwrap_or(usize::MAX);
         let stop = usize::try_from(end - self.top).unwrap_or(0);
-        lines.extend((start..stop).map(|row| render(&self.rows[row])));
+        lines.extend((start..stop).map(|row| render(&self.rows[row].cells)));
         self.given = end;
         Some(Redraw { from, lines })
     }
@@ -465,7 +631,7 @@ fn render(line: &[Cell]) -> String {
         if cell.style != style {
             style = cell.style;
             if style == Style::default() {
-                out.push_str("\x1b[0m");
+                out.push_str(RESET);
             } else {
                 style.sgr(&mut out);
             }
@@ -473,7 +639,7 @@ fn render(line: &[Cell]) -> String {
         out.push(cell.c);
     }
     if style != Style::default() {
-        out.push_str("\x1b[0m");
+        out.push_str(RESET);
     }
     out
 }
@@ -533,9 +699,10 @@ impl Perform for Grid {
             'X' => {
                 let col = self.col;
                 if let Some(line) = self.rows.get_mut(self.row) {
-                    let end = col.saturating_add(n).min(line.len());
+                    let end = col.saturating_add(n).min(line.cells.len());
                     if col < end {
-                        line[col..end].fill(BLANK);
+                        line.cells[col..end].fill(BLANK);
+                        line.recount();
                     }
                     self.touch(self.row);
                 }
@@ -543,9 +710,10 @@ impl Perform for Grid {
             'P' => {
                 let col = self.col;
                 if let Some(line) = self.rows.get_mut(self.row) {
-                    let end = col.saturating_add(n).min(line.len());
+                    let end = col.saturating_add(n).min(line.cells.len());
                     if col < end {
-                        line.drain(col..end);
+                        line.cells.drain(col..end);
+                        line.recount();
                     }
                     self.touch(self.row);
                 }
@@ -553,18 +721,20 @@ impl Perform for Grid {
             '@' => {
                 let col = self.col;
                 if let Some(line) = self.rows.get_mut(self.row)
-                    && col < line.len()
+                    && col < line.cells.len()
                 {
-                    let n = n.min(MOST_CELLS - col);
-                    line.splice(col..col, std::iter::repeat_n(BLANK, n));
-                    line.truncate(MOST_CELLS);
+                    let n = n.min(MOST_LINE - col);
+                    line.cells.splice(col..col, std::iter::repeat_n(BLANK, n));
+                    line.cells.truncate(MOST_LINE);
+                    line.recount();
+                    line.fit();
                     self.touch(self.row);
                 }
             }
             'L' => {
                 if self.row < self.rows.len() {
                     for _ in 0..n.min(ROWS) {
-                        self.rows.insert(self.row, Vec::new());
+                        self.rows.insert(self.row, Row::default());
                     }
                     self.rows.truncate(ROWS);
                     self.touch(self.row);
@@ -592,7 +762,13 @@ impl Perform for Grid {
             b'8' => (self.row, self.col, self.style) = self.saved,
             b'D' => self.index(),
             b'E' => self.line_feed(),
-            b'M' => self.row = self.row.saturating_sub(1),
+            // Up a line, and at the window's top, everything down one.
+            b'M' if self.row == 0 => {
+                self.rows.push_front(Row::default());
+                self.rows.truncate(ROWS);
+                self.touch(0);
+            }
+            b'M' => self.row -= 1,
             b'c' => {
                 self.rows.clear();
                 self.touch(0);
