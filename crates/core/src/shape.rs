@@ -1218,7 +1218,9 @@ pub(crate) fn every_type(s: &mut Samples) {
         agent: AgentName("claude".into()),
         cwd: "/work".into(),
         session: SessionChoice::New,
+        tools: Tools::none(),
     });
+    s.both(&OpenRequest::new("claude", "/work").with_tools(Tools::caf(CafTool::ALL)));
     s.both(&Outcome::Refused(Refused::NoSuchChat));
     s.both(&FromViewer::Agent {
         request: RequestNo(2),

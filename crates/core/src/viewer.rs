@@ -80,6 +80,7 @@ use crate::question::Answer;
 use crate::save::{CannotRestore, SavedChat};
 use crate::settings::SettingChoice;
 use crate::time::Wall;
+use crate::tool::Tools;
 use crate::usage::{BadQuery, ModelPrice, Summary, UsageQuery};
 
 /// The versions of the viewer wire this CAF speaks.
@@ -442,7 +443,7 @@ pub struct RequestNo(pub u64);
 
 /// What a viewer asks for when it asks to open a chat. The host turns it
 /// into an [`OpenChat`](crate::OpenChat), adding anything else, such as
-/// its tools, or refuses.
+/// MCP servers, or refuses.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -453,17 +454,32 @@ pub struct OpenRequest {
     pub cwd: PathBuf,
     /// A new session, or one to continue.
     pub session: SessionChoice,
+    /// CAF's own tools the viewer would have the chat given
+    /// ([`OpenChat::tools`](crate::OpenChat::tools)): only a wish, which
+    /// the host grants, trims or ignores. None by default. Requests from
+    /// before it was added read as none.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(as = "Option<Tools>", optional))]
+    pub tools: Tools,
 }
 
 impl OpenRequest {
-    /// A new session with `agent` in `cwd`.
+    /// A new session with `agent` in `cwd`, asking for no tools.
     #[must_use]
     pub fn new(agent: impl Into<String>, cwd: impl Into<PathBuf>) -> Self {
         Self {
             agent: AgentName(agent.into()),
             cwd: cwd.into(),
             session: SessionChoice::New,
+            tools: Tools::none(),
         }
+    }
+
+    /// The same, asking for `tools`.
+    #[must_use]
+    pub fn with_tools(mut self, tools: Tools) -> Self {
+        self.tools = tools;
+        self
     }
 }
 

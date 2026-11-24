@@ -12,6 +12,7 @@ use caf_core::agent::AgentSpec;
 use caf_core::host::Grouping;
 use caf_core::save::RestoreChat;
 use caf_core::time::Now;
+use caf_core::tool::{CafTool, Tools};
 use caf_core::{Core, Host, NoAppItems, OpenChat, Shelf};
 use caf_driver_tokio::viewer::ViewerRules;
 use caf_driver_tokio::{Caf, Config, Running, Step as CafStep, Steps, ToolsConfig, UsageConfig};
@@ -66,11 +67,13 @@ pub fn host() -> Host {
 }
 
 /// What viewers may do: open a chat with any of `agents` in any absolute
-/// folder, with no MCP servers, act on every chat, install agents and
-/// sign in and out of them, and read usage and set prices. If chats are
-/// `saved`, each opened is kept on
-/// [`SHELF`], and viewers may restore those kept there, with no MCP
-/// servers, as new chats have.
+/// folder, with no MCP servers, and those of CAF's own tools the viewer
+/// asks for (its open-chat form's "CAF's tools", on unless unticked),
+/// act on every chat, install agents and sign in and out of them, and
+/// read usage and set prices. If chats are `saved`, each opened is kept
+/// on [`SHELF`], and viewers may restore those kept there, with no MCP
+/// servers and all of CAF's tools: what a chat was given isn't saved, and
+/// all is what the form gives by default.
 #[must_use]
 pub fn rules(agents: &[AgentSpec], saved: bool) -> ViewerRules {
     let names: Vec<_> = agents.iter().map(|agent| agent.name.clone()).collect();
@@ -84,11 +87,14 @@ pub fn rules(agents: &[AgentSpec], saved: bool) -> ViewerRules {
         let mut open = OpenChat::new(request.agent.0.clone(), request.cwd.clone());
         open.session = request.session.clone();
         open.shelf = saved.then(shelf);
+        open.tools = request.tools.clone();
         Some(open)
     });
     if saved {
-        rules.restore =
-            Box::new(|chat, on| (on.0 == SHELF).then(|| RestoreChat::new(chat, shelf())));
+        rules.restore = Box::new(|chat, on| {
+            (on.0 == SHELF)
+                .then(|| RestoreChat::new(chat, shelf()).with_tools(Tools::caf(CafTool::ALL)))
+        });
     }
     rules
 }
@@ -424,8 +430,8 @@ mod tests {
     use serde_json::value::RawValue;
 
     use super::{
-        Raw, Shelf, check_recording, check_steps, hidden, host, rules, shelf, shown_directives,
-        shown_event,
+        CafTool, Raw, Shelf, Tools, check_recording, check_steps, hidden, host, rules, shelf,
+        shown_directives, shown_event,
     };
     use crate::inspector::Check;
     use crate::replay::{Base, take, to_json};
@@ -586,13 +592,20 @@ mod tests {
     }
 
     #[test]
-    fn viewers_may_open_the_agents_on_offer_in_absolute_folders_with_no_tools() {
+    fn viewers_may_open_the_agents_on_offer_in_absolute_folders_with_cafs_tools_alone() {
         let rules = rules(&agents(), false);
         let open = rules.open.as_ref();
         let mut request = OpenRequest::new("fake", "/home/me/project");
         let chat = open(&request).expect("allowed");
         assert_eq!(chat.agent.0, "fake");
         assert!(chat.mcp_servers.is_empty());
+        assert!(chat.tools.is_empty(), "none asked for");
+        let all = Tools::caf(CafTool::ALL);
+        let asked = request.clone().with_tools(all.clone());
+        assert_eq!(open(&asked).expect("allowed").tools, all);
+        let some = Tools::caf([CafTool::Read]);
+        let asked = request.clone().with_tools(some.clone());
+        assert_eq!(open(&asked).expect("allowed").tools, some);
         request.cwd = "project".into();
         assert!(open(&request).is_none(), "a relative folder");
         assert!(
@@ -609,7 +622,12 @@ mod tests {
         let id = caf_core::ChatId::from_number(1000);
         let restore = (rules.restore)(id, &shelf()).expect("allowed");
         assert_eq!((restore.chat, &restore.shelf), (id, &shelf()));
-        assert!(restore.mcp_servers.is_empty(), "the tools new chats have");
+        assert!(restore.mcp_servers.is_empty(), "the servers new chats have");
+        assert_eq!(
+            restore.tools,
+            Tools::caf(CafTool::ALL),
+            "the form's default"
+        );
         let elsewhere = Shelf("another app's".into());
         assert!((rules.restore)(id, &elsewhere).is_none());
         let unsaved = super::rules(&agents(), false);

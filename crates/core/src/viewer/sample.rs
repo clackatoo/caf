@@ -40,7 +40,7 @@ use crate::shape::{account_limits, model_price, settings, spend, turn_usage};
 use crate::time::{End, Wall, Window};
 use crate::tool::{
     Action, CafTool, Cut, DecidedBy, Decision, Diff, DiffLine, Ending, Hunk, Image, LineChange,
-    Lines, Link, Location, Origin, Output, Piece, StoppedBy, Text,
+    Lines, Link, Location, Origin, Output, Piece, StoppedBy, Text, Tools,
 };
 use crate::usage::{BadQuery, ModelPrice, PriceLayer, PricedModel, UsageQuery};
 use crate::viewer::{
@@ -741,12 +741,13 @@ fn version_1() -> Sample {
         archived: Some(Wall(1_700_000_000_000)),
         ..summary.clone()
     };
-    let open = |request, session| FromViewer::Open {
+    let open = |request, session, tools| FromViewer::Open {
         request: RequestNo(request),
         open: OpenRequest {
             agent: AgentName("claude".into()),
             cwd: "/work".into(),
             session,
+            tools,
         },
     };
     let answer = |request, question, answer| FromViewer::Answer {
@@ -767,8 +768,12 @@ fn version_1() -> Sample {
         FromViewer::Unwatch {
             chat: ChatId::from_number(1),
         },
-        open(1, SessionChoice::New),
-        open(2, SessionChoice::Continue(AgentSessionId("s1".into()))),
+        open(1, SessionChoice::New, Tools::caf(CafTool::ALL)),
+        open(
+            2,
+            SessionChoice::Continue(AgentSessionId("s1".into())),
+            Tools::none(),
+        ),
         FromViewer::Send {
             request: RequestNo(3),
             chat: ChatId::from_number(1),

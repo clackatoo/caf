@@ -37,6 +37,25 @@
           "cwd": "/work",
           "session": {
             "type": "New"
+          },
+          "tools": {
+            "caf": [
+              {
+                "type": "Read"
+              },
+              {
+                "type": "Edit"
+              },
+              {
+                "type": "Write"
+              },
+              {
+                "type": "Bash"
+              },
+              {
+                "type": "TaskStop"
+              }
+            ]
           }
         }
       }
@@ -51,6 +70,9 @@
           "session": {
             "type": "Continue",
             "value": "s1"
+          },
+          "tools": {
+            "caf": []
           }
         }
       }
