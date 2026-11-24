@@ -213,6 +213,12 @@
 //! {"respond": {"to": "prompt", "result": {"stopReason": "end_turn"}}}
 //! ```
 //!
+//! Started as CAF's relay, with `CAF_RELAY` or `CAF_RELAY_CHECK` set, the
+//! fake is a relay, `caf_relay::relay_if_asked`, before anything else,
+//! as an app's program is: so a test can point CAF's `Relay::Command` at
+//! [`binary`], and serve CAF's tools through a real relay to a fake whose
+//! `mcp_start` starts it.
+//!
 //! A fake started as an MCP server, by a test's session naming it with
 //! [`SCRIPT_VAR`] in its `env`, follows a script as it does as an
 //! adapter: MCP is JSON-RPC by lines too.

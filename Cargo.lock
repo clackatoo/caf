@@ -213,6 +213,7 @@ dependencies = [
 name = "caf-fake-agent"
 version = "0.0.0"
 dependencies = [
+ "caf-relay",
  "libc",
  "serde",
  "serde_json",

@@ -1403,3 +1403,17 @@ fn an_mcp_servers_answers_are_checked() {
         "no MCP server started called caf"
     );
 }
+
+#[test]
+fn it_answers_cafs_relay_check() {
+    let output = Command::new(env!("CARGO_BIN_EXE_caf-fake-agent"))
+        .env(caf_relay::CHECK_VAR, "1")
+        .env_remove(caf_relay::RELAY_VAR)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim_end(),
+        caf_relay::CHECK_ANSWER
+    );
+}

@@ -8,6 +8,9 @@ use std::time::{Duration, Instant};
 use caf_fake_agent::{EXIT_BAD_SCRIPT, RECORD_VAR, SCRIPT_VAR, Script, auth, run};
 
 fn main() {
+    // Started as CAF's relay, it relays, as an app's program does, so
+    // tests run that path through a real binary.
+    caf_relay::relay_if_asked();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.as_slice() {
         // A process started by `spawn_holder`: it holds the pipes it was
