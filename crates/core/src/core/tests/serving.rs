@@ -75,6 +75,7 @@ fn a_chat_given_tools_gets_the_caf_server_and_says_what_its_tools_do() {
             "chat": CHAT,
             // TaskStop comes with Bash.
             "tools": [{ "type": "Read" }, { "type": "Bash" }, { "type": "TaskStop" }],
+            "app": [],
             "cwd": "/work",
             "instructions": "caf-test's tools to read files (Read), run commands (Bash) and stop background commands (TaskStop), in the folder you're working in.",
         } } })]

@@ -260,6 +260,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         out.push(Directive::Tool(ToolDirective::Serve {
             chat,
             tools: run.caf_tools.clone(),
+            app: Vec::new(),
             cwd: run.cwd.clone(),
             instructions: served_instructions(&self.host.name, &run.caf_tools),
         }));

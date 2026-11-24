@@ -749,6 +749,7 @@ impl ToolsDriver {
                 tools,
                 instructions,
                 cwd,
+                ..
             } => {
                 self.served.insert(
                     chat,
@@ -2122,6 +2123,7 @@ mod tests {
             self.apply(ToolDirective::Serve {
                 chat,
                 tools: CafTool::ALL.to_vec(),
+                app: Vec::new(),
                 cwd: "/work".into(),
                 instructions: "Use them.".into(),
             });

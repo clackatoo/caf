@@ -297,6 +297,11 @@ pub enum ToolDirective {
         chat: ChatId,
         /// CAF's tools it's given, in order.
         tools: Vec<CafTool>,
+        /// The app's own tools it's given, by name, in order: served after
+        /// CAF's. Recordings made before it was added read as none.
+        #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(as = "Option<Vec<String>>", optional))]
+        app: Vec<String>,
         /// The chat's folder, as the agent's told it: what the model is
         /// told is its working directory.
         cwd: String,
