@@ -428,6 +428,9 @@ const FINISH_TIME: Duration = Duration::from_secs(1);
 /// How long one of the app's tools has to stop once its call is stopped,
 /// before the model is told it was all the same.
 const STOP_TIME: Duration = Duration::from_secs(5);
+/// How much longer than [`STOP_TIME`] shutting down waits for the app's
+/// tools to stop, so a wait that began just before isn't cut short.
+const STOP_SLACK: Duration = Duration::from_millis(100);
 
 /// What the driver reports, for the core.
 #[derive(Debug)]
@@ -488,6 +491,10 @@ pub(crate) struct ToolsDriver<A: AppItem = NoAppItems> {
     /// The calls the core cancelled whose app's tools' runs are being
     /// stopped, until each is known to have finished or stopped.
     stopping: HashMap<CallId, Each<A>>,
+    /// Connections closed as their chat was let go, or CAF shuts down,
+    /// kept until the calls being stopped on them are answered, by their
+    /// number.
+    parked: HashMap<u64, Conn>,
     /// The runtime the app's tools run on, if there are any: threads of
     /// their own, so one that blocks holds up nothing of CAF's.
     app_runtime: Option<tokio::runtime::Runtime>,
@@ -733,6 +740,7 @@ impl<A: AppItem> ToolsDriver<A> {
             writers: JoinSet::new(),
             stops: JoinSet::new(),
             stopping: HashMap::new(),
+            parked: HashMap::new(),
             app_runtime,
         }
     }
@@ -994,6 +1002,8 @@ impl<A: AppItem> ToolsDriver<A> {
             }
             ToolDirective::Cancel { call } => {
                 self.forget(call);
+                // What it printed last is its, before how it ended.
+                self.take_prints();
                 if let Some(mut each) = self.calls.remove(&call) {
                     // Its run may have finished just now, its end not yet
                     // taken: it ended as the core stopped it, so the model
@@ -1124,9 +1134,15 @@ impl<A: AppItem> ToolsDriver<A> {
                 }
             }
             AfterStop::Ran { call, ended } => {
-                let Some(each) = self.stopping.remove(&call) else {
+                // What it printed as it stopped is its, before how it
+                // ended.
+                self.take_prints();
+                let Some(mut each) = self.stopping.remove(&call) else {
                     return;
                 };
+                if let Some(batch) = each.batch.take() {
+                    self.reports.push_back(output(call, batch));
+                }
                 // A job's model was answered, unless that answer still
                 // waits: then it hears it, as it would have.
                 let held = self.held.remove(&call);
@@ -1152,8 +1168,20 @@ impl<A: AppItem> ToolsDriver<A> {
                         });
                     }
                 }
+                self.unpark();
             }
         }
+    }
+
+    /// Lets go of the connections parked for calls being stopped once
+    /// none waits to be answered on them any more: each closes once
+    /// what's waiting is written.
+    fn unpark(&mut self) {
+        let (stopping, held) = (&self.stopping, &self.held);
+        self.parked.retain(|&no, _| {
+            stopping.values().any(|each| each.conn == no)
+                || held.values().any(|held| held.conn == no)
+        });
     }
 
     /// Tells the runner `call` won't run, or has gone.
@@ -1188,6 +1216,8 @@ impl<A: AppItem> ToolsDriver<A> {
         let Some(chat) = self.calls.get(&call).map(|each| each.chat) else {
             return;
         };
+        // What the job printed last is its, before how it ended.
+        self.take_prints();
         let found = (self.calls.iter())
             .find(|(_, each)| each.chat == chat && each.job == Some(job))
             .map(|(&target, _)| target);
@@ -1311,6 +1341,7 @@ impl<A: AppItem> ToolsDriver<A> {
         if let Some(held) = self.held.remove(&call) {
             self.answer(held.conn, &held.request, &held.answer);
         }
+        self.unpark();
     }
 
     /// Ends the calls whose app's tools have stopped
@@ -1507,6 +1538,8 @@ impl<A: AppItem> ToolsDriver<A> {
                 // A job's request was answered: it's no longer the agent's
                 // to cancel, and goes on.
                 Out::Cancelled(request) => {
+                    // What it printed last is its, before how it ended.
+                    self.take_prints();
                     let found = (self.calls.iter())
                         .find(|(_, each)| {
                             each.conn == no && each.request == request && each.job.is_none()
@@ -1691,6 +1724,11 @@ impl<A: AppItem> ToolsDriver<A> {
                 change: RelayChange::Lost,
             });
         }
+        // A call of one of the app's tools being stopped is answered as it
+        // ends, after: the connection is kept for it until then.
+        if closing == Closing::Ended && self.stopping.values().any(|each| each.conn == no) {
+            self.parked.insert(no, conn);
+        }
         // Dropping its sender ends its writing task, once what's waiting
         // is written, and with it the socket.
     }
@@ -1701,6 +1739,11 @@ impl<A: AppItem> ToolsDriver<A> {
             (self.conns.get_mut(&no)).and_then(|conn| conn.mcp.answer(request, answer))
         {
             self.send(no, bytes);
+        } else if let Some(conn) = self.parked.get_mut(&no)
+            && let Some(bytes) = conn.mcp.answer(request, answer)
+        {
+            // Closed, it's written all the same before its socket closes.
+            let _ = conn.write.try_send(bytes);
         }
     }
 
@@ -1731,38 +1774,54 @@ impl<A: AppItem> ToolsDriver<A> {
     /// Batches what calls printed.
     fn poll_prints(&mut self, cx: &mut Context<'_>) {
         while let Poll::Ready(Some(print)) = self.printed.poll_recv(cx) {
-            let (call, from, lines) = match print {
-                Print::Lines { call, from, lines } => (call, from, lines),
-                Print::Detach { call, job, answer } => {
-                    self.detach(call, job, answer);
-                    continue;
-                }
-            };
-            let Some(each) = self.calls.get_mut(&call) else {
-                continue;
-            };
-            if !each.running {
-                continue;
-            }
-            let print = Printed { from, lines };
-            match &mut each.batch {
-                Some(batch) => {
-                    if let Some(earlier) = batch.add(print) {
-                        self.reports.push_back(output(call, earlier));
-                    }
-                }
-                None => each.batch = Some(Batch::new(print)),
-            }
-            if each
-                .batch
-                .as_ref()
-                .is_some_and(|batch| batch.bytes >= BATCH_BYTES)
-                && let Some(batch) = each.batch.take()
-            {
-                self.reports.push_back(output(call, batch));
-            }
+            self.printed_one(print);
         }
         self.wake_at_next();
+    }
+
+    /// Batches what calls printed that's waiting now, without waiting:
+    /// before a call ends otherwise than as [`ToolsDriver::poll_calls`]
+    /// finds it, so the end of its output comes before its end.
+    fn take_prints(&mut self) {
+        while let Ok(print) = self.printed.try_recv() {
+            self.printed_one(print);
+        }
+    }
+
+    /// Batches what a call printed, or detaches it: a call running, or
+    /// one of the app's tools being stopped.
+    fn printed_one(&mut self, print: Print) {
+        let (call, from, lines) = match print {
+            Print::Lines { call, from, lines } => (call, from, lines),
+            Print::Detach { call, job, answer } => {
+                self.detach(call, job, answer);
+                return;
+            }
+        };
+        let Some(each) = (self.calls.get_mut(&call)).or_else(|| self.stopping.get_mut(&call))
+        else {
+            return;
+        };
+        if !each.running {
+            return;
+        }
+        let print = Printed { from, lines };
+        match &mut each.batch {
+            Some(batch) => {
+                if let Some(earlier) = batch.add(print) {
+                    self.reports.push_back(output(call, earlier));
+                }
+            }
+            None => each.batch = Some(Batch::new(print)),
+        }
+        if each
+            .batch
+            .as_ref()
+            .is_some_and(|batch| batch.bytes >= BATCH_BYTES)
+            && let Some(batch) = each.batch.take()
+        {
+            self.reports.push_back(output(call, batch));
+        }
     }
 
     /// Takes what previews and runs finished.
@@ -1953,16 +2012,11 @@ impl<A: AppItem> ToolsDriver<A> {
 
     /// Ends serving, as CAF shuts down: every open call is answered as
     /// cancelled, every connection closed, and the socket removed. Waits
-    /// a moment for the answers to be written.
+    /// for the app's tools being stopped, at most [`STOP_TIME`] all
+    /// together, so each call is answered as it ended, then at most
+    /// [`FINISH_TIME`] for the answers to be written: so at most about
+    /// six seconds.
     pub(crate) async fn finish(&mut self) {
-        // The app's tools' runs the core cancelled are waited for first,
-        // their connections still open, so each is answered as it ended.
-        let mut stops = std::mem::take(&mut self.stops);
-        while let Some(after) = stops.join_next().await {
-            if let Ok(after) = after {
-                self.after_stop(after);
-            }
-        }
         for (_, held) in std::mem::take(&mut self.held) {
             self.answer(held.conn, &held.request, &held.answer);
         }
@@ -1977,16 +2031,30 @@ impl<A: AppItem> ToolsDriver<A> {
             }
             drop(live.socket);
         }
-        // The app's tools still stopping are waited for, each for at most
-        // its own STOP_TIME, so their calls are answered once they have.
+        // The app's tools still stopping are waited for, together, for at
+        // most STOP_TIME (and a moment, as each waits that long itself, from
+        // before this), so their calls are answered as they ended; their
+        // connections are kept for that. What's reported now is no matter:
+        // the core has let every chat go.
         let mut stops = std::mem::take(&mut self.stops);
-        // What's reported now is no matter: the core has let every chat
-        // go.
-        while let Some(after) = stops.join_next().await {
-            if let Ok(after) = after {
-                self.after_stop(after);
+        let _ = tokio::time::timeout(STOP_TIME + STOP_SLACK, async {
+            while let Some(after) = stops.join_next().await {
+                if let Ok(after) = after {
+                    self.after_stop(after);
+                }
+            }
+        })
+        .await;
+        // Any still stopping is answered as cancelled, as its time is up.
+        for (_, each) in std::mem::take(&mut self.stopping) {
+            if each.job.is_none() {
+                self.answer(each.conn, &each.request, &Answer::error(CANCELLED));
             }
         }
+        for (_, held) in std::mem::take(&mut self.held) {
+            self.answer(held.conn, &held.request, &held.answer);
+        }
+        self.parked.clear();
         if let Some(runtime) = self.app_runtime.take() {
             runtime.shutdown_background();
         }
@@ -3330,6 +3398,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn what_a_run_printed_last_as_its_stopped_comes_before_its_end() {
+        let mut h = harness();
+        h.serve(CHAT);
+        let mut client = h.bound(CHAT).await;
+        let call = h.called(&mut client, 1, false).await;
+        h.apply(ToolDirective::Run {
+            call,
+            action: Action::Read {
+                path: "/x".into(),
+                lines: None,
+            },
+            input: serde_json::Value::Null,
+        });
+        let run = h.run().await;
+        // It prints, finishes and is stopped before the driver has a turn.
+        run.call.print(0, vec!["last".into()]);
+        let read = Ran::new(true, Vec::new(), Answer::text("ok"));
+        *run.quietly.lock().unwrap() = Some(read);
+        h.apply(ToolDirective::Cancel { call });
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Output { from: 0, lines } if *lines == ["last"]),
+        );
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Finished { done: true, .. })
+        });
+        assert_eq!(text_of(&client.recv().await), "ok");
+        h.quiet().await;
+    }
+
+    #[tokio::test]
     async fn a_run_that_had_finished_as_the_agent_gave_up_on_it_ends_as_it_went_unanswered() {
         let mut h = harness();
         h.serve(CHAT);
@@ -4606,8 +4706,9 @@ mod tests {
     #[derive(Deserialize, schemars::JsonSchema)]
     struct How {
         /// `title`, `preview`, `preview_poll`, `run`, `run_poll`, `drop`,
-        /// `drop_cancel`, `block` (its thread, for `ms`), or `stuck` (its
-        /// thread, for `ms`, once started).
+        /// `drop_cancel`, `block` (its thread, for `ms`), `block_then_print`
+        /// (the same, then printing a line), or `stuck` (its thread, for
+        /// `ms`, once started).
         how: String,
         #[serde(default)]
         ms: u64,
@@ -4697,12 +4798,15 @@ mod tests {
                         let _dropped = SlowDropped;
                         std::future::pending().await
                     }
-                    "block" | "stuck" | "print_block" => {
+                    "block" | "stuck" | "print_block" | "block_then_print" => {
                         if input.how == "print_block" {
                             call.print(0, vec!["printed".into()]);
                         }
                         started.store(true, Ordering::SeqCst);
                         std::thread::sleep(Duration::from_millis(input.ms));
+                        if input.how == "block_then_print" {
+                            call.print(0, vec!["printed".into()]);
+                        }
                         blocked.store(true, Ordering::SeqCst);
                         Done::answer("unblocked")
                     }
@@ -4844,6 +4948,101 @@ mod tests {
         assert_eq!(answer["result"]["isError"], false);
         client.nothing_waiting().await;
         h.quiet().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn what_a_stopped_app_tool_prints_as_it_runs_to_its_end_comes_before_its_end() {
+        let (mut h, _go, started, _blocked) = misbehaving();
+        h.serve_app(CHAT, &["misbehave"]);
+        let mut client = h.bound(CHAT).await;
+        let input = json!({"how": "block_then_print", "ms": 300});
+        let (call, _) = call_app(&mut h, &mut client, 1, "misbehave", input.clone()).await;
+        h.apply(app_directive(call, input, true));
+        while !started.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        // Stopped as it blocks, it prints once it's done blocking.
+        h.apply(ToolDirective::Cancel { call });
+        assert_event(
+            h.report().await,
+            call,
+            |event| matches!(event, ToolEvent::Output { from: 0, lines } if *lines == ["printed"]),
+        );
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Finished { done: true, .. })
+        });
+        assert_eq!(text_of(&client.recv().await), "unblocked");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_app_call_being_stopped_as_its_chat_is_let_go_is_answered_as_it_ended() {
+        // Stopped first, it's answered as cancelled.
+        let (mut h, _go, _drops) = trimming();
+        h.serve_app(CHAT, &["trim_clip"]);
+        let mut client = h.bound(CHAT).await;
+        let (call, _) = trim(&mut h, &mut client, 6, json!({"clip": 6})).await;
+        h.apply(ToolDirective::Run {
+            call,
+            action: Action::Tool {
+                name: "trim_clip".into(),
+            },
+            input: json!({"clip": 6}),
+        });
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Output { .. })
+        });
+        h.apply(ToolDirective::Cancel { call });
+        h.apply(ToolDirective::Unserve { chat: CHAT });
+        let answer = client.recv().await;
+        assert_eq!(answer["id"], 6);
+        assert_eq!(text_of(&answer), CANCELLED);
+        assert!(client.closed().await, "then its relay closes");
+
+        // Running to its end first, it's answered with what it gave.
+        let (mut h, _go, started, _blocked) = misbehaving();
+        h.serve_app(CHAT, &["misbehave"]);
+        let mut client = h.bound(CHAT).await;
+        let input = json!({"how": "block", "ms": 300});
+        let (call, _) = call_app(&mut h, &mut client, 1, "misbehave", input.clone()).await;
+        h.apply(app_directive(call, input, true));
+        while !started.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        h.apply(ToolDirective::Cancel { call });
+        h.apply(ToolDirective::Unserve { chat: CHAT });
+        let answer = client.recv().await;
+        assert_eq!(text_of(&answer), "unblocked");
+        assert!(client.closed().await, "then its relay closes");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutting_down_waits_for_the_app_tools_stopping_at_most_once() {
+        let (mut h, _go, started, _blocked) = misbehaving();
+        h.serve_app(CHAT, &["misbehave"]);
+        let mut client = h.bound(CHAT).await;
+        // One stuck call the core stopped, and one still running.
+        let input = json!({"how": "stuck", "ms": 7000});
+        let (stopped, _) = call_app(&mut h, &mut client, 1, "misbehave", input.clone()).await;
+        h.apply(app_directive(stopped, input.clone(), true));
+        while !started.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let (running, _) = call_app(&mut h, &mut client, 2, "misbehave", input.clone()).await;
+        h.apply(app_directive(running, input, true));
+        h.apply(ToolDirective::Cancel { call: stopped });
+        h.quiet().await;
+        let began = Instant::now();
+        h.shut_down().await;
+        let took = began.elapsed();
+        assert!(took < STOP_TIME + Duration::from_secs(1), "{took:?}");
+        // Both are answered, as cancelled.
+        let mut answered = [client.recv().await, client.recv().await]
+            .map(|answer| (answer["id"].as_u64().unwrap(), text_of(&answer).to_owned()));
+        answered.sort();
+        assert_eq!(
+            answered,
+            [(1, CANCELLED.to_owned()), (2, CANCELLED.to_owned())]
+        );
     }
 
     #[tokio::test]
