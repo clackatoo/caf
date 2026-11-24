@@ -199,10 +199,10 @@ pub struct Ran {
     /// path: where the chat's next command runs.
     pub folder: Option<String>,
     /// For a job, what the agent is told of its end, in a notice turn.
-    /// A job that ends by itself must have one: a job's end without one
-    /// is what TaskStop stopping it looks like
-    /// ([`Action::Stop`]), so one ending just as it's stopped is told
-    /// apart.
+    /// A job ending by itself without one is given a plain one saying it
+    /// failed: only TaskStop's stop ([`Action::Stop`]) ends a job with
+    /// none, so the core tells a job that ended just as it was stopped
+    /// from one it stopped.
     pub notice: Option<String>,
 }
 
@@ -1312,7 +1312,10 @@ impl ToolsDriver {
                 done: ran.done,
                 pieces: ran.record,
                 folder: ran.folder,
-                notice: job.and(ran.notice),
+                // Only a TaskStop's stop ends a job without one
+                // ([`ToolsDriver::stop_job`]): that's how the core tells
+                // them apart.
+                notice: job.map(|job| ran.notice.unwrap_or_else(|| failed_notice(job))),
             },
         });
         if job.is_none() {
@@ -1491,6 +1494,15 @@ fn output(call: CallId, batch: Batch) -> Report {
             lines: batch.lines,
         },
     }
+}
+
+/// The notice of job `job`'s end, for a runner that gave none, such as
+/// one that panicked.
+fn failed_notice(job: JobId) -> String {
+    format!(
+        "<task-notification>\n<task-id>{}</task-id>\n<status>failed</status>\n<summary>Background task {} failed</summary>\n</task-notification>",
+        job.0, job.0
+    )
 }
 
 /// What the model is told of a call stopped with its turn.
@@ -3277,5 +3289,23 @@ mod tests {
         h.apply(ToolDirective::Unserve { chat: CHAT });
         assert_eq!(h.dropped().await, call);
         h.quiet().await;
+    }
+
+    #[tokio::test]
+    async fn a_job_ending_without_a_notice_is_given_one_so_it_isnt_taken_as_stopped() {
+        let mut h = harness();
+        h.serve(CHAT);
+        let mut client = h.bound(CHAT).await;
+        let call = h.called(&mut client, 1, false).await;
+        let mut run = running(&mut h, call, a_read()).await;
+        run.call.answer_now(|_| Answer::text("in the background"));
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Detached { .. })
+        });
+        run.finish.send(failed("it broke")).unwrap();
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Finished { done: false, notice: Some(notice), .. }
+                if notice.contains("<task-id>1</task-id>") && notice.contains("failed"))
+        });
     }
 }
