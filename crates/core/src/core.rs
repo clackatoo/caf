@@ -598,7 +598,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     ///
     /// [`Refused::NoSuchAgent`], [`Refused::OwnTools`] if CAF can't turn
     /// off the agent's own tools, [`Refused::RelativeFolder`],
-    /// [`Refused::Unsendable`], or [`Refused::BadShelf`] for its shelf.
+    /// [`Refused::Unsendable`], [`Refused::BadShelf`] for its shelf, or
+    /// [`Refused::ToolsNotServed`] if it's given CAF's tools and nothing
+    /// serves them.
     pub fn open_chat(
         &mut self,
         now: Now,
@@ -792,8 +794,10 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     ///
     /// # Errors
     ///
-    /// [`Refused::Loaded`], [`Refused::BadShelf`], or
-    /// [`Refused::Unsendable`] for its MCP servers or instructions. Which
+    /// [`Refused::Loaded`], [`Refused::BadShelf`],
+    /// [`Refused::Unsendable`] for its MCP servers or instructions, or
+    /// [`Refused::ToolsNotServed`] if it's given CAF's tools and nothing
+    /// serves them. Which
     /// agent the chat is with is known only once it's read, so a chat
     /// whose agent the host no longer offers, or whose own tools CAF can't
     /// turn off, is still restored, and sending to it is refused
