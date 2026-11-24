@@ -1388,7 +1388,7 @@ pub(crate) fn own_instructions(host: &str, tools: &[CafTool], app: &[String]) ->
              you tools to {}, in the folder you're working in, asking the user's leave where it \
              must. You have no other tools of your own: you can't do anything else, such as \
              browse the web, except through other tools {host} gives you. Answer in Markdown.",
-            tool_uses(tools)
+            tool_uses(tools, !app.is_empty())
         ),
         (false, false) => format!(
             "You are working inside {host}, the app the user is talking to you in. {host} gives \
@@ -1396,7 +1396,7 @@ pub(crate) fn own_instructions(host: &str, tools: &[CafTool], app: &[String]) ->
              asking the user's leave where they must. You have no other tools of your own: you \
              can't do anything else, such as browse the web, except through other tools {host} \
              gives you. Answer in Markdown.",
-            tool_uses(tools)
+            tool_uses(tools, !app.is_empty())
         ),
     }
 }
@@ -1409,11 +1409,11 @@ pub(crate) fn served_instructions(host: &str, tools: &[CafTool], app: &[String])
         (true, _) => format!("{host}'s own tools ({apps}){}.", task_stop(tools)),
         (false, true) => format!(
             "{host}'s tools to {}, in the folder you're working in.",
-            tool_uses(tools)
+            tool_uses(tools, !app.is_empty())
         ),
         (false, false) => format!(
             "{host}'s tools to {}, in the folder you're working in, and its own ({apps}).",
-            tool_uses(tools)
+            tool_uses(tools, !app.is_empty())
         ),
     }
 }
@@ -1434,8 +1434,9 @@ fn task_stop(tools: &[CafTool]) -> &'static str {
 }
 
 /// What `tools` do, with each one's name, as a list: "read files (Read)
-/// and run commands (Bash)".
-fn tool_uses(tools: &[CafTool]) -> String {
+/// and run commands (Bash)". TaskStop stops background commands, in a
+/// chat with Bash and none of the app's tools (`app`), else tasks.
+fn tool_uses(tools: &[CafTool], app: bool) -> String {
     let uses: Vec<String> = (tools.iter())
         .map(|tool| {
             let does = match tool {
@@ -1443,8 +1444,11 @@ fn tool_uses(tools: &[CafTool]) -> String {
                 CafTool::Edit => "change part of a file",
                 CafTool::Write => "write whole files",
                 CafTool::Bash => "run commands",
-                // Only Bash's jobs are commands.
-                CafTool::TaskStop if tools.contains(&CafTool::Bash) => "stop background commands",
+                // Its jobs are all commands only if Bash's are the only
+                // ones: the app's tools may make jobs too.
+                CafTool::TaskStop if tools.contains(&CafTool::Bash) && !app => {
+                    "stop background commands"
+                }
                 CafTool::TaskStop => "stop background tasks",
             };
             format!("{does} ({})", tool.name())
