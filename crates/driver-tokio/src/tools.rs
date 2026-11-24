@@ -311,8 +311,10 @@ pub(crate) struct ToolsDriver {
     finished: Option<CallId>,
     /// One sleep, moved to the next batch or progress due.
     sleep: Pin<Box<Sleep>>,
-    /// The tasks writing to relays, waited for as CAF shuts down.
-    writers: JoinSet<()>,
+    /// The tasks writing to relays, waited for as CAF shuts down. Each
+    /// gives its connection's number if it gave up, as the socket broke or
+    /// a line took too long.
+    writers: JoinSet<Option<u64>>,
     /// [`ToolsConfig::progress_every`].
     progress_every: Duration,
 }
@@ -600,9 +602,9 @@ impl ToolsDriver {
                     let (conn, request) = each.stop();
                     self.answer(conn, &request, &Answer::error(CANCELLED));
                 } else if let Some(held) = self.held.remove(&call) {
-                    // It finished, but the core stopped it before it knew:
-                    // what it gave is never the model's.
-                    self.answer(held.conn, &held.request, &Answer::error(CANCELLED));
+                    // It finished as the core stopped it: the work was
+                    // done, so the model hears what it gave.
+                    self.answer(held.conn, &held.request, &held.answer);
                 }
             }
             // No other kind is given yet.
@@ -621,8 +623,19 @@ impl ToolsDriver {
         if let Some(report) = self.pop() {
             return Poll::Ready(report);
         }
-        // Each writer done with its socket is let go.
-        while let Poll::Ready(Some(_)) = self.writers.poll_join_next(cx) {}
+        // Each writer done with its socket is let go. One that gave up
+        // leaves its connection dead: it's closed, as lost.
+        while let Poll::Ready(Some(ended)) = self.writers.poll_join_next(cx) {
+            if let Ok(Some(no)) = ended
+                && let Some(conn) = self.conns.get(&no)
+            {
+                log::warn!(target: "caf", "a relay for chat {} was closed: it couldn't be written to", conn.chat.0);
+                self.close(no, Closing::Lost);
+            }
+        }
+        if let Some(report) = self.pop() {
+            return Poll::Ready(report);
+        }
         self.poll_accept(cx);
         self.poll_conns(cx);
         self.poll_prints(cx);
@@ -747,10 +760,11 @@ impl ToolsDriver {
                 // An agent that stops reading isn't waited for forever.
                 match tokio::time::timeout(WRITE_TIME, write.write_all(&line)).await {
                     Ok(Ok(())) => {}
-                    _ => return,
+                    _ => return Some(no),
                 }
             }
             let _ = write.shutdown().await;
+            None
         });
         self.conns.insert(
             no,
@@ -918,9 +932,13 @@ impl ToolsDriver {
                 self.close(no, Closing::Lost);
                 false
             }
-            // Its writing task ended, as the socket broke: its reader is
-            // about to say so.
-            Err(mpsc::error::TrySendError::Closed(_)) => true,
+            // Its writing task gave up, as the socket broke or a line took
+            // too long.
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                log::warn!(target: "caf", "a relay for chat {} was closed: it couldn't be written to", conn.chat.0);
+                self.close(no, Closing::Lost);
+                false
+            }
         }
     }
 
@@ -1695,6 +1713,13 @@ mod tests {
             });
         }
 
+        async fn report_within(&mut self, wait: Duration) -> Report {
+            tokio::time::timeout(wait, self.reports.recv())
+                .await
+                .expect("a report in time")
+                .expect("the driver is running")
+        }
+
         async fn report(&mut self) -> Report {
             tokio::time::timeout(Duration::from_secs(10), self.reports.recv())
                 .await
@@ -2434,7 +2459,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_answer_held_for_the_core_goes_if_its_call_is_cancelled_first() {
+    async fn a_call_that_finished_as_the_core_cancelled_it_is_answered_with_what_it_gave() {
         let mut h = harness_of(false, false);
         h.serve(CHAT);
         let mut client = h.bound(CHAT).await;
@@ -2453,13 +2478,59 @@ mod tests {
         assert_event(h.report().await, call, |event| {
             matches!(event, ToolEvent::Finished { .. })
         });
-        // The core stopped the call before it took its Finished.
+        // The core stopped the call before it took its Finished: the work
+        // was done, so the model hears what it gave, once.
         h.apply(ToolDirective::Cancel { call });
         h.taken();
         let answer = client.recv().await;
         assert_eq!(answer["id"], 1);
-        assert_eq!(text_of(&answer), CANCELLED);
+        assert_eq!(text_of(&answer), "ok");
+        assert_eq!(answer["result"]["isError"], false);
         client.nothing_waiting().await;
+    }
+
+    #[tokio::test]
+    async fn a_relay_that_stops_reading_for_long_is_closed_as_lost() {
+        let mut h = harness();
+        h.serve(CHAT);
+        let mut client = h.bound(CHAT).await;
+        let call = h.called(&mut client, 1, false).await;
+        // One answer, more than its socket holds, and the agent reads none.
+        let big = h.called(&mut client, 2, false).await;
+        h.apply(ToolDirective::Run {
+            call: big,
+            action: Action::Read {
+                path: "/x".into(),
+                lines: None,
+            },
+        });
+        let run = h.run().await;
+        run.finish
+            .send(Ran::new(
+                true,
+                Vec::new(),
+                Answer::text("x".repeat(2 << 20)),
+            ))
+            .unwrap();
+        assert_event(h.report().await, big, |event| {
+            matches!(event, ToolEvent::Finished { .. })
+        });
+        // The clock moves only once everything waits.
+        tokio::time::pause();
+        let started = Instant::now();
+        // Waited for longer than a line may take to write.
+        let wait = WRITE_TIME * 6;
+        assert_event(h.report_within(wait).await, call, |event| {
+            matches!(event, ToolEvent::Gone)
+        });
+        match h.report_within(wait).await {
+            Report::Relay {
+                chat,
+                change: RelayChange::Lost,
+            } => assert_eq!(chat, CHAT),
+            other => panic!("expected Lost, got {other:?}"),
+        }
+        assert!(started.elapsed() >= WRITE_TIME, "{:?}", started.elapsed());
     }
 
     #[tokio::test]
