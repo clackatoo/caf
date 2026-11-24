@@ -126,7 +126,9 @@ pub fn rules(
 /// - **Noted as it happens:** CAF's steps are tapped as CAF takes them
 ///   ([`Untooled::step`]), so a chat is noted before anything can restore
 ///   it. A deleted chat is forgotten, and so is any chat the store's first
-///   listing doesn't have, deleted while the debugger wasn't running.
+///   listing doesn't have, deleted while the debugger wasn't running: but
+///   never one noted since this debugger started, which a listing may not
+///   have yet.
 /// - **Kept in a file of the debugger's own** in the store's folder,
 ///   [`UNTOOLED_FILE`]: a JSON list of chat ids, its user's alone. A
 ///   thread of its own writes it, never CAF's, reading it again before
@@ -138,6 +140,8 @@ pub fn rules(
 #[derive(Debug, Default)]
 pub struct Untooled {
     chats: Mutex<BTreeSet<ChatId>>,
+    /// The chats noted since this debugger started: never pruned.
+    noted: Mutex<BTreeSet<ChatId>>,
     /// Whether the store's first listing has been seen.
     listed: AtomicBool,
     /// The thread writing the file, and what it's to write, if there's a
@@ -202,6 +206,7 @@ impl Untooled {
         });
         Self {
             chats: Mutex::new(chats),
+            noted: Mutex::new(BTreeSet::new()),
             listed: AtomicBool::new(false),
             writer: Mutex::new(Some((changes, writer))),
         }
@@ -220,6 +225,9 @@ impl Untooled {
     pub fn step(&self, event: &Event<NoAppItems>) {
         let change = match event {
             Event::Host(HostCommand::OpenChat { chat, open }) if open.tools.is_empty() => {
+                if let Ok(mut noted) = self.noted.lock() {
+                    noted.insert(*chat);
+                }
                 Change::Add(*chat)
             }
             Event::Host(HostCommand::Delete { chat, .. }) => Change::Remove(*chat),
@@ -229,11 +237,19 @@ impl Untooled {
                         chats, unreadable, ..
                     },
                 ..
-            } if !self.listed.swap(true, Ordering::Relaxed) => Change::KeepOnly(
-                (chats.iter().map(|header| header.chat))
-                    .chain(unreadable.iter().map(|(chat, _)| *chat))
-                    .collect(),
-            ),
+            } if !self.listed.swap(true, Ordering::Relaxed) => {
+                let noted = self
+                    .noted
+                    .lock()
+                    .map(|noted| noted.clone())
+                    .unwrap_or_default();
+                Change::KeepOnly(
+                    (chats.iter().map(|header| header.chat))
+                        .chain(unreadable.iter().map(|(chat, _)| *chat))
+                        .chain(noted)
+                        .collect(),
+                )
+            }
             _ => return,
         };
         if let Ok(mut chats) = self.chats.lock() {
@@ -925,8 +941,12 @@ mod tests {
         )
         .unwrap();
         // The first listing forgets what the store no longer has, an
-        // unreadable chat kept; a later one changes nothing.
+        // unreadable chat kept, and one noted since this debugger started,
+        // which it may not have yet; a later one changes nothing.
+        let fresh = chat(7);
+        next.step(&opened(fresh, None));
         next.step(&listed(&[bare, other], &[older]));
+        assert!(next.has(fresh), "noted since it started: never pruned");
         next.step(&listed(&[], &[]));
         assert!(next.has(bare) && next.has(older));
         drop(restoring);
@@ -935,6 +955,10 @@ mod tests {
         let kept = Untooled::in_store(&dir);
         assert!(kept.has(bare) && kept.has(older) && kept.has(other));
         assert!(!kept.has(chat(6)), "deleted while no debugger ran: pruned");
+        assert!(
+            kept.has(fresh),
+            "noted since it started: kept in the file too"
+        );
 
         // No note, or one that can't be read, notes none: all tools.
         assert!(!Untooled::in_store(&dir.join("elsewhere")).has(bare));

@@ -209,8 +209,8 @@ call ends *Cancelled*, stopped by the agent.
 **Output files** (a job's, and a long output's) are kept at
 `out/<runner>/<chat>/<call>.txt` under CAF's tools folder
 (`ToolsConfig::folder`, by default `$XDG_RUNTIME_DIR/caf`), readable by the
-user alone. `<runner>` is the app's process id, with `-2`, `-3`… for a
-second runner in one process, and each runner locks its folder, so one
+user alone. `<runner>` is the app's process id, with `-1`, `-2`… after it
+for a second runner in one process, a third, and so on, and each runner locks its folder, so one
 never touches another's. Each holds at most 64 MiB of
 output, then says the rest wasn't kept. They're removed when the chat is let
 go or the app ends, and those an app that's gone left behind are removed as
