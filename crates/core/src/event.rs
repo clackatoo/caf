@@ -201,7 +201,8 @@ pub enum HostCommand<A: AppItem = NoAppItems, D: AppData = NoAppData> {
         /// What it's told.
         text: String,
     },
-    /// Stop the chat's running turn, and drop its waiting ones.
+    /// Stop the chat's running turn, drop its waiting messages, and hold its
+    /// waiting notices ([`Core::stop`](crate::Core::stop)).
     Stop {
         /// The chat.
         chat: ChatId,

@@ -456,3 +456,69 @@ fn the_app_notifies_the_agent_with_a_notice_turn() {
         Err(Refused::NoSuchChat)
     );
 }
+
+#[test]
+fn the_users_stop_holds_a_notice_waiting_until_the_next_message() {
+    let mut script = job_running("cargo build");
+    let out = script.tool(
+        2,
+        called(
+            CafTool::Bash,
+            json!({ "command": "make", "run_in_background": true }),
+            None,
+        ),
+    );
+    script.policy(ticket(&out), PolicyAnswer::Allow);
+    script.tool(2, ToolEvent::Detached { job: JobId(2) });
+    // A job ends while its turn still runs: its notice waits.
+    script.tool(1, finished(true, Vec::new(), None, Some(NOTICE)));
+    let (_, out) = script.send(CHAT, "and this");
+    assert!(writes(&out).is_empty());
+    // The user stops: the message waiting is dropped, the notice held.
+    script.stop(CHAT).0.expect("stopping");
+    let out = script.answers(PROC, PROMPT, &json!({ "stopReason": "cancelled" }));
+    assert!(
+        writes(&out)
+            .iter()
+            .all(|(_, message)| message["method"] != "session/prompt"),
+        "nothing is sent as the turn stops: {out:#?}"
+    );
+    let lives: Vec<Value> = turns(&script).into_iter().map(|(_, life)| life).collect();
+    assert_eq!(
+        lives,
+        [kind("Stopped"), kind("Waiting"), kind("Stopped")],
+        "the notice waits, the message is stopped"
+    );
+    // The other job ends after: its notice joins the one held.
+    let out = script.tool(2, finished(true, Vec::new(), None, Some("second")));
+    assert!(writes(&out).is_empty(), "{out:#?}");
+    // A Stop with only held notices has nothing to stop.
+    assert_eq!(script.stop(CHAT).0, Err(Refused::NothingToStop));
+    // The next message sends the notices first, in order, then itself.
+    let (_, out) = script.send(CHAT, "next");
+    let (text, id) = prompted(&out);
+    assert_eq!(text, NOTICE);
+    let out = script.answers(PROC, id, &json!({ "stopReason": "end_turn" }));
+    let (text, id) = prompted(&out);
+    assert_eq!(text, "second");
+    let out = script.answers(PROC, id, &json!({ "stopReason": "end_turn" }));
+    let (text, id) = prompted(&out);
+    assert_eq!(text, "next");
+    script.answers(PROC, id, &json!({ "stopReason": "end_turn" }));
+    assert_eq!(turns(&script)[1].1, kind("Finished"));
+}
+
+#[test]
+fn the_apps_notice_lets_held_notices_go_before_it() {
+    let mut script = job_running("cargo build");
+    script.tool(1, finished(true, Vec::new(), None, Some(NOTICE)));
+    script.stop(CHAT).0.expect("stopping");
+    script.answers(PROC, PROMPT, &json!({ "stopReason": "cancelled" }));
+    let (_, out) = script.notify(CHAT, "The deploy finished");
+    let (text, first) = prompted(&out);
+    assert_eq!(text, NOTICE);
+    let out = script.answers(PROC, first, &json!({ "stopReason": "end_turn" }));
+    let (text, second) = prompted(&out);
+    assert_eq!(text, "The deploy finished");
+    script.answers(PROC, second, &json!({ "stopReason": "end_turn" }));
+}

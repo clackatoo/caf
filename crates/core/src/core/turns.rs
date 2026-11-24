@@ -68,6 +68,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         }
         self.call_off_shutdown(now);
         self.end_agent_turn(now, chat);
+        self.release_notices(chat);
         self.add_turn(
             chat,
             Turn {
@@ -93,7 +94,8 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     }
 
     /// Queues `text` in `chat` as a notice turn from CAF, such as that a
-    /// background job ended: sent as a message is, once no turn runs. It's
+    /// background job ended: sent as a message is, once no turn runs, or,
+    /// while the user's Stop holds notices, with them. It's
     /// never refused for the queue being full, so it's never lost: a
     /// chat's jobs are few, and each ends once.
     pub(super) fn queue_notice(
@@ -107,6 +109,7 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             return;
         }
         self.end_agent_turn(now, chat);
+        // While the user's Stop holds notices, this one joins them.
         let turn = TurnId(self.ids.take());
         self.add_turn(
             chat,
@@ -125,6 +128,14 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             self.want_open(now, chat, out);
         }
         self.pump(now, chat, out);
+    }
+
+    /// Lets go the notices `chat`'s Stop held, as a message or the app's
+    /// notice is queued after them: they're sent first, in order.
+    fn release_notices(&mut self, chat: ChatId) {
+        if let Some(run) = self.runs.get_mut(&chat) {
+            run.notices_held = false;
+        }
     }
 
     /// The turns of `chat` waiting to be sent, oldest first.
@@ -149,6 +160,9 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         else {
             return;
         };
+        if run.notices_held {
+            return;
+        }
         let (proc, session) = (*proc, session.clone());
         if !self.send_settings(now, chat, proc, &session, out) {
             return;
@@ -461,7 +475,15 @@ impl<A: AppItem, D: AppData> Core<A, D> {
     ) -> Result<(), Refused> {
         let whole = self.chats.get(&chat).ok_or(Refused::NoSuchChat)?;
         let run = self.runs.get(&chat).ok_or(Refused::NoSuchChat)?;
-        let waiting = self.waiting_turns(chat);
+        // Messages waiting are stopped; notices are held, so the agent
+        // still hears what they say, with whatever's sent next.
+        let (notices, waiting): (Vec<TurnId>, Vec<TurnId>) = (self.waiting_turns(chat).into_iter())
+            .partition(|&turn| {
+                matches!(
+                    self.turn(chat, turn).map(|each| &each.starter),
+                    Some(Starter::Notice(_))
+                )
+            });
         let opening = matches!(run.open, Open::Wanted | Open::Asked { .. })
             && whole.state != ChatState::Closed;
         let running = run
@@ -511,6 +533,11 @@ impl<A: AppItem, D: AppData> Core<A, D> {
         let stopped = !waiting.is_empty();
         for turn in waiting {
             self.set_life(now, chat, turn, TurnLife::Stopped);
+        }
+        if !notices.is_empty()
+            && let Some(run) = self.runs.get_mut(&chat)
+        {
+            run.notices_held = true;
         }
         if opening {
             self.stop_opening(now, chat, out);

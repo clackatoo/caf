@@ -181,7 +181,12 @@ It ends in one of these ways:
 A restored chat has no jobs: one saved while running ends Failed. TaskStop
 is served with Bash automatically. A notice turn is `Starter::Notice`: the
 app can send its own with `Core::notify`, and it's queued like a message.
-The user's Stop drops notices still waiting, as it does messages.
+The user's Stop drops the messages still waiting, but not the notices:
+dropping a notice would mean the agent never learns that its job ended,
+and sending it at once would set the agent working again just after the
+user stopped it. So Stop **holds** them. A job's notice that comes after
+joins them. They're all sent just before the user's next message, or the
+app's next notice, each as its own turn, in order.
 
 Each chat also keeps a **shell folder**: where its last command's shell
 ended, starting at its folder. Its next Bash command runs there. A job's
