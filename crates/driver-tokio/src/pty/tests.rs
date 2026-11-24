@@ -193,7 +193,7 @@ async fn a_folder_that_isnt_there_is_said_so() {
 #[tokio::test]
 async fn it_runs_in_a_terminal_the_size_of_the_screen() {
     // Its output is the terminal; its input isn't.
-    let (_, text) = run("test ! -t 0 && test -t 1 && echo tty; stty size </dev/tty").await;
+    let (_, text) = run("test ! -t 0 && test -t 1 && echo tty; stty size <&1").await;
     assert_eq!(text, "tty\r\n24 200\r\n");
     // Its own session and group, which the terminal is the controlling
     // one of: from /proc, as any ps may not say.
@@ -426,4 +426,20 @@ async fn a_command_is_held_back_while_its_output_isnt_taken() {
     let ended = running.wait().await;
     assert_eq!(ended.exit, Some(Exit::Code(0)));
     assert!(count > 50_000_000, "{count}");
+}
+
+#[tokio::test]
+async fn a_prompt_on_the_terminal_fails_at_once() {
+    // As sudo, ssh or gpg asks for a password: there's no one to answer.
+    let (ended, _) = tokio::time::timeout(PATIENCE, run("read -r line < /dev/tty"))
+        .await
+        .expect("it didn't wait for an answer");
+    assert_ne!(ended.exit, Some(Exit::Code(0)));
+}
+
+#[tokio::test]
+async fn what_a_command_left_running_has_the_hangup_when_it_ends() {
+    let (ended, text) = run("sleep 1000 & echo $!").await;
+    assert_eq!(ended.exit, Some(Exit::Code(0)));
+    gone(text.trim().parse().unwrap()).await;
 }

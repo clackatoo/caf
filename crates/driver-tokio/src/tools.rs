@@ -79,7 +79,7 @@ impl Default for ToolsConfig {
         Self {
             relay: Relay::None,
             runner: None,
-            files: Arc::new(DiskFiles::default()),
+            files: Arc::new(DiskFiles),
             commands: Arc::new(PtyCommands),
             folder: None,
             progress_every: PROGRESS_EVERY,
@@ -1330,6 +1330,7 @@ impl ToolsDriver {
             request,
             batch,
             job,
+            agent_call,
             ..
         } = each;
         if let Some(batch) = batch {
@@ -1344,7 +1345,9 @@ impl ToolsDriver {
                 // Only a TaskStop's stop ends a job without one
                 // ([`ToolsDriver::stop_job`]): that's how the core tells
                 // them apart.
-                notice: job.map(|job| ran.notice.unwrap_or_else(|| failed_notice(job))),
+                notice: job.map(|job| {
+                    (ran.notice).unwrap_or_else(|| failed_notice(job, agent_call.as_deref()))
+                }),
             },
         });
         if job.is_none() {
@@ -1527,11 +1530,22 @@ fn output(call: CallId, batch: Batch) -> Report {
 
 /// The notice of job `job`'s end, for a runner that gave none, such as
 /// one that panicked.
-fn failed_notice(job: JobId) -> String {
-    format!(
-        "<task-notification>\n<task-id>{}</task-id>\n<status>failed</status>\n<summary>Background task {} failed</summary>\n</task-notification>",
-        job.0, job.0
-    )
+/// It's laid out as `caf_tools::notice` lays one out, but for the output
+/// file, which isn't known: the task's id, the agent's id for its call if
+/// known (`tool_use`), its status and a summary.
+fn failed_notice(job: JobId, tool_use: Option<&str>) -> String {
+    let mut out = format!("<task-notification>\n<task-id>{}</task-id>", job.0);
+    if let Some(tool_use) = tool_use {
+        let escaped = (tool_use.replace('&', "&amp;"))
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        out.push_str(&format!("\n<tool-use-id>{escaped}</tool-use-id>"));
+    }
+    out.push_str(&format!(
+        "\n<status>failed</status>\n<summary>Background task {} failed</summary>\n</task-notification>",
+        job.0
+    ));
+    out
 }
 
 /// What the model is told of a call stopped with its turn.
@@ -3343,7 +3357,7 @@ mod tests {
         run.finish.send(failed("it broke")).unwrap();
         assert_event(h.report().await, call, |event| {
             matches!(event, ToolEvent::Finished { done: false, notice: Some(notice), .. }
-                if notice.contains("<task-id>1</task-id>") && notice.contains("failed"))
+                if notice == "<task-notification>\n<task-id>1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>failed</status>\n<summary>Background task 1 failed</summary>\n</task-notification>")
         });
     }
 

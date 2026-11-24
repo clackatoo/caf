@@ -49,6 +49,14 @@ struct Own {
 /// `steps` (after the handshake, the relay and the first prompt) as the
 /// agent: `steps` is given the folder its files are in.
 fn serve(steps: impl FnOnce(&Path) -> Vec<Value>) -> Own {
+    serve_with(steps, |_| {})
+}
+
+/// [`serve`], with `config` changed as `change` says first.
+fn serve_with(
+    steps: impl FnOnce(&Path) -> Vec<Value>,
+    change: impl FnOnce(&mut caf_driver_tokio::Config),
+) -> Own {
     let dir = Dir::new();
     let work = dir.path("work");
     std::fs::create_dir_all(&work).unwrap();
@@ -65,6 +73,7 @@ fn serve(steps: impl FnOnce(&Path) -> Vec<Value>) -> Own {
     config.policy = Box::new(AllowAll);
     config.tools.relay = Relay::Command(SpawnCommand::new(caf_fake_agent::binary()));
     config.tools.folder = Some(dir.path("s"));
+    change(&mut config);
     let (caf, running) = Caf::start(config);
     Own {
         dir,
@@ -670,6 +679,81 @@ async fn a_shell_folder_thats_gone_starts_again_in_the_chats() {
         ]
         .concat()
     });
+    let _chat = own.chat().await;
+    own.script_done().await;
+    own.shut_down().await;
+}
+
+/// An app's terminal whose output stays open after its command ends, as
+/// a visible terminal can: it prints one line, then nothing, ever.
+struct OpenTerminal;
+
+/// A command in an [`OpenTerminal`].
+struct InOpenTerminal {
+    printed: bool,
+}
+
+impl caf_driver_tokio::caf_tools::Commands for OpenTerminal {
+    fn start(
+        &self,
+        _spec: caf_driver_tokio::caf_tools::CommandSpec,
+    ) -> caf_driver_tokio::caf_tools::BoxFuture<
+        Result<Box<dyn caf_driver_tokio::caf_tools::Running>, String>,
+    > {
+        Box::pin(std::future::ready(Ok(
+            Box::new(InOpenTerminal { printed: false })
+                as Box<dyn caf_driver_tokio::caf_tools::Running>,
+        )))
+    }
+}
+
+impl caf_driver_tokio::caf_tools::Running for InOpenTerminal {
+    fn output(
+        &mut self,
+    ) -> caf_driver_tokio::caf_tools::BoxFuture<Option<caf_driver_tokio::caf_tools::Output>> {
+        if std::mem::replace(&mut self.printed, true) {
+            return Box::pin(std::future::pending());
+        }
+        let line = caf_driver_tokio::caf_tools::Output::Bytes(b"done\r\n".to_vec());
+        Box::pin(std::future::ready(Some(line)))
+    }
+
+    fn wait(
+        &mut self,
+    ) -> caf_driver_tokio::caf_tools::BoxFuture<caf_driver_tokio::caf_tools::Ended> {
+        let ended = caf_driver_tokio::caf_tools::Ended::new(Some(Exit::Code(0)), None);
+        Box::pin(std::future::ready(ended))
+    }
+
+    fn interrupt(&mut self) {}
+
+    fn stop(&mut self) -> caf_driver_tokio::caf_tools::BoxFuture<()> {
+        Box::pin(std::future::ready(()))
+    }
+
+    fn place(&self) -> Option<String> {
+        Some("terminal 7".to_owned())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_command_ends_when_it_does_though_its_terminal_stays_open() {
+    let own = serve_with(
+        |_| {
+            [
+                call(
+                    "Bash",
+                    "b1",
+                    json!({"command": "make"}),
+                    says("Ran in terminal 7\ndone", false),
+                )
+                .to_vec(),
+                vec![end_turn()],
+            ]
+            .concat()
+        },
+        |config| config.tools.commands = std::sync::Arc::new(OpenTerminal),
+    );
     let _chat = own.chat().await;
     own.script_done().await;
     own.shut_down().await;

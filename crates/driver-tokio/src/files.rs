@@ -1,12 +1,11 @@
 //! [`DiskFiles`]: CAF's tools' files, on the disk.
 
-use std::collections::HashSet;
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{self, Read as _, Write as _};
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Condvar, Mutex, PoisonError};
 
 use caf_core::ids::CallId;
 use caf_tools::{BoxFuture, FileError, FileRead, FileText, Files, Version};
@@ -38,51 +37,75 @@ const MOST_LINKS: usize = 40;
 ///   hard link where the filesystem has no such rename, or, where it has
 ///   neither, by making it in place, only if it's not there. Its folders
 ///   are made.
-/// - **One write at a time to each file,** in this process, from the
-///   version's check to the rename: two changes to it at once can't both
-///   be made, one over the other. Other processes aren't held back.
+/// - **One write at a time to each file,** in this process, whatever it's
+///   called and whichever `DiskFiles` writes it, from the version's check
+///   to the rename: two changes to it at once can't both be made, one over
+///   the other. Other processes aren't held back.
 /// - The work is done on tokio's blocking threads.
-#[derive(Clone, Debug, Default)]
-pub struct DiskFiles {
-    writing: Arc<Writing>,
-}
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DiskFiles;
 
-/// The files being written, each by one write at a time.
-#[derive(Debug, Default)]
+/// The files being written in this process, each by one write at a time.
+static WRITING: Writing = Writing {
+    files: Mutex::new(Vec::new()),
+    done: Condvar::new(),
+};
+
 struct Writing {
-    paths: Mutex<HashSet<PathBuf>>,
+    files: Mutex<Vec<Key>>,
     done: Condvar,
 }
 
-/// A file being written: let go of when dropped.
-struct Held<'a> {
-    writing: &'a Writing,
-    path: PathBuf,
+/// A file, as one write at a time holds it: by its device and inode if
+/// it's there, else by its folder's real path and its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Key {
+    File(u64, u64),
+    Path(PathBuf),
 }
 
-impl Writing {
-    /// Waits until nothing else writes the file at `path`, and holds it.
-    fn hold(&self, path: &Path) -> Held<'_> {
-        let mut paths = self.paths.lock().unwrap_or_else(PoisonError::into_inner);
-        while paths.contains(path) {
-            paths = self
-                .done
-                .wait(paths)
-                .unwrap_or_else(PoisonError::into_inner);
+impl Key {
+    /// The key of the file at `path`, symlinks followed.
+    fn of(path: &Path) -> Self {
+        if let Ok(meta) = std::fs::metadata(path) {
+            return Self::File(meta.dev(), meta.ino());
         }
-        paths.insert(path.to_owned());
-        Held {
-            writing: self,
-            path: path.to_owned(),
+        match (path.parent(), path.file_name()) {
+            (Some(parent), Some(name)) => match std::fs::canonicalize(parent) {
+                Ok(parent) => Self::Path(parent.join(name)),
+                Err(_) => Self::Path(path.to_owned()),
+            },
+            _ => Self::Path(path.to_owned()),
         }
     }
 }
 
-impl Drop for Held<'_> {
+/// A file being written: let go of when dropped.
+struct Held {
+    key: Key,
+}
+
+impl Writing {
+    /// Waits until nothing else writes the file at `path`, and holds it.
+    fn hold(&self, path: &Path) -> Held {
+        let key = Key::of(path);
+        let mut files = self.files.lock().unwrap_or_else(PoisonError::into_inner);
+        while files.contains(&key) {
+            files = self
+                .done
+                .wait(files)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        files.push(key.clone());
+        Held { key }
+    }
+}
+
+impl Drop for Held {
     fn drop(&mut self) {
-        let mut paths = (self.writing.paths.lock()).unwrap_or_else(PoisonError::into_inner);
-        paths.remove(&self.path);
-        self.writing.done.notify_all();
+        let mut files = (WRITING.files.lock()).unwrap_or_else(PoisonError::into_inner);
+        files.retain(|key| key != &self.key);
+        WRITING.done.notify_all();
     }
 }
 
@@ -100,9 +123,8 @@ impl Files for DiskFiles {
         _call: CallId,
     ) -> BoxFuture<Result<Version, FileError>> {
         let path = path.to_owned();
-        let writing = Arc::clone(&self.writing);
         Box::pin(blocking(move || {
-            write(&writing, &path, &text.bytes, expected.as_ref())
+            write(&path, &text.bytes, expected.as_ref())
         }))
     }
 }
@@ -233,15 +255,10 @@ fn resolve(path: &Path) -> Result<PathBuf, FileError> {
 }
 
 /// Writes `bytes` to the file at `path`, if its version is still
-/// `expected` (`None`: there's none), holding it in `writing` meanwhile.
-fn write(
-    writing: &Writing,
-    path: &Path,
-    bytes: &[u8],
-    expected: Option<&Version>,
-) -> Result<Version, FileError> {
+/// `expected` (`None`: there's none), holding it meanwhile.
+fn write(path: &Path, bytes: &[u8], expected: Option<&Version>) -> Result<Version, FileError> {
     let target = resolve(path)?;
-    let _held = writing.hold(&target);
+    let _held = WRITING.hold(&target);
     let current = match read_regular(&target) {
         Ok((before, meta)) => Some((version(&meta, &before), meta)),
         Err(FileError::NotFound) => None,

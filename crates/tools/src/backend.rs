@@ -203,6 +203,10 @@ pub trait Running: Send {
     /// there's no more. It's taken only as fast as CAF asks, so a command
     /// printing faster than CAF keeps up is held back, as a terminal
     /// holds back one nobody reads. Cancelling the future loses nothing.
+    ///
+    /// Its output should end once the command has: but as an app's
+    /// terminal may stay open after it, once [`wait`](Self::wait) has
+    /// resolved CAF takes what's left of it for two seconds at most.
     fn output(&mut self) -> BoxFuture<Option<Output>>;
     /// How it ended, and the folder its shell ended in if known.
     fn wait(&mut self) -> BoxFuture<Ended>;

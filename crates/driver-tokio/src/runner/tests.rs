@@ -85,31 +85,27 @@ fn a_file_of_output_under_its_most_has_it_all() {
 }
 
 #[test]
-fn the_folders_of_processes_that_are_gone_are_swept_and_no_others() {
+fn only_folders_no_runner_holds_are_swept() {
+    use rustix::fs::{FlockOperation, flock};
     let dir = Dir::new();
-    // A process that's gone, reaped: its id names nothing now.
-    let mut child = std::process::Command::new("true").spawn().unwrap();
-    let dead = child.id();
-    child.wait().unwrap();
-    let ours = std::process::id();
-    for name in [
-        format!("{dead}"),
-        format!("{dead}-2"),
-        format!("{ours}"),
-        format!("{ours}-1"),
-        "other".to_owned(),
-    ] {
-        std::fs::create_dir_all(dir.0.join(&name).join("chat")).unwrap();
+    for name in ["gone", "live"] {
+        std::fs::create_dir_all(dir.0.join(name).join("chat")).unwrap();
     }
-    sweep(&dir.0);
+    // A runner that's still there, in whatever namespace, holds its own.
+    let live = File::open(dir.0.join("live")).unwrap();
+    flock(&live, FlockOperation::LockExclusive).unwrap();
+    let mine = dir.0.join("mine");
+    let held = claim(&dir.0, &mine).unwrap();
     let mut left: Vec<String> = std::fs::read_dir(&dir.0)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     left.sort();
-    let mut expected = vec![format!("{ours}"), format!("{ours}-1"), "other".to_owned()];
-    expected.sort();
-    assert_eq!(left, expected);
+    assert_eq!(left, [SWEEPING, "live", "mine"]);
+    // Its own is held, so the next runner leaves it be.
+    let next = claim(&dir.0, &dir.0.join("next")).unwrap();
+    assert!(mine.exists());
+    drop((held, next, live));
 }
 
 #[test]

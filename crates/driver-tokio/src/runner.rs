@@ -30,6 +30,9 @@ use crate::tools::{Call, Preview, Ran, Runner};
 const MOST_KEPT: usize = 256 * 1024;
 /// How often a job's output file is brought up to date, at most.
 const FLUSH_EVERY: Duration = Duration::from_millis(250);
+/// How long what's left of a command's output is taken once it has
+/// ended, at most.
+const LAST_OUTPUT: Duration = Duration::from_secs(2);
 /// The most of a command's output kept in its file: past this, the file
 /// says the rest wasn't kept.
 pub(crate) const MOST_SAVED: u64 = 64 * 1024 * 1024;
@@ -52,10 +55,10 @@ const PANICKED: &str = "CAF's tool failed unexpectedly";
 ///   version then, and written expecting that version: a change between
 ///   the preview and the run makes it stale.
 /// - **Output too large to answer whole,** and a job's, goes to a file
-///   in `out/<process>/<chat>/` of the tools' folder, only the user's, at
+///   in `out/<runner>/<chat>/` of the tools' folder, only the user's, at
 ///   most [`MOST_SAVED`], removed when the chat is let go, or the runner
-///   is; and those a process that's gone left are removed as the next
-///   starts.
+///   is. Each runner holds a lock on its folder: one left by a runner
+///   that's gone, its lock let go of, is removed as the next starts.
 pub(crate) struct CafRunner {
     files: Arc<dyn Files>,
     commands: Arc<dyn Commands>,
@@ -64,8 +67,10 @@ pub(crate) struct CafRunner {
 
 /// What the runner keeps, shared with its calls' futures.
 struct Shared {
-    /// This process's folder in `out/` of the tools' folder.
+    /// This runner's folder in `out/` of the tools' folder.
     out: PathBuf,
+    /// The lock on it, which keeps other runners from sweeping it.
+    _held: Option<File>,
     chats: HashMap<ChatId, ChatState>,
     /// The chats' output folders made.
     made: HashSet<ChatId>,
@@ -91,12 +96,18 @@ impl CafRunner {
         outs: &Path,
         out: &str,
     ) -> Self {
-        sweep(outs);
+        let out = outs.join(out);
+        let held = claim(outs, &out)
+            .inspect_err(|error| {
+                log::warn!(target: "caf", "CAF's folder for output files, {}, couldn't be made: {error}", out.display());
+            })
+            .ok();
         Self {
             files,
             commands,
             shared: Arc::new(Mutex::new(Shared {
-                out: outs.join(out),
+                out,
+                _held: held,
                 chats: HashMap::new(),
                 made: HashSet::new(),
             })),
@@ -104,29 +115,58 @@ impl CafRunner {
     }
 }
 
-/// Removes the folders in `outs` of processes that are gone: each named
-/// for its process's id, and more after a `-`.
-fn sweep(outs: &Path) {
-    let Ok(entries) = std::fs::read_dir(outs) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(pid) = (name.to_str())
-            .and_then(|name| name.split('-').next())
-            .and_then(|pid| pid.parse::<libc::pid_t>().ok())
-            .filter(|&pid| pid > 0)
-        else {
+/// The name of the lock file in `out/` that makes and sweeps folders
+/// one at a time.
+const SWEEPING: &str = ".sweeping";
+
+/// Makes `out`, this runner's folder in `outs`, only the user's, and
+/// holds a lock on it for as long as what's given back is kept: first
+/// removing the folders in `outs` whose lock nothing holds, left by
+/// runners that are gone. Making and sweeping are done one at a time, so
+/// a folder made isn't swept before it's held.
+fn claim(outs: &Path, out: &Path) -> std::io::Result<File> {
+    use rustix::fs::{FlockOperation, flock};
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(outs)?;
+    std::fs::set_permissions(outs, std::fs::Permissions::from_mode(0o700))?;
+    let sweeping = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(outs.join(SWEEPING))?;
+    flock(&sweeping, FlockOperation::LockExclusive)?;
+    for entry in std::fs::read_dir(outs)?.flatten() {
+        let path = entry.path();
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) || path == out {
+            continue;
+        }
+        let Ok(folder) = File::open(&path) else {
             continue;
         };
-        #[allow(unsafe_code)]
-        // SAFETY: signal 0 only asks whether the process is there.
-        let gone = unsafe { libc::kill(pid, 0) } != 0
-            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
-        if gone {
-            let _ = std::fs::remove_dir_all(entry.path());
+        // Held, its runner is still there, whatever its process's id says
+        // from here: it may be in another namespace.
+        if flock(&folder, FlockOperation::NonBlockingLockExclusive).is_ok() {
+            let _ = std::fs::remove_dir_all(&path);
         }
     }
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(out)
+        .or_else(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        })?;
+    std::fs::set_permissions(out, std::fs::Permissions::from_mode(0o700))?;
+    let held = File::open(out)?;
+    flock(&held, FlockOperation::LockExclusive)?;
+    Ok(held)
 }
 
 impl Drop for CafRunner {
@@ -180,11 +220,24 @@ impl Drop for AbortOnDrop {
     }
 }
 
-/// `work`, on a blocking thread.
+/// `work`, on a blocking thread. If it panics, so does this, and the
+/// call's task gives that up as CAF's tool failing; if the runtime is
+/// going, this waits for the call's task to go with it.
 async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
     match tokio::task::spawn_blocking(work).await {
         Ok(done) => done,
-        Err(error) => std::panic::resume_unwind(error.into_panic()),
+        Err(error) => match error.try_into_panic() {
+            Ok(panic) => std::panic::resume_unwind(panic),
+            Err(_) => std::future::pending().await,
+        },
+    }
+}
+
+/// Resolves at `at`, or never if it's `None`.
+async fn sleep_until(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -370,7 +423,7 @@ async fn read(
                 let known = known_as(&path);
                 let mut file = file;
                 if file.sha256.is_none() {
-                    file = file.clone().with_sha256(Sha256::digest(&file.bytes).into());
+                    file.sha256 = Some(Sha256::digest(&file.bytes).into());
                 }
                 let mut shared = lock(&shared);
                 let state = shared.chats.entry(chat).or_default();
@@ -794,8 +847,18 @@ async fn bash(
     let timed_out = tokio::time::sleep(timeout);
     tokio::pin!(timed_out);
     let mut output = running.output();
+    let mut waited = running.wait();
+    // Once it has ended: how, and until when what's left of its output is
+    // taken, as an app's terminal may stay open after it.
+    let mut ended = None;
+    let mut taken_until = None;
     loop {
         tokio::select! {
+            end = &mut waited, if ended.is_none() => {
+                ended = Some(end);
+                taken_until = Some(Instant::now() + LAST_OUTPUT);
+            }
+            () = sleep_until(taken_until) => break,
             printed = &mut output => match printed {
                 Some(printed) => {
                     print(&call, &mut log, printed);
@@ -826,7 +889,10 @@ async fn bash(
             }
         }
     }
-    let ended = running.wait().await;
+    let ended = match ended {
+        Some(ended) => ended,
+        None => waited.await,
+    };
     if let Some(redraw) = log.screen.finish() {
         log.redraw(redraw.from, &redraw.lines);
         call.print(redraw.from, redraw.lines);

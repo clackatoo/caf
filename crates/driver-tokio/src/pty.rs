@@ -45,16 +45,17 @@ const WRAPPER: &str = "trap '{ pwd -P >&3; } 2>/dev/null' EXIT\neval \"shift; $1
 /// [`ToolsConfig::commands`](crate::ToolsConfig::commands).
 ///
 /// - **A pty** the size of [`caf_tools::Screen`]'s window, with the
-///   command in a session and process group of its own, the pty its
-///   controlling terminal.
+///   command in a session and process group of its own.
 /// - **`bash -c`**, or `sh -c` where there's no bash, so it's not
 ///   interactive: what it starts in the background stays in its group.
 /// - **Its environment** is the app's, with `TERM=xterm-256color`,
 ///   `PAGER=cat` and `GIT_PAGER=cat`, without `CLAUDECODE` or any
 ///   `CAF_RELAY*`, and with the spec's own variables.
-/// - **Its input is `/dev/null`:** a command that waits for input, such
-///   as a password prompt or `cat` with no file, finds none at once,
-///   rather than waiting out its timeout.
+/// - **Its input is `/dev/null`, and it has no controlling terminal:** a
+///   command that waits for input, such as `cat` with no file, finds none
+///   at once, and a prompt on `/dev/tty`, such as sudo's, ssh's or gpg's,
+///   fails at once, rather than either waiting out its timeout. Its
+///   output is still a terminal, so it's in colour.
 /// - **It starts clean:** the signals a terminal's job control uses are
 ///   back to their defaults, whatever the app ignores, and no file the app
 ///   has open is passed on to it.
@@ -64,9 +65,8 @@ const WRAPPER: &str = "trap '{ pwd -P >&3; } 2>/dev/null' EXIT\neval \"shift; $1
 /// - **The folder its shell ended in** comes back in [`Ended`].
 /// - **Stopping** sends SIGTERM to its group, then SIGKILL after
 ///   [`STOP_GRACE`] to what's left, through its pidfd (on Linux 6.9 or
-///   later; `kill(-pgid)` before). A command that ended by itself isn't
-///   signalled: what it left in the background has the hangup its
-///   terminal's end sends. Dropping it stops it the same way, without
+///   later; `kill(-pgid)` before). When its shell ends by itself, what it
+///   left in the background is sent the hangup a terminal's end would. Dropping it stops it the same way, without
 ///   waiting. It's always reaped.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PtyCommands;
@@ -275,8 +275,8 @@ fn open_pty() -> io::Result<(OwnedFd, OwnedFd)> {
 /// them, from `linux/close_range.h`.
 const CLOSE_RANGE_CLOEXEC: libc::c_uint = 1 << 2;
 
-/// In the child, before it runs the shell: a session of its own, whose
-/// controlling terminal is the pty on its output, the folder's pipe as
+/// In the child, before it runs the shell: a session of its own, with no
+/// controlling terminal, the folder's pipe as
 /// fd 3, job control's signals at their defaults, and every other fd the
 /// app had closed as it runs the shell.
 fn child_setup(folder_fd: i32) -> io::Result<()> {
@@ -286,10 +286,8 @@ fn child_setup(folder_fd: i32) -> io::Result<()> {
         if libc::setsid() < 0 {
             return Err(io::Error::last_os_error());
         }
-        // Its input is /dev/null: the terminal is its output's.
-        if libc::ioctl(1, libc::TIOCSCTTY, 0) < 0 {
-            return Err(io::Error::last_os_error());
-        }
+        // No controlling terminal: a prompt on /dev/tty, as sudo's, ssh's
+        // or gpg's, fails at once rather than waiting for no one.
         if folder_fd == 3 {
             // dup2 to itself leaves close-on-exec set.
             if libc::fcntl(3, libc::F_SETFD, 0) < 0 {
@@ -542,6 +540,11 @@ async fn watch_command(mut watched: Watched) {
                     Ok(waited) => {
                         status = Some(waited);
                         watched.leader.pidfd = None;
+                        // What it left has the hangup a terminal's end
+                        // sends, as there's no terminal to send it.
+                        if kill_at.is_none() {
+                            watched.leader.signal(libc::SIGHUP);
+                        }
                         let now = Instant::now();
                         drain_until = Some(now + DRAIN);
                         drain_most = Some(now + DRAIN_MOST);
