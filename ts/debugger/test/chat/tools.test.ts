@@ -829,7 +829,7 @@ describe('background jobs', () => {
 
 /** A notice as caf_tools::notice writes it, of job 2, its summary as given (escaped already). */
 const notice = (summary: string, toolUse: string | null = 'toolu_1') =>
-  `<task-notification>\n<task-id>2</task-id>\n${toolUse === null ? '' : `<tool-use-id>${toolUse}</tool-use-id>\n`}<output-file>/run/user/1000/caf/out/0190e2a1-7c3b-7000-8000-000000000001/17.txt</output-file>\n<status>completed</status>\n<summary>${summary}</summary>\n</task-notification>`
+  `<task-notification>\n<task-id>2</task-id>\n${toolUse === null ? '' : `<tool-use-id>${toolUse}</tool-use-id>\n`}<output-file>/run/user/1000/caf/out/48213/0190e2a1-7c3b-7000-8000-000000000001/17.txt</output-file>\n<status>completed</status>\n<summary>${summary}</summary>\n</task-notification>`
 
 describe("CAF's notice of a job's end", () => {
   it('is told by its summary, as caf_tools::notice writes it, with or without the call\'s id', () => {

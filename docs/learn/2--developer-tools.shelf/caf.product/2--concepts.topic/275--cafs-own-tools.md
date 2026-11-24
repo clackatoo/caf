@@ -162,7 +162,9 @@ background, as Claude Code does now, and the model is told so.
 
 **Its environment** is your program's, with `TERM=xterm-256color`, and
 `PAGER` and `GIT_PAGER` set to `cat` so nothing waits for a key. `CLAUDECODE`
-and CAF's own relay variables are taken out.
+and CAF's own relay variables are taken out. **Its input is `/dev/null`:** a
+command that waits for input, such as a password prompt, finds none at once,
+rather than waiting out its timeout.
 
 **Stopping** a command (the user's Stop, while its turn runs) sends
 `SIGTERM` to it and everything it started, then `SIGKILL` 3 seconds later.
@@ -202,10 +204,13 @@ on, past the model's answer and its turn.
 asks anyone, as all it can do is stop what its own chat started. The job's
 call ends *Cancelled*, stopped by the agent.
 
-**Output files** (a job's, and a long output's) are kept in a folder of the
-chat's own under CAF's tools folder (`ToolsConfig::folder`, by default
-`$XDG_RUNTIME_DIR/caf`), readable by the user alone, and removed when the
-chat is let go or the app ends.
+**Output files** (a job's, and a long output's) are kept at
+`out/<process>/<chat>/<call>.txt` under CAF's tools folder
+(`ToolsConfig::folder`, by default `$XDG_RUNTIME_DIR/caf`), readable by the
+user alone, so one app never touches another's. Each holds at most 64 MiB of
+output, then says the rest wasn't kept. They're removed when the chat is let
+go or the app ends, and those an app that's gone left behind are removed as
+the next starts.
 
 ## Your editor and your terminals
 
@@ -229,16 +234,21 @@ read-before-change rules itself, so a backend only moves bytes.
 
 `DiskFiles` reads only regular files, at most 256 MiB, never through a FIFO.
 Its version is the file's modification time, size, inode and device, and its
-content's hash. It writes atomically: to a new file beside it, with its
+content's hash. (A backend of your own may give the bytes' sha256 with what
+it read, `FileRead::with_sha256`, if it has it already; CAF works it out
+otherwise.) It writes atomically: to a new file beside it, with its
 mode, synced, then renamed over it, once its version is checked again. A
 symlink's target is written, and a file with other hard links is written in
 place, so it keeps them.
 
 **`Commands`** (default `PtyCommands`, a pty of CAF's own for each command)
-starts a command, given its line, folder and variables, and hands CAF what it
-prints: raw terminal bytes, which CAF works into lines on its own screen, or
-lines already worked out, for a terminal emulator of your own. What it
-starts can be waited for, interrupted (Ctrl-C) and stopped, and says where
+starts a command, given its line, folder and variables. What it starts
+gives CAF what the command prints when CAF asks for more (`Running::output`,
+`None` at the end), so it's read only as fast as CAF takes it, as a terminal
+nobody reads holds its command up: raw terminal bytes, which CAF works into
+lines on its own screen, or lines already worked out, for a terminal
+emulator of your own. It can be waited for, interrupted (Ctrl-C) and
+stopped, and says where
 the user can watch it, such as *terminal 7*: the model's answer then starts
 *Ran in terminal 7*, so the model knows the user saw it. Dropping it must stop the command.
 

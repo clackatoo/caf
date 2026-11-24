@@ -111,7 +111,7 @@ describe('turns', () => {
     const words = (element: Element | null) => (element?.textContent ?? '').replace(/\s+/g, ' ').trim()
     // As caf_tools::notice writes it.
     const told =
-      '<task-notification>\n<task-id>2</task-id>\n<tool-use-id>toolu_9</tool-use-id>\n<output-file>/run/user/1000/caf/out/0190e2a1-7c3b-7000-8000-000000000001/17.txt</output-file>\n<status>completed</status>\n<summary>Background command "sleep 1; echo done" completed (exit code 0)</summary>\n</task-notification>'
+      '<task-notification>\n<task-id>2</task-id>\n<tool-use-id>toolu_9</tool-use-id>\n<output-file>/run/user/1000/caf/out/48213/0190e2a1-7c3b-7000-8000-000000000001/17.txt</output-file>\n<status>completed</status>\n<summary>Background command "sleep 1; echo done" completed (exit code 0)</summary>\n</task-notification>'
     const { container } = draw(
       chat({ turns: [turn({ starter: { type: 'Notice', value: told } }), turn({ starter: { type: 'Notice', value: 'The build finished' } })] }),
     )
