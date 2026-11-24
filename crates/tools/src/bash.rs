@@ -95,6 +95,31 @@ pub fn answer(
     saved: Option<&Path>,
     place: Option<&str>,
 ) -> String {
+    answer_of(
+        command,
+        text,
+        text.chars().count(),
+        exit,
+        stopped,
+        saved,
+        place,
+    )
+}
+
+/// [`answer`], for an output of `size` characters of which `text` is the
+/// start: for a runner that keeps only so much of a long output, at least
+/// its first [`MOST_ANSWER`] and one more, with the rest in the file
+/// `saved`.
+#[must_use]
+pub fn answer_of(
+    command: &str,
+    text: &str,
+    size: usize,
+    exit: Option<Exit>,
+    stopped: bool,
+    saved: Option<&Path>,
+    place: Option<&str>,
+) -> String {
     let mut parts = Vec::new();
     if let Some(place) = place {
         parts.push(format!("Ran in {place}"));
@@ -102,15 +127,15 @@ pub fn answer(
     let start = parts.len();
     if !stopped {
         match exit {
-            Some(Exit::Code(code)) if failed(command, code) => {
+            Some(Exit::Code(code)) if exit_failed(command, code) => {
                 parts.push(format!("Exit code {code}"));
             }
             Some(Exit::Signal(signal)) => parts.push(format!("Killed by signal {signal}")),
             _ => {}
         }
     }
-    if too_large(text) {
-        let size = format_size(text.chars().count() as u64);
+    if size > MOST_ANSWER || too_large(text) {
+        let size = format_size(size.max(text.chars().count()) as u64);
         parts.push(match saved {
             Some(path) => {
                 let (preview, more) = preview(text, PREVIEW);
@@ -140,8 +165,10 @@ pub fn answer(
 
 /// Whether `command` exiting with `code` failed, as Claude Code reads it:
 /// by the last command in the line, its redirects aside, and, for git, its
-/// subcommand.
-fn failed(command: &str, code: i32) -> bool {
+/// subcommand. Exit 1 from `grep` and the like says "no", not that it
+/// failed (see [`answer`]).
+#[must_use]
+pub fn exit_failed(command: &str, code: i32) -> bool {
     let words = words(last_command(command));
     let says_no = match words.first().copied().unwrap_or("") {
         "grep" | "rg" | "egrep" | "fgrep" | "find" | "diff" | "test" | "[" => true,
