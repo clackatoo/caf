@@ -722,7 +722,7 @@ mod tests {
         assert_eq!(tool, CafTool::Read);
         assert_eq!(input, json!({ "file_path": "/a" }));
         assert_eq!(agent_call.as_deref(), Some("toolu_1"));
-        assert_eq!(connection.open(), [request.clone()]);
+        assert_eq!(connection.open(), std::slice::from_ref(&request));
         // No arguments are an empty object; no `_meta`, no id.
         let line = json!({ "jsonrpc": "2.0", "id": "x", "method": "tools/call", "params": { "name": "Bash" } });
         let (other, tool, input, agent_call) = called(connection.take(line.to_string().as_bytes()));
@@ -739,7 +739,7 @@ mod tests {
             ]
         );
         assert_eq!(connection.answer(&request, &Answer::text("again")), None);
-        assert_eq!(connection.open(), [other.clone()]);
+        assert_eq!(connection.open(), std::slice::from_ref(&other));
         let answer = connection
             .answer(
                 &other,
