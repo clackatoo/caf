@@ -602,8 +602,11 @@ impl<A: AppItem, D: AppData> Caf<A, D> {
     /// tools as [`Config::tools`] says. With [`Relay::None`](crate::Relay::None),
     /// the default, it always starts.
     ///
-    /// The relay's check runs the relay once, on this thread: it takes as
-    /// long as the program takes to start, and at most 10 s.
+    /// The relay's check runs the relay once and waits for it on this
+    /// thread, blocking it, and with it the runtime's thread it's on: for
+    /// as long as the program takes to start and answer, and at most 10 s.
+    /// Start CAF before the app's work starts, or on a thread of its own
+    /// (`spawn_blocking`) if that matters.
     ///
     /// # Errors
     ///

@@ -24,6 +24,7 @@ use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -260,6 +261,13 @@ const PROGRESS_EVERY: Duration = Duration::from_secs(60);
 const CHECK_TIME: Duration = Duration::from_secs(10);
 /// The longest path a unix socket takes, without its closing NUL.
 const SOCKET_PATH_MOST: usize = 107;
+/// How many lines may wait to be written to a relay: an agent that stops
+/// reading while more come has its relay closed.
+const WRITES_WAITING: usize = 256;
+/// How long one line may take to write to a relay, before it's given up.
+const WRITE_TIME: Duration = Duration::from_secs(10);
+/// How long to wait before taking connections again after failing to.
+const ACCEPT_AGAIN: Duration = Duration::from_millis(100);
 /// How long shutting down waits for answers to be written.
 const FINISH_TIME: Duration = Duration::from_secs(1);
 
@@ -297,14 +305,16 @@ pub(crate) struct ToolsDriver {
     /// The answer to each call that finished, held until the core has
     /// taken its [`ToolEvent::Finished`]: so the agent can't end its turn
     /// on hearing it before the core knows the call is done.
-    held: HashMap<CallId, (u64, Vec<u8>)>,
+    held: HashMap<CallId, Held>,
     /// The call whose `Finished` was handed out last, its answer to be
     /// written once the core has it ([`ToolsDriver::taken`]).
     finished: Option<CallId>,
     /// One sleep, moved to the next batch or progress due.
     sleep: Pin<Box<Sleep>>,
-    /// The tasks writing to relays, waited for as CAF shuts down.
-    writers: JoinSet<()>,
+    /// The tasks writing to relays, waited for as CAF shuts down. Each
+    /// gives its connection's number if it gave up, as the socket broke or
+    /// a line took too long.
+    writers: JoinSet<Option<u64>>,
     /// [`ToolsConfig::progress_every`].
     progress_every: Duration,
 }
@@ -320,6 +330,9 @@ struct Live {
     /// Each connection's reading task, bound or not.
     readers: HashMap<u64, AbortHandle>,
     last_conn: u64,
+    /// After failing to take a connection, such as with too many files
+    /// open, when to try again.
+    accept_again: Option<Instant>,
 }
 
 /// The socket's file, removed when it's dropped.
@@ -336,12 +349,22 @@ struct Served {
     instructions: String,
 }
 
+/// A finished call's answer, waiting for the core to take its `Finished`.
+struct Held {
+    conn: u64,
+    request: Request,
+    answer: Answer,
+}
+
 /// A bound connection.
 struct Conn {
+    /// Its writing task, stopped at once if it's lost or replaced.
+    writer: AbortHandle,
     chat: ChatId,
     mcp: Connection,
-    /// Lines for its writing task. Dropped, the task ends the socket.
-    write: mpsc::UnboundedSender<Vec<u8>>,
+    /// Lines for its writing task, at most [`WRITES_WAITING`]. Dropped,
+    /// the task ends the socket.
+    write: mpsc::Sender<Vec<u8>>,
 }
 
 /// An open call.
@@ -451,6 +474,12 @@ impl ToolsDriver {
             }
             Relay::Command(command) => command,
         };
+        sendable(&relay).map_err(|why| {
+            StartError::Serving(format!(
+                "its relay {} can't be sent to an agent: {why}",
+                relay.program.display()
+            ))
+        })?;
         check_relay(&relay)?;
         let (driver, serving) = Self::listen(config, relay, app)?;
         Ok((driver, Some(serving)))
@@ -466,10 +495,24 @@ impl ToolsDriver {
             Some(folder) => folder,
             None => default_folder(),
         };
-        let socket = folder.join(format!("{}-{}.sock", file_name(app), std::process::id()));
+        // A second CAF in the same process gets a name of its own.
+        static STARTED: AtomicU64 = AtomicU64::new(0);
+        let nth = STARTED.fetch_add(1, Ordering::Relaxed);
+        let name = match nth {
+            0 => format!("{}-{}.sock", file_name(app), std::process::id()),
+            nth => format!("{}-{}-{nth}.sock", file_name(app), std::process::id()),
+        };
+        let socket = folder.join(name);
         // Before the folder is made, so a path too long leaves nothing.
         if socket.as_os_str().len() > SOCKET_PATH_MOST {
             return Err(StartError::SocketPathTooLong { path: socket });
+        }
+        // The agent is sent it as text.
+        if socket.to_str().is_none() {
+            return Err(StartError::Serving(format!(
+                "its socket's path, {}, isn't UTF-8, so it can't be sent to an agent",
+                socket.display()
+            )));
         }
         private_folder(&folder).map_err(StartError::Serving)?;
         let (listener, file) = listen(&socket)?;
@@ -484,6 +527,7 @@ impl ToolsDriver {
             to_driver,
             readers: HashMap::new(),
             last_conn: 0,
+            accept_again: None,
         };
         Ok((Self::with(config, Some(live)), serving))
     }
@@ -557,6 +601,10 @@ impl ToolsDriver {
                     // Its work stops before the model hears it did.
                     let (conn, request) = each.stop();
                     self.answer(conn, &request, &Answer::error(CANCELLED));
+                } else if let Some(held) = self.held.remove(&call) {
+                    // It finished as the core stopped it: the work was
+                    // done, so the model hears what it gave.
+                    self.answer(held.conn, &held.request, &held.answer);
                 }
             }
             // No other kind is given yet.
@@ -572,6 +620,19 @@ impl ToolsDriver {
     }
 
     fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Report> {
+        if let Some(report) = self.pop() {
+            return Poll::Ready(report);
+        }
+        // Each writer done with its socket is let go. One that gave up
+        // leaves its connection dead: it's closed, as lost.
+        while let Poll::Ready(Some(ended)) = self.writers.poll_join_next(cx) {
+            if let Ok(Some(no)) = ended
+                && let Some(conn) = self.conns.get(&no)
+            {
+                log::warn!(target: "caf", "a relay for chat {} was closed: it couldn't be written to", conn.chat.0);
+                self.close(no, Closing::Lost);
+            }
+        }
         if let Some(report) = self.pop() {
             return Poll::Ready(report);
         }
@@ -606,10 +667,8 @@ impl ToolsDriver {
         let Some(call) = self.finished.take() else {
             return;
         };
-        if let Some((conn, bytes)) = self.held.remove(&call)
-            && let Some(conn) = self.conns.get(&conn)
-        {
-            let _ = conn.write.send(bytes);
+        if let Some(held) = self.held.remove(&call) {
+            self.answer(held.conn, &held.request, &held.answer);
         }
     }
 
@@ -618,6 +677,10 @@ impl ToolsDriver {
         let Some(live) = &mut self.live else {
             return;
         };
+        if live.accept_again.is_some_and(|at| at > Instant::now()) {
+            return;
+        }
+        live.accept_again = None;
         while let Poll::Ready(accepted) = live.listener.poll_accept(cx) {
             match accepted {
                 Ok((stream, _)) => {
@@ -629,6 +692,9 @@ impl ToolsDriver {
                 }
                 Err(error) => {
                     log::warn!(target: "caf", "a relay's connection couldn't be taken: {error}");
+                    // Tried again shortly, as nothing may wake the task.
+                    live.accept_again = Some(Instant::now() + ACCEPT_AGAIN);
+                    self.wake_at_next();
                     return;
                 }
             }
@@ -687,19 +753,23 @@ impl ToolsDriver {
         if let Some(old) = self.bound.get(&chat).copied() {
             self.close(old, Closing::Replaced);
         }
-        let (lines, mut written) = mpsc::unbounded_channel::<Vec<u8>>();
-        self.writers.spawn(async move {
+        let (lines, mut written) = mpsc::channel::<Vec<u8>>(WRITES_WAITING);
+        let writer = self.writers.spawn(async move {
             let mut write = write;
             while let Some(line) = written.recv().await {
-                if write.write_all(&line).await.is_err() {
-                    return;
+                // An agent that stops reading isn't waited for forever.
+                match tokio::time::timeout(WRITE_TIME, write.write_all(&line)).await {
+                    Ok(Ok(())) => {}
+                    _ => return Some(no),
                 }
             }
             let _ = write.shutdown().await;
+            None
         });
         self.conns.insert(
             no,
             Conn {
+                writer,
                 chat,
                 mcp,
                 write: lines,
@@ -721,7 +791,9 @@ impl ToolsDriver {
             let chat = conn.chat;
             match out {
                 Out::Write(bytes) => {
-                    let _ = conn.write.send(bytes);
+                    if !self.send(no, bytes) {
+                        return;
+                    }
                 }
                 Out::Call {
                     request,
@@ -801,7 +873,7 @@ impl ToolsDriver {
                 // Its work stops before the model hears it did.
                 let (_, request) = each.stop();
                 if let Some(bytes) = conn.mcp.answer(&request, &Answer::error(CANCELLED)) {
-                    let _ = conn.write.send(bytes);
+                    let _ = conn.write.try_send(bytes);
                 }
             } else {
                 drop(each);
@@ -810,6 +882,22 @@ impl ToolsDriver {
                     event: ToolEvent::Gone,
                 });
             }
+        }
+        let held: Vec<CallId> = (self.held.iter())
+            .filter(|(_, held)| held.conn == no)
+            .map(|(call, _)| *call)
+            .collect();
+        for call in held {
+            if let Some(held) = self.held.remove(&call)
+                && closing == Closing::Ended
+                && let Some(bytes) = conn.mcp.answer(&held.request, &Answer::error(CANCELLED))
+            {
+                let _ = conn.write.try_send(bytes);
+            }
+        }
+        if closing != Closing::Ended {
+            // Nobody's left to answer: its socket closes now.
+            conn.writer.abort();
         }
         if closing == Closing::Lost {
             self.reports.push_back(Report::Relay {
@@ -822,11 +910,35 @@ impl ToolsDriver {
     }
 
     /// Answers a call on its connection, if it's still there.
-    fn answer(&mut self, conn: u64, request: &Request, answer: &Answer) {
-        if let Some(conn) = self.conns.get_mut(&conn)
-            && let Some(bytes) = conn.mcp.answer(request, answer)
+    fn answer(&mut self, no: u64, request: &Request, answer: &Answer) {
+        if let Some(bytes) =
+            (self.conns.get_mut(&no)).and_then(|conn| conn.mcp.answer(request, answer))
         {
-            let _ = conn.write.send(bytes);
+            self.send(no, bytes);
+        }
+    }
+
+    /// Writes a line to a connection, if it's still there. One whose
+    /// agent has stopped reading, with [`WRITES_WAITING`] lines waiting
+    /// already, is closed as lost: false then.
+    fn send(&mut self, no: u64, bytes: Vec<u8>) -> bool {
+        let Some(conn) = self.conns.get(&no) else {
+            return false;
+        };
+        match conn.write.try_send(bytes) {
+            Ok(()) => true,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                log::warn!(target: "caf", "a relay for chat {} was closed: its agent stopped reading", conn.chat.0);
+                self.close(no, Closing::Lost);
+                false
+            }
+            // Its writing task gave up, as the socket broke or a line took
+            // too long.
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                log::warn!(target: "caf", "a relay for chat {} was closed: it couldn't be written to", conn.chat.0);
+                self.close(no, Closing::Lost);
+                false
+            }
         }
     }
 
@@ -912,11 +1024,6 @@ impl ToolsDriver {
             if let Some(batch) = batch {
                 self.reports.push_back(output(call, batch));
             }
-            let answer =
-                (self.conns.get_mut(&conn)).and_then(|each| each.mcp.answer(&request, &ran.answer));
-            if let Some(bytes) = answer {
-                self.held.insert(call, (conn, bytes));
-            }
             self.reports.push_back(Report::Tool {
                 call,
                 event: ToolEvent::Finished {
@@ -924,6 +1031,14 @@ impl ToolsDriver {
                     pieces: ran.record,
                 },
             });
+            self.held.insert(
+                call,
+                Held {
+                    conn,
+                    request,
+                    answer: ran.answer,
+                },
+            );
         }
     }
 
@@ -949,11 +1064,11 @@ impl ToolsDriver {
                 progress.push((each.conn, each.request.clone(), text));
             }
         }
-        for (conn, request, text) in progress {
-            if let Some(conn) = self.conns.get_mut(&conn)
-                && let Some(bytes) = conn.mcp.progress(&request, text)
+        for (no, request, text) in progress {
+            if let Some(bytes) =
+                (self.conns.get_mut(&no)).and_then(|conn| conn.mcp.progress(&request, text))
             {
-                let _ = conn.write.send(bytes);
+                self.send(no, bytes);
             }
         }
         self.wake_at_next();
@@ -968,6 +1083,7 @@ impl ToolsDriver {
         let next = (self.calls.values())
             .flat_map(|each| [Some(each.progress_at), each.batch.as_ref().map(|b| b.due)])
             .flatten()
+            .chain(self.live.as_ref().and_then(|live| live.accept_again))
             .min()
             .unwrap_or_else(far_off);
         if self.sleep.deadline() != next {
@@ -979,10 +1095,8 @@ impl ToolsDriver {
     /// cancelled, every connection closed, and the socket removed. Waits
     /// a moment for the answers to be written.
     pub(crate) async fn finish(&mut self) {
-        for (_, (conn, bytes)) in self.held.drain() {
-            if let Some(conn) = self.conns.get(&conn) {
-                let _ = conn.write.send(bytes);
-            }
+        for (_, held) in std::mem::take(&mut self.held) {
+            self.answer(held.conn, &held.request, &held.answer);
         }
         let conns: Vec<u64> = self.conns.keys().copied().collect();
         for conn in conns {
@@ -995,8 +1109,12 @@ impl ToolsDriver {
             }
             drop(live.socket);
         }
-        let writers = std::mem::take(&mut self.writers);
-        let _ = tokio::time::timeout(FINISH_TIME, writers.join_all()).await;
+        // Some were stopped, as their relays were lost: that's no matter.
+        let mut writers = std::mem::take(&mut self.writers);
+        let _ = tokio::time::timeout(FINISH_TIME, async {
+            while writers.join_next().await.is_some() {}
+        })
+        .await;
     }
 }
 
@@ -1175,6 +1293,29 @@ async fn read_line(
     }
 }
 
+/// Why `relay` can't be sent to an agent as an MCP server, if it can't:
+/// the agent is sent its program, arguments and variables as text, sets
+/// them over its own environment, and starts it in a folder of its own.
+fn sendable(relay: &SpawnCommand) -> Result<(), &'static str> {
+    if relay.cwd.is_some() {
+        return Err("it has a folder to start in, and an agent starts it in its own");
+    }
+    if relay.program.to_str().is_none() {
+        return Err("its program's path isn't UTF-8");
+    }
+    if relay.args.iter().any(|arg| arg.to_str().is_none()) {
+        return Err("an argument isn't UTF-8");
+    }
+    for change in &relay.env {
+        match change {
+            EnvChange::Set(name, value) if name.to_str().is_some() && value.to_str().is_some() => {}
+            EnvChange::Set(..) => return Err("a variable's name or value isn't UTF-8"),
+            _ => return Err("it removes a variable, and an agent can only set them"),
+        }
+    }
+    Ok(())
+}
+
 /// Checks that `relay` has the hook: run with
 /// [`caf_relay::CHECK_VAR`], it must print [`caf_relay::CHECK_ANSWER`].
 fn check_relay(relay: &SpawnCommand) -> Result<(), StartError> {
@@ -1184,7 +1325,7 @@ fn check_relay(relay: &SpawnCommand) -> Result<(), StartError> {
     };
     // Run as the check, this program went on to start CAF: checking again
     // would start it again, without end.
-    if std::env::var_os(caf_relay::CHECK_VAR).is_some() {
+    if asked_to_check(std::env::var_os(caf_relay::CHECK_VAR).as_deref()) {
         return Err(no_hook(format!(
             "was run as CAF's relay check ({} is set), but went on to start CAF",
             caf_relay::CHECK_VAR
@@ -1205,9 +1346,6 @@ fn check_relay(relay: &SpawnCommand) -> Result<(), StartError> {
             _ => {}
         }
     }
-    if let Some(cwd) = &relay.cwd {
-        command.current_dir(cwd);
-    }
     command
         .env(caf_relay::CHECK_VAR, "1")
         .env_remove(caf_relay::RELAY_VAR)
@@ -1217,15 +1355,30 @@ fn check_relay(relay: &SpawnCommand) -> Result<(), StartError> {
     let mut child = command
         .spawn()
         .map_err(|e| StartError::Serving(format!("its relay {program} couldn't be run: {e}")))?;
+    // Read as it comes, without waiting: a process it started may hold
+    // its output open after it has gone. Dropped as the check ends, so
+    // nothing is left reading it.
     let mut stdout = child.stdout.take().expect("it's piped");
-    let (said, heard) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut out = Vec::new();
-        let _ = (&mut stdout).take(4096).read_to_end(&mut out);
-        let _ = said.send(out);
-    });
+    if let Err(e) = rustix::io::ioctl_fionbio(&stdout, true) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(StartError::Serving(format!(
+            "its relay {program} couldn't be checked: {e}"
+        )));
+    }
+    let mut out = Vec::new();
+    let read = |stdout: &mut std::process::ChildStdout, out: &mut Vec<u8>| {
+        let mut buf = [0; 512];
+        while out.len() < 4096 {
+            match stdout.read(&mut buf) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => out.extend_from_slice(&buf[..n]),
+            }
+        }
+    };
     let started = std::time::Instant::now();
     let status = loop {
+        read(&mut stdout, &mut out);
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() < CHECK_TIME => {
@@ -1240,15 +1393,17 @@ fn check_relay(relay: &SpawnCommand) -> Result<(), StartError> {
                 )));
             }
             Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
                 return Err(StartError::Serving(format!(
                     "its relay {program} couldn't be checked: {e}"
                 )));
             }
         }
     };
-    let out = heard
-        .recv_timeout(Duration::from_secs(1))
-        .unwrap_or_default();
+    // What it wrote as it went.
+    read(&mut stdout, &mut out);
+    drop(stdout);
     let expected = format!("{}\n", caf_relay::CHECK_ANSWER);
     if status.success() && out == expected.as_bytes() {
         return Ok(());
@@ -1257,6 +1412,11 @@ fn check_relay(relay: &SpawnCommand) -> Result<(), StartError> {
         "didn't answer its check ({status}, printing {:?})",
         String::from_utf8_lossy(&out)
     )))
+}
+
+/// Whether [`caf_relay::CHECK_VAR`], as it's set, asks for the check.
+fn asked_to_check(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| value == "1")
 }
 
 /// `$XDG_RUNTIME_DIR/caf`, or `caf-<uid>` in the temporary folder.
@@ -1315,13 +1475,19 @@ fn file_name(app: &str) -> String {
 }
 
 /// Listens on `socket`, whose path fits, replacing a socket left there by
-/// an earlier process with the same id.
+/// an earlier process with the same id, once connecting to it shows
+/// nothing's listening.
 fn listen(socket: &Path) -> Result<(UnixListener, SocketFile), StartError> {
     let shown = socket.display();
     if let Ok(meta) = std::fs::symlink_metadata(socket) {
         if !meta.file_type().is_socket() {
             return Err(StartError::Serving(format!(
                 "its socket {shown} is taken by something else"
+            )));
+        }
+        if std::os::unix::net::UnixStream::connect(socket).is_ok() {
+            return Err(StartError::Serving(format!(
+                "its socket {shown} is in use by another program"
             )));
         }
         let _ = std::fs::remove_file(socket);
@@ -1433,8 +1599,17 @@ mod tests {
 
     /// A driver, run on a task of its own, given directives and handing
     /// out reports through channels. Dropping `directives` shuts it down.
+    /// What the test tells the driver's task.
+    enum Cmd {
+        Apply(ToolDirective),
+        /// The core has taken the last report ([`ToolsDriver::taken`]).
+        Taken,
+        /// How many tasks writing to relays it still holds.
+        Writers(oneshot::Sender<usize>),
+    }
+
     struct Harness {
-        directives: Option<mpsc::UnboundedSender<ToolDirective>>,
+        directives: Option<mpsc::UnboundedSender<Cmd>>,
         reports: mpsc::UnboundedReceiver<Report>,
         runs: mpsc::UnboundedReceiver<Run>,
         dropped: mpsc::UnboundedReceiver<CallId>,
@@ -1452,6 +1627,12 @@ mod tests {
     }
 
     fn harness_with(panics: bool) -> Harness {
+        harness_of(panics, true)
+    }
+
+    /// A harness whose driver is told the core took a report only when
+    /// the test says ([`Harness::taken`]), if not `auto_taken`.
+    fn harness_of(panics: bool, auto_taken: bool) -> Harness {
         let dir = Dir::new();
         let (runs, run) = mpsc::unbounded_channel();
         let (dropped, drop_seen) = mpsc::unbounded_channel();
@@ -1471,13 +1652,19 @@ mod tests {
         let finished = tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    directive = given.recv() => match directive {
-                        Some(directive) => driver.apply(directive),
+                    cmd = given.recv() => match cmd {
+                        Some(Cmd::Apply(directive)) => driver.apply(directive),
+                        Some(Cmd::Taken) => driver.taken(),
+                        Some(Cmd::Writers(reply)) => {
+                            let _ = reply.send(driver.writers.len());
+                        }
                         None => break,
                     },
                     report = driver.next() => {
                         let _ = reported.send(report);
-                        driver.taken();
+                        if auto_taken {
+                            driver.taken();
+                        }
                     }
                 }
             }
@@ -1496,7 +1683,26 @@ mod tests {
 
     impl Harness {
         fn apply(&self, directive: ToolDirective) {
-            self.directives.as_ref().unwrap().send(directive).unwrap();
+            self.directives
+                .as_ref()
+                .unwrap()
+                .send(Cmd::Apply(directive))
+                .unwrap();
+        }
+
+        /// The core has taken the last report.
+        fn taken(&self) {
+            self.directives.as_ref().unwrap().send(Cmd::Taken).unwrap();
+        }
+
+        async fn writers(&self) -> usize {
+            let (reply, replied) = oneshot::channel();
+            self.directives
+                .as_ref()
+                .unwrap()
+                .send(Cmd::Writers(reply))
+                .unwrap();
+            replied.await.unwrap()
         }
 
         fn serve(&self, chat: ChatId) {
@@ -1505,6 +1711,13 @@ mod tests {
                 tools: CafTool::ALL.to_vec(),
                 instructions: "Use them.".into(),
             });
+        }
+
+        async fn report_within(&mut self, wait: Duration) -> Report {
+            tokio::time::timeout(wait, self.reports.recv())
+                .await
+                .expect("a report in time")
+                .expect("the driver is running")
         }
 
         async fn report(&mut self) -> Report {
@@ -1989,7 +2202,9 @@ mod tests {
     async fn a_relay_with_the_wrong_token_is_closed() {
         let mut h = harness();
         h.serve(CHAT);
+        // Another chat's token, good for that chat, which is served too.
         let other = ChatId(uuid::Uuid::from_u128(7));
+        h.serve(other);
         let wrong = mcp::token(&h.serving.key, other);
         let mut client = h.connect_with(CHAT, &wrong).await;
         assert!(client.closed().await);
@@ -2213,9 +2428,15 @@ mod tests {
             ToolsDriver::listen(config, SpawnCommand::new("/bin/false"), "my app").unwrap();
         let mode = std::fs::metadata(&folder).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o700);
-        assert_eq!(
-            serving.socket,
-            folder.join(format!("my_app-{}.sock", std::process::id()))
+        // Another test's CAF in this process may have come first, and been
+        // numbered before it.
+        let name = serving.socket.file_name().unwrap().to_str().unwrap();
+        let first = format!("my_app-{}", std::process::id());
+        assert_eq!(serving.socket.parent(), Some(&*folder));
+        assert!(
+            name == format!("{first}.sock")
+                || (name.starts_with(&format!("{first}-")) && name.ends_with(".sock")),
+            "{name}"
         );
         assert_ne!(serving.key.0, [0; 32]);
     }
@@ -2235,5 +2456,283 @@ mod tests {
             let mut read = BufReader::new(&b""[..]);
             assert_eq!(read_line(&mut read, 8).await, Ok(None));
         });
+    }
+
+    #[tokio::test]
+    async fn a_call_that_finished_as_the_core_cancelled_it_is_answered_with_what_it_gave() {
+        let mut h = harness_of(false, false);
+        h.serve(CHAT);
+        let mut client = h.bound(CHAT).await;
+        let call = h.called(&mut client, 1, false).await;
+        h.apply(ToolDirective::Run {
+            call,
+            action: Action::Read {
+                path: "/x".into(),
+                lines: None,
+            },
+        });
+        let run = h.run().await;
+        run.finish
+            .send(Ran::new(true, Vec::new(), Answer::text("ok")))
+            .unwrap();
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Finished { .. })
+        });
+        // The core stopped the call before it took its Finished: the work
+        // was done, so the model hears what it gave, once.
+        h.apply(ToolDirective::Cancel { call });
+        h.taken();
+        let answer = client.recv().await;
+        assert_eq!(answer["id"], 1);
+        assert_eq!(text_of(&answer), "ok");
+        assert_eq!(answer["result"]["isError"], false);
+        client.nothing_waiting().await;
+    }
+
+    #[tokio::test]
+    async fn a_relay_that_stops_reading_for_long_is_closed_as_lost() {
+        let mut h = harness();
+        h.serve(CHAT);
+        let mut client = h.bound(CHAT).await;
+        let call = h.called(&mut client, 1, false).await;
+        // One answer, more than its socket holds, and the agent reads none.
+        let big = h.called(&mut client, 2, false).await;
+        h.apply(ToolDirective::Run {
+            call: big,
+            action: Action::Read {
+                path: "/x".into(),
+                lines: None,
+            },
+        });
+        let run = h.run().await;
+        // Before its answer is written, so before the write's time starts.
+        let started = Instant::now();
+        run.finish
+            .send(Ran::new(
+                true,
+                Vec::new(),
+                Answer::text("x".repeat(2 << 20)),
+            ))
+            .unwrap();
+        assert_event(h.report().await, big, |event| {
+            matches!(event, ToolEvent::Finished { .. })
+        });
+        // The clock moves only once everything waits.
+        tokio::time::pause();
+        // Waited for longer than a line may take to write.
+        let wait = WRITE_TIME * 6;
+        assert_event(h.report_within(wait).await, call, |event| {
+            matches!(event, ToolEvent::Gone)
+        });
+        match h.report_within(wait).await {
+            Report::Relay {
+                chat,
+                change: RelayChange::Lost,
+            } => assert_eq!(chat, CHAT),
+            other => panic!("expected Lost, got {other:?}"),
+        }
+        assert!(started.elapsed() >= WRITE_TIME, "{:?}", started.elapsed());
+    }
+
+    #[tokio::test]
+    async fn a_relay_that_stops_reading_is_closed_as_lost() {
+        let mut h = harness();
+        h.serve(CHAT);
+        let mut client = h.bound(CHAT).await;
+        // Asked for its tools over and over, and never reading the answers.
+        let list = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n";
+        for _ in 0..4000 {
+            if client.write.write_all(list).await.is_err() {
+                break;
+            }
+        }
+        match h.report().await {
+            Report::Relay {
+                chat,
+                change: RelayChange::Lost,
+            } => assert_eq!(chat, CHAT),
+            other => panic!("expected Lost, got {other:?}"),
+        }
+        // Its socket ends, with what was written before; its writer was
+        // stopped, which shutting down takes in its stride.
+        let mut rest = Vec::new();
+        let ended =
+            tokio::time::timeout(Duration::from_secs(10), client.read.read_to_end(&mut rest));
+        assert!(ended.await.is_ok(), "the socket ended");
+        h.shut_down().await;
+    }
+
+    #[tokio::test]
+    async fn a_closed_relays_writer_is_let_go() {
+        let mut h = harness();
+        h.serve(CHAT);
+        let mut client = h.bound(CHAT).await;
+        assert_eq!(h.writers().await, 1);
+        h.apply(ToolDirective::Unserve { chat: CHAT });
+        assert!(client.closed().await);
+        let reaped = tokio::time::timeout(Duration::from_secs(10), async {
+            while h.writers().await > 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(reaped.is_ok(), "the writer was never let go");
+    }
+
+    #[tokio::test]
+    async fn a_relay_has_ten_seconds_to_say_which_chat_it_serves() {
+        let h = harness();
+        let stream = UnixStream::connect(&h.serving.socket).await.unwrap();
+        let (read, write) = stream.into_split();
+        let mut client = Client {
+            read: BufReader::new(read),
+            write,
+        };
+        tokio::time::pause();
+        let started = Instant::now();
+        let mut rest = Vec::new();
+        let _ = client.read.read_to_end(&mut rest).await;
+        assert!(rest.is_empty());
+        assert!(
+            started.elapsed() >= HANDSHAKE_TIME,
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_line_over_the_limit_closes_its_relay_as_lost() {
+        let mut h = harness();
+        h.serve(CHAT);
+        let mut client = h.bound(CHAT).await;
+        let call = h.called(&mut client, 1, false).await;
+        let mut line = vec![b' '; LINE_MOST + 1];
+        line.push(b'\n');
+        let _ = client.write.write_all(&line).await;
+        assert_event(h.report().await, call, |event| {
+            matches!(event, ToolEvent::Gone)
+        });
+        match h.report().await {
+            Report::Relay {
+                chat,
+                change: RelayChange::Lost,
+            } => assert_eq!(chat, CHAT),
+            other => panic!("expected Lost, got {other:?}"),
+        }
+        assert!(client.closed().await);
+    }
+
+    #[test]
+    fn only_check_set_to_1_is_a_check() {
+        use std::ffi::OsStr;
+        assert!(asked_to_check(Some(OsStr::new("1"))));
+        assert!(!asked_to_check(Some(OsStr::new("0"))));
+        assert!(!asked_to_check(Some(OsStr::new(""))));
+        assert!(!asked_to_check(None));
+    }
+
+    #[test]
+    fn a_relay_that_answers_and_leaves_its_output_open_passes() {
+        // Something it started still holds its output once it has gone.
+        let mut command = SpawnCommand::new("/bin/sh");
+        command.args = vec![
+            "-c".into(),
+            format!(
+                "[ \"${}\" = 1 ] && echo '{}'; sleep 3 &",
+                caf_relay::CHECK_VAR,
+                caf_relay::CHECK_ANSWER
+            )
+            .into(),
+        ];
+        let started = std::time::Instant::now();
+        check_relay(&command).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[tokio::test]
+    async fn a_relay_command_the_agent_cant_be_sent_is_refused() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let unsendable = [
+            {
+                let mut command = SpawnCommand::new("/bin/true");
+                command.cwd = Some("/tmp".into());
+                command
+            },
+            {
+                let mut command = SpawnCommand::new("/bin/true");
+                command.env = vec![EnvChange::Remove("HOME".into())];
+                command
+            },
+            {
+                let mut command = SpawnCommand::new("/bin/true");
+                command.args = vec![std::ffi::OsStr::from_bytes(b"\xff").into()];
+                command
+            },
+            {
+                let mut command = SpawnCommand::new("/bin/true");
+                command.env = vec![EnvChange::Set(
+                    "A".into(),
+                    std::ffi::OsStr::from_bytes(b"\xff").into(),
+                )];
+                command
+            },
+            SpawnCommand::new(std::ffi::OsStr::from_bytes(b"/bin/\xff")),
+        ];
+        for command in unsendable {
+            let dir = Dir::new();
+            let config = ToolsConfig {
+                relay: Relay::Command(command.clone()),
+                folder: Some(dir.0.clone()),
+                ..ToolsConfig::default()
+            };
+            let Err(why) = ToolsDriver::start(config, "test") else {
+                panic!("{command:?} was taken");
+            };
+            assert!(matches!(why, StartError::Serving(_)), "{why:?}");
+            assert!(why.to_string().contains("can't be sent"), "{why}");
+        }
+        // Nor a socket whose path isn't UTF-8.
+        let dir = Dir::new();
+        let config = ToolsConfig {
+            folder: Some(dir.0.join(std::ffi::OsStr::from_bytes(b"\xff"))),
+            ..ToolsConfig::default()
+        };
+        let Err(why) = ToolsDriver::listen(config, SpawnCommand::new("/bin/false"), "test") else {
+            panic!("a socket path that isn't UTF-8 was taken");
+        };
+        assert!(why.to_string().contains("UTF-8"), "{why}");
+    }
+
+    #[tokio::test]
+    async fn two_cafs_in_one_process_have_sockets_of_their_own() {
+        let dir = Dir::new();
+        let config = || ToolsConfig {
+            folder: Some(dir.0.clone()),
+            ..ToolsConfig::default()
+        };
+        let (_one, first) =
+            ToolsDriver::listen(config(), SpawnCommand::new("/bin/false"), "app").unwrap();
+        let (_two, second) =
+            ToolsDriver::listen(config(), SpawnCommand::new("/bin/false"), "app").unwrap();
+        assert_ne!(first.socket, second.socket);
+        assert!(first.socket.exists() && second.socket.exists());
+        UnixStream::connect(&first.socket).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_socket_in_use_is_refused_and_a_stale_one_replaced() {
+        let dir = Dir::new();
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let path = dir.0.join("s.sock");
+        let live = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let Err(why) = listen(&path) else {
+            panic!("it took a socket in use");
+        };
+        assert!(why.to_string().contains("in use"), "{why}");
+        assert!(path.exists());
+        drop(live);
+        // Its file is left behind, as a process that died leaves it.
+        assert!(path.exists());
+        listen(&path).unwrap();
     }
 }

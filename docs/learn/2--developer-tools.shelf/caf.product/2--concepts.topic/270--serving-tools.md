@@ -69,7 +69,8 @@ message.
 CAF listens on a socket in `$XDG_RUNTIME_DIR/caf`, or a folder of its own
 in the temp folder if there's no runtime folder, readable only by the user
 (`ToolsConfig::folder` says another). The socket is named after your program
-and its process, and removed when CAF shuts down. A socket's path is
+and its process, numbered if the process starts more than one CAF, and
+removed when CAF shuts down. A socket's path is
 limited to about 108 bytes; the error for a longer one names the path.
 
 ## Choosing a chat's tools
