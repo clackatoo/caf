@@ -1246,6 +1246,62 @@ mod tests {
     }
 
     #[test]
+    fn the_listed_schemas_require_exactly_what_the_parser_does() {
+        let list = crate::mcp::tool_list(&CafTool::ALL);
+        for (tool, definition) in CafTool::ALL
+            .into_iter()
+            .zip(list.as_array().expect("a list"))
+        {
+            let schema = &definition["inputSchema"];
+            let properties = schema["properties"].as_object().expect("properties");
+            let required: Vec<&str> = (schema["required"].as_array().expect("required").iter())
+                .map(|name| name.as_str().expect("a name"))
+                .collect();
+            // A value of each field's type that the parser takes.
+            let value = |name: &str| match properties[name]["type"].as_str() {
+                Some("string") => json!("x"),
+                Some("number") => json!(5),
+                Some("boolean") => json!(true),
+                other => panic!("{tool:?}.{name} is of type {other:?}"),
+            };
+            let only = |names: &[&str]| -> Value {
+                names
+                    .iter()
+                    .map(|&name| (name.to_owned(), value(name)))
+                    .collect()
+            };
+            assert!(
+                action_of(tool, &only(&required), "/w").is_ok(),
+                "{tool:?} takes its required fields alone"
+            );
+            for missing in &required {
+                let fewer: Vec<&str> = required
+                    .iter()
+                    .copied()
+                    .filter(|name| name != missing)
+                    .collect();
+                assert!(
+                    action_of(tool, &only(&fewer), "/w").is_err(),
+                    "{tool:?} needs {missing}"
+                );
+            }
+            let all: Vec<&str> = properties.keys().map(String::as_str).collect();
+            assert!(
+                action_of(tool, &only(&all), "/w").is_ok(),
+                "{tool:?} takes every field of its schema, of its type"
+            );
+            for name in &all {
+                let mut wrong = only(&all);
+                wrong[*name] = json!({});
+                assert!(
+                    action_of(tool, &wrong, "/w").is_err(),
+                    "{tool:?}.{name} is typed"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn titles_say_what_a_call_does_from_the_chats_folder() {
         let path = |path: &str| Action::Edit {
             path: path.to_owned(),
