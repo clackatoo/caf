@@ -48,13 +48,27 @@ pub struct FileRead {
     pub bytes: Vec<u8>,
     /// Its version, which a change to it is written expecting.
     pub version: Version,
+    /// The bytes' sha256, if the backend worked it out already, as the
+    /// disk's does for its version: so CAF needn't again.
+    pub sha256: Option<[u8; 32]>,
 }
 
 impl FileRead {
     /// A file of `bytes`, at `version`.
     #[must_use]
     pub fn new(bytes: Vec<u8>, version: Version) -> Self {
-        Self { bytes, version }
+        Self {
+            bytes,
+            version,
+            sha256: None,
+        }
+    }
+
+    /// With the bytes' sha256, which must be theirs.
+    #[must_use]
+    pub fn with_sha256(mut self, sha256: [u8; 32]) -> Self {
+        self.sha256 = Some(sha256);
+        self
     }
 }
 
@@ -121,13 +135,10 @@ pub enum FileError {
 /// Where commands run: CAF's own pty by default, or an app's visible
 /// terminal.
 pub trait Commands: Send + Sync + 'static {
-    /// Starts `spec`'s command, giving its output to `out` as it comes,
-    /// in order. An error is why it couldn't start, said in a line.
-    fn start(
-        &self,
-        spec: CommandSpec,
-        out: Box<dyn FnMut(Output) + Send>,
-    ) -> BoxFuture<Result<Box<dyn Running>, String>>;
+    /// Starts `spec`'s command. Its output is taken from what it gives
+    /// back ([`Running::output`]). An error is why it couldn't start, said
+    /// in a line.
+    fn start(&self, spec: CommandSpec) -> BoxFuture<Result<Box<dyn Running>, String>>;
 }
 
 /// A command to run.
@@ -188,6 +199,11 @@ pub enum Output {
 /// Dropping it must stop the command, as [`stop`](Self::stop) does,
 /// without waiting.
 pub trait Running: Send {
+    /// The next of its output, in order, once there is some: `None` once
+    /// there's no more. It's taken only as fast as CAF asks, so a command
+    /// printing faster than CAF keeps up is held back, as a terminal
+    /// holds back one nobody reads. Cancelling the future loses nothing.
+    fn output(&mut self) -> BoxFuture<Option<Output>>;
     /// How it ended, and the folder its shell ended in if known.
     fn wait(&mut self) -> BoxFuture<Ended>;
     /// Ctrl-C to its foreground (process group).

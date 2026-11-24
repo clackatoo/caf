@@ -74,7 +74,25 @@ impl ReadState {
     /// A partial read of a file read whole, unchanged since, leaves it
     /// read whole.
     pub fn record(&mut self, path: PathBuf, version: Version, bytes: &[u8], partial: bool) {
-        let hash = hash(bytes);
+        self.record_sha256(path, version, hash(bytes), partial);
+    }
+
+    /// [`record`](Self::record), of the file `file` as it was read, its
+    /// bytes hashed only if the backend didn't.
+    pub fn record_read(&mut self, path: PathBuf, file: &FileRead, partial: bool) {
+        let hash = file.sha256.unwrap_or_else(|| hash(&file.bytes));
+        self.record_sha256(path, file.version.clone(), hash, partial);
+    }
+
+    /// [`record`](Self::record), of a file whose bytes' sha256 is `hash`,
+    /// worked out already.
+    pub fn record_sha256(
+        &mut self,
+        path: PathBuf,
+        version: Version,
+        hash: [u8; 32],
+        partial: bool,
+    ) {
         if partial
             && let Some(seen) = self.seen.get_mut(&path)
             && !seen.partial
@@ -105,7 +123,8 @@ impl ReadState {
         let Some(seen) = self.seen.get(path) else {
             return Check::NotRead;
         };
-        if current.version == seen.version || (!seen.partial && hash(&current.bytes) == seen.hash) {
+        let same_bytes = || current.sha256.unwrap_or_else(|| hash(&current.bytes)) == seen.hash;
+        if current.version == seen.version || (!seen.partial && same_bytes()) {
             Check::Fresh
         } else {
             Check::Stale
@@ -228,5 +247,17 @@ mod tests {
             state.check(Path::new("/a"), &file(b"x", "1")),
             Check::NotRead
         );
+    }
+
+    #[test]
+    fn a_hash_the_backend_gave_is_the_one_used() {
+        let mut state = ReadState::new();
+        // A hash that isn't the bytes' shows it's the one used.
+        let read = file(b"x", "1").with_sha256([7; 32]);
+        state.record_read("/a".into(), &read, false);
+        let now = file(b"other", "2").with_sha256([7; 32]);
+        assert_eq!(state.check(Path::new("/a"), &now), Check::Fresh);
+        // Without one, the bytes are hashed.
+        assert_eq!(state.check(Path::new("/a"), &file(b"x", "2")), Check::Stale);
     }
 }
