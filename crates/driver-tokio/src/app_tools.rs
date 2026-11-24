@@ -26,7 +26,7 @@
 //!     seconds: f64,
 //! }
 //!
-//! let trim = tool("trim_clip", |call, input: Trim| async move {
+//! let trim = tool("trim_clip", |_call, input: Trim| async move {
 //!     // Ask the app's UI thread to do it, through a handle the closure
 //!     // captured, and await its answer: never block on it.
 //!     Done::answer(format!("Trimmed clip {} to {}s", input.clip, input.seconds))
@@ -86,8 +86,9 @@ pub trait AppTool<A: AppItem = NoAppItems>: Send + Sync + 'static {
     /// ends with, failed, if it can't be done. `None` (the default) for a
     /// tool that doesn't preview: [`ToolSpec::previews`] says which.
     ///
-    /// A preview that fails ends the call: what it ends with is the
-    /// call's, its item ([`Done::item`]) included. The future runs as a
+    /// A preview that fails ends the call, Failed, even if its `Done`
+    /// says it was done: what it ends with is otherwise the call's, its
+    /// answer, record and item ([`Done::item`]) included. The future runs as a
     /// task of its own, but `preview` itself is called on CAF's own task:
     /// it must give its future at once, never blocking.
     fn preview(
