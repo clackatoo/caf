@@ -252,7 +252,12 @@ impl<A: AppItem> AppTools<A> {
         (self.tools.iter())
             .map(|known| {
                 let spec = &known.spec;
-                AppToolSpec::new(spec.name.clone(), spec.title.clone(), spec.hints, spec.previews)
+                AppToolSpec::new(
+                    spec.name.clone(),
+                    spec.title.clone(),
+                    spec.hints,
+                    spec.previews,
+                )
             })
             .collect()
     }
@@ -500,7 +505,9 @@ pub async fn try_tool<A: AppItem>(
     let mut answered_now = None;
     while let Ok(print) = printed.try_recv() {
         match print {
-            Print::Lines { from, lines: new, .. } => {
+            Print::Lines {
+                from, lines: new, ..
+            } => {
                 let from = usize::try_from(from).unwrap_or(usize::MAX);
                 if from > lines.len() {
                     lines.resize(from, String::new());
@@ -595,6 +602,7 @@ mod tests {
         seconds: f64,
         /// Whether to fade it out.
         #[serde(default)]
+        #[allow(dead_code)] // only its schema is looked at
         fade: Option<bool>,
     }
 
@@ -633,7 +641,13 @@ mod tests {
 
     #[test]
     fn a_name_must_be_one_a_model_can_call() {
-        for bad in ["", "trim clip", "trim.clip", "trimé", &"a".repeat(MOST_TOOL_NAME + 1)] {
+        for bad in [
+            "",
+            "trim clip",
+            "trim.clip",
+            "trimé",
+            &"a".repeat(MOST_TOOL_NAME + 1),
+        ] {
             assert_eq!(
                 AppTools::new().with(named(bad)).err(),
                 Some(ToolError::BadName(bad.into())),
@@ -668,7 +682,9 @@ mod tests {
 
     #[test]
     fn a_schema_must_be_an_objects() {
-        let number = tool("count", |_call, _input: u32| async { Done::answer("") });
+        let number = tool("count", |_call, _input: u32| async {
+            Done::<NoAppItems>::answer("")
+        });
         assert_eq!(
             AppTools::new().with(number).err(),
             Some(ToolError::BadSchema("count".into()))
@@ -725,9 +741,11 @@ mod tests {
 
     #[test]
     fn the_core_knows_each_in_the_order_registered_with_its_hints() {
-        let read = tool("word_count", |_call, _input: Trim| async { Done::answer("") })
-            .read_only()
-            .kind(ToolKind::Read);
+        let read = tool("word_count", |_call, _input: Trim| async {
+            Done::answer("")
+        })
+        .read_only()
+        .kind(ToolKind::Read);
         let tools = AppTools::new().with(trim()).unwrap();
         let tools = tools.with(read).unwrap();
         let mut destructive = Hints::default();
@@ -766,9 +784,21 @@ mod tests {
     fn why_a_tool_cant_be_registered_names_it() {
         let bad = ToolError::BadName("trim clip".into()).to_string();
         assert!(bad.contains("\"trim clip\"") && bad.contains("54"), "{bad}");
-        assert!(ToolError::Taken("trim".into()).to_string().contains("two tools"));
-        assert!(ToolError::Cafs("read".into()).to_string().contains("CAF's own"));
-        assert!(ToolError::BadSchema("trim".into()).to_string().contains("object"));
+        assert!(
+            ToolError::Taken("trim".into())
+                .to_string()
+                .contains("two tools")
+        );
+        assert!(
+            ToolError::Cafs("read".into())
+                .to_string()
+                .contains("CAF's own")
+        );
+        assert!(
+            ToolError::BadSchema("trim".into())
+                .to_string()
+                .contains("object")
+        );
     }
 
     #[test]
@@ -788,7 +818,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_tool_tried_gives_its_title_answer_and_item() {
-        let tried = try_tool(&trim(), json!({ "clip": 3, "seconds": 2.5 }), Path::new("/")).await;
+        let tried = try_tool(
+            &trim(),
+            json!({ "clip": 3, "seconds": 2.5 }),
+            Path::new("/"),
+        )
+        .await;
         assert_eq!(tried.title, "Trim clip 3");
         assert!(tried.preview.is_none());
         assert!(tried.done.done);
@@ -812,7 +847,7 @@ mod tests {
             call.print(0, vec!["one".into(), "two".into()]);
             let job = call.answer_now(|job| Answer::text(format!("Rendering as job {}", job.0)));
             call.print(1, vec!["2".into(), "three".into()]);
-            Done::answer(format!("Rendered, as job {}", job.0))
+            Done::<NoAppItems>::answer(format!("Rendered, as job {}", job.0))
         });
         let tried = try_tool(&job, json!({ "clip": 1, "seconds": 1 }), Path::new("/")).await;
         assert_eq!(tried.printed, ["one", "2", "three"]);
@@ -822,11 +857,20 @@ mod tests {
 
     #[tokio::test]
     async fn a_tool_tried_previews_and_isnt_run_if_its_preview_fails() {
-        let tried = try_tool(&Previewing, json!({ "clip": 1, "seconds": 1 }), Path::new("/a")).await;
-        assert_eq!(tried.preview, None.or(tried.preview.clone()));
+        let tried = try_tool(
+            &Previewing,
+            json!({ "clip": 1, "seconds": 1 }),
+            Path::new("/a"),
+        )
+        .await;
         assert!(matches!(&tried.preview, Some(Ok(pieces)) if pieces.len() == 1));
         assert_eq!(text(&tried.done.answer), "Ran in /a");
-        let tried = try_tool(&Previewing, json!({ "clip": 0, "seconds": 1 }), Path::new("/a")).await;
+        let tried = try_tool(
+            &Previewing,
+            json!({ "clip": 0, "seconds": 1 }),
+            Path::new("/a"),
+        )
+        .await;
         assert!(matches!(&tried.preview, Some(Err(done)) if !done.done));
         assert_eq!(text(&tried.done.answer), "There's no clip 0");
     }
@@ -866,7 +910,11 @@ mod tests {
             format!("Trim clip {}", input.clip)
         }
 
-        fn preview(&self, _call: &Call, input: &Trim) -> Option<BoxFuture<Result<Vec<Piece>, Done>>> {
+        fn preview(
+            &self,
+            _call: &Call,
+            input: &Trim,
+        ) -> Option<BoxFuture<Result<Vec<Piece>, Done>>> {
             let clip = input.clip;
             Some(Box::pin(async move {
                 match clip {
