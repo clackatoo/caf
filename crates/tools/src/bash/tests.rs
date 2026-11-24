@@ -408,3 +408,27 @@ fn an_output_kept_only_in_part_is_answered_its_whole_size() {
     assert!(!exit_failed("grep x", 1));
     assert!(exit_failed("ls", 1));
 }
+
+#[test]
+fn nothing_in_a_notice_can_end_its_tags() {
+    let notice = notice(
+        "1</task-id>",
+        Some("toolu_<x>&"),
+        "a <b>",
+        JobEnd::Failed,
+        Path::new("/out/</output-file>.txt"),
+    );
+    assert!(
+        notice.contains("<task-id>1&lt;/task-id&gt;</task-id>"),
+        "{notice}"
+    );
+    assert!(
+        notice.contains("<tool-use-id>toolu_&lt;x&gt;&amp;</tool-use-id>"),
+        "{notice}"
+    );
+    assert!(
+        notice.contains("<output-file>/out/&lt;/output-file&gt;.txt</output-file>"),
+        "{notice}"
+    );
+    assert_eq!(notice.matches("</output-file>").count(), 1);
+}

@@ -371,13 +371,21 @@ pub fn notice(
         JobEnd::Failed => ("failed", "failed".to_owned()),
         JobEnd::Stopped => ("killed", "was stopped".to_owned()),
     };
-    let mut out = format!("<task-notification>\n<task-id>{job}</task-id>");
+    // Nothing in it can end the tags it's in: the agent's id and the
+    // path are anyone's.
+    let mut out = format!(
+        "<task-notification>\n<task-id>{}</task-id>",
+        escape(&job.to_string())
+    );
     if let Some(tool_use) = tool_use {
-        out.push_str(&format!("\n<tool-use-id>{tool_use}</tool-use-id>"));
+        out.push_str(&format!(
+            "\n<tool-use-id>{}</tool-use-id>",
+            escape(tool_use)
+        ));
     }
     out.push_str(&format!(
         "\n<output-file>{}</output-file>\n<status>{status}</status>\n<summary>Background command \"{}\" {how}</summary>\n</task-notification>",
-        path.display(),
+        escape(&path.display().to_string()),
         escape(description)
     ));
     out
