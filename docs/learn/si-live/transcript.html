@@ -311,6 +311,9 @@
   .chip { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; border: 1px solid var(--raised-edge); background: var(--card); border-radius: 999px; padding: 2px 10px; }
   .chip.run { border-color: var(--accent-edge); color: var(--accent-text); }
   .chip.fail { border-color: var(--warning-edge); color: var(--warning); }
+  /* A job: a step that runs on after the agent was answered. */
+  .bg { font-size: 11px; font-weight: 600; letter-spacing: .02em; border: 1px solid var(--accent-edge); color: var(--accent-text); border-radius: 999px; padding: 0 7px; line-height: 1.6; white-space: nowrap; }
+  .on-own code { font-size: .92em; }
 
   /* ---- The timeline: the steps in order, on a rail ---- */
   .tl { position: relative; margin: 2px 0 10px 2px; }
@@ -366,6 +369,7 @@
           <li>Failures, CAF's notes and a lost chat are never folded away.</li>
           <li>A question waiting on the user attaches to the top of the composer, shows the command or change it asks about, and the step it's about points to it.</li>
           <li>A step is drawn by its title, as given: CAF's for its own tools, the agent's for the rest.</li>
+          <li>A step that runs on in the background is marked <i>Background</i> until it ends, wherever its turn is; when it ends, CAF tells the agent, in a turn of CAF's own.</li>
         </ul>
       </div>
       <div>
@@ -376,6 +380,7 @@
           <li><b>Questions aren't items:</b> they're a list on the chat (<code>Chat.questions</code>), and come and go.</li>
           <li><b>A tool call's result is pieces</b> (<code>Piece</code>): text, diffs, a command's output, images and links. CAF works out a diff's hunks and keeps a command's output as its terminal showed it; the app draws them as they are.</li>
           <li><b>Who allowed a call</b> is kept with it (<code>Decision</code>): the user, or the policy with its reason.</li>
+          <li><b>A job</b> is a call that goes on after the agent was answered (<code>ToolCall.job</code>); CAF's notice of its end starts a turn (<code>Starter::Notice</code>).</li>
           <li><b>Later</b>, marked so in the pictures: the compaction line. CAF doesn't record it yet.</li>
         </ul>
       </div>
@@ -608,6 +613,7 @@
     chevD: I('<path d="M6 9l6 6 6-6"/>', 'style="width:12px;height:12px"'),
     unplug: I('<path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 01-10 0zM12 16v5M3 3l18 18"/>'),
     restore: I('<path d="M4 12a8 8 0 1 0 2.3-5.7M4 4v5h5"/>'),
+    stop: I('<rect x="6" y="6" width="12" height="12" rx="1.5"/>'),
   }
   const mark = SI.mark('claude', 15)
 
@@ -652,6 +658,16 @@
     T.tool('execute', 'cargo test -p caf-core config', 'done', { out: OUT_TEST, end: 'Exited with code 0', took: '6s' }),
   ]
   const ANSWER = T.words('<p>Fixed. An empty file now gives <code>ConfigError::Empty</code> instead of panicking: <code>parse_header</code> checks for a first line before reading it.</p><p>I added <code>empty_file_is_an_error</code> to the config tests, and all 14 pass.</p>')
+  // A turn that left two commands running in the background, as jobs 1
+  // and 2, in the states given: the dev server, then the tests.
+  const OUT_DEV = '  <span class="ok">VITE</span> v7.2.0  ready in 412 ms\n\n  ➜  Local:   http://localhost:5173/'
+  const OUT_SUITE = 'running 42 tests\ntest sync::two_viewers ... <span class="ok">ok</span>\ntest sync::resume_after_restart ...'
+  const OUT_SUITE_DONE = 'running 42 tests\n...\n<span class="ok">test result: ok. 42 passed; 0 failed</span>; finished in 112.30s'
+  const bgTurn = (dev, suite) => ({ t: 'turn', ask: 'Start the dev server, and run the integration tests in the background while you look at the flaky save test.', life: 'finished', took: '19s', at: '10:04', model: 'Opus 5.5', items: [
+    T.tool('execute', 'npm run dev', dev, { job: 1, out: OUT_DEV, live: dev === 'running', took: dev === 'running' ? '1m 4s' : '' }),
+    T.tool('execute', 'cargo test --test integration', suite, suite === 'running' ? { job: 2, out: OUT_SUITE, live: true, took: '1m 2s' } : { job: 2, out: OUT_SUITE_DONE, end: 'Exited with code 0', took: '1m 52s' }),
+    T.tool('read', 'Read crates/save/tests/flaky.rs', 'done'),
+    T.words("<p>Both are running in the background, and I'll hear when each ends. The flaky test waits a fixed 50 ms for the save: I'll have it wait for the save itself.</p>")] })
   const done = (extra = {}) => ({ t: 'turn', ask: ASK, life: 'finished', took: '42s', at: '14:32', model: 'Opus 5.5', items: [...WORK, ANSWER], ...extra })
 
   const STATES = [
@@ -670,6 +686,15 @@
     { id: 'on-own', label: 'The agent, on its own', what: "<b>A turn the agent started by itself,</b> here when a command it left running finished. Nobody sent it, so there's no message.",
       entries: [done(),
         { t: 'turn', starter: 'agent', life: 'finished', took: '3s', at: '14:41', model: 'Opus 5.5', items: [T.tool('other', 'Read output of cargo bench', 'done'), T.words('<p>The benchmark you asked for finished: parsing a 1 MB config takes <b>2.1 ms</b>, down from 2.4 ms before the change.</p>')] }] },
+    { group: 'Background jobs' },
+    { id: 'background', label: 'Running in the background', what: "<b>Claude started the dev server and the integration tests through CAF's own Bash, in the background, and went on.</b> Both were answered as they started, so the turn finished; they still run, each marked <i>Background</i>, their output coming in. Folded, each is a chip of its own, in the accent.",
+      openFirst: true, entries: [{ t: 'time', text: 'Today 10:04' }, bgTurn('running', 'running')] },
+    { id: 'job-ended', label: 'A job ends, and one is stopped', what: "<b>The tests ended, so CAF told Claude, in a turn of CAF's own;</b> Claude read their output and answered. Then the user asked for the dev server to be stopped: Claude's TaskStop is a step, <i>Stop task 1</i>, and the server's step is cancelled.",
+      entries: [bgTurn('cancelled', 'done'),
+        { t: 'turn', starter: 'notice', notice: 'Told Claude: task 2, <code>cargo test --test integration</code>, completed with exit code 0.', life: 'finished', took: '5s', at: '10:06', model: 'Opus 5.5',
+          items: [T.tool('read', 'Read /run/user/1000/caf/out/7/2.txt', 'done'), T.words('<p>The integration tests passed in the background: all 42, in 1m 52s.</p>')] },
+        { t: 'turn', ask: 'Great. Stop the dev server.', life: 'finished', took: '2s', at: '10:07', model: 'Opus 5.5',
+          items: [T.tool('stop', 'Stop task 1', 'done'), T.words('<p>Stopped the dev server.</p>')] }] },
     { group: 'Asking and failing' },
     { id: 'permission', label: 'Asking permission', what: "<b>Claude wants to run a command through CAF's own Bash, so CAF asks</b>, in its own voice, with the command and CAF's two answers. The question attaches to the composer, and the step points to it. None is chosen beforehand. A question about a tool of the agent's own is the agent's: <i>Claude asks permission:</i>, with its own answers.",
       entries: [{ t: 'time', text: 'Today 14:50' },
@@ -755,7 +780,8 @@
     const bits = [turn.model ? `${mark}${turn.model}` : '', turn.took ? (turn.life === 'running' ? `${turn.took} so far` : turn.took) : '', turn.at || '', lifeText[turn.life] ? `<span style="color:${turn.life === 'failed' ? 'var(--warning)' : 'var(--muted)'}">${lifeText[turn.life]}</span>` : '']
     return `<div class="meta">${bits.filter(Boolean).join('<span class="sep"></span>')}</div>`
   }
-  const sent = (turn) => turn.ask ? `<div class="sent">${turn.ask}</div>` : `<div class="on-own">${mark}Claude, on its own</div>`
+  // A turn CAF's notice started, such as a job's end, is in CAF's voice.
+  const sent = (turn) => turn.ask ? `<div class="sent">${turn.ask}</div>` : turn.starter === 'notice' ? `<div class="on-own"><span class="caf-badge">CAF</span><span>${turn.notice}</span></div>` : `<div class="on-own">${mark}Claude, on its own</div>`
   // The answer: the agent's last words, with only CAF's notes after them,
   // once the turn has finished.
   function finalAnswer(turn) {
@@ -770,14 +796,18 @@
   const pinned = (it) => it.k === 'note' || it.k === 'compacted'
 
   // The summary line's chips: the steps, counted by kind.
-  const KIND_WORD = { read: ['Read', 'file', 'files'], search: ['Searched', 'time', 'times'], edit: ['Edited', 'file', 'files'], execute: ['Ran', 'command', 'commands'], fetch: ['Fetched', 'page', 'pages'], delete: ['Deleted', 'file', 'files'], move: ['Moved', 'file', 'files'], other: ['Used', 'tool', 'tools'] }
+  const KIND_WORD = { read: ['Read', 'file', 'files'], search: ['Searched', 'time', 'times'], edit: ['Edited', 'file', 'files'], execute: ['Ran', 'command', 'commands'], fetch: ['Fetched', 'page', 'pages'], delete: ['Deleted', 'file', 'files'], move: ['Moved', 'file', 'files'], stop: ['Stopped', 'task', 'tasks'], other: ['Used', 'tool', 'tools'] }
+  // A job still running, past its answer.
+  const background = (t) => t.job && t.status === 'running'
   function chipsFor(turn) {
     const tools = turn.items.filter(i => i.k === 'tool')
     const thinking = turn.items.filter(i => i.k === 'think')
     let h = ''
     if (thinking.length) h += `<span class="chip">${icon.think}Thought ${thinking.map(t => t.took).join(' + ')}</span>`
-    for (const kind of ['read', 'search', 'edit', 'execute', 'fetch', 'delete', 'move', 'other']) {
-      const ts = tools.filter(t => (t.kind === 'think' ? 'other' : t.kind) === kind)
+    // Each job still running is a chip of its own, in the accent.
+    for (const t of tools.filter(background)) h += `<span class="chip run">${icon.spin}${t.title} <span class="bg">Background</span></span>`
+    for (const kind of ['read', 'search', 'edit', 'execute', 'fetch', 'delete', 'move', 'stop', 'other']) {
+      const ts = tools.filter(t => !background(t) && (t.kind === 'think' ? 'other' : t.kind) === kind)
       if (!ts.length) continue
       const [verb, one, many] = KIND_WORD[kind]
       const fail = ts.some(t => t.status === 'failed' || t.status === 'refused')
@@ -808,7 +838,8 @@
     const open = it.status === 'running' || bad || it.kind === 'edit' || !!it.by
     const body = open && toolBody(it) ? `<div class="body">${toolBody(it)}</div>` : ''
     const dot = it.status === 'running' ? icon.spin : bad ? icon.x : icon[it.kind]
-    return `<div class="node${cls}"><span class="dot">${dot}</span><div class="head"><span class="t">${it.title}</span><span class="r${it.status === 'refused' ? ' bad' : ''}">${toolRight(it)}</span>${!open ? `<span class="r">${icon.chevR}</span>` : ''}</div>${body}</div>`
+    const bg = background(it) ? '<span class="bg">Background</span>' : ''
+    return `<div class="node${cls}"><span class="dot">${dot}</span><div class="head"><span class="t">${it.title}</span>${bg}<span class="r${it.status === 'refused' ? ' bad' : ''}">${toolRight(it)}</span>${!open ? `<span class="r">${icon.chevR}</span>` : ''}</div>${body}</div>`
   }
 
   // A question waiting on the user, attached to the top of the composer.
