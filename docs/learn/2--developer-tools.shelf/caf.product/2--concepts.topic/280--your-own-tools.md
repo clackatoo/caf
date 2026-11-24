@@ -138,6 +138,11 @@ tools or its other drivers (if those threads can't be started, which is
 logged, they share CAF's). And a future blocking a thread can't be
 stopped (below).
 
+A task the tool starts with `tokio::spawn` runs on those threads too,
+and is dropped when CAF shuts down, wherever it's got to. Work that must
+outlive CAF, or the call, belongs on the app's own runtime: give the
+tool a handle to it (`tokio::runtime::Handle`), and spawn it there.
+
 ## Names and schemas
 
 `AppTools::with` checks each tool as it's registered, and refuses one with
