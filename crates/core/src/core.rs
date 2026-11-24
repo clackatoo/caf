@@ -1194,7 +1194,12 @@ impl<A: AppItem, D: AppData> Core<A, D> {
             "setup": self.setup,
             "data": self.data,
             "saving": self.saving,
-            "serving": self.serving,
+            // Its key makes every relay's token: it's never shown.
+            "serving": self.serving.as_ref().map(|serving| {
+                let mut shown = serde_json::to_value(serving).unwrap_or_default();
+                shown["key"] = crate::mcp::HIDDEN.into();
+                shown
+            }),
         })
     }
 }
