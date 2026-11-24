@@ -599,10 +599,12 @@ async fn a_recording_never_holds_the_key() {
         panic!("{line}");
     };
     assert_eq!(read.key.0, [0; 32]);
-    assert_eq!(
-        read.socket,
-        dir.path("s")
-            .join(format!("caf-test-{}.sock", std::process::id()))
+    // Numbered after the first CAF in this process.
+    assert_eq!(read.socket.parent(), Some(&*dir.path("s")));
+    let name = read.socket.file_name().unwrap().to_str().unwrap();
+    assert!(
+        name.starts_with(&format!("caf-test-{}", std::process::id())) && name.ends_with(".sock"),
+        "{name}"
     );
     // The socket is gone once CAF is.
     assert!(!read.socket.exists());
